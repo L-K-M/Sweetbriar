@@ -1,0 +1,70 @@
+[package]
+name = "sb-proton"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+sb-types = { version = "0.0.1", path = "../sb-types" }
+# M2.11's HTTP stack (spec/01's Crates table): hyper 1's http1 client
+# over the workspace's tokio-rustls, with hyper-util's pooling client and
+# http-body-util's body types. Chosen over reqwest to keep TLS, timeouts
+# and pacing in Sweetbriar's hands (spec/01).
+hyper = { version = "=1.12.0", default-features = false, features = ["client", "http1"] }
+hyper-util = { version = "=0.1.21", default-features = false, features = [
+    "client",
+    "client-legacy",
+    "client-pool",
+    "http1",
+    "tokio",
+] }
+http-body-util = "=0.1.5"
+bytes = "=1.12.1"
+# hyper-util's legacy connector is expressed as a tower Service; the trait
+# crate is already in the graph through hyper-util.
+tower-service = "=0.3.3"
+# The workspace's TLS crates (spec/01); 0.23.46 carries the
+# RUSTSEC-2026-0346..0349 fixes.
+rustls = { version = "=0.23.46", default-features = false, features = [
+    "ring",
+    "std",
+    "logging",
+    "tls12",
+] }
+tokio-rustls = { version = "=0.26.6", default-features = false, features = [
+    "ring",
+    "logging",
+    "tls12",
+] }
+# The platform verifier (spec/10): system trust store, hostname checked.
+rustls-platform-verifier = "=0.7.1"
+tokio = { version = "=1.54.1", default-features = false, features = [
+    "net",
+    "rt",
+    "sync",
+    "time",
+    "io-util",
+] }
+# Proton AG's SRP implementation (spec/01's Crates table). The default
+# `pgpinternal` feature verifies the modulus with rPGP and Proton's
+# embedded key; the server side drives the fake in sb-test-support.
+proton-srp = "=0.8.4"
+# Zeroizing in-memory secrets (spec/10): passwords, codes and tokens.
+secrecy = "=0.10.3"
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.154"
+# Request diagnostics only; never bodies or credentials (spec/10).
+log = { version = "=0.4.34", features = ["max_level_debug"] }
+
+[dev-dependencies]
+sb-test-support = { version = "0.0.1", path = "../sb-test-support" }
+secrecy = "=0.10.3"
+tokio = { version = "=1.54.1", default-features = false, features = [
+    "macros",
+    "rt",
+    "rt-multi-thread",
+    "test-util",
+    "time",
+] }

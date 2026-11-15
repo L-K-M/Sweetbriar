@@ -6,7 +6,24 @@
 yanked = "deny"
 unmaintained = "all"
 unsound = "all"
-ignore = []
+# RUSTSEC-2023-0071 (rsa, Marvin attack): proton-srp's default rPGP
+# backend pulls rsa 0.9 for Proton's RSA keys. The advisory is a timing
+# sidechannel in RSA decryption/signing. Sweetbriar uses rsa through
+# rPGP to verify Proton's modulus signature and, from M2.12, to unlock
+# RSA address keys and decrypt mail. A sender chooses that ciphertext,
+# but decryption runs locally where its timing isn't observable over
+# the network. A named exception per spec/01's Crates table.
+ignore = [
+    { id = "RUSTSEC-2023-0071", reason = "rsa 0.9 via rPGP; Proton keys may be RSA (spec/01)" },
+    # RUSTSEC-2026-0387 (crypto-bigint 0.5.5, timing variability):
+    # proton-srp 0.8.4, the current crates.io release, pins crypto-bigint
+    # 0.5.5; the fixed 0.7.6 is only taken by the unreleased proton-srp
+    # 0.9.0. Sweetbriar uses it for SRP, where the client's secret
+    # exponent is fresh randomness per attempt and the exchange is
+    # authenticated by the server proof (spec/10). Revisit when a crates.io
+    # proton-srp release carries the fix.
+    { id = "RUSTSEC-2026-0387", reason = "proton-srp 0.8.4 pins crypto-bigint 0.5.5; no fixed crates.io release yet" },
+]
 maximum-db-staleness = "P1D"
 unused-ignored-advisory = "warn"
 
@@ -44,7 +61,26 @@ exceptions = [
     { crate = "selectors@0.37.0", allow = ["MPL-2.0"] },
     { crate = "cssparser@0.38.0", allow = ["MPL-2.0"] },
     { crate = "cssparser-macros@0.7.1", allow = ["MPL-2.0"] },
+    # webpki-root-certs is a wasm32-only dependency of
+    # rustls-platform-verifier (and one of its dev-dependencies); it is
+    # not linked into Sweetbriar's macOS or Linux builds.
+    { crate = "webpki-root-certs@1.0.12", allow = ["CDLA-Permissive-2.0"] },
 ]
+
+# proton-srp's crates.io metadata carries no SPDX license field, only a
+# licence file; the file is MIT (spec/01's Crates table).
+[[licenses.clarify]]
+crate = "proton-srp"
+expression = "MIT"
+license-files = [{ path = "LICENSE", hash = 0x41b32367 }]
+
+# libbz2-rs-sys's crates.io metadata says the non-standard
+# `bzip2-1.0.6`; the file is a permissive BSD-style licence (the
+# policy's BSD-3-Clause), so the metadata is clarified.
+[[licenses.clarify]]
+crate = "libbz2-rs-sys"
+expression = "BSD-3-Clause"
+license-files = [{ path = "LICENSE", hash = 0x6022ceaf }]
 
 # Sweetbriar's own crates are publish = false; their Unlicense OR 0BSD
 # offering is already on the allow list above.

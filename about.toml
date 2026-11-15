@@ -15,12 +15,31 @@ accepted = [
     "Zlib",
     "Unicode-3.0",
     "MPL-2.0",
+    # wasm32-only dependency of rustls-platform-verifier; not linked
+    # into Sweetbriar's macOS or Linux builds (named in deny.toml).
+    "CDLA-Permissive-2.0",
 ]
 
 # Sweetbriar's own crates are publish = false and not third-party, so
 # they stay out of the notices file.
 [private]
 ignore = true
+
+# proton-srp's crates.io metadata carries no SPDX licence field, only a
+# licence file; the file is MIT (spec/01's Crates table).
+[proton-srp.clarify]
+license = "MIT"
+files = [
+    { path = "LICENSE", checksum = "0f1f10f59a851e50a188a252a29fc371af5528402e9c25c5484332ad8b245aab", license = "MIT" },
+]
+
+# libbz2-rs-sys's metadata says the non-standard `bzip2-1.0.6`; the
+# licence file is a permissive BSD-style licence.
+[libbz2-rs-sys.clarify]
+license = "BSD-3-Clause"
+files = [
+    { path = "LICENSE", checksum = "54e1fd7bd53273e601c9599eb162a004dacddee031ae297ee7109a7beb93b1c2", license = "BSD-3-Clause" },
+]
 
 # cargo-about otherwise also ingests src/gb18030_2022.rs — a source
 # file whose header comment happens to be the WHATWG license text —
