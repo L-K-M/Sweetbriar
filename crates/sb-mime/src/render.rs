@@ -349,7 +349,7 @@ pub(crate) fn sanitize_run(
 
 // These are the five escapes emitted by the pinned HTML5 serializer, not a
 // decoder for sender HTML. Decode ampersands last to avoid recursive decoding.
-fn decode_serialized(value: &str) -> String {
+pub(crate) fn decode_serialized(value: &str) -> String {
     value
         .replace("&lt;", "<")
         .replace("&gt;", ">")

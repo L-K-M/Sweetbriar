@@ -386,7 +386,7 @@ impl Inventory<'_> {
         }
     }
 }
-fn decode_cid(value: &str) -> Option<String> {
+pub(crate) fn decode_cid(value: &str) -> Option<String> {
     let mut bytes = Vec::new();
     let mut chars = value.bytes();
     while let Some(c) = chars.next() {
