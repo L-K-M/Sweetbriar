@@ -603,8 +603,12 @@ fn the_objects_and_the_generations_are_verified_weekly() {
     let first = started_of(&engine, MaintenanceJob::Verify);
     assert_eq!(first, MONDAY + ms(SETTLE));
 
-    // Not again before a week since that start.
+    // A later real change is backed up before the next weekly verification.
+    // This also makes the number of generations deterministic regardless of
+    // whether background import-derived work finished before the first backup.
+    change(&engine);
     advance(&engine, &clock, VERIFY_PERIOD - Duration::from_millis(1));
+    assert_eq!(count(&engine, COMPLETE), 2);
     assert_eq!(started_of(&engine, MaintenanceJob::Verify), first);
     advance(&engine, &clock, Duration::from_millis(1));
     assert_eq!(
@@ -613,7 +617,14 @@ fn the_objects_and_the_generations_are_verified_weekly() {
     );
     let detail = verified(&engine).detail.unwrap();
     assert!(detail.starts_with("sample: buckets 1, "), "{detail}");
-    assert!(detail.contains("generations: intact 1, "), "{detail}");
+    assert!(
+        detail.ends_with("generations: intact 2, damaged 0, missing 0, unreachable 0, failed 0"),
+        "{detail}"
+    );
+    assert_eq!(
+        verdicts(&engine),
+        [Some("intact".to_owned()), Some("intact".to_owned())]
+    );
     block_on(engine.shutdown()).unwrap();
 }
 
