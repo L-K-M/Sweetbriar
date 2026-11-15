@@ -71,8 +71,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             didClose: { [weak self] in await self?.archiveClosed() }
         )
         self.backups = backups
-        composeCues = SharedComposeCue(canWrite: { [weak backups] in backups?.canWrite == true })
-        composeWindows = ComposeWindows(backups: backups, appearance: appearance,
+        let composeCue = SharedComposeCue(canWrite: { [weak backups] in backups?.canWrite == true })
+        composeCues = composeCue
+        composeWindows = ComposeWindows(backups: backups, appearance: appearance, cues: composeCue,
             openCore: { try await session.bridge() },
             reportError: { [weak self] error in self?.presentError("Couldn't create a draft", error) })
         let mainWindow = MainWindowController(session: session, appearance: appearance, backups: backups,

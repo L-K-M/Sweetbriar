@@ -51,6 +51,10 @@ private actor ComposeTestSource: ComposeSource {
         return try await bridge.createDraft(idempotencyKey: idempotencyKey, source: source)
     }
     func draft(id: String) async throws -> Draft { try await bridge.draft(id: id) }
+    func composeCue() async throws -> ComposeCueMode { try await bridge.composeCue() }
+    func setComposeCue(_ mode: ComposeCueMode) async throws -> Receipt {
+        try await bridge.setComposeCue(mode)
+    }
     func appearance() async throws -> Appearance { try await bridge.appearance() }
     func appearanceEvents(generation: UInt64) async throws -> any AppearanceEventSource {
         try await bridge.appearanceEvents(generation: generation)
@@ -117,6 +121,7 @@ private final class ComposeFixture {
     let source: ComposeTestSource
     let backups = SharedBackups(didRestore: {}, didClose: {})
     let appearance = SharedAppearance()
+    lazy var cues = SharedComposeCue(canWrite: { [backups] in backups.canWrite })
     var controllers: [ComposeWindowController] = []
     var owner: ComposeWindows?
     var errors: [any Error] = []
@@ -153,7 +158,7 @@ private final class ComposeFixture {
     func makeOwner() -> ComposeWindows {
         let source = source
         let owner = ComposeWindows(
-            backups: backups, appearance: appearance, openCore: { source },
+            backups: backups, appearance: appearance, cues: cues, openCore: { source },
             reportError: { [weak self] in
                 self?.errors.append($0)
             })
@@ -170,6 +175,7 @@ private final class ComposeFixture {
             }
         }
         let closed = await owner?.closeForQuit() != false
+        await cues.stopAndWait()
         await appearance.reset()
         return closed
     }
@@ -276,6 +282,45 @@ struct ComposeWindowTests {
                 controller.window?.titlebarAccessoryViewControllers.contains {
                     $0 === controller.identityStrip
                 } == true)
+        }
+    }
+
+    @Test func ownerSharesCueWithBothNativeWindows() async throws {
+        try await withComposeFixture { f in
+            let owner = f.makeOwner()
+            owner.newMessage()
+            owner.newMessage()
+            try #require(
+                await composeEventually {
+                    owner.windows.count == 2 && owner.windows.values.allSatisfy { $0.model.content != nil }
+                })
+            let cue = try #require(f.cues.model(source: f.source))
+            try #require(await composeEventually { cue.mode == .standard })
+            #expect(await cue.setMode(.strong))
+            try #require(
+                await composeEventually {
+                    owner.windows.values.allSatisfy {
+                        !$0.cueStatusLabel.isHidden
+                            && $0.cueStatusLabel.stringValue.contains("Strong appearance is unavailable")
+                    }
+                })
+            #expect(
+                owner.windows.values.allSatisfy {
+                    $0.window?.styleMask.contains(.fullSizeContentView) == false
+                })
+        }
+    }
+
+    @Test func unavailableCueRefusesBeforeCreatingADraft() async throws {
+        try await withComposeFixture { f in
+            f.cues.freezeForRestore()
+            let owner = f.makeOwner()
+            owner.newMessage()
+            try #require(await composeEventually { !f.errors.isEmpty })
+            #expect(await f.source.creates == 0)
+            #expect(owner.windows.isEmpty)
+            #expect(f.backups.restoreBlockedReason == nil)
+            #expect(try await f.bridge.drafts().isEmpty)
         }
     }
 

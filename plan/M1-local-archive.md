@@ -2160,9 +2160,23 @@ local drafts. No network yet.
                           Settings and compose chrome and retain every
                           remaining neutral-editor, selected-row actual
                           surface, full-screen, text-size, restore, multiwindow
-                          and source/undo proof above. The complete workflow
-                          remains unqualified until this and the later native
-                          acceptance step pass.
+                          and source/undo proof above. Re-sized before coding:
+                          - **b2b2b2b2a Strong chrome consumer (L):** connect
+                            compose windows to the shared receipt-aware cue;
+                            apply and revert core-token Strong chrome while
+                            keeping the editor neutral and preserving source,
+                            focus and undo. Unknown or stale preference must
+                            be explicit. Test real native windows, multiple
+                            consumers and appearance transitions. Do not
+                            expose a setting until its UI is connected.
+                          - **b2b2b2b2b Settings and qualification (L):** add
+                            the Standard/Strong setting with health admission,
+                            frozen editor tickets and receipt-only publication;
+                            retain the actual selected-row surfaces, two real
+                            full-screen windows, text-size, restore/reopen,
+                            multiwindow and source/undo checks above. The full
+                            workflow remains unqualified until this and the
+                            later native acceptance step pass.
         Optional Contacts stays optional; complete native workflow and
         owner input-method/accessibility gates remain c2e and owner work.
       - **M1.9c2c Attachment and conflict editing (L):** picking/dragging

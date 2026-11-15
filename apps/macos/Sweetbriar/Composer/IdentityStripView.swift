@@ -50,6 +50,7 @@ final class IdentityStripView: NSView {
             needsDisplay = true
         }
     }
+    var appearanceDidChange: (() -> Void)?
     var contrastOptions: () -> (increase: Bool, differentiate: Bool) = {
         (
             NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast,
@@ -95,6 +96,7 @@ final class IdentityStripView: NSView {
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
         needsDisplay = true
+        appearanceDidChange?()
     }
 
     override func draw(_ dirtyRect: NSRect) {
