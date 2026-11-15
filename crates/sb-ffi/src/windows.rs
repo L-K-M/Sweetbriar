@@ -29,6 +29,9 @@ pub enum WindowSpec {
     Thread { thread_id: i64 },
     /// Logical-message Search hits, with same-snapshot status.
     Search { spec: SearchSpec },
+    /// A saved view's query results, resolved when the window opens
+    /// (spec/07 Views).
+    View { view_id: String },
 }
 
 impl WindowSpec {
@@ -40,6 +43,7 @@ impl WindowSpec {
             Self::Flagged => sb_service::WindowSpec::Flagged,
             Self::Thread { thread_id } => sb_service::WindowSpec::Thread(thread_id),
             Self::Search { spec } => sb_service::WindowSpec::Search(spec.into_service()),
+            Self::View { view_id } => sb_service::WindowSpec::View(view_id),
         }
     }
 }
@@ -447,6 +451,13 @@ mod tests {
         assert_eq!(
             WindowSpec::Flagged.into_service(),
             sb_service::WindowSpec::Flagged
+        );
+        assert_eq!(
+            WindowSpec::View {
+                view_id: "00000000-0000-4000-8000-0000000000ff".into()
+            }
+            .into_service(),
+            sb_service::WindowSpec::View("00000000-0000-4000-8000-0000000000ff".into())
         );
         assert_eq!(
             WindowSpec::DebugSynthetic.into_service(),

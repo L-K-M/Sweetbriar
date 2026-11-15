@@ -18,10 +18,23 @@ and `set_note`, through `sb-store`, `sb-engine` and `sb-service`.
   survive occurrence vanishing and restore; export includes them (09,
   capture format 1); commands are idempotent under replay.
 
-**M6.1b (FFI and macOS) — M, macos-ci.** Bindings plus "Save search
-as view", sidebar views, a tag picker and a reader note editor.
+**M6.1b1 (FFI) — L, linux.** `upsert_saved_view`, `delete_saved_view`,
+`saved_views()`, the `View(id)` window spec, `add_tag`, `remove_tag`
+and `set_note` exported through `sb-ffi` with DTOs mirroring the
+service's, plus the regenerated bindings under
+`apps/macos/SweetbriarCore/`.
+- **Spec:** 02, 07 (Views, Messages, Threading, cancellation and FFI
+  rules).
+- **Depends on:** M6.1a.
+- **Acceptance:** each export round-trips over a synthetic archive
+  and replays idempotently under a repeated key (the sb-ffi tests);
+  `cargo xtask ffi --bindings-only` regenerates the committed bindings
+  and `cargo xtask check-ffi` passes.
+
+**M6.1b2 (macOS UI) — M, macos-ci.** "Save search as view", sidebar
+views, a tag picker and a reader note editor.
 - **Spec:** 02, 07, 08 (reader header, sidebar).
-- **Depends on:** M6.1a; the "never sent" trace also needs a remote
+- **Depends on:** M6.1b1; the "never sent" trace also needs a remote
   backend (M2+).
 - **Acceptance:** saving a search lists its rows under the new view;
   the picker applies and removes a tag; the note editor saves and

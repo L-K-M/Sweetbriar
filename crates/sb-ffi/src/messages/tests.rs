@@ -105,6 +105,232 @@ fn a_message_maps_field_for_field() {
     }
 }
 
+/// Each selection variant maps to the service's own (spec/07).
+#[test]
+fn selections_map_variant_for_variant() {
+    assert_eq!(
+        MessageSelection::OccurrenceIds(vec![1, 2]).into_service(),
+        sb_service::MessageSelection::OccurrenceIds(vec![1, 2])
+    );
+    assert_eq!(
+        MessageSelection::Window {
+            window_id: 3,
+            generation: 4
+        }
+        .into_service(),
+        sb_service::MessageSelection::Window {
+            window_id: 3,
+            generation: 4
+        }
+    );
+}
+
+/// One imported message, through the exported import surface.
+fn import_one(core: &Core, path: &std::path::Path) {
+    use crate::ImportTarget;
+    std::fs::write(
+        path,
+        "From sender@example.test Sat Oct 17 12:00:00 2026\n\
+         Message-ID: <17@ffi.test>\n\
+         Date: 17 Oct 2026 12:00:00 +0000\n\
+         Subject: alpha one\n\
+         Content-Type: text/plain; charset=utf-8\n\n\
+         alpha alpha alpha\n",
+    )
+    .unwrap();
+    let started = sb_test_support::block_on(core.start_import(
+        CancelToken::new(),
+        "20000000-0000-4000-8000-000000000001".into(),
+        vec![path.to_string_lossy().into_owned()],
+        ImportTarget::LocalArchive,
+    ))
+    .unwrap();
+    wait_import(core, &started.job_id, |job| {
+        job.state == crate::ImportJobState::AwaitingConfirmation
+    });
+    sb_test_support::block_on(core.confirm_import(
+        CancelToken::new(),
+        "20000000-0000-4000-8000-000000000002".into(),
+        started.job_id.clone(),
+        vec![],
+    ))
+    .unwrap();
+    wait_import(core, &started.job_id, |job| {
+        job.state == crate::ImportJobState::Completed
+    });
+}
+
+fn wait_import(
+    core: &Core,
+    job_id: &str,
+    done: impl Fn(&crate::ImportJob) -> bool,
+) -> crate::ImportJob {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(300);
+    loop {
+        let job = sb_test_support::block_on(core.import_job(CancelToken::new(), job_id.to_owned()))
+            .unwrap();
+        if done(&job) {
+            return job;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the import never settled"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+}
+
+/// Tags and notes cross through the exported commands: explicit and
+/// window selections attach and detach, a repeated idempotency key
+/// answers its stored receipt, and empty text clears the note
+/// (spec/07 Messages).
+#[test]
+fn tag_and_note_commands_round_trip_and_replay() {
+    use crate::{Anchor, CoreConfig, WindowSpec, open_core};
+    use sb_test_support::{ScratchDir, block_on};
+
+    let scratch = ScratchDir::new("ffi-tags-notes");
+    let core = block_on(open_core(
+        CancelToken::new(),
+        CoreConfig {
+            data_root: scratch.path().join("store").to_string_lossy().into_owned(),
+            cache_root: scratch.path().join("cache").to_string_lossy().into_owned(),
+        },
+    ))
+    .unwrap();
+    import_one(&core, &scratch.path().join("Tags.mbox"));
+
+    let account = block_on(core.accounts(CancelToken::new())).unwrap()[0]
+        .account_id
+        .clone();
+    let mailbox = block_on(core.mailboxes(CancelToken::new(), account))
+        .unwrap()
+        .mailboxes[0]
+        .mailbox_id;
+    let window = block_on(core.open_window(
+        CancelToken::new(),
+        WindowSpec::Mailbox {
+            mailbox_id: mailbox,
+        },
+        Anchor::Top,
+        10,
+    ))
+    .unwrap();
+    assert_eq!(window.rows.len(), 1);
+    let target = &window.rows[0];
+    assert_eq!(target.subject, "alpha one");
+    let occurrence = target.occurrence_id;
+    let message_id = target.message_id;
+
+    // An explicit occurrence selection attaches the named tag.
+    let add_key = "20000000-0000-4000-8000-000000000010".to_owned();
+    let added = block_on(core.add_tag(
+        CancelToken::new(),
+        add_key.clone(),
+        MessageSelection::OccurrenceIds(vec![occurrence]),
+        "work".into(),
+    ))
+    .unwrap();
+    assert_eq!(added.command, "add_tag");
+    assert!(added.result_json.contains(r#""added":1"#));
+    assert_eq!(
+        block_on(core.add_tag(
+            CancelToken::new(),
+            add_key,
+            MessageSelection::OccurrenceIds(vec![occurrence]),
+            "work".into(),
+        ))
+        .unwrap(),
+        added,
+        "a repeated key answers its stored receipt"
+    );
+    let read = block_on(core.get_message(CancelToken::new(), message_id)).unwrap();
+    assert_eq!(read.tags.len(), 1);
+    assert_eq!(read.tags[0].name, "work");
+
+    // A window token names the open window's rows at its generation.
+    let window_key = "20000000-0000-4000-8000-000000000011".to_owned();
+    let later = block_on(core.add_tag(
+        CancelToken::new(),
+        window_key,
+        MessageSelection::Window {
+            window_id: window.window_id,
+            generation: window.generation,
+        },
+        "later".into(),
+    ))
+    .unwrap();
+    assert!(later.result_json.contains(r#""added":1"#));
+    let read = block_on(core.get_message(CancelToken::new(), message_id)).unwrap();
+    let mut names = read
+        .tags
+        .iter()
+        .map(|tag| tag.name.as_str())
+        .collect::<Vec<_>>();
+    names.sort_unstable();
+    assert_eq!(names, ["later", "work"]);
+
+    // Removal detaches the tag; a repeated key replays.
+    let remove_key = "20000000-0000-4000-8000-000000000012".to_owned();
+    let removed = block_on(core.remove_tag(
+        CancelToken::new(),
+        remove_key.clone(),
+        MessageSelection::OccurrenceIds(vec![occurrence]),
+        "work".into(),
+    ))
+    .unwrap();
+    assert!(removed.result_json.contains(r#""removed":1"#));
+    assert_eq!(
+        block_on(core.remove_tag(
+            CancelToken::new(),
+            remove_key,
+            MessageSelection::OccurrenceIds(vec![occurrence]),
+            "work".into(),
+        ))
+        .unwrap(),
+        removed
+    );
+    let read = block_on(core.get_message(CancelToken::new(), message_id)).unwrap();
+    assert_eq!(
+        read.tags
+            .iter()
+            .map(|tag| tag.name.as_str())
+            .collect::<Vec<_>>(),
+        ["later"]
+    );
+
+    // One note per message; empty text removes it.
+    let note_key = "20000000-0000-4000-8000-000000000013".to_owned();
+    let noted = block_on(core.set_note(
+        CancelToken::new(),
+        note_key.clone(),
+        message_id,
+        "a note".into(),
+    ))
+    .unwrap();
+    assert_eq!(noted.command, "set_note");
+    assert_eq!(
+        block_on(core.set_note(CancelToken::new(), note_key, message_id, "a note".into(),))
+            .unwrap(),
+        noted
+    );
+    let read = block_on(core.get_message(CancelToken::new(), message_id)).unwrap();
+    assert_eq!(read.note.as_deref(), Some("a note"));
+    let cleared = block_on(core.set_note(
+        CancelToken::new(),
+        "20000000-0000-4000-8000-000000000014".into(),
+        message_id,
+        "".into(),
+    ))
+    .unwrap();
+    assert_eq!(cleared.command, "set_note");
+    let read = block_on(core.get_message(CancelToken::new(), message_id)).unwrap();
+    assert_eq!(read.note, None);
+
+    block_on(core.close_window(window.window_id));
+    block_on(core.shutdown());
+}
+
 /// Both exported queries honor their cancellation token.
 #[test]
 fn reader_queries_honor_cancellation() {

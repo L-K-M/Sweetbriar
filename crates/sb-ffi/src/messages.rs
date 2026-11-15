@@ -1,6 +1,9 @@
-//! Reader metadata, body and attachment lease DTOs and queries (spec/07, spec/08).
+//! Reader metadata, body and attachment lease DTOs and queries
+//! (spec/07, spec/08), plus the local tag and note commands
+//! (spec/07 Messages): records mirroring `sb-service`'s DTOs field
+//! by field, converted one way across the boundary.
 
-use crate::{CancelToken, Core, CoreError};
+use crate::{CancelToken, Core, CoreError, Receipt};
 use std::sync::Arc;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
@@ -40,6 +43,33 @@ pub struct ReaderTag {
     pub tag_id: String,
     pub name: String,
     pub color_srgb: Option<String>,
+}
+
+/// A message selection (spec/07): up to 1,000 explicit occurrence
+/// ids, or one open window's rows at the generation its caller holds.
+/// Tags resolve to logical messages, not occurrences.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
+pub enum MessageSelection {
+    /// Explicit occurrence ids.
+    OccurrenceIds(Vec<i64>),
+    /// An open window's rows at `generation`; a stale generation is
+    /// `ResetRequired`.
+    Window { window_id: u64, generation: u64 },
+}
+
+impl MessageSelection {
+    fn into_service(self) -> sb_service::MessageSelection {
+        match self {
+            Self::OccurrenceIds(ids) => sb_service::MessageSelection::OccurrenceIds(ids),
+            Self::Window {
+                window_id,
+                generation,
+            } => sb_service::MessageSelection::Window {
+                window_id,
+                generation,
+            },
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
@@ -279,6 +309,63 @@ impl Core {
             })
             .await?;
         Ok(value)
+    }
+
+    /// `add_tag(selection, tag)` (spec/07 Messages): attach the named
+    /// tag, creating the definition when the name is new. A repeated
+    /// key answers its stored receipt. Like every command it honours
+    /// the token only until it holds the core.
+    pub async fn add_tag(
+        &self,
+        token: Arc<CancelToken>,
+        idempotency_key: String,
+        selection: MessageSelection,
+        tag: String,
+    ) -> Result<Receipt, CoreError> {
+        let receipt = self
+            .command(&token, async move |core| {
+                core.add_tag(&idempotency_key, selection.into_service(), &tag)
+                    .await
+            })
+            .await?;
+        Ok(Receipt::from_service(&receipt))
+    }
+
+    /// `remove_tag(selection, tag)` (spec/07 Messages): detach the
+    /// named tag; the definition stays. A repeated key answers its
+    /// stored receipt.
+    pub async fn remove_tag(
+        &self,
+        token: Arc<CancelToken>,
+        idempotency_key: String,
+        selection: MessageSelection,
+        tag: String,
+    ) -> Result<Receipt, CoreError> {
+        let receipt = self
+            .command(&token, async move |core| {
+                core.remove_tag(&idempotency_key, selection.into_service(), &tag)
+                    .await
+            })
+            .await?;
+        Ok(Receipt::from_service(&receipt))
+    }
+
+    /// `set_note(message_id, text)` (spec/07 Messages): write Markdown,
+    /// one note per message; empty text removes it. A repeated key
+    /// answers its stored receipt.
+    pub async fn set_note(
+        &self,
+        token: Arc<CancelToken>,
+        idempotency_key: String,
+        message_id: i64,
+        text: String,
+    ) -> Result<Receipt, CoreError> {
+        let receipt = self
+            .command(&token, async move |core| {
+                core.set_note(&idempotency_key, message_id, &text).await
+            })
+            .await?;
+        Ok(Receipt::from_service(&receipt))
     }
 }
 
