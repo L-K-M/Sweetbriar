@@ -460,6 +460,13 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
         }
     }
 
+    private var appearanceReadPending: Bool {
+        guard let identity = identityControls.model.selectedIdentity, identity.sendable != .unavailable,
+            let appearance
+        else { return false }
+        return appearance.appearance == nil && appearance.lastError == nil
+    }
+
     private var identityAppearanceIsLoading: Bool {
         guard let content = model.content else { return model.failure == nil }
         guard content.identityId != nil else { return false }
@@ -467,10 +474,7 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
         case .unloaded, .loading:
             return true
         case .loaded:
-            guard let identity = identityControls.model.selectedIdentity, identity.sendable != .unavailable,
-                let appearance
-            else { return false }
-            return appearance.appearance == nil && appearance.lastError == nil
+            return appearanceReadPending
         case .failed, .stopped:
             return false
         }
@@ -507,7 +511,7 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
             message = "Compose appearance is unavailable. Quit and reopen Sweetbriar to retry."
         } else if cue?.mode == nil {
             message = "Loading compose appearance…"
-        } else if cue?.mode == .strong && tint == nil {
+        } else if cue?.mode == .strong && tint == nil && !(model.content == nil && model.failure != nil) {
             message =
                 identityAppearanceIsLoading
                 ? "Loading compose appearance…"
@@ -550,10 +554,7 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
                 && identityControls.model.selectedIdentity == nil
             {
                 stripContent = .unavailable(label: "Loading sending identity…")
-            } else if let identity = identityControls.model.selectedIdentity,
-                identity.sendable != .unavailable,
-                let appearance, appearance.appearance == nil, appearance.lastError == nil
-            {
+            } else if appearanceReadPending, let identity = identityControls.model.selectedIdentity {
                 stripContent = .unavailable(
                     label: "Loading appearance: \(IdentityStripContent.label(for: identity))")
             } else {
@@ -562,7 +563,8 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
                     appearance: appearance?.appearance)
             }
         } else {
-            stripContent = .unavailable(label: "Loading sending identity…")
+            stripContent = .unavailable(
+                label: model.failure == nil ? "Loading sending identity…" : "Sending identity unavailable")
         }
         identityStrip.setContent(stripContent, routeChanged: routeChanged)
         renderChrome()

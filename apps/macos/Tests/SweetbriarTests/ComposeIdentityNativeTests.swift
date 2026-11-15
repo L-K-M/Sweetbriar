@@ -51,6 +51,7 @@ private actor NativeIdentitySource: DraftStore, ComposeCatalogSource, RecipientS
         forwardOfMessageId: nil, revision: nil, attempt: nil, createdAtMs: 0, updatedAtMs: 0)
     private var catalog: ComposeCatalog
     private var catalogFailure: CoreFailure?
+    private let draftFailure: CoreFailure?
     private var catalogGate: NativeIdentityGate?
     private var parseGate: NativeIdentityGate?
     private var heldParses: [NativeIdentityGate] = []
@@ -58,7 +59,8 @@ private actor NativeIdentitySource: DraftStore, ComposeCatalogSource, RecipientS
     private(set) var catalogReads = 0
     private(set) var parses: [String] = []
     private(set) var saves = 0
-    init(_ seed: Seed, defaultId: String?, catalogGate: NativeIdentityGate?) {
+    init(_ seed: Seed, defaultId: String?, catalogGate: NativeIdentityGate?, draftFailure: CoreFailure?) {
+        self.draftFailure = draftFailure
         catalog = .init(
             identities: [nativeIdentity("a"), nativeIdentity("b", sendable: .provisional)],
             defaultIdentityId: defaultId)
@@ -74,7 +76,10 @@ private actor NativeIdentitySource: DraftStore, ComposeCatalogSource, RecipientS
         await catalogGate?.open()
         for gate in heldParses { await gate.open() }
     }
-    func draft(id: String) async throws -> Draft { row }
+    func draft(id: String) async throws -> Draft {
+        if let draftFailure { throw draftFailure }
+        return row
+    }
     func composeCatalog(preferredAccountId: String?) async throws -> ComposeCatalog {
         catalogReads += 1
         await catalogGate?.wait()  // Deliberately await the actual answer after cancellation.
@@ -166,11 +171,12 @@ private enum IdentityUndoEvents { case application, explicitTestTransactions }
 private func withNativeIdentity(
     _ seed: NativeIdentitySource.Seed = .saved(nativeContent()), defaultId: String? = nil,
     catalogGate: NativeIdentityGate? = nil, undoEvents: IdentityUndoEvents = .application,
-    appearance: AppearanceModel? = nil, cue: ComposeCueModel? = nil,
+    draftFailure: CoreFailure? = nil, appearance: AppearanceModel? = nil, cue: ComposeCueModel? = nil,
     announceRoute: @escaping @MainActor (String) -> Void = { _ in },
     body: @MainActor (ComposeWindowController, NativeIdentitySource) async throws -> Void
 ) async throws {
-    let source = NativeIdentitySource(seed, defaultId: defaultId, catalogGate: catalogGate)
+    let source = NativeIdentitySource(
+        seed, defaultId: defaultId, catalogGate: catalogGate, draftFailure: draftFailure)
     let controller = ComposeWindowController(
         source: source, draftId: "native-identity", appearance: appearance, cue: cue,
         announceRoute: announceRoute)
@@ -185,8 +191,10 @@ private func withNativeIdentity(
             try #require(undo.groupingLevel == 0)
             undo.groupsByEvent = false
         }
-        let loaded = await identityEventually { controller.model.content != nil }
-        try #require(loaded)
+        let settled = await identityEventually {
+            draftFailure == nil ? controller.model.content != nil : controller.model.failure != nil
+        }
+        try #require(settled)
         try await body(controller, source)
         result = .success(())
     } catch { result = .failure(error) }
@@ -514,15 +522,40 @@ struct ComposeIdentityNativeTests {
         await cue.reload()
         #expect(await cue.setMode(.strong))
         let source = NativeStripAppearanceSource()
-        await source.setFailure(.unavailable(reason: "synthetic appearance failure"))
         let appearance = AppearanceModel(source: source)
-        await appearance.refresh()
         try await withNativeIdentity(appearance: appearance, cue: cue) { controller, _ in
+            try #require(
+                await identityEventually {
+                    controller.identityStrip.strip.accessibilityLabel()?.hasPrefix("Loading appearance:")
+                        == true
+                        && controller.cueStatusLabel.stringValue == "Loading compose appearance…"
+                })
+            await source.setFailure(.unavailable(reason: "synthetic appearance failure"))
+            await appearance.refresh()
             try #require(
                 await identityEventually {
                     controller.cueStatusLabel.stringValue
                         == "Strong appearance is unavailable for this sending identity."
+                        && controller.identityStrip.strip.accessibilityLabel()?.hasPrefix(
+                            "Appearance unavailable:") == true
                 })
+            #expect(controller.window?.styleMask.contains(.fullSizeContentView) == false)
+        }
+    }
+
+    @Test func failedDraftLoadDoesNotPretendIdentityIsStillLoading() async throws {
+        let cue = ComposeCueModel(source: NativeCueSource())
+        await cue.reload()
+        #expect(await cue.setMode(.strong))
+        try await withNativeIdentity(draftFailure: .unavailable(reason: "synthetic draft failure"), cue: cue)
+        {
+            controller, _ in
+            try #require(
+                await identityEventually {
+                    controller.statusLabel.stringValue.contains("synthetic draft failure")
+                })
+            #expect(controller.identityStrip.strip.accessibilityLabel() == "Sending identity unavailable")
+            #expect(controller.cueStatusLabel.isHidden)
             #expect(controller.window?.styleMask.contains(.fullSizeContentView) == false)
         }
     }
