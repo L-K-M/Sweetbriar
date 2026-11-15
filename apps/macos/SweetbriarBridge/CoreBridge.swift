@@ -481,6 +481,22 @@ public final class CoreBridge: Sendable {
         return DraftAttachmentObject(object)
     }
 
+    /// Stream a selected local file into a durable attachment publication.
+    /// A security scope, when provided by the system, stays active until the
+    /// native command returns, including after cancellation of a begun call.
+    public func publishDraftAttachment(file: URL) async throws -> DraftAttachmentObject {
+        guard file.isFileURL else {
+            throw CoreFailure.invalidInput(field: "path", message: "Choose a local file.")
+        }
+        let scoped = file.startAccessingSecurityScopedResource()
+        defer { if scoped { file.stopAccessingSecurityScopedResource() } }
+        let token = SweetbriarCore.CancelToken()
+        let object = try await Self.withCancellation(token: token) {
+            try await self.core.publishDraftAttachmentFile(token: token, path: file.path)
+        }
+        return DraftAttachmentObject(object)
+    }
+
     /// `republish_draft_attachment` (spec/07): re-publish one stored
     /// attachment reference from an exact immutable revision; an older
     /// revision or a terminal source draft stays a valid source. The

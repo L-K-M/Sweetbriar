@@ -1253,6 +1253,14 @@ public protocol CoreProtocol: AnyObject, Sendable {
     func publishDraftAttachment(token: CancelToken, input: DraftAttachmentPublish) async throws  -> DraftAttachmentObject
     
     /**
+     * Stream a user-selected regular file through the ordinary durable
+     * publication path (spec/07). The caller retains any security-scoped
+     * file access until this command returns; once begun it drains even if
+     * cancelled or its caller is dropped.
+     */
+    func publishDraftAttachmentFile(token: CancelToken, path: String) async throws  -> DraftAttachmentObject
+    
+    /**
      * `republish_draft_attachment(draft_id, revision_id, reference)`
      * (spec/07): re-publish one stored attachment reference from an
      * exact immutable draft revision. `reference` crosses owned and
@@ -1953,6 +1961,28 @@ open func publishDraftAttachment(token: CancelToken, input: DraftAttachmentPubli
             rustFutureFunc: {
                 uniffi_sb_ffi_fn_method_core_publish_draft_attachment(
                         self.uniffiCloneHandle(),FfiConverterTypeCancelToken_lower(token),FfiConverterTypeDraftAttachmentPublish_lower(input)
+                )
+            },
+            pollFunc: ffi_sb_ffi_rust_future_poll_u64,
+            completeFunc: ffi_sb_ffi_rust_future_complete_u64,
+            freeFunc: ffi_sb_ffi_rust_future_free_u64,
+            liftFunc: FfiConverterTypeDraftAttachmentObject_lift,
+            errorHandler: FfiConverterTypeCoreError_lift
+        )
+}
+    
+    /**
+     * Stream a user-selected regular file through the ordinary durable
+     * publication path (spec/07). The caller retains any security-scoped
+     * file access until this command returns; once begun it drains even if
+     * cancelled or its caller is dropped.
+     */
+open func publishDraftAttachmentFile(token: CancelToken, path: String)async throws  -> DraftAttachmentObject  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_sb_ffi_fn_method_core_publish_draft_attachment_file(
+                        self.uniffiCloneHandle(),FfiConverterTypeCancelToken_lower(token),FfiConverterString.lower(path)
                 )
             },
             pollFunc: ffi_sb_ffi_rust_future_poll_u64,
@@ -12081,6 +12111,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sb_ffi_checksum_method_core_publish_draft_attachment() != 18368) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sb_ffi_checksum_method_core_publish_draft_attachment_file() != 44050) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sb_ffi_checksum_method_core_republish_draft_attachment() != 106) {
