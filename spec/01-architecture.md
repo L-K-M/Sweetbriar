@@ -23,6 +23,7 @@ crates/
   sb-mime/                 L5  parsing, extraction, sanitizing, rendering, composing MIME, Markdown
   sb-imap/                 L5  generic IMAP transport; knows no provider dialects
   sb-smtp/                 L5  SMTP submission
+  sb-proton/               L5  Proton API client: sessions, SRP, events, messages, OpenPGP (04-sync-proton)
   sb-platform/             L5  secret store, clock, filesystem seams, paths, platform facts
   sb-types/                L6  shared vocabulary only: ids, timestamps, email addresses, byte ranges, palette-v1 RGB values, and seam traits (Fs, Clock, Random); no implementations, no dependencies on other sb-* crates
   sb-test-support/         dev-only: fake IMAP/SMTP server, fixtures loader, crash-cut harness
@@ -67,7 +68,7 @@ rule at compile time: a crate can name only the crates it depends on.
  L4                     sb-resources
             one narrow, typed façade over the leaves; maps leaf types and errors
                                  │
- L5   sb-store     sb-mime     sb-imap     sb-smtp     sb-platform
+ L5   sb-store   sb-mime   sb-imap   sb-smtp   sb-proton   sb-platform
                                  │
  L6                          sb-types
             plain shared data types used by more than one leaf
@@ -83,6 +84,8 @@ rule at compile time: a crate can name only the crates it depends on.
    - Any crate may take `sb-test-support` as a dev-dependency.
 2. **Leaves never call each other.**
    - `sb-imap` doesn't parse MIME: it returns bytes.
+   - `sb-proton` doesn't build MIME: it returns decrypted parts, and
+     `sb-mime` reconstructs the message (04-sync-proton).
    - `sb-mime` doesn't touch the store.
    - `sb-store` doesn't know about IMAP.
    - Shared vocabulary types (ids, timestamps, email addresses, byte
@@ -96,8 +99,9 @@ rule at compile time: a crate can name only the crates it depends on.
    Re-exports name items, never whole crates or modules. `sb-service`
    defines its own DTOs for the API surface and re-exports nothing from
    below, so no engine or store type crosses into L1.
-4. **Backends never write the store.** `sb-imap` returns observations
-   (mailbox lists, UID sets, fetched headers and bodies). The engine
+4. **Backends never write the store.** `sb-imap` and `sb-proton` return
+   observations (mailbox lists, UID sets, labels, events, fetched headers
+   and bodies). The engine
    decides what to apply and applies it through `sb-resources` → `sb-store`.
 5. **Seams are traits in `sb-types`; implementations are in
    `sb-platform`.** A leaf such as `sb-store` uses only the `Fs` trait
@@ -240,6 +244,8 @@ is committed, and updates are their own PRs.
 | IMAP mailbox encoding | `base64` | 0.23.1 | Reuses io-imap's pinned dependency for strict RFC 3501 modified UTF-7 names (02 decoded UTF-8 names); the upstream private decoder is lossy |
 | SMTP | `lettre` (tokio + rustls features, no native-tls) | 0.11.23 | Raw-message submission of `mail-builder` output. Must expose enough to detect "connection lost after DATA" (05) |
 | TLS | `rustls` / `tokio-rustls` / `rustls-platform-verifier` | 0.23.46 / 0.26.6 / 0.7.1 | Pinned-certificate verifier for Bridge; platform verifier for others (10). `rustls` 0.23.46 for the RUSTSEC-2026-0346 to 0349 fixes (M2.1a) |
+| HTTP (Proton API) | `hyper` 1 client (`http1`), `hyper-util`, `http-body-util` | pin at first use (M2.11) | Over the workspace's `tokio-rustls` with the platform verifier (10). Chosen over `reqwest` to keep TLS, timeouts and pacing in Sweetbriar's hands, as for IMAP |
+| Proton auth and OpenPGP | `proton-srp`, `proton-crypto` (`rustpgp` backend only, no default features), `proton-crypto-account` | pin at first use (M2.11, M2.12) | Proton AG's MIT-licensed Rust crates, on crates.io (research/proton-api). The default `gopgp` backend links Go through cgo and is not used. `proton-rpgp` brings `pgp` (MIT OR Apache-2.0) and `rsa`: the `rsa` timing advisory (RUSTSEC-2023-0071, Marvin) gets a named `cargo deny` exception with its reasoning when the crate arrives, since Proton keys may be RSA. Their published licence metadata needs a `deny.toml` clarification against the MIT licence file |
 | Async | `tokio` | 1.54.1 | Maintenance update, including the RUSTSEC-2026-0386 fix; existing feature sets unchanged |
 | FFI | `uniffi` | 0.32.2 | Proc-macro exports, no UDL. No async foreign callback traits (07) |
 | Template config maintenance | `askama_derive` backport, maintained `toml` | 0.16.1, 1.1.8 | RUSTSEC-2026-0374: reviewed immutable fork revision in Cargo replaces basic-toml without changing UniFFI/runtime APIs; see plan/maintenance/2026-10-basic-toml |
@@ -267,8 +273,9 @@ is committed, and updates are their own PRs.
   published.
 - **LGPL** is allowed only for dynamically linked Linux platform
   libraries (GTK, *later*).
-- **Never linked:** GPL or AGPL in any form. Proton Bridge (GPLv3) stays
-  a separate user-installed program.
+- **Never linked:** GPL or AGPL in any form. Sweetbriar doesn't use
+  Proton Bridge (GPLv3) and never copies its code; its source is read
+  for protocol facts only (04-sync-proton).
 - **Enforcement:** `deny.toml` enforces this with an allow-list
   (cargo-deny 0.20 syntax). The starting template is in the crates
   research.

@@ -1,4 +1,12 @@
-# 04 — IMAP sync (Proton Bridge first)
+# 04 — IMAP sync (generic IMAP)
+
+> **Owner decision, 2026-11-15:** Proton accounts use Sweetbriar's own
+> Proton API client ([04-sync-proton](04-sync-proton.md)), not Proton
+> Bridge. This document's generic IMAP engine stays as tested code for
+> generic IMAP accounts (*later*), and its breaker, intent and health
+> rules are shared with 04-sync-proton. Its Bridge facts and the
+> `proton_bridge` policy describe merged code that new accounts no
+> longer reach; they are removed when that code is retired (plan M2).
 
 Rests on research [04-data-safety](../research/04-data-safety.md), D2/D3
 in [debate/04-resolution](../research/debate/04-resolution.md), and

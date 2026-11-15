@@ -1,5 +1,12 @@
 # 05 — Sending
 
+> **Revision pending (owner decision, 2026-11-15):** sending moves from
+> SMTP through Bridge to the Proton API (drafts created on Proton,
+> per-recipient encryption packages, Proton saving the Sent copy;
+> research/proton-api/mail-sync.md §7). Drafts, the outbox state
+> machine, identities and From resolution stand. The SMTP and Bridge
+> specifics are revised in their own spec PR before M4 starts.
+
 Rests on research [04-data-safety](../research/04-data-safety.md)
 (drafts and sending), D3, [15-account-colors](../research/15-account-colors.md)
 (compose behaviour), [12-markdown-first](../research/12-markdown-first.md)

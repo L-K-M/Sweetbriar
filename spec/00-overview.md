@@ -11,8 +11,12 @@ mail client for Proton Mail.
   islands.
 - **Local archive:** import Apple Mail `.mbox` exports and EML files into
   immutable storage, with a reconciliation report.
-- **Proton Mail through Proton Bridge:** IMAP and SMTP to Bridge on the
-  same Mac; read, search, compose, send, flag and file.
+- **Proton Mail through Sweetbriar's own Proton API client** (owner
+  decision, 2026-11-15; 04-sync-proton): read, search, compose, send,
+  flag and file, with no Proton Bridge. Proton offers no programme for
+  third-party clients, so this access is best effort: Sweetbriar
+  identifies itself honestly, paces its traffic like a standard client,
+  and shows any refusal (research/proton-api).
 - **Search:** exact local full-text search (FTS5) with field queries and
   visible coverage.
 - **Reader:** sanitized sender layout for HTML and literal plain text.
@@ -69,10 +73,10 @@ These rule every decision the spec leaves open.
 
 | Term | Meaning |
 |---|---|
-| **Account** | A configured mail source in Sweetbriar (the local archive, a Proton Bridge account). It has a stable UUID that never depends on credentials or remote ids |
+| **Account** | A configured mail source in Sweetbriar (the local archive, a Proton account). It has a stable UUID that never depends on credentials or remote ids |
 | **Identity** | An address the user can send as, belonging to an account (the primary address, aliases) |
 | **Acquisition** | Immutable bytes of one message as acquired from one source, stored once per content hash, with provenance |
-| **Occurrence** | One remote copy of a message: (account, mailbox, UIDVALIDITY, UID) for IMAP. It carries its own flags. The same message in two Bridge label folders is two occurrences |
+| **Occurrence** | One remote copy of a message: (account, mailbox, UIDVALIDITY, UID) for IMAP, or (account, label, message id) for Proton. It carries its own flags. The same message in two labels is two occurrences |
 | **Logical message** | Sweetbriar's grouping of occurrences known to be the same provider message. It never merges on Message-ID alone |
 | **Membership** | An occurrence's presence in a mailbox (folder or label) |
 | **Intent** | A durable record of a remote effect the user requested (flag, move, trash, add label), written in the same transaction as the local effect. Sends are tracked as send attempts instead |
@@ -80,4 +84,5 @@ These rule every decision the spec leaves open.
 | **Generation** | A version counter used to invalidate stale query windows, credentials or backups |
 | **Coverage** | Which parts of an account are locally available (headers, bodies, attachments, index) |
 | **Breaker** | The safety stop that pauses unexplained mass disappearance |
-| **Bridge** | Proton Mail Bridge, Proton's local IMAP/SMTP gateway |
+| **Bridge** | Proton Mail Bridge, Proton's local IMAP/SMTP gateway. Sweetbriar no longer uses it (2026-11-15) |
+| **Proton API** | Proton's HTTPS API, which Sweetbriar's `sb-proton` crate speaks directly |

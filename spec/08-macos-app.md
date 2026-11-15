@@ -127,6 +127,30 @@ Closing must acknowledge their displayed edits, or await the explicitly
 confirmed Close Without Saving path below, before releasing admission.
 Neither unsaved text nor a delayed draft save may cross a swap.
 
+## Proton sign-in (M2.14)
+
+File → Add Proton Account… opens a sheet driving 07's sign-in
+conversation; the Bridge account sheet is no longer offered.
+
+- **Before the first sign-in,** the sheet says plainly: Sweetbriar talks
+  to Proton directly; Proton doesn't officially support third-party
+  apps, may ask you to verify that you are human, and could block this
+  access; your password is used to sign in and is never stored.
+- **Steps:** display name, username and password; then, as Proton asks,
+  a six-digit code field (with paste), the mailbox password, or human
+  verification. Each step shows Proton's refusal inline and keeps what
+  was typed except secrets. Cancel ends the conversation
+  (`cancel_proton_sign_in`).
+- **Human verification** opens a child sheet with a non-persistent
+  `WKWebView` limited as spec/10 says. It closes when Proton hands back
+  the token, and the conversation continues.
+- **A security-key-only account** gets the refusal's explanation and a
+  link to Proton's 2FA settings page in the default browser.
+- **Signing in again** (from the account's health row, "Sign in again")
+  opens the same sheet for that account, with the username fixed.
+- Password fields are `NSSecureTextField`s; their contents go to the
+  bridge as bytes and are cleared when the step is sent.
+
 ## Sidebar
 
 - **Unified section:** Inbox (`Unified(inbox)`), Flagged (`Flagged`),
@@ -134,8 +158,8 @@ Neither unsaved text nor a delayed draft save may cross a swap.
   (07). Each account's own synced Drafts mailbox appears under the
   account.
 - **One section per account,** with its colored monogram and name; its
-  mailboxes are below, folders and labels grouped as Bridge exposes them
-  (04).
+  mailboxes are below: system folders, then folders (nested), then
+  labels, as 04-sync-proton maps them.
 - **Built with** an `NSOutlineView`, source-list style.
 - **Mailboxes** come from `mailboxes(account_id)` (07), with unread
   counts. Imported mailboxes are flat, named after their sources; no
