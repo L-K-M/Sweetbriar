@@ -123,6 +123,14 @@ private actor FakeDraftStore: DraftStore {
             resultJson: "{\"draft_id\":\"\(draftId)\"}", createdAtMs: 3
         )
     }
+    func publishDraftAttachment(file: URL) async throws -> DraftAttachmentObject {
+        throw CoreFailure.internalError(detail: "attachment publication is not used by this fixture")
+    }
+    func republishDraftAttachment(
+        draftId: String, revisionId: String, reference: DraftAttachmentRef
+    ) async throws -> DraftAttachmentObject {
+        throw CoreFailure.internalError(detail: "attachment republication is not used by this fixture")
+    }
 }
 
 // MARK: - DTO handling
@@ -355,10 +363,15 @@ func canonicallyEquivalentEditsKeepDistinctCommandIntent() async {
     await model.save()
     edited.subject = "e\u{0301}"
     model.update(edited)
+    await store.setSaveFailure(nil)
     await model.save()
+    // The ambiguous first intent is replayed under its own key before the
+    // canonically equivalent edit saves as a distinct intent.
     let saves = await store.saves
-    #expect(saves.count == 2 && saves[0].key != saves[1].key)
-    #expect(Array(saves[0].content.subject.utf8) != Array(saves[1].content.subject.utf8))
+    #expect(saves.count == 3 && saves[0].key == saves[1].key && saves[1].key != saves[2].key)
+    #expect(Array(saves[1].content.subject.utf8) == Array(saves[0].content.subject.utf8))
+    #expect(Array(saves[0].content.subject.utf8) != Array(saves[2].content.subject.utf8))
+    #expect(saves[2].base == "r2" && !model.isDirty)
 }
 
 @MainActor
@@ -435,6 +448,15 @@ private actor ReceiptHeldDraftStore: DraftStore {
             throw CoreFailure.unavailable(reason: "injected discard failure after commit")
         }
         return receipt
+    }
+    func publishDraftAttachment(file: URL) async throws -> DraftAttachmentObject {
+        try await bridge.publishDraftAttachment(file: file)
+    }
+    func republishDraftAttachment(
+        draftId: String, revisionId: String, reference: DraftAttachmentRef
+    ) async throws -> DraftAttachmentObject {
+        try await bridge.republishDraftAttachment(
+            draftId: draftId, revisionId: revisionId, reference: reference)
     }
 }
 

@@ -14,6 +14,12 @@ public protocol DraftStore: Sendable {
         baseRevisionId: String?, content: DraftContent
     ) async throws -> DraftSaved
     func discardDraft(idempotencyKey: String, draftId: String) async throws -> Receipt
+    /// Stream a user-selected file into a fresh publication (spec/07).
+    func publishDraftAttachment(file: URL) async throws -> DraftAttachmentObject
+    /// A fresh publication of a reference stored on an exact revision (spec/07).
+    func republishDraftAttachment(
+        draftId: String, revisionId: String, reference: DraftAttachmentRef
+    ) async throws -> DraftAttachmentObject
 }
 
 extension CoreBridge: DraftStore {}
@@ -77,6 +83,14 @@ public final class DraftModel {
     /// True once `stop` ran; completions are ignored but a begun command still commits.
     public private(set) var isStopped = false
 
+    /// An attachment taken out of the content, kept so undo or redo can put
+    /// it back. A handle a save spent comes back as a stored reference;
+    /// the next save republishes it when its base no longer has it.
+    public struct AttachmentRestoration: Sendable {
+        public let attachment: DraftAttachment
+        public let index: Int
+    }
+
     /// The route the displayed revision carries.
     public var route: Route {
         guard let revision else { return .noRevision }
@@ -100,6 +114,23 @@ public final class DraftModel {
     @ObservationIgnored private var saveTicket: UInt64 = 0
     @ObservationIgnored private var userEditVersion: UInt64 = 0
     @ObservationIgnored private var lastSave: (key: String, editVersion: UInt64, baseRevisionId: String?)?
+    /// A save whose outcome is unknown: it may have committed and spent its
+    /// handles without the receipt arriving. Its exact intent is retried
+    /// before any different save, so a lost receipt is replayed, not guessed.
+    @ObservationIgnored private var unresolved: PendingSave?
+    /// The stored references of the revision `baseRevisionId` names.
+    @ObservationIgnored private var baseAttachments: [DraftAttachmentRef] = []
+    /// Revisions known to store each reference: republication authority.
+    @ObservationIgnored private var sources: [(reference: DraftAttachmentRef, revisionId: String)] = []
+    /// Handles an acknowledged save spent, and the revision that spent them.
+    @ObservationIgnored private var spent: [(object: DraftAttachmentObject, revisionId: String)] = []
+
+    private struct PendingSave {
+        var key: String
+        var editVersion: UInt64
+        var baseRevisionId: String?
+        var content: DraftContent
+    }
 
     public init(source: any DraftStore, draftId: String) {
         self.source = source
@@ -133,24 +164,36 @@ public final class DraftModel {
     /// same content and base replays its receipt, so a spent attachment
     /// reservation cannot block it; an edit during the save survives.
     public func save() async {
-        guard canSave, let content else { return }
-        let base = baseRevisionId
-        let key = saveKey(base: base)
+        guard canSave, self.content != nil else { return }
         let ticket = saveTicket &+ 1
         saveTicket = ticket
-        let version = userEditVersion
         isSaving = true
         invalidateReads()
         conflict = nil
         failure = nil
         defer { if !isStopped { isSaving = false } }
+        guard await resolveUnknownOutcome(ticket: ticket) else { return }
+        guard let content else { return }
+        let base = baseRevisionId
+        let version = userEditVersion
+        // The unresolved intent itself retries verbatim under its own key.
+        let retry = unresolved.flatMap {
+            $0.editVersion == version && $0.baseRevisionId == base ? $0 : nil
+        }
+        let key = retry?.key ?? saveKey(base: base)
+        var sent = retry?.content ?? content
+        var began = false
         do {
+            if retry == nil {
+                sent = try await withAuthority(content)
+                guard !isStopped, ticket == saveTicket else { return }
+            }
+            began = true
             let saved = try await source.saveDraft(
-                idempotencyKey: key, draftId: draftId, baseRevisionId: base, content: content
+                idempotencyKey: key, draftId: draftId, baseRevisionId: base, content: sent
             )
             guard !isStopped, ticket == saveTicket else { return }
-            baseRevisionId = saved.revisionId
-            acknowledgeAttachments(in: content)
+            acknowledge(saved, sent: sent, shown: content)
             isDirty = version != userEditVersion
             // The receipt establishes the new base even if this read
             // fails. Later edits keep that base and the acknowledged
@@ -159,10 +202,13 @@ public final class DraftModel {
         } catch let error as CoreFailure {
             guard case .conflict(let detail) = error else {
                 guard !isStopped, ticket == saveTicket else { return }
+                if began { recordOutcome(of: error, key, version, base, sent) }
                 failure = error
                 return
             }
             guard !isStopped, ticket == saveTicket else { return }
+            // A committed key replays its receipt, so a conflict proves no commit.
+            unresolved = nil
             conflict = Conflict(
                 draftId: draftId, baseRevisionId: base, content: content, detail: detail
             )
@@ -172,8 +218,64 @@ public final class DraftModel {
             // this path has no result to apply.
         } catch {
             guard !isStopped, ticket == saveTicket else { return }
+            if began { recordOutcome(of: error, key, version, base, sent) }
             failure = error
         }
+    }
+
+    // MARK: Attachment edits
+
+    /// Add a published attachment at the end; nil when nothing is editable.
+    @discardableResult
+    public func appendAttachment(_ attachment: DraftAttachment) -> Int? {
+        guard var current = editableContent, !Self.holdsHandle(of: attachment, in: current) else {
+            return nil
+        }
+        current.attachments.append(attachment)
+        update(current)
+        return current.attachments.count - 1
+    }
+
+    /// Take out one attachment; the restoration is its undo.
+    public func removeAttachment(at index: Int) -> AttachmentRestoration? {
+        guard var current = editableContent, current.attachments.indices.contains(index) else {
+            return nil
+        }
+        let removed = current.attachments.remove(at: index)
+        update(current)
+        return AttachmentRestoration(attachment: removed, index: index)
+    }
+
+    /// Put a removed attachment back (undo of a removal, redo of an add).
+    /// A spent handle returns as its stored reference: it can't be spent again.
+    @discardableResult
+    public func restoreAttachment(_ restoration: AttachmentRestoration) -> Int? {
+        guard var current = editableContent else { return nil }
+        var attachment = restoration.attachment
+        if case .new(let object, let filename, let mediaType) = attachment,
+            spent.contains(where: { $0.object === object })
+        {
+            attachment = .retained(Self.reference(object, filename, mediaType))
+        }
+        guard !Self.holdsHandle(of: attachment, in: current) else { return nil }
+        let index = min(max(restoration.index, 0), current.attachments.count)
+        current.attachments.insert(attachment, at: index)
+        update(current)
+        return index
+    }
+
+    /// One handle carries one reservation, so it can appear only once.
+    private static func holdsHandle(of attachment: DraftAttachment, in content: DraftContent) -> Bool {
+        guard case .new(let object, _, _) = attachment else { return false }
+        return content.attachments.contains {
+            guard case .new(let present, _, _) = $0 else { return false }
+            return present === object
+        }
+    }
+
+    private var editableContent: DraftContent? {
+        guard !isStopped, !isDiscarded else { return nil }
+        return content
     }
 
     /// Retry one discard intent under its original idempotency key.
@@ -242,6 +344,7 @@ public final class DraftModel {
     private func apply(_ draft: Draft, preservingContent: Bool) {
         self.draft = draft
         isDiscarded = draft.state == .discarded
+        if let revision = draft.revision { recordSources(revision.attachments, in: revision.revisionId) }
         if preservingContent {
             // A remote revision is not the base of these unsaved edits.
             // A read of our acknowledged base can fill in its metadata.
@@ -249,11 +352,14 @@ public final class DraftModel {
             return
         }
         lastSave = nil
+        unresolved = nil
         if let revision = draft.revision {
             self.revision = revision
             baseRevisionId = revision.revisionId
+            baseAttachments = revision.attachments
             content = DraftContent(revision)
         } else {
+            baseAttachments = []
             self.revision = nil
             baseRevisionId = nil
             content = DraftContent.empty()
@@ -264,6 +370,143 @@ public final class DraftModel {
     private func invalidateReads() {
         loadTicket &+= 1
         isLoading = false
+    }
+
+    /// Retry a save whose outcome is unknown under its own key, before saving
+    /// anything different. A replay answers the lost receipt; otherwise that
+    /// older content commits and the current save follows it. A conflict
+    /// means it never committed. False when the save must stop here.
+    private func resolveUnknownOutcome(ticket: UInt64) async -> Bool {
+        guard let pending = unresolved else { return true }
+        if pending.editVersion == userEditVersion, pending.baseRevisionId == baseRevisionId {
+            // The current save is that same intent under that same key.
+            return true
+        }
+        do {
+            let saved = try await source.saveDraft(
+                idempotencyKey: pending.key, draftId: draftId,
+                baseRevisionId: pending.baseRevisionId, content: pending.content)
+            guard !isStopped, ticket == saveTicket else { return false }
+            acknowledge(saved, sent: pending.content, shown: pending.content)
+            return true
+        } catch CoreFailure.conflict {
+            guard !isStopped, ticket == saveTicket else { return false }
+            unresolved = nil
+            return true
+        } catch is CancellationError {
+            return false
+        } catch {
+            guard !isStopped, ticket == saveTicket else { return false }
+            guard Self.mayHaveCommitted(error) else {
+                // Refused before any write, so it never committed: drop it.
+                unresolved = nil
+                return true
+            }
+            failure = error
+            return false
+        }
+    }
+
+    /// Keep the intent only when its failure may have followed a commit.
+    private func recordOutcome(
+        of error: any Error, _ key: String, _ version: UInt64, _ base: String?,
+        _ sent: DraftContent
+    ) {
+        guard Self.mayHaveCommitted(error) else {
+            unresolved = nil
+            return
+        }
+        unresolved = PendingSave(key: key, editVersion: version, baseRevisionId: base, content: sent)
+    }
+
+    /// Refusals the core answers before writing prove nothing committed: a
+    /// committed key replays its receipt before validation. Anything else,
+    /// including a lost answer, may have followed a commit.
+    private static func mayHaveCommitted(_ error: any Error) -> Bool {
+        guard let failure = error as? CoreFailure else { return true }
+        switch failure {
+        case .unavailable, .internalError, .corrupt, .locked:
+            return true
+        case .notFound, .needsMigration, .newerStore, .invalidInput, .conflict, .resetRequired,
+            .searchParse:
+            return false
+        }
+    }
+
+    /// A receipt: the new base, its stored references and spent handles.
+    /// `shown` is the content the editor held when the save began.
+    private func acknowledge(_ saved: DraftSaved, sent: DraftContent, shown: DraftContent) {
+        baseRevisionId = saved.revisionId
+        unresolved = nil
+        baseAttachments = sent.attachments.map(Self.reference)
+        recordSources(baseAttachments, in: saved.revisionId)
+        for case .new(let object, _, _) in sent.attachments
+        where !spent.contains(where: { $0.object === object }) {
+            spent.append((object, saved.revisionId))
+        }
+        acknowledgeAttachments(in: shown)
+    }
+
+    /// Give every attachment the authority its save needs. A stored reference
+    /// the base lacks, such as one an undo restored after a save removed it,
+    /// is republished from a revision that stores it. A spent handle is a
+    /// stored reference too. Anything else goes to the core unchanged.
+    private func withAuthority(_ content: DraftContent) async throws -> DraftContent {
+        var resolved = content
+        for (index, attachment) in content.attachments.enumerated() {
+            let reference: DraftAttachmentRef
+            switch attachment {
+            case .new(let object, let filename, let mediaType):
+                guard spent.contains(where: { $0.object === object }) else { continue }
+                reference = Self.reference(object, filename, mediaType)
+            case .retained(let stored):
+                reference = stored
+            }
+            if baseAttachments.contains(where: { Self.same($0, reference) }) {
+                resolved.attachments[index] = .retained(reference)
+                continue
+            }
+            guard let authority = sources.first(where: { Self.same($0.reference, reference) }) else {
+                continue
+            }
+            let object = try await source.republishDraftAttachment(
+                draftId: draftId, revisionId: authority.revisionId, reference: reference)
+            resolved.attachments[index] = .new(
+                object: object, filename: reference.filename, mediaType: reference.mediaType)
+        }
+        return resolved
+    }
+
+    private func recordSources(_ references: [DraftAttachmentRef], in revisionId: String) {
+        for reference in references
+        where !sources.contains(where: { Self.same($0.reference, reference) }) {
+            sources.append((reference, revisionId))
+        }
+    }
+
+    private static func reference(_ attachment: DraftAttachment) -> DraftAttachmentRef {
+        switch attachment {
+        case .new(let object, let filename, let mediaType):
+            return reference(object, filename, mediaType)
+        case .retained(let reference):
+            return reference
+        }
+    }
+
+    private static func reference(
+        _ object: DraftAttachmentObject, _ filename: String, _ mediaType: String
+    ) -> DraftAttachmentRef {
+        DraftAttachmentRef(
+            objectSha256: object.objectSha256, filename: filename,
+            mediaType: mediaType, size: object.byteLength)
+    }
+
+    /// The core compares stored references byte for byte, not by Swift's
+    /// canonical-equivalence string equality.
+    private static func same(_ a: DraftAttachmentRef, _ b: DraftAttachmentRef) -> Bool {
+        a.size == b.size && a.objectSha256.utf8.elementsEqual(b.objectSha256.utf8)
+            && a.filename.utf8.elementsEqual(b.filename.utf8)
+            && a.mediaType.utf8.elementsEqual(b.mediaType.utf8)
     }
 
     /// Only an acknowledged publication becomes a retained reference.

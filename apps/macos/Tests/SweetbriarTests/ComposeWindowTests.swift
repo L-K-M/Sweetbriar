@@ -102,6 +102,15 @@ private actor ComposeTestSource: ComposeSource {
     func discardDraft(idempotencyKey: String, draftId: String) async throws -> Receipt {
         try await bridge.discardDraft(idempotencyKey: idempotencyKey, draftId: draftId)
     }
+    func publishDraftAttachment(file: URL) async throws -> DraftAttachmentObject {
+        try await bridge.publishDraftAttachment(file: file)
+    }
+    func republishDraftAttachment(
+        draftId: String, revisionId: String, reference: DraftAttachmentRef
+    ) async throws -> DraftAttachmentObject {
+        try await bridge.republishDraftAttachment(
+            draftId: draftId, revisionId: revisionId, reference: reference)
+    }
 }
 
 private struct ComposeClock: FrameClock { func nextFrame() async { await Task.yield() } }

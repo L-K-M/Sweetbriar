@@ -88,6 +88,14 @@ private actor IdentityDraftStore: DraftStore {
     func discardDraft(idempotencyKey: String, draftId: String) async throws -> Receipt {
         throw CoreFailure.unavailable(reason: "discard not used by identity fixture")
     }
+    func publishDraftAttachment(file: URL) async throws -> DraftAttachmentObject {
+        throw CoreFailure.internalError(detail: "attachment publication is not used by this fixture")
+    }
+    func republishDraftAttachment(
+        draftId: String, revisionId: String, reference: DraftAttachmentRef
+    ) async throws -> DraftAttachmentObject {
+        throw CoreFailure.internalError(detail: "attachment republication is not used by this fixture")
+    }
 }
 
 @MainActor

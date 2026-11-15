@@ -374,12 +374,34 @@ Neither unsaved text nor a delayed draft save may cross a swap.
     flushes instead. This path must remain usable when a read-only core
     refuses saving, so recovery is not trapped behind a compose window.
     A begun save is awaited, not cancelled because its waiter was cancelled.
+  - A save whose answer failed after it began may have committed. Its
+    exact intent (key, base and content) is retried before any different
+    save: a replay answers the lost receipt, otherwise that older content
+    commits first. A conflict, or another refusal the core answers before
+    writing (invalid input, not found, store version), means it never
+    committed; so does a failure before the save began, such as
+    republication. Those record no such intent. A same-intent retry sends
+    the recorded content unchanged. One published handle appears at most
+    once in the content.
   - M1.9c2a first wires subject and plain/Markdown body editing. Existing
     recipients, route and attachments survive those edits unchanged;
     their editable controls, Drafts navigation and complete native UI
     acceptance follow in c2b–c2e. Sending remains unavailable until M4.
 - **Attachments** are dragged in or picked. Each is published to the
   object store before the revision that references it.
+  - A file streams through `publish_draft_attachment_file` and joins the
+    content the editor holds when it finishes, so edits made meanwhile
+    survive. Dismissing an unbegun publication commits nothing; a begun
+    one's unwanted result is dropped unreferenced. A failure stays visible
+    until dismissed. Close and restore fence new publications and await
+    begun native commands.
+  - Removal, undo and redo edit the content only. A handle an
+    acknowledged save spent returns as its stored reference, never as a
+    handle to spend again. At save time a stored reference the base
+    revision lacks is republished from a revision that stores it
+    (`republish_draft_attachment`), so undo after a saved removal is not
+    a conflict. References compare by UTF-8 bytes; same-byte attachments
+    stay independent entries.
 - **Paste:** pasting HTML offers "Paste as Markdown" with a preview and a
   lossy-conversion warning; plain paste is the default.
 - **Sending** shows the Out Box entry. During the undo window (default
