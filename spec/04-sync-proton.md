@@ -94,8 +94,9 @@ where Proton differs.
 
 ## Connections and pacing
 
-- One HTTP/1.1 connection per account, kept alive; at most two requests
-  in flight per account (the worker and one body fetch), and at most
+- At most two HTTP/1.1 connections per account, one per request in
+  flight, and one kept alive when idle; at most two requests in flight
+  per account (the worker and one body fetch), and at most
   four requests per second per account in the background. Interactive
   requests (opening a message) go first.
 - **Timeouts:** 30 s per request; 120 s per body or attachment download,
