@@ -2174,9 +2174,22 @@ local drafts. No network yet.
                             frozen editor tickets and receipt-only publication;
                             retain the actual selected-row surfaces, two real
                             full-screen windows, text-size, restore/reopen,
-                            multiwindow and source/undo checks above. The full
-                            workflow remains unqualified until this and the
-                            later native acceptance step pass.
+                            multiwindow and source/undo checks above. Re-sized
+                            before implementation:
+                            - **b2b2b2b2b1 Cue settings control (M):** expose
+                              the shared receipt-aware Standard/Strong value in
+                              Settings, with explicit loading/error/stale
+                              states, current health and frozen editor-ticket
+                              admission, retry and draining on restore/quit.
+                              Test held receipts, refusal, stale tickets and
+                              native settings presentation.
+                            - **b2b2b2b2b2 Native appearance qualification (L):**
+                              exercise the actual selected-row surfaces, two
+                              real full-screen compose windows, text size,
+                              restore/reopen, multiwindow propagation and
+                              source/undo checks above. The full workflow is
+                              not qualified until this and the later native
+                              acceptance step pass.
         Optional Contacts stays optional; complete native workflow and
         owner input-method/accessibility gates remain c2e and owner work.
       - **M1.9c2c Attachment and conflict editing (L):** picking/dragging

@@ -16,14 +16,14 @@ final class AppearanceSettingsWindow: NSWindowController {
     private let selection = SettingsSelection()
     private let editor = ArchiveWriteTasks()
 
-    init(session: CoreSession, shared: SharedAppearance, backups: SharedBackups) {
+    init(session: CoreSession, shared: SharedAppearance, cues: SharedComposeCue, backups: SharedBackups) {
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 780, height: 680),
                               styleMask: [.titled, .closable, .miniaturizable, .resizable],
                               backing: .buffered, defer: false)
         window.title = "Settings"
         window.center()
         window.contentView = NSHostingView(rootView: AppearanceSettingsLoader(
-            session: session, shared: shared, backups: backups, selection: selection, editor: editor
+            session: session, shared: shared, cues: cues, backups: backups, selection: selection, editor: editor
         ))
         super.init(window: window)
     }
@@ -45,6 +45,7 @@ final class AppearanceSettingsWindow: NSWindowController {
 private struct AppearanceSettingsLoader: View {
     let session: CoreSession
     let shared: SharedAppearance
+    let cues: SharedComposeCue
     let backups: SharedBackups
     @Bindable var selection: SettingsSelection
     let editor: ArchiveWriteTasks
@@ -62,13 +63,15 @@ private struct AppearanceSettingsLoader: View {
                                                    description: Text("Quit and reopen Sweetbriar to settle the restore."))
                         } else if backups.isRestoring {
                             ProgressView("Waiting for the restore outcome…")
-                        } else {
+                        } else if let cue = cues.model(source: bridge) {
                             AccountAppearanceSettings(
                                 bridge: bridge, model: AppearanceSettingsModel(appearance: shared.model(source: bridge)),
-                                backups: model, editor: editor, editorRevision: editor.revision
+                                cue: cue, backups: model, editor: editor, editorRevision: editor.revision
                             )
                             .id(editor.revision)
-                            .disabled(!model.canWrite)
+                        } else {
+                            ContentUnavailableView("Compose appearance unavailable", systemImage: "exclamationmark.triangle",
+                                                   description: Text("Reopen Settings after the archive operation."))
                         }
                     }
                     .tabItem { Label("Appearance", systemImage: "paintpalette") }.tag(SettingsTab.appearance)
@@ -102,6 +105,7 @@ private struct AppearanceSettingsLoader: View {
 private struct AccountAppearanceSettings: View {
     let bridge: CoreBridge
     @State var model: AppearanceSettingsModel
+    let cue: ComposeCueModel
     let backups: BackupsModel
     let editor: ArchiveWriteTasks
     let editorRevision: UInt64
@@ -122,69 +126,82 @@ private struct AccountAppearanceSettings: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
-                Text("Accounts").font(.title2.bold())
-                if let failure = model.appearanceFailure {
-                    Text("Appearance may be out of date: \(failure)").foregroundStyle(.red)
-                    Button("Retry appearance") { Task { await model.retryAppearance() } }
+                ComposeCueSettingsView(cue: cue, editor: editor, revision: editorRevision) {
+                    backups.canWrite
                 }
-                if let loadError {
-                    Text(loadError).foregroundStyle(.red)
-                } else if loadingAccounts {
-                    ProgressView("Loading accounts…")
-                } else if accounts.isEmpty {
-                    Text("No accounts available.").foregroundStyle(.secondary)
-                } else {
-                    Picker("Account", selection: $selected) {
-                        ForEach(accounts, id: \.accountId) { account in
-                            Text(accountLabel(account)).tag(Optional(account.accountId))
-                        }
+                Divider()
+                Group {
+                    Text("Accounts").font(.title2.bold())
+                    if let failure = model.appearanceFailure {
+                        Text("Appearance may be out of date: \(failure)").foregroundStyle(.red)
+                        Button("Retry appearance") { Task { await model.retryAppearance() } }
                     }
-                    if let current {
-                        Text("Appearance").font(.headline)
-                        Text("Choose a color for this account.")
-                        Picker("Account color", selection: Binding<UInt8?>(
-                            get: {
-                                if case .paletteV1(let slot) = current.assignment { return slot }
-                                return nil
-                            },
-                            set: { slot in
-                                guard let slot else { return }
-                                save(.paletteV1(slot: slot), account: current)
+                    if let loadError {
+                        Text(loadError).foregroundStyle(.red)
+                    } else if loadingAccounts {
+                        ProgressView("Loading accounts…")
+                    } else if accounts.isEmpty {
+                        Text("No accounts available.").foregroundStyle(.secondary)
+                    } else {
+                        Picker("Account", selection: $selected) {
+                            ForEach(accounts, id: \.accountId) { account in
+                                Text(accountLabel(account)).tag(Optional(account.accountId))
                             }
-                        )) {
-                            ForEach(model.appearance.palette, id: \.slot) { preset in
-                                HStack {
-                                    Circle().fill(color(preset.colorSrgb)).overlay(Circle().strokeBorder(.secondary)).frame(width: 20, height: 20)
-                                    Text(preset.name)
+                        }
+                        if let current {
+                            Text("Appearance").font(.headline)
+                            Text("Choose a color for this account.")
+                            Picker(
+                                "Account color",
+                                selection: Binding<UInt8?>(
+                                    get: {
+                                        if case .paletteV1(let slot) = current.assignment { return slot }
+                                        return nil
+                                    },
+                                    set: { slot in
+                                        guard let slot else { return }
+                                        save(.paletteV1(slot: slot), account: current)
+                                    }
+                                )
+                            ) {
+                                ForEach(model.appearance.palette, id: \.slot) { preset in
+                                    HStack {
+                                        Circle().fill(color(preset.colorSrgb)).overlay(
+                                            Circle().strokeBorder(.secondary)
+                                        ).frame(width: 20, height: 20)
+                                        Text(preset.name)
+                                    }
+                                    .tag(Optional(preset.slot))
+                                    .accessibilityLabel(preset.name)
                                 }
-                                .tag(Optional(preset.slot))
-                                .accessibilityLabel(preset.name)
                             }
+                            .pickerStyle(.radioGroup)
+                            .disabled(model.saving || model.appearanceFailure != nil)
+                            Button("Custom…") {
+                                editingAccount = current
+                                customColor = color(current.colorSrgb)
+                                customError = nil
+                                customOpen = true
+                            }
+                            .disabled(model.saving || model.appearanceFailure != nil)
+                            if current.assignment == .custom {
+                                Text("Custom: \(current.colorSrgb)").foregroundStyle(.secondary)
+                            }
+                            HStack(spacing: 12) {
+                                preview("Light", current.tokens.light, current.monogram)
+                                preview("Dark", current.tokens.dark, current.monogram)
+                            }
+                            Text("Stored on this device; included in export.").font(.footnote)
+                                .foregroundStyle(.secondary)
+                            if let error = model.error { Text(error).foregroundStyle(.red) }
+                            if let admissionError { Text(admissionError).foregroundStyle(.red) }
+                            if model.saving { ProgressView("Saving…") }
+                        } else if model.appearanceFailure == nil {
+                            ProgressView("Loading appearance…")
                         }
-                        .pickerStyle(.radioGroup)
-                        .disabled(model.saving || model.appearanceFailure != nil)
-                        Button("Custom…") {
-                            editingAccount = current
-                            customColor = color(current.colorSrgb)
-                            customError = nil
-                            customOpen = true
-                        }
-                        .disabled(model.saving || model.appearanceFailure != nil)
-                        if current.assignment == .custom {
-                            Text("Custom: \(current.colorSrgb)").foregroundStyle(.secondary)
-                        }
-                        HStack(spacing: 12) {
-                            preview("Light", current.tokens.light, current.monogram)
-                            preview("Dark", current.tokens.dark, current.monogram)
-                        }
-                        Text("Stored on this device; included in export.").font(.footnote).foregroundStyle(.secondary)
-                        if let error = model.error { Text(error).foregroundStyle(.red) }
-                        if let admissionError { Text(admissionError).foregroundStyle(.red) }
-                        if model.saving { ProgressView("Saving…") }
-                    } else if model.appearanceFailure == nil {
-                        ProgressView("Loading appearance…")
                     }
                 }
+                .disabled(!backups.canWrite)
                 Spacer(minLength: 0)
             }
             .padding(24)
