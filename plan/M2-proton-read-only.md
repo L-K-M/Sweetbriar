@@ -529,6 +529,12 @@ the provider policies (`proton_bridge`, `generic_imap`) live in
   `continue_proton_sign_in` and `cancel_proton_sign_in` through engine
   and service; the secret item; session restore on start; disconnect
   revoking the session.
+- **Split** (over the PR size limit as one): **M2.13a** the Proton
+  migration with the store's `proton_accounts` and
+  `proton_body_failures` accessors (the migration and drift checks
+  below); **M2.13b**, on M2.12, the sign-in conversation through engine
+  and service, the secret item, restore on start and disconnect (the
+  other checks).
 - **Acceptance:** nothing is stored before `Complete` (schema and secret
   store inspected after each refusal); a repeated idempotency key
   answers the receipt without contacting the fake; signing in as
