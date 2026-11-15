@@ -399,6 +399,20 @@ conversation; the Bridge account sheet is no longer offered.
     flushes instead. This path must remain usable when a read-only core
     refuses saving, so recovery is not trapped behind a compose window.
     A begun save is awaited, not cancelled because its waiter was cancelled.
+  - **Keep Both (M1.9c2cd):** a conflicted window offers Keep Both. It
+    settles begun attachment publications, then saves the window's
+    content as the first revision of a new draft (same reply source; a
+    forward can't be copied yet and is refused with an explanation),
+    opens that draft in its own window and closes this one without
+    another save. The draft the other window saved is unchanged. The
+    copy has no base, so its stored references and spent handles are
+    republished from this draft's revisions that store them; one with no
+    known source refuses the copy before anything is written. A refusal
+    before the copy's create began leaves the window editable. Once the
+    create began, the window stays frozen with its text and the failure,
+    and only an explicit Keep Both retries, with the same keys and
+    content, so a lost receipt never makes a second copy. Keep Both is
+    unavailable while archive writes are.
   - A save whose answer failed after it began may have committed. Its
     exact intent (key, base and content) is retried before any different
     save: a replay answers the lost receipt, otherwise that older content
@@ -427,6 +441,19 @@ conversation; the Bridge account sheet is no longer offered.
     (`republish_draft_attachment`), so undo after a saved removal is not
     a conflict. References compare by UTF-8 bytes; same-byte attachments
     stay independent entries.
+  - **Native controls (M1.9c2cc):** Attach… opens a file sheet (several
+    files at once, no folders); files dropped on the editor attach the
+    same way and never insert their paths as text. Each attachment has a
+    row with its name and a Remove button; each unfinished publication a
+    row saying it is attaching, and each failed one a row with the
+    reason and Dismiss. Attaching and removing are undoable edits on the
+    window's undo stack ("Undo Attach File", "Undo Remove Attachment"),
+    with redo; an undo whose attachment is no longer at its place does
+    nothing. New attachments are admitted only while the editor is
+    editable and archive writes are available. Close settles begun
+    publications before its final save, so a finished file is saved,
+    then fences and drains them; Close Without Saving fences first and
+    drops unwanted results unreferenced.
 - **Paste:** pasting HTML offers "Paste as Markdown" with a preview and a
   lossy-conversion warning; plain paste is the default.
 - **Sending** shows the Out Box entry. During the undo window (default

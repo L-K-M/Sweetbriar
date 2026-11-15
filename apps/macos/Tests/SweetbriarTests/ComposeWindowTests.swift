@@ -28,11 +28,15 @@ private actor ComposeTestSource: ComposeSource {
     let bridge: CoreBridge
     private var createGate: ComposeGate?
     private var answerGate: ComposeGate?
+    private var publishGate: ComposeGate?
+    private(set) var publishes = 0
+    func holdPublish(_ gate: ComposeGate) { publishGate = gate }
     private var failure: CoreFailure?
     private var parseHold: (text: String, gate: ComposeGate)?
     private(set) var parsed: [String] = []
     func holdParse(_ text: String, gate: ComposeGate) { parseHold = (text, gate) }
     private(set) var creates = 0
+    private(set) var createdIds: [String] = []
     private(set) var saves = 0
     private(set) var acknowledged = 0
     private(set) var preferredQueries: [String?] = []
@@ -43,13 +47,16 @@ private actor ComposeTestSource: ComposeSource {
     func release() async {
         await createGate?.open()
         await answerGate?.open()
+        await publishGate?.open()
         if let parseHold { await parseHold.gate.open() }
         failure = nil
     }
     func createDraft(idempotencyKey: String, source: DraftSource) async throws -> DraftCreated {
         creates += 1
         await createGate?.wait()
-        return try await bridge.createDraft(idempotencyKey: idempotencyKey, source: source)
+        let created = try await bridge.createDraft(idempotencyKey: idempotencyKey, source: source)
+        createdIds.append(created.draftId)
+        return created
     }
     func draft(id: String) async throws -> Draft { try await bridge.draft(id: id) }
     func composeCue() async throws -> ComposeCueMode { try await bridge.composeCue() }
@@ -103,7 +110,11 @@ private actor ComposeTestSource: ComposeSource {
         try await bridge.discardDraft(idempotencyKey: idempotencyKey, draftId: draftId)
     }
     func publishDraftAttachment(file: URL) async throws -> DraftAttachmentObject {
-        try await bridge.publishDraftAttachment(file: file)
+        publishes += 1
+        // Held after the object is durable: a begun native command.
+        let object = try await bridge.publishDraftAttachment(file: file)
+        await publishGate?.wait()
+        return object
     }
     func republishDraftAttachment(
         draftId: String, revisionId: String, reference: DraftAttachmentRef
@@ -140,16 +151,18 @@ private final class ComposeFixture {
         self.bridge = bridge
         source = ComposeTestSource(bridge)
     }
-    func makeWindow(id: String? = nil, canWrite: @escaping @MainActor () -> Bool = { true }) async throws
-        -> ComposeWindowController
-    {
+    func makeWindow(
+        id: String? = nil, canWrite: @escaping @MainActor () -> Bool = { true },
+        openCopy: ComposeWindowController.OpenCopy? = nil
+    ) async throws -> ComposeWindowController {
         let draftId: String
         if let id {
             draftId = id
         } else {
             draftId = try await bridge.createDraft(idempotencyKey: UUID().uuidString, source: .new).draftId
         }
-        let controller = ComposeWindowController(source: source, draftId: draftId, canWrite: canWrite)
+        let controller = ComposeWindowController(
+            source: source, draftId: draftId, canWrite: canWrite, openCopy: openCopy)
         controllers.append(controller)
         try #require(
             await composeEventually { controller.model.content != nil && controller.textView.isEditable })
@@ -1046,6 +1059,276 @@ struct ComposeWindowTests {
             #expect(
                 try await f.bridge.draft(id: controller.model.draftId).revision?.bodySource == "Saved on blur"
             )
+        }
+    }
+}
+
+@MainActor
+private func attachmentFile(_ name: String, _ text: String) throws -> URL {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+        "sb-attach-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    let file = directory.appendingPathComponent(name)
+    try Data(text.utf8).write(to: file)
+    return file
+}
+
+@MainActor
+private func storedAttachmentNames(_ f: ComposeFixture, _ draftId: String) async throws -> [String] {
+    try await f.bridge.draft(id: draftId).revision?.attachments.map(\.filename) ?? []
+}
+
+@MainActor
+private final class WritesSwitch { var allowed = true }
+
+/// The native attachment controls (spec/08 "Attachments", M1.9c2cc).
+@Suite(.serialized, .timeLimit(.minutes(1))) @MainActor
+struct ComposeAttachmentWindowTests {
+    @Test func anAttachedFileGetsARowAndItsSaveStoresIt() async throws {
+        try await withComposeFixture { f in
+            let controller = try await f.makeWindow()
+            #expect(controller.attachmentControls.attachButton.isEnabled)
+            #expect(controller.attachmentControls.attach([try attachmentFile("notes.txt", "hello")]))
+            try #require(await composeEventually { controller.model.content?.attachments.count == 1 })
+            #expect(controller.attachmentControls.list.views.count == 1)
+            #expect(controller.attachmentControls.list.isHidden == false)
+            #expect(await controller.saveAndWait())
+            #expect(try await storedAttachmentNames(f, controller.model.draftId) == ["notes.txt"])
+        }
+    }
+
+    @Test func removalAndAttachUndoAndRedoOnTheWindowStack() async throws {
+        try await withComposeFixture { f in
+            let controller = try await f.makeWindow()
+            let undo = try #require(controller.window?.undoManager)
+            controller.attachmentControls.attach([try attachmentFile("a.txt", "a")])
+            try #require(await composeEventually { controller.model.content?.attachments.count == 1 })
+            #expect(undo.undoActionName == "Attach File")
+            undo.undo()
+            #expect(controller.model.content?.attachments.isEmpty == true)
+            undo.redo()
+            #expect(controller.model.content?.attachments.count == 1)
+            #expect(await controller.saveAndWait())
+
+            controller.attachmentControls.remove(at: 0)
+            #expect(controller.model.content?.attachments.isEmpty == true)
+            #expect(undo.undoActionName == "Remove Attachment")
+            undo.undo()
+            let restored = try #require(controller.model.content?.attachments.first)
+            // The save spent the handle; it comes back as its stored reference.
+            guard case .retained(let reference) = restored else {
+                Issue.record("expected the stored reference, got \(restored)")
+                return
+            }
+            #expect(reference.filename == "a.txt")
+            undo.redo()
+            #expect(controller.model.content?.attachments.isEmpty == true)
+            undo.undo()
+            #expect(await controller.saveAndWait())
+            #expect(try await storedAttachmentNames(f, controller.model.draftId) == ["a.txt"])
+        }
+    }
+
+    @Test func anUndoWhoseAttachmentMovedDoesNothing() async throws {
+        try await withComposeFixture { f in
+            let controller = try await f.makeWindow()
+            let undo = try #require(controller.window?.undoManager)
+            controller.attachmentControls.attach([try attachmentFile("first.txt", "1")])
+            try #require(await composeEventually { controller.model.content?.attachments.count == 1 })
+            undo.removeAllActions()
+            controller.attachmentControls.attach([try attachmentFile("second.txt", "2")])
+            try #require(await composeEventually { controller.model.content?.attachments.count == 2 })
+            // Removing the first attachment outside the undo stack moves the second.
+            _ = controller.model.removeAttachment(at: 0)
+            undo.undo()
+            let names = controller.model.content?.attachments.map(ComposeAttachmentControls.filename(of:))
+            #expect(names == ["second.txt"])
+        }
+    }
+
+    @Test func aDroppedFileAttachesInsteadOfInsertingItsPath() async throws {
+        try await withComposeFixture { f in
+            let controller = try await f.makeWindow()
+            editCompose(controller, subject: "S", body: "Body")
+            let file = try attachmentFile("dropped.txt", "dropped")
+            let handler = try #require(controller.textView.fileDropHandler)
+            #expect(handler([file]))
+            try #require(await composeEventually { controller.model.content?.attachments.count == 1 })
+            #expect(controller.textView.string == "Body")
+
+            let pasteboard = NSPasteboard(name: NSPasteboard.Name("sb-test-\(UUID().uuidString)"))
+            defer { pasteboard.releaseGlobally() }
+            pasteboard.clearContents()
+            pasteboard.writeObjects([file as NSURL])
+            #expect(ComposeAttachmentControls.fileURLs(on: pasteboard) == [file])
+            pasteboard.clearContents()
+            pasteboard.setString("/not/a/file/url", forType: .string)
+            #expect(ComposeAttachmentControls.fileURLs(on: pasteboard).isEmpty)
+        }
+    }
+
+    @Test func aFailedPublicationStaysUntilDismissed() async throws {
+        try await withComposeFixture { f in
+            let controller = try await f.makeWindow()
+            let folder = try attachmentFile("x.txt", "x").deletingLastPathComponent()
+            #expect(controller.attachmentControls.attach([folder]))
+            try #require(
+                await composeEventually { controller.publications.publications.first?.failure != nil })
+            // The window re-renders on a later main-actor turn.
+            let failureLabel = {
+                firstComposeView(NSTextField.self, in: controller.attachmentControls.list) {
+                    $0.stringValue.hasPrefix("Couldn't attach")
+                }
+            }
+            try #require(await composeEventually { failureLabel() != nil })
+            let label = try #require(failureLabel())
+            #expect(label.stringValue.contains(folder.lastPathComponent))
+            let dismiss = try #require(
+                firstComposeView(NSButton.self, in: controller.attachmentControls.list) {
+                    $0.title == "Dismiss"
+                })
+            dismiss.performClick(nil)
+            #expect(controller.publications.publications.isEmpty)
+            #expect(controller.attachmentControls.list.isHidden)
+            #expect(controller.model.content?.attachments.isEmpty == true)
+        }
+    }
+
+    @Test func attachingIsRefusedWhileWritesAreUnavailable() async throws {
+        try await withComposeFixture { f in
+            let writes = WritesSwitch()
+            let controller = try await f.makeWindow(canWrite: { writes.allowed })
+            writes.allowed = false
+            controller.attachmentControls.render()
+            #expect(!controller.attachmentControls.attachButton.isEnabled)
+            #expect(!controller.attachmentControls.attach([try attachmentFile("no.txt", "no")]))
+            #expect(await f.source.publishes == 0)
+            writes.allowed = true
+        }
+    }
+
+    @Test func closeSavesAFileWhosePublicationHadBegun() async throws {
+        try await withComposeFixture { f in
+            let controller = try await f.makeSavedWindow(subject: "S", body: "B")
+            let gate = ComposeGate()
+            await f.source.holdPublish(gate)
+            controller.attachmentControls.attach([try attachmentFile("late.txt", "late")])
+            try #require(await composeEventually { await f.source.publishes == 1 })
+            let close = Task { await controller.closeAndWait() }
+            try #require(await composeEventually { controller.isClosing })
+            #expect(!controller.attachmentControls.attachButton.isEnabled)
+            await gate.open()
+            #expect(await close.value)
+            #expect(try await storedAttachmentNames(f, controller.model.draftId) == ["late.txt"])
+        }
+    }
+
+    @Test func closeWithoutSavingDropsABegunPublicationUnreferenced() async throws {
+        try await withComposeFixture { f in
+            let controller = try await f.makeSavedWindow(subject: "S", body: "B")
+            let gate = ComposeGate()
+            await f.source.holdPublish(gate)
+            controller.attachmentControls.attach([try attachmentFile("unwanted.txt", "u")])
+            try #require(await composeEventually { await f.source.publishes == 1 })
+            let close = Task { await controller.closeWithoutSavingAndWait() }
+            try #require(await composeEventually { controller.isClosing })
+            await gate.open()
+            #expect(await close.value)
+            #expect(controller.model.content?.attachments.isEmpty != false)
+            #expect(try await storedAttachmentNames(f, controller.model.draftId).isEmpty)
+        }
+    }
+}
+
+/// Keep Both (spec/08 "Saving", M1.9c2cd).
+@Suite(.serialized, .timeLimit(.minutes(1))) @MainActor
+struct ComposeKeepBothTests {
+    private static let winner = DraftContent(
+        identityId: nil, format: .plain, plainFlowed: true, subject: "Winner",
+        to: [], cc: [], bcc: [], bodySource: "Other window's revision", attachments: [])
+
+    /// A window whose save met another window's newer revision.
+    private func conflicted(
+        _ f: ComposeFixture, owner: ComposeWindows, canWrite: @escaping @MainActor () -> Bool = { true },
+        attach: String? = nil
+    ) async throws -> ComposeWindowController {
+        let created = try await f.bridge.createDraft(idempotencyKey: UUID().uuidString, source: .new)
+        let controller = try await f.makeWindow(
+            id: created.draftId, canWrite: canWrite,
+            openCopy: { try await owner.openCopy(source: $0, content: $1, createKey: $2, saveKey: $3) })
+        if let attach {
+            controller.attachmentControls.attach([try attachmentFile(attach, "bytes")])
+            try #require(await composeEventually { controller.model.content?.attachments.count == 1 })
+            #expect(await controller.saveAndWait())
+        }
+        let base = controller.model.baseRevisionId
+        _ = try await f.bridge.saveDraft(
+            idempotencyKey: UUID().uuidString, draftId: created.draftId, baseRevisionId: base,
+            content: Self.winner)
+        editCompose(controller, subject: "Mine", body: "Keep this text")
+        #expect(!(await controller.saveAndWait()))
+        try #require(controller.model.conflict != nil)
+        return controller
+    }
+
+    @Test func keepBothSavesTheTextAsANewDraftAndClosesThisWindow() async throws {
+        try await withComposeFixture { f in
+            let owner = f.makeOwner()
+            let controller = try await conflicted(f, owner: owner)
+            #expect(!controller.keepBothButton.isHidden && controller.keepBothButton.isEnabled)
+            controller.keepBoth()
+            try #require(await composeEventually { owner.windows.count == 1 })
+            #expect(await controller.closeAndWait())
+            let copyId = try #require(owner.windows.keys.first)
+            #expect(copyId != controller.model.draftId)
+            let copy = try #require(try await f.bridge.draft(id: copyId).revision)
+            #expect(copy.subject == "Mine" && copy.bodySource == "Keep this text")
+            let original = try await f.bridge.draft(id: controller.model.draftId).revision
+            #expect(original?.bodySource == Self.winner.bodySource)
+        }
+    }
+
+    @Test func keepBothCopiesAStoredAttachmentFromTheOriginalDraft() async throws {
+        try await withComposeFixture { f in
+            let owner = f.makeOwner()
+            let controller = try await conflicted(f, owner: owner, attach: "kept.txt")
+            controller.keepBoth()
+            try #require(await composeEventually { owner.windows.count == 1 })
+            let copyId = try #require(owner.windows.keys.first)
+            #expect(try await storedAttachmentNames(f, copyId) == ["kept.txt"])
+            #expect(try await storedAttachmentNames(f, controller.model.draftId).isEmpty)
+        }
+    }
+
+    @Test func anInterruptedKeepBothRetriesOnlyItsOwnCopy() async throws {
+        try await withComposeFixture { f in
+            let owner = f.makeOwner()
+            let controller = try await conflicted(f, owner: owner)
+            await f.source.failSave(.unavailable(reason: "The answer was lost."))
+            controller.keepBoth()
+            try #require(await composeEventually { controller.keepBothFailure != nil })
+            try #require(await composeEventually { controller.keepingBoth == nil })
+            #expect(owner.windows.isEmpty)
+            #expect(!controller.textView.isEditable)
+            #expect(controller.statusLabel.stringValue.contains("didn't finish"))
+            await f.source.failSave(nil)
+            controller.keepBoth()
+            try #require(await composeEventually { owner.windows.count == 1 })
+            let ids = await f.source.createdIds
+            #expect(ids.count == 2 && Set(ids).count == 1)
+        }
+    }
+
+    @Test func keepBothIsRefusedWhileWritesAreUnavailable() async throws {
+        try await withComposeFixture { f in
+            let owner = f.makeOwner()
+            let writes = WritesSwitch()
+            let controller = try await conflicted(f, owner: owner, canWrite: { writes.allowed })
+            writes.allowed = false
+            controller.keepBoth()
+            #expect(controller.keepingBoth == nil)
+            #expect(await f.source.createdIds.isEmpty)
+            writes.allowed = true
         }
     }
 }
