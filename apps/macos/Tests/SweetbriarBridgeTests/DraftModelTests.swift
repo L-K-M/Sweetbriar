@@ -639,3 +639,34 @@ func cancelledSaveReusesItsKeyOnRetry() async {
     #expect(saves.count == 2 && saves[0].key == saves[1].key && saves[1].base == "r1")
     #expect(model.baseRevisionId == "r2")
 }
+
+// MARK: - Keep Both copies (M1.9c2cd)
+@MainActor
+@Test
+func keepBothCopiesAReplyWithItsSourceAndRefusesAForward() async throws {
+    var reply = draft(revision: revision("r1"))
+    reply.replyToOccurrenceId = 7
+    let replying = DraftModel(source: FakeDraftStore(reply), draftId: "d1")
+    await replying.load()
+    let copy = try await replying.copyForKeepBoth()
+    #expect(copy.source == .reply(occurrenceId: 7))
+    #expect(copy.content == replying.content)
+
+    let plain = DraftModel(source: FakeDraftStore(draft(revision: revision("r1"))), draftId: "d1")
+    await plain.load()
+    #expect(try await plain.copyForKeepBoth().source == .new)
+
+    var forward = draft(revision: revision("r1"))
+    forward.forwardOfMessageId = 9
+    let forwarding = DraftModel(source: FakeDraftStore(forward), draftId: "d1")
+    await forwarding.load()
+    await #expect(throws: CoreFailure.invalidInput(
+        field: "draft", message: "Keep Both isn't available for forwards yet.")) {
+        try await forwarding.copyForKeepBoth()
+    }
+
+    let stopped = DraftModel(source: FakeDraftStore(draft(revision: revision("r1"))), draftId: "d1")
+    await stopped.load()
+    stopped.stop()
+    await #expect(throws: CoreFailure.self) { try await stopped.copyForKeepBoth() }
+}

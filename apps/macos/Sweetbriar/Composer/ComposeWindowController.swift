@@ -26,6 +26,21 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
         target: nil, action: nil)
     private let saveButton = NSButton(title: "Save", target: nil, action: nil)
     private let abandonButton = NSButton(title: "Close Without Saving…", target: nil, action: nil)
+    let keepBothButton = NSButton(title: "Keep Both", target: nil, action: nil)
+    /// Opens a Keep Both copy (the window owner's `openCopy`).
+    typealias OpenCopy = @MainActor (DraftSource, DraftContent, String, String) async throws -> Void
+    private let openCopy: OpenCopy?
+    /// A Keep Both whose create or save began: its exact keys and content
+    /// are kept for an explicit retry, and the editor stays frozen.
+    private struct KeepBothIntent {
+        let source: DraftSource
+        let content: DraftContent
+        let createKey: String
+        let saveKey: String
+    }
+    private var keepBothIntent: KeepBothIntent?
+    private(set) var keepingBoth: Task<Void, Never>?
+    private(set) var keepBothFailure: (any Error)?
     private lazy var autosave = DraftAutosave(
         model: model,
         prepareForSave: { [weak self] in
@@ -65,6 +80,7 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
         source: any DraftStore & RecipientSource & ComposeCatalogSource, draftId: String,
         preferredAccountId: String? = nil, appearance: AppearanceModel? = nil, cue: ComposeCueModel? = nil,
         canWrite: @escaping @MainActor () -> Bool = { true },
+        openCopy: OpenCopy? = nil,
         announceRoute: @escaping @MainActor (String) -> Void = { message in
             NSAccessibility.post(
                 element: NSApp!, notification: .announcementRequested,
@@ -75,6 +91,7 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
         self.cue = cue
         self.announceRoute = announceRoute
         self.canWrite = canWrite
+        self.openCopy = openCopy
         catalogSource = source
         self.preferredAccountId = preferredAccountId
         let policy = ComposeSavePolicy(source: source, canWrite: canWrite)
@@ -141,6 +158,10 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
         saveButton.setAccessibilityIdentifier("composeSave")
         abandonButton.target = self
         abandonButton.action = #selector(confirmAbandon)
+        keepBothButton.target = self
+        keepBothButton.action = #selector(keepBoth)
+        keepBothButton.setAccessibilityIdentifier("composeKeepBoth")
+        keepBothButton.isHidden = true
         abandonButton.setAccessibilityIdentifier("composeCloseWithoutSaving")
         statusLabel.setAccessibilityIdentifier("composeSaveStatus")
         statusLabel.textColor = .secondaryLabelColor
@@ -156,7 +177,7 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
         send.toolTip = "Sending is not available yet. You can save a local draft without a sending account."
         send.setAccessibilityIdentifier("composeSend")
         let controls = NSStackView(views: [
-            modeControl, attachmentControls.attachButton, saveButton, send, abandonButton,
+            modeControl, attachmentControls.attachButton, saveButton, send, keepBothButton, abandonButton,
         ])
         controls.spacing = 8
         let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 640, height: 340))
@@ -245,7 +266,9 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
         render()
     }
 
-    private var canChangeIdentity: Bool { !finished && !isClosing && model.content != nil }
+    private var canChangeIdentity: Bool {
+        !finished && !isClosing && model.content != nil && keepingBoth == nil && keepBothIntent == nil
+    }
     private var canAttach: Bool {
         canChangeIdentity && canWrite() && abandonAlert == nil && !identityControls.isDeciding
     }
@@ -341,6 +364,54 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
             _ = await autosave.flush()
             render()
         }
+    }
+
+    /// Keep Both (spec/08 "Saving"): after a conflict, save this window's
+    /// content as a new draft in its own window and close this one; the
+    /// draft the other window saved stays as it is. Never automatic.
+    @objc func keepBoth() {
+        guard model.conflict != nil, let openCopy, keepingBoth == nil, !isClosing, !finished,
+            abandonAlert == nil, !identityControls.isDeciding, canWrite(), let window,
+            !recipientFields.contains(where: \.hasMarkedText), window.makeFirstResponder(nil),
+            !textView.hasMarkedText()
+        else { return }
+        captureEdit()
+        autosave.suspendDebounce()
+        keepBothFailure = nil
+        keepingBoth = Task { [self] in
+            defer {
+                keepingBoth = nil
+                render()
+            }
+            // A file still publishing joins the copy.
+            await publications.settle()
+            let intent: KeepBothIntent
+            if let keepBothIntent {
+                intent = keepBothIntent
+            } else {
+                do {
+                    let copy = try await model.copyForKeepBoth()
+                    intent = KeepBothIntent(
+                        source: copy.source, content: copy.content,
+                        createKey: UUID().uuidString, saveKey: UUID().uuidString)
+                } catch {
+                    // Nothing was written: editing resumes.
+                    keepBothFailure = error
+                    return
+                }
+            }
+            keepBothIntent = intent
+            do {
+                try await openCopy(intent.source, intent.content, intent.createKey, intent.saveKey)
+            } catch {
+                keepBothFailure = error
+                return
+            }
+            keepBothIntent = nil
+            // The copy now holds this window's content: close without another save.
+            _ = beginClose(mode: .abandonEdits)
+        }
+        render()
     }
 
     @objc private func confirmAbandon() {
@@ -555,14 +626,17 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
     }
 
     private func render(routeChanged: Bool = false) {
-        let editable = model.content != nil && !isClosing && !finished
+        let editable =
+            model.content != nil && !isClosing && !finished && keepingBoth == nil && keepBothIntent == nil
         subjectField.isEditable = editable
         textView.isEditable = editable
         modeControl.isEnabled = editable
         for field in recipientFields { field.control.isEditable = editable }
         saveButton.isEnabled = editable && canWrite() && !model.isSaving && model.conflict == nil
         attachmentControls.render()
-        abandonButton.isEnabled = !isClosing && !finished
+        abandonButton.isEnabled = !isClosing && !finished && keepingBoth == nil
+        keepBothButton.isHidden = model.conflict == nil || openCopy == nil
+        keepBothButton.isEnabled = !isClosing && !finished && keepingBoth == nil && canWrite()
         if let content = model.content, !model.isDirty, !textView.hasMarkedText() {
             if !subjectField.stringValue.utf8.elementsEqual(content.subject.utf8) {
                 subjectField.stringValue = content.subject
@@ -604,9 +678,18 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
         if closeIntent == .abandonEdits {
             statusLabel.stringValue =
                 model.isSaving ? "Waiting for an in-progress save…" : "Closing without another save…"
+        } else if keepingBoth != nil {
+            statusLabel.stringValue = "Saving your text as a new draft…"
+        } else if let failure = keepBothFailure {
+            statusLabel.stringValue =
+                keepBothIntent == nil
+                ? "Keep Both: \(failure.localizedDescription) Your text remains here."
+                : "Keep Both didn't finish: \(failure.localizedDescription) Your text remains here; try Keep Both again, or explicitly close without saving."
         } else if model.conflict != nil {
             statusLabel.stringValue =
-                "Another window saved this draft. Your text remains here. Keep editing or explicitly close without saving. Keep-both recovery follows in a later step."
+                openCopy == nil
+                ? "Another window saved this draft. Your text remains here. Keep editing or explicitly close without saving."
+                : "Another window saved this draft. Your text remains here. Keep Both saves it as a new draft in its own window, or explicitly close without saving."
         } else if let failure = model.failure {
             statusLabel.stringValue =
                 "Draft error: \(failure.localizedDescription) Try Save again, keep editing, or explicitly close without saving."

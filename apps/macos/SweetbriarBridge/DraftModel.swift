@@ -477,6 +477,49 @@ public final class DraftModel {
         return resolved
     }
 
+    /// What a Keep Both copy starts from (spec/08 "Saving"): the draft's
+    /// source and the current content, ready for a new draft's first save.
+    /// The copy has no base, so every stored reference and spent handle is
+    /// republished from this draft's revision that stores it; unspent
+    /// handles pass unchanged. A forward can't be copied yet (its draft
+    /// records no source occurrence), nor an attachment with no known
+    /// source: both are `invalidInput`, before anything is written.
+    public func copyForKeepBoth() async throws -> (source: DraftSource, content: DraftContent) {
+        guard !isStopped, !isDiscarded, let content, let draft else {
+            throw CoreFailure.unavailable(reason: "This draft can no longer be copied.")
+        }
+        let copySource: DraftSource
+        if draft.forwardOfMessageId != nil {
+            throw CoreFailure.invalidInput(
+                field: "draft", message: "Keep Both isn't available for forwards yet.")
+        } else if let occurrenceId = draft.replyToOccurrenceId {
+            copySource = .reply(occurrenceId: occurrenceId)
+        } else {
+            copySource = .new
+        }
+        var resolved = content
+        for (index, attachment) in content.attachments.enumerated() {
+            let reference: DraftAttachmentRef
+            switch attachment {
+            case .new(let object, let filename, let mediaType):
+                guard spent.contains(where: { $0.object === object }) else { continue }
+                reference = Self.reference(object, filename, mediaType)
+            case .retained(let stored):
+                reference = stored
+            }
+            guard let authority = sources.first(where: { Self.same($0.reference, reference) }) else {
+                throw CoreFailure.invalidInput(
+                    field: "attachments",
+                    message: "\(reference.filename) can no longer be copied. Remove it and try again.")
+            }
+            let object = try await source.republishDraftAttachment(
+                draftId: draftId, revisionId: authority.revisionId, reference: reference)
+            resolved.attachments[index] = .new(
+                object: object, filename: reference.filename, mediaType: reference.mediaType)
+        }
+        return (copySource, resolved)
+    }
+
     private func recordSources(_ references: [DraftAttachmentRef], in revisionId: String) {
         for reference in references
         where !sources.contains(where: { Self.same($0.reference, reference) }) {
