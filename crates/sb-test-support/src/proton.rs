@@ -319,13 +319,17 @@ async fn dispatch(
     method: &hyper::Method,
     path: &str,
 ) -> Result<Response<Full<Bytes>>, io::Error> {
-    let fault = faults.lock().unwrap_or_else(|e| e.into_inner()).clone();
-    let fault = match fault {
-        Some(Fault::Once(inner)) => {
-            *faults.lock().unwrap_or_else(|e| e.into_inner()) = None;
-            Some(*inner)
+    // Read and clear a one-shot fault under one lock, so two concurrent
+    // requests can't both take it.
+    let fault = {
+        let mut slot = faults.lock().unwrap_or_else(|e| e.into_inner());
+        match slot.take() {
+            Some(Fault::Once(inner)) => Some(*inner),
+            other => {
+                slot.clone_from(&other);
+                other
+            }
         }
-        other => other,
     };
     if let Some(fault) = fault {
         match fault {

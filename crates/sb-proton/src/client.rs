@@ -23,7 +23,7 @@ use rustls::pki_types::{CertificateDer, ServerName};
 use rustls::{ClientConfig, RootCertStore};
 use rustls_platform_verifier::BuilderVerifierExt;
 use tokio::net::TcpStream;
-use tokio::sync::Semaphore;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio_rustls::TlsConnector;
 use tower_service::Service;
 
@@ -249,13 +249,12 @@ impl Client {
         body: Option<Bytes>,
         priority: Priority,
         auth: Option<(&str, &str)>,
-    ) -> Result<Response<Incoming>, ProtonError> {
+    ) -> Result<Answer, ProtonError> {
         if priority == Priority::Background {
             self.wait_background_slot().await;
         }
-        let _permit = self
-            .semaphore
-            .acquire()
+        let permit = Arc::clone(&self.semaphore)
+            .acquire_owned()
             .await
             .map_err(|_| ProtonError::Unavailable {
                 message: "the client is closed".to_owned(),
@@ -272,7 +271,7 @@ impl Client {
                         || status == StatusCode::SERVICE_UNAVAILABLE
                     {
                         let retry_after = clamp_retry_after(response.headers().get("retry-after"));
-                        let (_, body) = read_response(response).await?;
+                        let (_, body) = read_body(response).await?;
                         if rate_attempt >= MAX_RATE_RETRIES {
                             return Err(ProtonError::Unavailable {
                                 message: error_message(&body),
@@ -290,7 +289,7 @@ impl Client {
                         continue;
                     }
                     if status.is_server_error() {
-                        let (_, body) = read_response(response).await?;
+                        let (_, body) = read_body(response).await?;
                         if network_attempt >= MAX_NETWORK_RETRIES {
                             return Err(ProtonError::Unavailable {
                                 message: error_message(&body),
@@ -308,10 +307,15 @@ impl Client {
                         tokio::time::sleep(delay).await;
                         continue;
                     }
-                    return Ok(response);
+                    return Ok(Answer {
+                        response,
+                        _permit: permit,
+                    });
                 }
                 Ok(Err(error)) => {
-                    if network_attempt >= MAX_NETWORK_RETRIES {
+                    if !may_retry(&method, !error.is_connect())
+                        || network_attempt >= MAX_NETWORK_RETRIES
+                    {
                         return Err(ProtonError::Unavailable {
                             message: error.to_string(),
                         });
@@ -320,7 +324,7 @@ impl Client {
                     tokio::time::sleep(backoff_delay(network_attempt)).await;
                 }
                 Err(_) => {
-                    if network_attempt >= MAX_NETWORK_RETRIES {
+                    if !may_retry(&method, true) || network_attempt >= MAX_NETWORK_RETRIES {
                         return Err(ProtonError::Timeout);
                     }
                     network_attempt += 1;
@@ -385,14 +389,35 @@ impl Client {
 
 /// Reads a response body to bytes. A body that fails mid-read is a
 /// failed request, never a partial observation (spec/04).
-pub(crate) async fn read_response(
+/// The in-flight permit is released once the body is read.
+pub(crate) async fn read_response(answer: Answer) -> Result<(StatusCode, Bytes), ProtonError> {
+    read_body(answer.response).await
+}
+
+/// A response with its in-flight permit. The permit is held until the
+/// body has been read or the response dropped, so a body still
+/// streaming counts against [`MAX_IN_FLIGHT`] (spec/04).
+pub(crate) struct Answer {
     response: Response<Incoming>,
-) -> Result<(StatusCode, Bytes), ProtonError> {
+    _permit: OwnedSemaphorePermit,
+}
+
+/// Whether a failed attempt may be sent again (spec/04 "Backoff"). One
+/// that may have reached Proton (a timeout, or a connection lost after
+/// it was sent) is retried only when its method is idempotent, so a
+/// lost answer never replays a sign-in or refresh.
+fn may_retry(method: &Method, may_have_reached: bool) -> bool {
+    !may_have_reached || method.is_idempotent()
+}
+
+/// Reads a body within the request deadline, so a stalled body can't
+/// hold an in-flight permit for ever.
+async fn read_body(response: Response<Incoming>) -> Result<(StatusCode, Bytes), ProtonError> {
     let status = response.status();
-    let bytes = response
-        .into_body()
-        .collect()
+    let collected = tokio::time::timeout(REQUEST_TIMEOUT, response.into_body().collect())
         .await
+        .map_err(|_| ProtonError::Timeout)?;
+    let bytes = collected
         .map_err(|e| ProtonError::Unavailable {
             message: format!("the response body didn't read: {e}"),
         })?
@@ -539,6 +564,66 @@ impl hyper::rt::Write for TlsConn {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sb_test_support::{FakeProtonServer, Fault, cert_der};
+
+    fn test_client(server: &FakeProtonServer) -> Client {
+        let config = Config::new(server.base_url(), "15.1", Trust::Roots(vec![cert_der()]));
+        Client::new(config).expect("the test client configures")
+    }
+
+    #[tokio::test]
+    async fn an_unread_body_keeps_its_in_flight_slot() {
+        let server = FakeProtonServer::serve(Vec::new()).await.expect("serve");
+        let client = test_client(&server);
+        let send = || {
+            client.send(
+                Method::GET,
+                "/tests/ping",
+                None,
+                Priority::Interactive,
+                None,
+            )
+        };
+        let first = send().await.expect("the first request answers");
+        let second = send().await.expect("the second request answers");
+        assert_eq!(client.semaphore.available_permits(), 0);
+        let third = tokio::time::timeout(Duration::from_millis(200), send()).await;
+        assert!(
+            third.is_err(),
+            "a third request waits while two bodies are unread"
+        );
+
+        read_response(first).await.expect("the body reads");
+        assert_eq!(client.semaphore.available_permits(), 1);
+        drop(second);
+        assert_eq!(client.semaphore.available_permits(), MAX_IN_FLIGHT);
+    }
+
+    #[tokio::test]
+    async fn a_dropped_post_is_not_sent_again() {
+        let server = FakeProtonServer::serve(Vec::new()).await.expect("serve");
+        server.set_fault(Some(Fault::Drop));
+        let client = test_client(&server);
+        let result = client
+            .send(
+                Method::POST,
+                "/tests/ping",
+                Some(Bytes::from_static(b"{}")),
+                Priority::Interactive,
+                None,
+            )
+            .await;
+        assert!(matches!(result, Err(ProtonError::Unavailable { .. })));
+        assert_eq!(server.requests().len(), 1, "the POST went out once");
+    }
+
+    #[test]
+    fn only_idempotent_requests_are_retried_once_they_may_have_reached_proton() {
+        assert!(may_retry(&Method::POST, false));
+        assert!(!may_retry(&Method::POST, true));
+        assert!(may_retry(&Method::GET, true));
+        assert!(may_retry(&Method::DELETE, true));
+    }
 
     #[test]
     fn backoff_grows_from_one_second_and_caps_at_five_minutes() {

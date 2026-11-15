@@ -331,8 +331,16 @@ impl Client {
             Err(ProtonError::Unavailable { .. }) | Err(ProtonError::Timeout) => return Ok(()),
             Err(error) => return Err(error),
         };
-        let (status, body) = read_response(response).await?;
-        expect_success(status, &body)
+        let outcome = match read_response(response).await {
+            Ok((status, body)) => expect_success(status, &body),
+            Err(error) => Err(error),
+        };
+        match outcome {
+            Err(
+                ProtonError::Unauthorized | ProtonError::Unavailable { .. } | ProtonError::Timeout,
+            ) => Ok(()),
+            other => other,
+        }
     }
 }
 

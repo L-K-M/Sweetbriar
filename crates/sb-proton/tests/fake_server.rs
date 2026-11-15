@@ -210,6 +210,15 @@ async fn refresh_and_logout_are_typed() {
         .logout(&rotated)
         .await
         .expect("logout is best effort");
+    // Proton refuses an already-invalid token with 401; it still answers Ok.
+    server.set_fault(Some(Fault::Code {
+        status: 401,
+        code: 401,
+    }));
+    client
+        .logout(&rotated)
+        .await
+        .expect("an invalid token's logout is best effort");
 }
 
 #[tokio::test]
