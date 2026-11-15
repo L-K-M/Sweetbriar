@@ -42,7 +42,7 @@ Error 9001 details are JSON `{HumanVerificationMethods, HumanVerificationToken}`
 
 - README: "a Go library implementing a client and development server for (a subset of) the Proton REST API"; "The library is maintained by Proton AG, and is not actively looking for contributors." (`go-proton-api/README.md:8,22`). GitHub description: "Proton API library used by Go-based clients and tools" (https://api.github.com/repos/ProtonMail/go-proton-api).
 - `DefaultAppVersion = "go-proton-api"` with the comment "This must be changed (using the WithAppVersion option) for production use." (`manager_builder.go:15-17`).
-- No API stability guarantee is stated. The MIT licence disclaims warranty (`go-proton-api/LICENSE`). Latest tagged module version is v0.4.0 (2023-02-09, https://proxy.golang.org/github.com/!proton!mail/go-proton-api/@v/v0.4.0.info); Proton Bridge consumes a 2026 pseudo-version `v0.4.1-0.20260901104215-8a62023d3e38` (`proton-bridge/go.mod:12`). The GitHub tags API currently returns only v0.1.4 (https://api.github.com/repos/ProtonMail/go-proton-api/tags). Inference: the library is pre-1.0, changed heavily after 2023, and is used in production by Bridge without a stable release.
+- No API stability guarantee is stated. The MIT licence disclaims warranty (`go-proton-api/LICENSE`). Latest tagged module version is v0.4.0 (2023-02-09, https://proxy.golang.org/github.com/!proton!mail/go-proton-api/@v/v0.4.0.info); Proton Bridge consumes a 2026 pseudo-version `v0.4.1-0.20260901104215-8a62023d3e38` (`proton-bridge/go.mod:12`). The GitHub tags API currently returns only v0.1.4 (https://api.github.com/repos/ProtonMail/go-proton-api/tags). The two version listings disagree (the proxy keeps v0.4.0, the tags API shows only v0.1.4), so upstream tags were evidently removed after release; a CI lane pins an audited commit, not a tag. Inference: the library is pre-1.0, changed heavily after 2023, and is used in production by Bridge without a stable release.
 - It is the library Bridge uses (`proton-bridge/go.mod:12`), so it is "official" code, but the README does not promise third-party support.
 
 ## 6. How hydroxide identifies itself
@@ -81,10 +81,14 @@ Facts:
 Inferences:
 - A third-party client will be judged largely on its app-version string and traffic pattern. Using `Other` is the honest identity but is reported to trigger anti-bot and permission limits; using an official string (e.g. `web-mail@...`) avoids CAPTCHA but is impersonation and can be blocked server-side at any time.
 - Expect forced-update behaviour (5003) and HV loops; design for interactive CAPTCHA and token refresh.
-- Account suspension is the worst case and is discretionary; the no-recourse clause means Proton support may refuse help.
+- Account suspension is the worst case and is discretionary: with no recourse it can mean losing access to the whole mailbox, which is one reason Sweetbriar keeps complete local copies; the no-recourse clause means Proton support may refuse help.
 - Direct API access is unlikely to be a supported, stable platform; treat it as best-effort.
 
+- Credential custody: a third-party client holds session tokens and the derived key passphrase on the user's device (Sweetbriar never stores the password; spec/10). §1's clause against sharing login credentials with "any other person or entity" is not obviously about the user's own client, but it is untested.
+
 ## 11. Open questions
+
+- What traffic pattern counts as "standard client behavior" (event polling cadence, retries and backoff, concurrency, header set)? Only Proton's own clients show it; Sweetbriar's pacing (spec/04-sync-proton) is an estimate.
 
 - Is there an official Proton statement (blog, support article, forum post) that the Mail REST API is public or that third-party clients are permitted? community.proton.me is unreachable from this environment.
 - Does Proton run a client-registration/allowlist process for app-version strings? Issue #227 is unanswered; ask Proton support/business channels.

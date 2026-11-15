@@ -2,6 +2,8 @@
 
 References (read-only clones under `src/`): `go-proton-api` @ 79fbe06 (primary), `hydroxide` @ a08bcca (second), `proton-bridge` @ 36d7b6a (GPL-3.0; protocol facts only, no code copied). API base paths are `/core/v4` and `/mail/v4` (`go-proton-api/server/router.go:32,84`). Proton API booleans are `0`/`1` (`go-proton-api/boolean.go:8-14`).
 
+Caveat: many endpoint details below (defaults, rejection rules, event shapes, import limits) come from `go-proton-api`'s client and its development server, not from Proton's production API. They are protocol evidence to qualify, not production guarantees.
+
 ## 1. Labels, folders, system labels
 
 System label IDs (`go-proton-api/label_types.go:8-21`):
@@ -101,7 +103,7 @@ Attachment upload is in §4.
 - Does the v4 event payload include message/conversation counts? go-proton-api's v4 `Event` has no counts field; hydroxide v3 does.
 - Is there a v4 undelete/restore endpoint? v3 has `/messages/undelete`; v4 client does not.
 - Actual server-side maximum `PageSize` for `/mail/v4/messages` (client uses 150; test server defaults to 100).
-- Exact semantics of `Refresh` bits 2-127 in v4 (only 1 and 255 are named in go-proton-api).
+- Exact semantics of the other `Refresh` bits in v4 (only 1 and 255 are named in go-proton-api).
 - Whether `PUT /mail/v4/messages/delete` is always permanent or is trash when the message is outside Trash; references show it used for permanent deletion after expunge, and trash is done by labeling with `TrashLabel`.
 - Whether `ExternalID` is always present for received mail and how it relates to the `Message-ID` header when both exist.
 - Real API behavior of `Stale` on message listing and the exact retry contract.

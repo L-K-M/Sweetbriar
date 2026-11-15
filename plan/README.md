@@ -89,7 +89,7 @@ Every step has:
   listed, on the owner's Mac).
 - **Runs on:** `linux` (agent and Linux CI), `macos-ci` (only in macOS
   CI) or `owner` (manual on the owner's Mac).
-- **Size:** S (under ~300 changed lines), M (~300–800), L (~800–1,500).
+- **Size:** S (under ~300 changed lines), M (~300–800), L (~800–1,450).
   Anything larger is split before starting.
 
 ## Sizing

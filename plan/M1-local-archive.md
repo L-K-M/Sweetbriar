@@ -2238,7 +2238,7 @@ local drafts. No network yet.
           reservation lifetimes, close, quit and native interaction. One PR
           (combined 2026-11-15 under "Sizing"); split model from native
           only if the diff exceeds the limit. The full workflow is not
-          qualified until c2e passes.
+          qualified until M1.9c2e passes.
       - **M1.9c2d Drafts navigation and restoration (L):** the sidebar's
         Drafts (local) list, open/reopen by draft id, one window per draft,
         and AppKit draft-id restoration. Include refresh/error handling
