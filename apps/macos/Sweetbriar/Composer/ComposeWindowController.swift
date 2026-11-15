@@ -16,8 +16,10 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
     let bccRecipients: RecipientField
     private var recipientFields: [RecipientField] { [toRecipients, ccRecipients, bccRecipients] }
     let statusLabel = NSTextField(wrappingLabelWithString: "Loading draft…")
+    let cueStatusLabel = NSTextField(wrappingLabelWithString: "")
     let identityStrip = IdentityStripAccessory(nibName: nil, bundle: nil)
     private let appearance: AppearanceModel?
+    private let cue: ComposeCueModel?
     private let announceRoute: @MainActor (String) -> Void
     private let modeControl = NSSegmentedControl(
         labels: ["Plain", "Markdown"], trackingMode: .selectOne,
@@ -52,7 +54,7 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
 
     init(
         source: any DraftStore & RecipientSource & ComposeCatalogSource, draftId: String,
-        preferredAccountId: String? = nil, appearance: AppearanceModel? = nil,
+        preferredAccountId: String? = nil, appearance: AppearanceModel? = nil, cue: ComposeCueModel? = nil,
         canWrite: @escaping @MainActor () -> Bool = { true },
         announceRoute: @escaping @MainActor (String) -> Void = { message in
             NSAccessibility.post(
@@ -61,6 +63,7 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
         }
     ) {
         self.appearance = appearance
+        self.cue = cue
         self.announceRoute = announceRoute
         self.canWrite = canWrite
         catalogSource = source
@@ -80,10 +83,17 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
         super.init(window: window)
         window.delegate = self
         window.addTitlebarAccessoryViewController(identityStrip)
+        identityStrip.strip.appearanceDidChange = { [weak self] in
+            Task { @MainActor [weak self] in
+                guard let self, !finished else { return }
+                renderChrome()
+            }
+        }
         buildContent(window)
         render()
         observeModel()
         observeAppearance()
+        observeCue()
         loadTask = Task { [self] in
             await model.load()
             render()
@@ -122,6 +132,8 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
         abandonButton.setAccessibilityIdentifier("composeCloseWithoutSaving")
         statusLabel.setAccessibilityIdentifier("composeSaveStatus")
         statusLabel.textColor = .secondaryLabelColor
+        cueStatusLabel.setAccessibilityIdentifier("composeAppearanceStatus")
+        cueStatusLabel.textColor = .secondaryLabelColor
         let identity = NSStackView(views: [
             NSTextField(labelWithString: "From:"), identityControls.popup, identityControls.refreshButton,
         ])
@@ -137,6 +149,10 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
         scroll.hasVerticalScroller = true
         scroll.autohidesScrollers = true
         scroll.borderType = .bezelBorder
+        scroll.drawsBackground = true
+        scroll.backgroundColor = .textBackgroundColor
+        textView.drawsBackground = true
+        textView.backgroundColor = .textBackgroundColor
         scroll.documentView = textView
         textView.minSize = NSSize(width: 0, height: scroll.contentSize.height)
         textView.maxSize = NSSize(
@@ -148,7 +164,9 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
             width: scroll.contentSize.width, height: CGFloat.greatestFiniteMagnitude)
         textView.textContainer?.widthTracksTextView = true
         let stack = NSStackView(
-            views: [identity as NSView] + recipientRows + [subjectField, controls, scroll, statusLabel])
+            views: [identity as NSView] + recipientRows + [
+                subjectField, controls, scroll, statusLabel, cueStatusLabel,
+            ])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 10
@@ -156,16 +174,22 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
         let content = NSView()
         content.addSubview(stack)
         window.contentView = content
+        guard let contentGuide = window.contentLayoutGuide else {
+            preconditionFailure("a titled compose window must have a content layout guide")
+        }
         NSLayoutConstraint.activate([
             stack.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 16),
             stack.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -16),
-            stack.topAnchor.constraint(equalTo: content.topAnchor, constant: 16),
+            NSLayoutConstraint(
+                item: stack, attribute: .top, relatedBy: .equal,
+                toItem: contentGuide, attribute: .top, multiplier: 1, constant: 16),
             stack.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -12),
             identity.widthAnchor.constraint(equalTo: stack.widthAnchor),
             subjectField.widthAnchor.constraint(equalTo: stack.widthAnchor),
             scroll.widthAnchor.constraint(equalTo: stack.widthAnchor),
             scroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 120),
             statusLabel.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            cueStatusLabel.widthAnchor.constraint(equalTo: stack.widthAnchor),
         ])
         for row in recipientRows { row.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true }
         scroll.setContentHuggingPriority(.defaultLow, for: .vertical)
@@ -420,6 +444,62 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
         }
     }
 
+    private func observeCue() {
+        withObservationTracking {
+            _ = cue?.mode
+            _ = cue?.lastError
+            _ = cue?.isLoading
+            _ = cue?.isStopped
+        } onChange: { [weak self] in
+            Task { @MainActor [weak self] in
+                guard let self, !finished else { return }
+                render()
+                observeCue()
+            }
+        }
+    }
+
+    private func renderChrome() {
+        guard let window else { return }
+        var tint: NSColor?
+        if cue?.mode == .strong, case .identity(_, _, let tokens) = identityStrip.strip.content {
+            let dark =
+                identityStrip.strip.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            tint = appearanceColor(dark ? tokens.dark.stripSrgb : tokens.light.stripSrgb)
+        }
+        if let tint {
+            if !window.styleMask.contains(.fullSizeContentView) {
+                window.styleMask.insert(.fullSizeContentView)
+            }
+            if !window.titlebarAppearsTransparent { window.titlebarAppearsTransparent = true }
+            if window.backgroundColor != tint { window.backgroundColor = tint }
+        } else {
+            if window.titlebarAppearsTransparent { window.titlebarAppearsTransparent = false }
+            if window.styleMask.contains(.fullSizeContentView) {
+                window.styleMask.remove(.fullSizeContentView)
+            }
+            if window.backgroundColor != .windowBackgroundColor {
+                window.backgroundColor = .windowBackgroundColor
+            }
+        }
+        let message: String?
+        if let error = cue?.lastError {
+            message =
+                "Compose appearance may be out of date: \(error.localizedDescription). Quit and reopen Sweetbriar to retry."
+        } else if cue == nil || cue?.isStopped == true {
+            message = "Compose appearance is unavailable. Quit and reopen Sweetbriar to retry."
+        } else if cue?.mode == nil {
+            message = "Loading compose appearance…"
+        } else if cue?.mode == .strong && tint == nil {
+            message = "Strong appearance is unavailable for this sending identity."
+        } else {
+            message = nil
+        }
+        let text = message ?? ""
+        if cueStatusLabel.stringValue != text { cueStatusLabel.stringValue = text }
+        if cueStatusLabel.isHidden != (message == nil) { cueStatusLabel.isHidden = message == nil }
+    }
+
     private func render(routeChanged: Bool = false) {
         let editable = model.content != nil && !isClosing && !finished
         subjectField.isEditable = editable
@@ -453,6 +533,7 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
             stripContent = .unavailable(label: "Loading sending identity…")
         }
         identityStrip.setContent(stripContent, routeChanged: routeChanged)
+        renderChrome()
         let subject = model.content.flatMap { $0.subject.isEmpty ? nil : $0.subject } ?? "New Message"
         window?.title = identityControls.titleContext.map { "\(subject) · \($0)" } ?? subject
         if closeIntent == .abandonEdits {

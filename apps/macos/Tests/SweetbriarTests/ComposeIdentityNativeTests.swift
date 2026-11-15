@@ -139,6 +139,13 @@ private func identityEventually(_ check: @MainActor () async -> Bool) async -> B
 @MainActor
 private func identityViews(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(identityViews) }
 @MainActor
+private func editorBackgroundPixel(_ view: NSTextView) throws -> NSColor {
+    let bitmap = try #require(view.bitmapImageRepForCachingDisplay(in: view.bounds))
+    view.cacheDisplay(in: view.bounds, to: bitmap)
+    let pixel = try #require(bitmap.colorAt(x: bitmap.pixelsWide - 4, y: bitmap.pixelsHigh / 2))
+    return try #require(pixel.usingColorSpace(.sRGB))
+}
+@MainActor
 private func chooseNative(_ id: String, on controller: ComposeWindowController) throws {
     let popup = controller.identityControls.popup
     let index = try #require(popup.itemArray.firstIndex { ($0.representedObject as? String) == id })
@@ -158,12 +165,14 @@ private enum IdentityUndoEvents { case application, explicitTestTransactions }
 private func withNativeIdentity(
     _ seed: NativeIdentitySource.Seed = .saved(nativeContent()), defaultId: String? = nil,
     catalogGate: NativeIdentityGate? = nil, undoEvents: IdentityUndoEvents = .application,
-    appearance: AppearanceModel? = nil, announceRoute: @escaping @MainActor (String) -> Void = { _ in },
+    appearance: AppearanceModel? = nil, cue: ComposeCueModel? = nil,
+    announceRoute: @escaping @MainActor (String) -> Void = { _ in },
     body: @MainActor (ComposeWindowController, NativeIdentitySource) async throws -> Void
 ) async throws {
     let source = NativeIdentitySource(seed, defaultId: defaultId, catalogGate: catalogGate)
     let controller = ComposeWindowController(
-        source: source, draftId: "native-identity", appearance: appearance, announceRoute: announceRoute)
+        source: source, draftId: "native-identity", appearance: appearance, cue: cue,
+        announceRoute: announceRoute)
     controller.showWindow(nil)
     let result: Result<Void, any Error>
     do {
@@ -200,6 +209,8 @@ private final class PopupAppearanceFlip {
 private actor NativeStripAppearanceSource: AppearanceSource {
     private var mark = "W"
     private var lightMarker = sampleAccount.tokens.light.markerSrgb
+    private var lightStrip = sampleAccount.tokens.light.stripSrgb
+    private var darkStrip = sampleAccount.tokens.dark.stripSrgb
     private var generation: UInt64 = 1
     func setMark(_ value: String) {
         mark = value
@@ -209,9 +220,16 @@ private actor NativeStripAppearanceSource: AppearanceSource {
         lightMarker = value
         generation += 1
     }
+    func setStrips(light: String, dark: String) {
+        lightStrip = light
+        darkStrip = dark
+        generation += 1
+    }
     func appearance() async throws -> Appearance {
         var tokens = sampleAccount.tokens
         tokens.light.markerSrgb = lightMarker
+        tokens.light.stripSrgb = lightStrip
+        tokens.dark.stripSrgb = darkStrip
         return Appearance(
             generation: generation, accounts: [],
             identities: ["a", "b"].map { id in
@@ -231,6 +249,21 @@ private actor NativeStripAppearanceSource: AppearanceSource {
         identityId: String, expectedRevision: Int64?, change: IdentityAppearanceChange
     ) async throws -> Receipt { throw CoreFailure.unavailable(reason: "Not used by this fixture.") }
     nonisolated func palette() -> [PaletteColor] { [] }
+}
+
+private actor NativeCueSource: ComposeCueSource {
+    private var value = ComposeCueMode.standard
+    private var failure: CoreFailure?
+    func setFailure(_ error: CoreFailure?) { failure = error }
+    func composeCue() async throws -> ComposeCueMode {
+        if let failure { throw failure }
+        return value
+    }
+    func setComposeCue(_ mode: ComposeCueMode) async throws -> Receipt {
+        if let failure { throw failure }
+        value = mode
+        return .init(command: "set_setting", resultJson: "{}", createdAtMs: 1)
+    }
 }
 
 @Suite(.serialized, .timeLimit(.minutes(1))) @MainActor
@@ -273,6 +306,141 @@ struct ComposeIdentityNativeTests {
                 #expect(second.textView.undoManager?.canUndo == secondUndo)
                 #expect(announcements.isEmpty)
             }
+        }
+    }
+
+    @Test func sharedCueTintsTwoWindowsWithoutTouchingMarkedTextOrUndo() async throws {
+        let colors = NativeStripAppearanceSource()
+        await colors.setStrips(light: "#eaf3ff", dark: "#1c2530")
+        let appearance = AppearanceModel(source: colors)
+        await appearance.refresh()
+        let cueSource = NativeCueSource()
+        let cue = ComposeCueModel(source: cueSource)
+        await cue.reload()
+        var announcements: [String] = []
+        let announce: @MainActor (String) -> Void = { announcements.append($0) }
+        try await withNativeIdentity(
+            .saved(nativeContent(body: "")), appearance: appearance, cue: cue, announceRoute: announce
+        ) { first, _ in
+            try await withNativeIdentity(
+                .saved(nativeContent(body: "")), appearance: appearance, cue: cue, announceRoute: announce
+            ) { second, _ in
+                first.window?.appearance = NSAppearance(named: .aqua)
+                second.window?.appearance = NSAppearance(named: .darkAqua)
+                try #require(
+                    await identityEventually {
+                        first.identityStrip.strip.accessibilityLabel()?.contains("a@EXAMPLE.test") == true
+                            && second.identityStrip.strip.accessibilityLabel()?.contains("a@EXAMPLE.test")
+                                == true
+                    })
+                #expect(first.window?.styleMask.contains(.fullSizeContentView) == false)
+                #expect(second.window?.styleMask.contains(.fullSizeContentView) == false)
+                first.window?.makeKeyAndOrderFront(nil)
+                first.window?.makeFirstResponder(first.textView)
+                first.textView.setMarkedText(
+                    "編集中", selectedRange: .init(location: 3, length: 0),
+                    replacementRange: .init(location: 0, length: 0))
+                try #require(first.textView.hasMarkedText())
+                let marked = first.textView.markedRange()
+                let nativeBytes = Array(first.textView.string.utf8)
+                let firstContent = first.model.content
+                let secondContent = second.model.content
+                let firstUndo = first.textView.undoManager?.canUndo
+                let secondUndo = second.textView.undoManager?.canUndo
+                let editorBefore = try editorBackgroundPixel(first.textView)
+                #expect(await cue.setMode(.strong))
+                try #require(
+                    await identityEventually {
+                        first.window?.styleMask.contains(.fullSizeContentView) == true
+                            && second.window?.styleMask.contains(.fullSizeContentView) == true
+                    })
+                let light = try #require(first.window?.backgroundColor.usingColorSpace(.sRGB))
+                let dark = try #require(second.window?.backgroundColor.usingColorSpace(.sRGB))
+                #expect(abs(light.redComponent - 0xea / 255.0) < 0.01)
+                #expect(abs(dark.redComponent - 0x1c / 255.0) < 0.01)
+                #expect(first.window?.titlebarAppearsTransparent == true)
+                #expect(second.window?.titlebarAppearsTransparent == true)
+                second.window?.appearance = NSAppearance(named: .aqua)
+                try #require(
+                    await identityEventually {
+                        guard let value = second.window?.backgroundColor.usingColorSpace(.sRGB) else {
+                            return false
+                        }
+                        return abs(value.redComponent - 0xea / 255.0) < 0.01
+                    })
+                second.window?.appearance = NSAppearance(named: .darkAqua)
+                try #require(
+                    await identityEventually {
+                        guard let value = second.window?.backgroundColor.usingColorSpace(.sRGB) else {
+                            return false
+                        }
+                        return abs(value.redComponent - 0x1c / 255.0) < 0.01
+                    })
+                #expect(first.textView.drawsBackground && second.textView.drawsBackground)
+                #expect(first.textView.backgroundColor == .textBackgroundColor)
+                #expect(second.textView.backgroundColor == .textBackgroundColor)
+                let editorAfter = try editorBackgroundPixel(first.textView)
+                #expect(abs(editorAfter.redComponent - editorBefore.redComponent) < 0.02)
+                #expect(abs(editorAfter.greenComponent - editorBefore.greenComponent) < 0.02)
+                #expect(abs(editorAfter.blueComponent - editorBefore.blueComponent) < 0.02)
+                #expect(first.textView.hasMarkedText() && first.textView.markedRange() == marked)
+                #expect(Array(first.textView.string.utf8) == nativeBytes)
+                #expect(first.window?.firstResponder === first.textView)
+                #expect(first.model.content == firstContent && second.model.content == secondContent)
+                #expect(first.textView.undoManager?.canUndo == firstUndo)
+                #expect(second.textView.undoManager?.canUndo == secondUndo)
+                #expect(announcements.isEmpty)
+                first.window?.contentView?.layoutSubtreeIfNeeded()
+                let popupRect = first.identityControls.popup.convert(
+                    first.identityControls.popup.bounds, to: nil)
+                let layout = try #require(first.window?.contentLayoutRect)
+                #expect(popupRect.maxY <= layout.maxY + 1)
+                #expect(await cue.setMode(.standard))
+                try #require(
+                    await identityEventually {
+                        first.window?.styleMask.contains(.fullSizeContentView) == false
+                            && second.window?.styleMask.contains(.fullSizeContentView) == false
+                    })
+                #expect(first.window?.titlebarAppearsTransparent == false)
+                #expect(second.window?.titlebarAppearsTransparent == false)
+                #expect(first.textView.hasMarkedText() && first.textView.markedRange() == marked)
+                #expect(first.model.content == firstContent && second.model.content == secondContent)
+                #expect(first.textView.undoManager?.canUndo == firstUndo)
+                #expect(announcements.isEmpty)
+                first.textView.unmarkText()
+            }
+        }
+    }
+
+    @Test func failedCueReadIsExplicitAndRetainsAStaleAcknowledgedMode() async throws {
+        let source = NativeCueSource()
+        await source.setFailure(.unavailable(reason: "synthetic cue failure"))
+        let cue = ComposeCueModel(source: source)
+        await cue.reload()
+        let appearance = AppearanceModel(source: NativeStripAppearanceSource())
+        await appearance.refresh()
+        try await withNativeIdentity(appearance: appearance, cue: cue) { controller, _ in
+            #expect(cue.mode == nil)
+            #expect(controller.window?.styleMask.contains(.fullSizeContentView) == false)
+            #expect(!controller.cueStatusLabel.isHidden)
+            #expect(controller.cueStatusLabel.stringValue.contains("synthetic cue failure"))
+            await source.setFailure(nil)
+            await cue.reload()
+            #expect(await cue.setMode(.strong))
+            try #require(
+                await identityEventually {
+                    controller.window?.styleMask.contains(.fullSizeContentView) == true
+                        && controller.cueStatusLabel.isHidden
+                })
+            await source.setFailure(.unavailable(reason: "synthetic cue failure"))
+            await cue.reload()
+            try #require(
+                await identityEventually {
+                    !controller.cueStatusLabel.isHidden
+                        && controller.cueStatusLabel.stringValue.contains("synthetic cue failure")
+                })
+            #expect(cue.mode == .strong)
+            #expect(controller.window?.styleMask.contains(.fullSizeContentView) == true)
         }
     }
 

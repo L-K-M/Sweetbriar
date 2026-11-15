@@ -1,7 +1,8 @@
 import Foundation
 import SweetbriarBridge
 
-protocol ComposeSource: DraftStore, RecipientSource, ComposeCatalogSource, AppearanceSource {
+protocol ComposeSource: DraftStore, RecipientSource, ComposeCatalogSource, AppearanceSource, ComposeCueSource
+{
     func createDraft(idempotencyKey: String, source: DraftSource) async throws -> DraftCreated
 }
 
@@ -13,6 +14,7 @@ extension CoreBridge: ComposeSource {}
 final class ComposeWindows {
     private let backups: SharedBackups
     private let appearance: SharedAppearance
+    private let cues: SharedComposeCue
     private let openCore: @MainActor () async throws -> any ComposeSource
     private let reportError: @MainActor (any Error) -> Void
     private var pending: [UUID: Task<Void, Never>] = [:]
@@ -21,12 +23,13 @@ final class ComposeWindows {
     private var isQuitting = false
 
     init(
-        backups: SharedBackups, appearance: SharedAppearance,
+        backups: SharedBackups, appearance: SharedAppearance, cues: SharedComposeCue,
         openCore: @escaping @MainActor () async throws -> any ComposeSource,
         reportError: @escaping @MainActor (any Error) -> Void
     ) {
         self.backups = backups
         self.appearance = appearance
+        self.cues = cues
         self.openCore = openCore
         self.reportError = reportError
     }
@@ -38,10 +41,15 @@ final class ComposeWindows {
             defer { pending[request] = nil }
             do {
                 let source = try await openCore()
+                guard let cue = cues.model(source: source) else {
+                    throw CoreFailure.unavailable(
+                        reason: "Compose appearance is unavailable. Try again after the current operation.")
+                }
                 let created = try await source.createDraft(idempotencyKey: request.uuidString, source: .new)
                 let controller = ComposeWindowController(
                     source: source, draftId: created.draftId, preferredAccountId: preferredAccountId,
-                    appearance: appearance.model(source: source), canWrite: { [backups] in backups.canWrite })
+                    appearance: appearance.model(source: source), cue: cue,
+                    canWrite: { [backups] in backups.canWrite })
                 precondition(windows[created.draftId] == nil, "a fresh create key returns a distinct draft")
                 windows[created.draftId] = controller
                 controller.onClosed = { [weak self] in
