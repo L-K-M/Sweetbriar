@@ -20,3 +20,6 @@ DerivedData/
 # scripts/build.sh: Xcode's derived data, and the built app it stages.
 /build/
 /dist/
+
+# Local Claude Code approvals can contain secrets.
+**/.claude/settings.local.json
