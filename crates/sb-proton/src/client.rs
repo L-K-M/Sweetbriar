@@ -13,7 +13,7 @@ use std::time::Duration;
 use bytes::Bytes;
 use http_body_util::{BodyExt, Full};
 use hyper::body::Incoming;
-use hyper::header::HeaderValue;
+use hyper::header::{HeaderName, HeaderValue};
 use hyper::{Method, Request, Response, StatusCode, Uri};
 use hyper_util::client::legacy::Client as LegacyClient;
 use hyper_util::client::legacy::connect::{Connected, Connection};
@@ -234,6 +234,7 @@ impl Client {
                 None,
                 Priority::Interactive,
                 None,
+                &[],
             )
             .await?;
         let (status, body) = read_response(response).await?;
@@ -241,7 +242,8 @@ impl Client {
     }
 
     /// Sends one request with pacing, the 30 s deadline, `Retry-After`
-    /// and exponential backoff. `auth` adds the session headers.
+    /// and exponential backoff. `auth` adds the session headers; the
+    /// `extra` headers are the human-verification retry headers.
     pub(crate) async fn send(
         &self,
         method: Method,
@@ -249,6 +251,7 @@ impl Client {
         body: Option<Bytes>,
         priority: Priority,
         auth: Option<(&str, &str)>,
+        extra: &[(HeaderName, HeaderValue)],
     ) -> Result<Answer, ProtonError> {
         if priority == Priority::Background {
             self.wait_background_slot().await;
@@ -260,7 +263,7 @@ impl Client {
                 message: "the client is closed".to_owned(),
             })?;
 
-        let request = self.build_request(&method, path, body, auth)?;
+        let request = self.build_request(&method, path, body, auth, extra)?;
         let mut network_attempt = 0;
         let mut rate_attempt = 0;
         loop {
@@ -361,6 +364,7 @@ impl Client {
         path: &str,
         body: Option<Bytes>,
         auth: Option<(&str, &str)>,
+        extra: &[(HeaderName, HeaderValue)],
     ) -> Result<Request<Full<Bytes>>, ProtonError> {
         let uri: Uri = format!("{}{}", self.config.base_url, path)
             .parse()
@@ -379,6 +383,9 @@ impl Client {
             builder = builder
                 .header("x-pm-uid", uid)
                 .header("authorization", format!("Bearer {access_token}"));
+        }
+        for (name, value) in extra {
+            builder = builder.header(name, value);
         }
         let body = body.unwrap_or_default();
         builder
@@ -584,6 +591,7 @@ mod tests {
                 None,
                 Priority::Interactive,
                 None,
+                &[],
             )
         };
         let first = send().await.expect("the first request answers");
@@ -613,6 +621,7 @@ mod tests {
                 Some(Bytes::from_static(b"{}")),
                 Priority::Interactive,
                 None,
+                &[],
             )
             .await;
         assert!(matches!(result, Err(ProtonError::Unavailable { .. })));
@@ -636,6 +645,7 @@ mod tests {
                 Some(Bytes::from_static(b"{}")),
                 Priority::Interactive,
                 None,
+                &[],
             )
             .await;
         assert!(matches!(result, Err(ProtonError::Unavailable { .. })));
