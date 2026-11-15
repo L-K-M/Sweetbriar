@@ -149,7 +149,8 @@ conversation; the Bridge account sheet is no longer offered.
 - **Signing in again** (from the account's health row, "Sign in again")
   opens the same sheet for that account, with the username fixed.
 - Password fields are `NSSecureTextField`s; their contents go to the
-  bridge as bytes and are cleared when the step is sent.
+  Swift bridge (`SweetbriarBridge`, not Proton Bridge) as bytes and are
+  cleared when the step is sent.
 
 ## Sidebar
 

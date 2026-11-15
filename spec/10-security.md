@@ -51,7 +51,7 @@ and D24, D29.
   before any token is used (04-sync-proton).
 - **Honest identity:** every request sends `x-pm-appversion: Other` and
   `User-Agent: Sweetbriar/<version> (macOS <version>)`. Sweetbriar never
-  sends another client's identity, even when Proton refuses its own;
+  sends another client's identity, even when Proton refuses Sweetbriar's;
   the refusal is shown to the user (04-sync-proton). A test asserts both headers on
   every request the fake server sees.
 - **Human verification** opens Proton's verification page in a

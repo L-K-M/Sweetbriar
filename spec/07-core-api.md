@@ -313,8 +313,8 @@ async fn Core::shutdown(self);   // flush writer, release the lease
     Proton's message; no account exists yet to carry a state (during
     sync the same refusals set the account's health, 04-sync-proton).
     Each refusal stores nothing.
-  - A conversation lives in memory only, for at most 10 minutes or until
-    `cancel_proton_sign_in`; an unknown or expired `sign_in_id` is
+  - A conversation lives in memory only, for at most 10 minutes, until
+    `cancel_proton_sign_in`, or until a wrong password ends it; an unknown or expired `sign_in_id` is
     `NotFound`. Nothing is stored before `Complete`: then the account
     rows, the identities and the receipt commit together, and the
     secrets are written as for Bridge accounts (paused with

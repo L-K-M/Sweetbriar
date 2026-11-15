@@ -82,7 +82,8 @@ where Proton differs.
    retries the request. Refreshes are serialized per account, since
    Proton rotates the refresh token: a 401 that arrives while a refresh
    is in flight waits for it and retries with the new access token,
-   and the new refresh token is stored before any request uses it. A
+   and the new refresh token is stored before any request uses the new
+   access token. A
    refused refresh (10013) puts the account in
    `needs_attention` ("Sign in again"); local data stays.
 4. **On every start** the engine restores the session from the secret
