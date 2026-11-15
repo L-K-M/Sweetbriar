@@ -1274,6 +1274,11 @@ extend:
 |---|---|---|
 | `appearance.compose_cue` | `standard`, `strong` (08 Strong mode) | `standard` |
 | `backups.destination` | Empty for the default, or an absolute directory path without NUL (M1.8j1b) | Empty: the data root's `backups/` |
+| `reader.reading_view_senders` | The senders whose messages open in the Reading view (08, M6.3b2): lowercase addresses, each with one `@` and at most 254 bytes, sorted, unique, joined by newlines; at most 1,000 | Empty: every message opens in sender layout |
+
+The sender list must already be canonical; any other spelling is
+`InvalidInput`, so one set of senders has one stored value. Addresses
+can't contain newlines, so the separator is unambiguous.
 
 A destination is stored as a canonical JSON string, with quotes, backslashes
 and other string characters escaped. `set_setting` validates its syntax,
