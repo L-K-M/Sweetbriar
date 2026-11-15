@@ -488,6 +488,12 @@ the provider policies (`proton_bridge`, `generic_imap`) live in
   - the fake server's auth half in `sb-test-support`;
   - `deny.toml`: the new crates, the `rsa` advisory exception with its
     reasoning, licence clarifications; regenerated notices.
+- **Split** (over the PR size limit as one): **M2.11a1** the HTTP
+  transport (client, pacing, response codes, the fake's generic half,
+  dependencies); **M2.11a2** SRP sign-in, refresh and logout with the
+  fake's auth routes (other challenges are a typed refusal);
+  **M2.11b** the 2FA, human-verification and mailbox-password
+  challenges and the FIDO2-only refusal.
 - **Acceptance:**
   - a wrong modulus signature or server proof aborts before any token
     is used;
