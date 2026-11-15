@@ -74,8 +74,8 @@ CREATE TABLE store_meta (
 ```sql
 CREATE TABLE accounts (
   account_id        TEXT PRIMARY KEY,                 -- UUID, never changes
-  kind              TEXT NOT NULL CHECK (kind IN ('local','imap')),
-  provider          TEXT NOT NULL CHECK (provider IN ('local_archive','proton_bridge','generic_imap')),
+  kind              TEXT NOT NULL CHECK (kind IN ('local','imap','proton')),
+  provider          TEXT NOT NULL CHECK (provider IN ('local_archive','proton_bridge','generic_imap','proton_api')),
   display_name      TEXT NOT NULL,
   state             TEXT NOT NULL CHECK (state IN ('active','paused','needs_attention','disconnected')),
   state_reason      TEXT,                             -- shown on the health surface
@@ -203,14 +203,12 @@ does not suppress independent list/Search announcements. Register an observer
 before reading the initial generation; registration does not invent a commit.
 Engine/Service queries, receipts and subscriptions remain M1.10c2.
 
-## Proton accounts (pending: the Proton migration, plan M2.13)
+## Proton accounts
 
 Owner decision 2026-11-15: Proton accounts use Sweetbriar's own Proton
 API client (04-sync-proton). This section is the schema contract for
-the migration that M2.13 adds; until it lands, the blocks are `text`, so
-the schema drift test (Migrations) still compares the current schema.
-M2.13 moves them into the SQL blocks above and below in the same PR as
-the migration.
+the Proton migration (plan M2.13); migration 28 creates it, and the
+schema drift test (Migrations) compares the result.
 
 **Changed `CHECK` values:**
 
@@ -233,7 +231,7 @@ mailboxes(account_id, provider_key) WHERE provider_key IS NOT NULL`.
 
 **New tables:**
 
-```text
+```sql
 CREATE TABLE proton_accounts (                        -- one per Proton API account
   account_id         TEXT PRIMARY KEY REFERENCES accounts(account_id),
   api_base_url       TEXT NOT NULL,                   -- 'https://mail.proton.me/api' in the pilot
@@ -282,7 +280,7 @@ CREATE TABLE proton_body_failures (                   -- bodies that couldn't be
   replaces it along with the body.
 - A Proton intent's `target_json` names occurrence ids with the
   message's `provider_key`.
-- **The migration** rebuilds `accounts`, `acquisition_sources` and
+- **The migration** (28) rebuilds `accounts`, `acquisition_sources` and
   `intents` in place, since SQLite can't alter a `CHECK` (create, copy,
   drop, rename, foreign keys checked afterwards), keeping every row and
   id. It is the first migration that rewrites data, so it brings the
@@ -303,7 +301,7 @@ CREATE TABLE acquisition_sources (                    -- provenance, one row per
   source_id        INTEGER PRIMARY KEY AUTOINCREMENT,
   acquisition_id   INTEGER NOT NULL REFERENCES acquisitions(acquisition_id),
   account_id       TEXT NOT NULL REFERENCES accounts(account_id),
-  source_kind      TEXT NOT NULL CHECK (source_kind IN ('imap_fetch','import_mbox','import_eml','send_attempt')), -- 'send_attempt' reserved: in the pilot, sent mail arrives through Sent sync
+  source_kind      TEXT NOT NULL CHECK (source_kind IN ('imap_fetch','import_mbox','import_eml','send_attempt','proton_fetch')), -- 'send_attempt' reserved: in the pilot, sent mail arrives through Sent sync
   source_ref       TEXT NOT NULL,                     -- e.g. occurrence id; import source path + sha256 + mailbox + offset (09); attempt id
   completeness     TEXT NOT NULL CHECK (completeness IN ('complete','truncated')),
   acquired_at      INTEGER NOT NULL
@@ -429,9 +427,12 @@ CREATE TABLE mailboxes (
   highest_modseq INTEGER,
   sync_state     TEXT NOT NULL CHECK (sync_state IN ('new','backfilling','synced','epoch_changed','gone')),
   revision       INTEGER NOT NULL DEFAULT 1,
+  provider_key TEXT,                                -- Proton label id, NULL elsewhere
   UNIQUE (account_id, remote_name),
   UNIQUE (mailbox_id, account_id)
 ) STRICT;
+CREATE UNIQUE INDEX mailboxes_provider_key ON mailboxes(account_id, provider_key)
+  WHERE provider_key IS NOT NULL;
 
 CREATE TABLE logical_messages (
   message_id       INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1168,7 +1169,7 @@ CREATE TABLE intents (
   state              TEXT NOT NULL CHECK (state IN ('pending','in_flight','done','parked','quarantined','cancelled')),
   attempts           INTEGER NOT NULL DEFAULT 0,
   next_attempt_at    INTEGER,
-  wait_reason        TEXT CHECK (wait_reason IN ('auth','throttled','offline','dependency','breaker','requalify')),
+  wait_reason        TEXT CHECK (wait_reason IN ('auth','throttled','offline','dependency','breaker','requalify','resync')),
   quarantine_reason  TEXT CHECK (quarantine_reason IN ('epoch_change','restore','ambiguous_match','config_change','breaker')),
   last_error         TEXT,
   evidence_json      TEXT,                         -- server evidence recorded as it arrives, e.g. a COPYUID mapping (04)
@@ -1661,10 +1662,20 @@ CREATE INDEX d_message_bindings_by_assembly ON d_message_bindings(acquisition_id
   existing acquisitions (06), without changing authoritative rows.
   Migration 6 adds the durable search index state and rebuild jobs of 06
   and 07: epoch 0, no job, no pause, and the cross-kind job-id guards,
-  again without touching existing data.
+  again without touching existing data. Migration 28 adds the Proton
+  account schema of the Proton accounts section: it rebuilds `accounts`,
+  `acquisition_sources` and `intents` in place for their new `CHECK`
+  values, adds `mailboxes.provider_key` and its partial unique index, and
+  creates `proton_accounts` and `proton_body_failures`. It keeps every row
+  and id, and it is the first migration that rewrites data, so it brings
+  the `VACUUM INTO` snapshot. A migration that rebuilds a table runs its
+  transaction with `foreign_keys` off, since the pragma cannot change
+  inside one; the `foreign_key_check` inside the transaction still
+  verifies the result.
 - **Before any migration that rewrites or drops data,** the engine takes a
-  `VACUUM INTO` snapshot, keeping the last two. This arrives with the
-  first such migration; migration 1 has none.
+  `VACUUM INTO` snapshot, keeping the last two. Migration 28 is the first;
+  migration 1 has none. A new store migrating from version 0 holds
+  nothing to preserve and takes none.
 - **A store newer than the app** opens read-only, with an explanation
   naming the app version that last migrated it (research D27). The
   writable open refuses it with `NewerStore`; the read-only open uses
