@@ -79,5 +79,9 @@ uniffi::setup_scaffolding!();
 
 pub use messages::{
     AttachmentLease, BodyAvailability, BodyKind, BodyLease, MessageSelection, ReaderAddress,
-    ReaderHeaders, ReaderMessage, ReaderOccurrence, ReaderTag, RenderWarning, RenderWarningCode,
+    ReaderHeaders, ReaderMessage, ReaderOccurrence, ReaderTag, ReadingBlock, ReadingDocument,
+    ReadingEmphasis, ReadingHeading, ReadingHeadingLevel, ReadingImage, ReadingImageReference,
+    ReadingInline, ReadingLineBreak, ReadingLink, ReadingList, ReadingListItem, ReadingParagraph,
+    ReadingPreformatted, ReadingQuote, ReadingSupport, ReadingText, RenderWarning,
+    RenderWarningCode,
 };
