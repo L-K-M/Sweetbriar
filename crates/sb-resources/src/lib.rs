@@ -104,7 +104,10 @@ pub use import_jobs::{
     recorded_import_job_sources, recoverable_import_jobs,
 };
 pub use sb_mime::SEARCH_EXTRACTOR_VERSION;
-pub use sb_mime::{MboxQuoting, MboxVariant};
+pub use sb_mime::{
+    Block, DOCUMENT_VERSION, DocumentSupport, HeadingLevel, ImageReference, Inline, MailDocument,
+    MboxQuoting, MboxVariant,
+};
 pub use sb_platform::{default_cache_root, default_data_root};
 pub use sb_store::ACCOUNT_PALETTE_V1;
 pub use sb_store::appearance::{

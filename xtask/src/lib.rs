@@ -4,6 +4,7 @@
 
 pub mod ffi;
 pub mod layers;
+pub mod reading_corpus;
 
 use std::fmt;
 use std::path::{Component, Path, PathBuf};

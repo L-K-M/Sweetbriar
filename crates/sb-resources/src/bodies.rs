@@ -2,7 +2,10 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use sb_mime::{AttachmentError, Limits, RenderKind, extract_attachment, render, render_input};
+use sb_mime::{
+    AttachmentError, DocumentSupport, Limits, RenderKind, extract_attachment, mail_document,
+    render, render_input,
+};
 use sb_platform::RealFs;
 
 use crate::{
@@ -298,5 +301,17 @@ impl Resources {
             },
             files,
         })
+    }
+
+    /// The semantic reading document for one message (spec/08 Reader:
+    /// Reading view), or [`DocumentSupport::Unsupported`] for sender
+    /// layout. The acquisition lookup, budgets and error mapping are
+    /// [`Self::publish_body`]'s: a missing body is `Unavailable`, a
+    /// parse failure is `Unavailable` with the failure named, and an
+    /// unknown message is `NotFound`.
+    pub fn reading_document(&self, message: i64) -> Result<DocumentSupport, StoreError> {
+        let bytes = self.acquired_body(message)?;
+        mail_document(&bytes, &Limits::default())
+            .map_err(|error| unavailable(format!("cannot build reading document: {error:?}")))
     }
 }
