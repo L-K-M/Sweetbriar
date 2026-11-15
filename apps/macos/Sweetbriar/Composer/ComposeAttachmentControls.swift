@@ -48,9 +48,17 @@ final class ComposeAttachmentControls: NSObject {
 
     private var undoManager: UndoManager? { window?.undoManager }
 
+    /// `-attachPath <path>`: Attach… takes this file instead of asking,
+    /// the compose UI test's seam past the open panel (spec/11 "UI").
+    private static let attachPathKey = "attachPath"
+
     /// Pick files in a sheet. Folders can't be chosen.
     @objc func chooseFiles() {
         guard admitted(), panel == nil, let window, window.attachedSheet == nil else { return }
+        if let path = UserDefaults.standard.string(forKey: Self.attachPathKey) {
+            attach([URL(fileURLWithPath: path)])
+            return
+        }
         let panel = NSOpenPanel()
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
