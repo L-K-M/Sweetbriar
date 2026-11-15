@@ -9,9 +9,9 @@ built, step by step. **AI agents implement; the owner reviews.** Every step is o
 
 ```
  M0 Foundations ──► M1 Local archive ──► M2 Proton read-only ──► M3 Flags ──► M4 Send ──► M5 Filing ──► M6 Pilot complete
- repo, CI, store,     import, list,        Bridge account,        read/star     drafts→       archive,      views, tags, notes,
- FFI, app shell,      reader, search,      sync, bodies,          via intents   Out Box→      move, trash,  colors complete,
- prototypes           export, backup,      health, real-Bridge                  SMTP          label, undo   qualification
+ repo, CI, store,     import, list,        Proton API sign-in,    read/star     drafts→       archive,      views, tags, notes,
+ FFI, app shell,      reader, search,      events, bodies,        via intents   Out Box→      move, trash,  colors complete,
+ prototypes           export, backup,      health, go-proton-api                Proton API    label, undo   qualification
                       local drafts         CI lane
 ```
 
@@ -19,9 +19,9 @@ built, step by step. **AI agents implement; the owner reviews.** Every step is o
 |---|---|---|
 | **M0** | An app that launches from CI artifacts and talks to the core; the list and composer prototypes decided | [M0-foundations](M0-foundations.md) |
 | **M1** | Import an Apple Mail export, browse, read safely, search, export, back up, restore; write and save local drafts | [M1-local-archive](M1-local-archive.md) |
-| **M2** | The Proton account syncing read-only through Bridge, with coverage and account health | [M2-proton-read-only](M2-proton-read-only.md) |
+| **M2** | The Proton account syncing read-only through Sweetbriar's own Proton API client, with coverage and account health | [M2-proton-read-only](M2-proton-read-only.md) |
 | **M3** | Read/unread and star synced to Proton | [M3-flags](M3-flags.md) |
-| **M4** | Compose and send through Bridge from the right identity, with an inspectable Out Box | [M4-send](M4-send.md) |
+| **M4** | Compose and send through the Proton API from the right identity, with an inspectable Out Box | [M4-send](M4-send.md) |
 | **M5** | Archive, move, trash and add-label, with undo | [M5-filing](M5-filing.md) |
 | **M6** | Saved views, tags, notes, complete account colors; budgets met; the pilot done | [M6-pilot](M6-pilot.md) |
 
@@ -29,7 +29,7 @@ built, step by step. **AI agents implement; the owner reviews.** Every step is o
 milestone, steps run in the listed order unless a step says it can run in
 parallel. **Read-only before mutations**: the order follows the research's build
 order (local durability → read-only sync → reversible effects →
-submission), adapted to Bridge. Flags, the first reversible effect,
+submission), adapted to the Proton API (originally to Bridge). Flags, the first reversible effect,
 come first; send comes before filing because daily use needs it more.
 
 **Owner decision, 2026-10-31:** code implementation may continue while
@@ -56,8 +56,8 @@ is unchanged.
   Proton Mail Bridge. Sync, flags, sending and filing talk to Proton's
   API directly through Sweetbriar's own client. Merged IMAP work stays
   as tested code but is no longer the Proton path. The spec and the
-  M2–M5 plans are revised in their own PR, spec first; until then, do
-  not start Bridge-specific steps (M2.3 onward, M2.8).
+  M2 plan are revised (spec/04-sync-proton, plan/M2); M3–M5 are
+  revised the same way, spec first, before each starts.
   Proton offers no registered third-party client programme: its terms
   tolerate automated access only while it looks like a standard client,
   and it may block such access without recourse. Sweetbriar identifies
@@ -178,8 +178,8 @@ that needs it.
 | O3 | Run the CI-built app on your Mac (`xattr -dr com.apple.quarantine Sweetbriar.app`) and report problems | From M0.9 |
 | O4 | Judge the list prototype (and run its benchmark: Debug → Run List Benchmark) and the composer probe on your Mac (checklists in M0) | M0.10, M0.11 |
 | O5 | Export a few Apple Mail mailboxes (Mailbox → Export Mailbox) for the import qualification | M1.Q |
-| O6 | Install Proton Mail Bridge 3.27.1+ (paid Proton plan with Mail), sign in, export its TLS certificate | M2 |
-| O7 | Run the per-milestone qualification checklists against your real Proton account | M2.Q onward |
+| O6 | *Revised 2026-11-15:* sign in to your Proton account in Sweetbriar when the agent asks (no Bridge; free or paid plan) | M2.Q |
+| O7 | *Revised 2026-11-15:* agents run the qualification checklists; you approve each effect on your real Proton account first | M2.Q onward |
 | O8 | Optional: enrol in the Apple Developer Program, for signed builds, Keychain access groups, notarization and later distribution. Ad-hoc builds suffice for the pilot except where M2.3 qualifies the data-protection Keychain (see there) | M2.3 / M6 |
 | O9 | Run the list benchmark's store-backed mode (Debug → Run Store Benchmark) over an imported mailbox on your Mac | M1.4 |
 
@@ -199,5 +199,5 @@ All of these on the owner's Mac:
 4. **Budgets.** The performance budgets in spec/08 are met at p95 on the
    owner's Mac with their real mailbox size.
 5. **Accessibility.** The gates in spec/08 pass.
-6. **Bridge.** The Bridge qualification checklists for M2–M5 are
+6. **Proton.** The Proton qualification checklists for M2–M5 are
    complete, with dated results committed under `plan/qualification/`.
