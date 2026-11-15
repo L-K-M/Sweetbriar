@@ -1,8 +1,9 @@
 // The main window's sidebar (spec/08 "Sidebar"): a source-list
 // `NSOutlineView` over the bridge's `SidebarModel`. Section headings
 // are group rows; entries sit below them with their unread counts.
-// Choosing an entry that opens a window calls `onChoose`; an entry
-// that opens nothing shows disabled, its note as the tooltip.
+// Choosing an entry that opens a window calls `onChoose`, Drafts
+// (local) `onChooseDrafts`; an entry that opens nothing shows disabled,
+// its note as the tooltip.
 
 import AppKit
 import Observation
@@ -32,6 +33,8 @@ final class SidebarViewController: NSViewController {
 
     /// Choosing an entry that opens a window.
     var onChoose: (@MainActor (WindowSpec) -> Void)?
+    /// Choosing Drafts (local) (spec/08 "Drafts (local)").
+    var onChooseDrafts: (@MainActor () -> Void)?
 
     init(model: SidebarModel, appearance: AppearanceModel) {
         self.model = model
@@ -99,12 +102,25 @@ final class SidebarViewController: NSViewController {
     /// Choose the entry `id` names, as a click would: it is selected
     /// and, if it opens a window, `onChoose` hears of it.
     func choose(entryID id: String) {
-        guard let entry = model.entry(id: id), case .window(let spec) = entry.target else {
-            return
-        }
+        guard let entry = model.entry(id: id), Self.isChoosable(entry) else { return }
         chosenID = id
         select(entryID: id)
-        onChoose?(spec)
+        report(entry)
+    }
+
+    private static func isChoosable(_ entry: SidebarModel.Entry) -> Bool {
+        switch entry.target {
+        case .window, .drafts: return true
+        case .unavailable: return false
+        }
+    }
+
+    private func report(_ entry: SidebarModel.Entry) {
+        switch entry.target {
+        case .window(let spec): onChoose?(spec)
+        case .drafts: onChooseDrafts?()
+        case .unavailable: break
+        }
     }
 
     /// Select the row of `id` without reporting a choice.
@@ -163,13 +179,11 @@ extension SidebarViewController: NSOutlineViewDataSource, NSOutlineViewDelegate 
         item is SectionNode ? 24 : outlineView.rowHeight
     }
 
-    /// Only entries that open a window can be selected (spec/08: a
-    /// mailbox that isn't selectable opens no window).
+    /// Only entries that open a window or the drafts list can be
+    /// selected (spec/08: a mailbox that isn't selectable opens no window).
     func outlineView(_ outlineView: NSOutlineView, shouldSelectItem item: Any) -> Bool {
-        guard let node = item as? EntryNode, case .window = node.entry.target else {
-            return false
-        }
-        return true
+        guard let node = item as? EntryNode else { return false }
+        return Self.isChoosable(node.entry)
     }
 
     func outlineView(
@@ -196,12 +210,12 @@ extension SidebarViewController: NSOutlineViewDataSource, NSOutlineViewDelegate 
         guard !selectingInCode else { return }
         let row = outlineView.selectedRow
         guard row >= 0, let node = outlineView.item(atRow: row) as? EntryNode,
-              case .window(let spec) = node.entry.target
+              Self.isChoosable(node.entry)
         else {
             return
         }
         chosenID = node.entry.id
-        onChoose?(spec)
+        report(node.entry)
     }
 
     static func accountLabel(_ section: SidebarModel.Section, among sections: [SidebarModel.Section]) -> String {
@@ -380,7 +394,7 @@ private final class SidebarEntryCellView: NSTableCellView {
         unread.stringValue = count > 0 ? "\(count)" : ""
         unread.isHidden = count == 0
         switch entry.target {
-        case .window:
+        case .window, .drafts:
             title.textColor = .labelColor
             toolTip = nil
         case .unavailable(let note):

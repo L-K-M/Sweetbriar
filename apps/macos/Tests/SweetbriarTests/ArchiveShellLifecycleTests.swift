@@ -405,3 +405,67 @@ struct ArchiveShellLifecycleTests {
         #expect(state.calls == 1)
     }
 }
+
+@MainActor
+private final class OpenedDrafts { var ids: [String] = [] }
+
+@Suite(.timeLimit(.minutes(1)))
+@MainActor
+struct DraftsPaneShellTests {
+    /// Drafts (local) puts the drafts list in the list pane with the
+    /// reader empty, a row opens its draft, another entry brings the
+    /// message list back, and retirement leaves the old list unable to
+    /// open anything (spec/08 "Drafts (local)").
+    @Test
+    func theDraftsEntryShowsTheListOpensRowsAndRetiresWithTheArchive() async throws {
+        try await withShellBridge { bridge in
+            let created = try await bridge.createDraft(idempotencyKey: UUID().uuidString, source: .new)
+            let appearance = SharedAppearance()
+            let backups = SharedBackups(didRestore: {}, didClose: {})
+            let opened = OpenedDrafts()
+            let controller = MainWindowController(
+                session: CoreSession { bridge }, appearance: appearance, backups: backups,
+                openDraft: { opened.ids.append($0) })
+            do {
+                controller.start()
+                try #require(await shellEventually { controller.sidebar != nil })
+                let sidebar = try #require(controller.sidebar)
+                try #require(await shellEventually { controller.messageList?.model != nil })
+                sidebar.choose(entryID: SidebarModel.unifiedDraftsID)
+                let drafts = try #require(controller.drafts)
+                try #require(await shellEventually { drafts.model.rows.map(\.id) == [created.draftId] })
+                #expect(drafts.tableView.numberOfRows == 1)
+                #expect(!drafts.view.isHidden)
+                #expect(controller.messageList?.view.isHidden == true)
+                let reader = try #require(shellReader(controller.window?.contentViewController))
+                if case .empty = reader.model.state {
+                } else {
+                    Issue.record("the reader must be empty while the drafts list is up")
+                }
+
+                drafts.tableView.selectRowIndexes([0], byExtendingSelection: false)
+                drafts.openChosen()
+                #expect(opened.ids == [created.draftId])
+
+                sidebar.choose(entryID: SidebarModel.unifiedInboxID)
+                #expect(drafts.view.isHidden)
+                #expect(controller.messageList?.view.isHidden == false)
+
+                await controller.retireContent()
+                #expect(drafts.model.isRetired)
+                #expect(controller.drafts == nil)
+                drafts.openChosen()
+                #expect(opened.ids == [created.draftId])
+            } catch {
+                await controller.retireContent()
+                await backups.cancelAndWait()
+                await appearance.reset()
+                controller.window?.close()
+                throw error
+            }
+            await backups.cancelAndWait()
+            await appearance.reset()
+            controller.window?.close()
+        }
+    }
+}

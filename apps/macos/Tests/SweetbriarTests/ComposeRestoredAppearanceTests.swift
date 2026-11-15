@@ -86,7 +86,7 @@ struct ComposeRestoredAppearanceTests {
         context.cues = cues
         let owner = ComposeWindows(
             backups: backups, appearance: appearance, cues: cues, openCore: { core },
-            reportError: { context.errors.append($0) })
+            reportError: { context.errors.append($1) })
         var reopened: [ComposeWindowController] = []
         let result: Result<Void, any Error>
         do {

@@ -108,6 +108,9 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
         window.isReleasedWhenClosed = false
         window.contentMinSize = NSSize(width: 600, height: 430)
         window.setAccessibilityIdentifier("compose-\(draftId)")
+        window.identifier = ComposeRestoration.windowIdentifier
+        window.restorationClass = ComposeRestoration.self
+        window.isRestorable = true
         super.init(window: window)
         window.delegate = self
         window.addTitlebarAccessoryViewController(identityStrip)
@@ -505,6 +508,11 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
         }
         closing = task
         return task
+    }
+
+    /// AppKit restoration keeps only the draft id (spec/08 "Windows").
+    func window(_ window: NSWindow, willEncodeRestorableState state: NSCoder) {
+        ComposeRestoration.encode(draftId: model.draftId, into: state)
     }
 
     func windowShouldClose(_ sender: NSWindow) -> Bool {
