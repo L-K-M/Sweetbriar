@@ -384,7 +384,16 @@ impl Fs for RealFs {
         let file = OpenOptions::new()
             .read(true)
             .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_NOCTTY)
-            .open(path)?;
+            .open(path)
+            .map_err(|error| {
+                // O_NOFOLLOW's ELOOP names a symlinked final component:
+                // a picked non-file, not a transient open failure.
+                if error.raw_os_error() == Some(libc::ELOOP) {
+                    not_regular(path)
+                } else {
+                    error
+                }
+            })?;
         if !file.metadata()?.is_file() {
             return Err(not_regular(path));
         }

@@ -4,7 +4,7 @@
 //! written. The draft row work itself is `sb_store::drafts`, used
 //! through [`Resources::write`]/[`Resources::read`].
 
-use std::io::{self, Read};
+use std::io::{self, Read, Seek};
 use std::path::{Component, Path};
 
 use sb_store::drafts::{AttachmentRef, attachment_source};
@@ -44,7 +44,7 @@ impl Resources {
                 message: "attachment path must be absolute without traversal".into(),
             });
         }
-        let file = self.fs.open_no_follow(path).map_err(|error| {
+        let mut file = self.fs.open_no_follow(path).map_err(|error| {
             if error.kind() == io::ErrorKind::InvalidInput {
                 StoreError::InvalidInput {
                     message: "attachment must be a regular file".into(),
@@ -56,7 +56,36 @@ impl Resources {
                 }
             }
         })?;
-        self.store.objects().publish(file)
+        self.publish_selected(&mut *file)
+    }
+
+    /// Stream an opened selection. The held descriptor pins the inode, so
+    /// its size before and after the stream proves whether the file's
+    /// length changed while it was read — a torn copy from a concurrent
+    /// shrink or growth fails instead of publishing. An in-place rewrite
+    /// that keeps the length can't be seen this way. Blocking file I/O;
+    /// run on a blocking thread, never the writer's.
+    fn publish_selected<R: Read + Seek + ?Sized>(
+        &self,
+        file: &mut R,
+    ) -> Result<PublishedObject, StoreError> {
+        let io_failure = |error: io::Error| StoreError::Unavailable {
+            reason: format!("cannot read selected attachment: {error}"),
+            io_kind: Some(error.kind()),
+        };
+        let opened = file
+            .seek(io::SeekFrom::End(0))
+            .and_then(|length| file.seek(io::SeekFrom::Start(0)).map(|_| length))
+            .map_err(io_failure)?;
+        let published = self.store.objects().publish(&mut *file)?;
+        let settled = file.seek(io::SeekFrom::End(0)).map_err(io_failure)?;
+        if opened != settled || published.id().byte_length() != opened {
+            return Err(StoreError::Unavailable {
+                reason: "selected attachment changed while it was read".into(),
+                io_kind: Some(io::ErrorKind::InvalidData),
+            });
+        }
+        Ok(published)
     }
 
     /// Republish one stored attachment reference from an exact
@@ -284,7 +313,7 @@ mod tests {
         symlink(&file, &link).unwrap();
         assert!(matches!(
             res.publish_draft_attachment_file(&link),
-            Err(StoreError::Unavailable { .. })
+            Err(StoreError::InvalidInput { .. })
         ));
         let fifo = scratch.path().join("fifo");
         assert!(
@@ -299,6 +328,59 @@ mod tests {
             Err(StoreError::InvalidInput { .. })
         ));
         res.close().unwrap();
+    }
+
+    /// Reads `inner` but writes `writer` once, the way an editor saving
+    /// over the picked file mid-stream would change its length. Both
+    /// handles share one inode, so the pinned descriptor's post-stream
+    /// size exposes the change.
+    struct MutateOnRead {
+        inner: std::fs::File,
+        writer: std::fs::File,
+        size: u64,
+        fired: bool,
+    }
+
+    impl io::Read for MutateOnRead {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            if !self.fired {
+                self.fired = true;
+                self.writer.set_len(self.size).unwrap();
+            }
+            self.inner.read(buf)
+        }
+    }
+
+    impl io::Seek for MutateOnRead {
+        fn seek(&mut self, position: io::SeekFrom) -> io::Result<u64> {
+            self.inner.seek(position)
+        }
+    }
+
+    #[test]
+    fn selected_file_changed_while_streaming_is_an_explicit_failure() {
+        for size in [8u64, 65_536] {
+            let scratch = ScratchDir::new("draft-selected-mutated");
+            let res = Resources::open(&scratch.path().join("store")).unwrap();
+            let path = scratch.path().join("picked");
+            std::fs::write(&path, vec![7u8; 512]).unwrap();
+            let inner = std::fs::File::open(&path).unwrap();
+            let writer = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+            let mut reader = MutateOnRead {
+                inner,
+                writer,
+                size,
+                fired: false,
+            };
+            assert!(
+                matches!(
+                    res.publish_selected(&mut reader),
+                    Err(StoreError::Unavailable { .. })
+                ),
+                "size {size}"
+            );
+            res.close().unwrap();
+        }
     }
 
     /// The source revision's reference and the fresh reservation both

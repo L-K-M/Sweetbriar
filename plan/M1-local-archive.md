@@ -2218,8 +2218,9 @@ local drafts. No network yet.
         - **M1.9c2ca Stream selected files (M):** expose bounded-memory
           publication of a user-selected regular file through the core and
           Swift bridge. Preserve the existing publication reservation,
-          cancellation and error contracts; test real files, non-files,
-          failures and durable saved references. No attachment UI yet.
+          pre-begin cancellation, begun drain and error contracts; test
+          real files, non-files, failures and durable saved references.
+          No attachment UI yet.
         - **M1.9c2cb Attachment edit and undo model (L):** retain published
           handles until acknowledged, preserve concurrent edits, and use
           authorized republication when undo/redo needs fresh authority.
