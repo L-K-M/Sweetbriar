@@ -23,6 +23,19 @@ ignore = [
     # authenticated by the server proof (spec/10). Revisit when a crates.io
     # proton-srp release carries the fix.
     { id = "RUSTSEC-2026-0387", reason = "proton-srp 0.8.4 pins crypto-bigint 0.5.5; no fixed crates.io release yet" },
+    # RUSTSEC-2025-0144 (ml-dsa, timing side-channel in ML-DSA
+    # decomposition): proton-rpgp 0.9.0 unconditionally enables pgp's
+    # `pqc` feature, so ml-dsa 0.0.4 is compiled. Sweetbriar never
+    # generates, imports or verifies ML-DSA keys: the pilot's address
+    # keys are Proton's ECC (v4) keys and message/attachment decryption
+    # uses their RSA/ECC session keys, so the vulnerable code path is
+    # unreachable. The advisory needs precise local timing of ML-DSA
+    # signing, which an attacker with that access already wins more
+    # easily. No fixed version is reachable: pgp 0.21.1 pins ml-dsa to
+    # ^0.0.4 and proton-rpgp 0.9.0 pins pgp 0.21; the fix
+    # (>=0.1.0-rc.3) needs a pgp release. Revisit with the next
+    # proton-rpgp.
+    { id = "RUSTSEC-2025-0144", reason = "ml-dsa via pgp's pqc feature; no ML-DSA keys in the pilot and no fixed pgp release" },
 ]
 maximum-db-staleness = "P1D"
 unused-ignored-advisory = "warn"
@@ -68,9 +81,26 @@ exceptions = [
 ]
 
 # proton-srp's crates.io metadata carries no SPDX license field, only a
-# licence file; the file is MIT (spec/01's Crates table).
+# licence file; the file is MIT (spec/01's Crates table). The M2.12
+# crates carry the same metadata gap and the same MIT licence file
+# (research/proton-api/keys-crypto.md §6).
 [[licenses.clarify]]
 crate = "proton-srp"
+expression = "MIT"
+license-files = [{ path = "LICENSE", hash = 0x41b32367 }]
+
+[[licenses.clarify]]
+crate = "proton-crypto"
+expression = "MIT"
+license-files = [{ path = "LICENSE", hash = 0x41b32367 }]
+
+[[licenses.clarify]]
+crate = "proton-crypto-account"
+expression = "MIT"
+license-files = [{ path = "LICENSE", hash = 0x41b32367 }]
+
+[[licenses.clarify]]
+crate = "proton-rpgp"
 expression = "MIT"
 license-files = [{ path = "LICENSE", hash = 0x41b32367 }]
 

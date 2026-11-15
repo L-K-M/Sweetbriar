@@ -7,7 +7,10 @@ use std::time::Duration;
 use sb_proton::{
     ApiCode, Challenge, Client, Config, InvalidField, PasswordMode, ProtonError, SignInStep, Trust,
 };
-use sb_test_support::{FakeProtonServer, Fault, ModulusSignatureVerifier, TestAccount, cert_der};
+use sb_test_support::{
+    ATTACHMENT_PLAINTEXT, FakeProtonServer, Fault, KeyFault, MESSAGE_PLAINTEXT,
+    ModulusSignatureVerifier, TestAccount, cert_der,
+};
 use secrecy::{ExposeSecret, SecretString};
 
 const MACOS_VERSION: &str = "15.1";
@@ -220,7 +223,7 @@ async fn second_factor_and_mailbox_password_chain_in_two_password_mode() {
     let server = server_with(
         TestAccount::new(USER, PASSWORD)
             .with_totp("123456")
-            .with_mailbox_password(),
+            .with_mailbox_password("synthetic-mailbox-password"),
     )
     .await;
     let client = client(&server);
@@ -358,7 +361,10 @@ fn verification_token(step: &SignInStep) -> String {
 
 #[tokio::test]
 async fn mailbox_password_mode_surfaces_the_challenge() {
-    let server = server_with(TestAccount::new(USER, PASSWORD).with_mailbox_password()).await;
+    let server = server_with(
+        TestAccount::new(USER, PASSWORD).with_mailbox_password("synthetic-mailbox-password"),
+    )
+    .await;
     let client = client(&server);
     let (mut sign_in, step) = client
         .begin_sign_in(USER, SecretString::from(PASSWORD))
@@ -581,4 +587,235 @@ fn the_response_code_table_covers_the_research_codes() {
     assert_eq!(ApiCode::from_i64(1000), Some(ApiCode::Success));
     assert_eq!(ApiCode::from_i64(10013), Some(ApiCode::RefreshTokenInvalid));
     assert_eq!(ApiCode::from_i64(42), None);
+}
+
+// ---- M2.12: keys, identities and decryption (spec/04, spec/10) ----
+
+/// Signs in and returns the completed session.
+async fn sign_in(client: &Client, username: &str, password: &str) -> sb_proton::Session {
+    let (_sign_in, step) = client
+        .begin_sign_in(username, SecretString::from(password))
+        .await
+        .expect("sign-in");
+    match step {
+        SignInStep::Complete(complete) => complete.session,
+        other => panic!("unexpected first step: {other:?}"),
+    }
+}
+
+/// Derives the key passphrase the way M2.13 stores it: the salted key
+/// secret for the user key.
+async fn stored_key_passphrase(client: &Client, session: &sb_proton::Session) -> Vec<u8> {
+    let salts = client.key_salts(session).await.expect("the salts");
+    let user_keys = client.user_keys(session).await.expect("the user keys");
+    let primary = &user_keys.0[0];
+    let srp = proton_crypto::ProtonSRP::new_sync();
+    salts
+        .salt_for_key(&srp, &primary.id, PASSWORD.as_bytes())
+        .expect("the key passphrase derives")
+        .as_bytes()
+        .to_vec()
+}
+
+#[tokio::test]
+async fn salts_user_keys_and_addresses_are_served() {
+    let server = server_with(TestAccount::new(USER, PASSWORD)).await;
+    let client = client(&server);
+    let session = sign_in(&client, USER, PASSWORD).await;
+
+    let salts = client.key_salts(&session).await.expect("the salts");
+    let user_keys = client.user_keys(&session).await.expect("the user keys");
+    assert_eq!(user_keys.0.len(), 1);
+    let srp = proton_crypto::ProtonSRP::new_sync();
+    assert!(
+        salts
+            .salt_for_key(&srp, &user_keys.0[0].id, PASSWORD.as_bytes())
+            .is_ok(),
+        "the salt derives the key passphrase"
+    );
+    let addresses = client.addresses(&session).await.expect("the addresses");
+    assert_eq!(addresses.len(), 3);
+    assert!(
+        addresses
+            .iter()
+            .all(|address| address.email.ends_with("@example.test"))
+    );
+    let requests = server.requests();
+    let paths: Vec<_> = requests.iter().map(|r| r.path.as_str()).collect();
+    assert!(paths.contains(&"/core/v4/keys/salts"));
+    assert!(paths.contains(&"/core/v4/users"));
+    assert!(paths.contains(&"/core/v4/addresses"));
+}
+
+#[tokio::test]
+async fn identities_map_enabled_and_sendable_addresses() {
+    let server = server_with(TestAccount::new(USER, PASSWORD)).await;
+    let client = client(&server);
+    let session = sign_in(&client, USER, PASSWORD).await;
+    let keys = client
+        .unlock_keys(&session, PASSWORD.as_bytes())
+        .await
+        .expect("the keys unlock");
+
+    assert_eq!(keys.failed(), Vec::<String>::new());
+    assert_eq!(
+        keys.identities().len(),
+        2,
+        "the disabled address is excluded"
+    );
+    let primary = keys
+        .identities()
+        .iter()
+        .find(|identity| identity.email == "owner@example.test")
+        .expect("the primary identity");
+    assert_eq!(primary.sendable, sb_proton::Sendable::Validated);
+    assert!(primary.unlocked_key);
+    let alias = keys
+        .identities()
+        .iter()
+        .find(|identity| identity.email == "owner-alias@example.test")
+        .expect("the alias identity");
+    assert_eq!(alias.sendable, sb_proton::Sendable::Unavailable);
+    assert!(alias.unlocked_key, "the legacy key unlocked");
+}
+
+#[tokio::test]
+async fn a_key_that_fails_to_unlock_is_reported_without_failing_the_sign_in() {
+    let server =
+        server_with(TestAccount::new(USER, PASSWORD).with_key_fault(KeyFault::OneAddressKey)).await;
+    let client = client(&server);
+    let session = sign_in(&client, USER, PASSWORD).await;
+    let keys = client
+        .unlock_keys(&session, PASSWORD.as_bytes())
+        .await
+        .expect("one address key still unlocks");
+    assert_eq!(keys.failed().len(), 1, "the damaged key is reported");
+    let alias = keys
+        .identities()
+        .iter()
+        .find(|identity| identity.email == "owner-alias@example.test")
+        .expect("the alias identity");
+    assert!(!alias.unlocked_key);
+    assert_eq!(alias.sendable, sb_proton::Sendable::Unavailable);
+}
+
+#[tokio::test]
+async fn no_address_key_unlocking_is_a_typed_failure() {
+    let server =
+        server_with(TestAccount::new(USER, PASSWORD).with_key_fault(KeyFault::AllAddressKeys))
+            .await;
+    let client = client(&server);
+    let session = sign_in(&client, USER, PASSWORD).await;
+    let error = client
+        .unlock_keys(&session, PASSWORD.as_bytes())
+        .await
+        .expect_err("no address key unlocks");
+    assert!(matches!(error, ProtonError::Unavailable { .. }));
+}
+
+#[tokio::test]
+async fn a_restored_session_unlocks_keys_without_the_password() {
+    let server = server_with(TestAccount::new(USER, PASSWORD)).await;
+    let client = client(&server);
+    let session = sign_in(&client, USER, PASSWORD).await;
+    let key_passphrase = stored_key_passphrase(&client, &session).await;
+    let uid = session.uid().to_owned();
+    let refresh = session.expose_refresh_token().to_owned();
+
+    let (restored, keys) = client
+        .restore_session(&uid, &refresh, &key_passphrase)
+        .await
+        .expect("the restored session unlocks the keys");
+    assert_eq!(restored.uid(), uid);
+    assert_eq!(keys.identities().len(), 2);
+    assert!(
+        keys.identities()
+            .iter()
+            .any(|identity| identity.sendable == sb_proton::Sendable::Validated)
+    );
+}
+
+#[tokio::test]
+async fn the_mailbox_password_derives_the_key_passphrase_in_two_password_mode() {
+    let server = server_with(
+        TestAccount::new(USER, PASSWORD).with_mailbox_password("synthetic-mailbox-password"),
+    )
+    .await;
+    let client = client(&server);
+    let (mut sign_in, step) = client
+        .begin_sign_in(USER, SecretString::from(PASSWORD))
+        .await
+        .expect("sign-in");
+    assert!(matches!(step, SignInStep::NeedsMailboxPassword));
+    let step = sign_in
+        .continue_sign_in(Challenge::MailboxPassword {
+            password: SecretString::from("synthetic-mailbox-password"),
+        })
+        .await
+        .expect("the mailbox password completes");
+    let session = match step {
+        SignInStep::Complete(complete) => complete.session,
+        other => panic!("unexpected step: {other:?}"),
+    };
+
+    let error = client
+        .unlock_keys(&session, PASSWORD.as_bytes())
+        .await
+        .expect_err("the login password does not unlock the keys");
+    assert!(matches!(error, ProtonError::Unavailable { .. }));
+    let keys = client
+        .unlock_keys(&session, b"synthetic-mailbox-password")
+        .await
+        .expect("the mailbox password unlocks the keys");
+    assert_eq!(keys.failed(), Vec::<String>::new());
+}
+
+#[tokio::test]
+async fn message_and_attachment_decryption_round_trip() {
+    let server = server_with(TestAccount::new(USER, PASSWORD)).await;
+    let client = client(&server);
+    let session = sign_in(&client, USER, PASSWORD).await;
+    let keys = client
+        .unlock_keys(&session, PASSWORD.as_bytes())
+        .await
+        .expect("the keys unlock");
+
+    let (body, _) = server.message_fixtures();
+    let plaintext = keys
+        .decrypt_body(body.as_bytes())
+        .expect("the body decrypts");
+    assert_eq!(plaintext.as_slice(), MESSAGE_PLAINTEXT.as_bytes());
+
+    let (key_packets, data_packet, expected) = server.attachment_fixture();
+    let attachment = keys
+        .decrypt_attachment(&key_packets, &data_packet)
+        .expect("the attachment decrypts");
+    assert_eq!(attachment.as_slice(), expected);
+    assert_eq!(expected, ATTACHMENT_PLAINTEXT);
+}
+
+#[tokio::test]
+async fn damaged_ciphertext_is_a_typed_failure() {
+    let server = server_with(TestAccount::new(USER, PASSWORD)).await;
+    let client = client(&server);
+    let session = sign_in(&client, USER, PASSWORD).await;
+    let keys = client
+        .unlock_keys(&session, PASSWORD.as_bytes())
+        .await
+        .expect("the keys unlock");
+
+    let (_, damaged_body) = server.message_fixtures();
+    assert!(matches!(
+        keys.decrypt_body(damaged_body.as_bytes()),
+        Err(sb_proton::DecryptError::Damaged)
+    ));
+
+    let (key_packets, data_packet, _) = server.attachment_fixture();
+    let mut damaged_packet = data_packet.clone();
+    let middle = damaged_packet.len() / 2;
+    damaged_packet[middle] ^= 0xFF;
+    assert!(matches!(
+        keys.decrypt_attachment(&key_packets, &damaged_packet),
+        Err(sb_proton::DecryptError::Damaged)
+    ));
 }

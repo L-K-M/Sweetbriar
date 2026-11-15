@@ -25,6 +25,16 @@ use pgp::composed::{
     SignedPublicKey, SubkeyParamsBuilder,
 };
 use pgp::types::Password;
+use proton_crypto::ProtonPGP;
+use proton_crypto::crypto::{
+    DataEncoding, Encryptor, EncryptorSync, KeyGeneratorAlgorithm, PGPProviderSync, SigningMode,
+    WritingMode,
+};
+use proton_crypto_account::keys::{
+    ArmoredPrivateKey, DecryptedAddressKey, KeyFlag, KeyId, LocalAddressKey, LocalUserKey,
+    LockedKey, UserKeys,
+};
+use proton_crypto_account::salts::{KeySalt, Salt};
 pub use proton_srp::{ModulusSignatureVerifier, ModulusVerifyError};
 use proton_srp::{
     RawSRPModulus, SRPAuth, ServerClientProof, ServerClientVerifier, ServerInteraction,
@@ -38,9 +48,28 @@ use tokio_rustls::TlsAcceptor;
 use crate::SeededRandom;
 use crate::imap_cert::server_config;
 
+/// The synthetic plaintext body the fake encrypts for its message
+/// fixture; tests compare a decryption against it.
+pub const MESSAGE_PLAINTEXT: &str = "Sweetbriar synthetic body: none of this is real mail.";
+/// The synthetic attachment plaintext the fake encrypts.
+pub const ATTACHMENT_PLAINTEXT: &[u8] = b"Sweetbriar synthetic attachment bytes.";
+
 /// A valid 2048-bit SRP group modulus (the one proton-srp's own test
 /// suite uses), base64-encoded. Synthetic: no live Proton data.
 pub const MODULUS_B64: &str = "W2z5HBi8RvsfYzZTS7qBaUxxPhsfHJFZpu3Kd6s1JafNrCCH9rfvPLrfuqocxWPgWDH2R8neK7PkNvjxto9TStuY5z7jAzWRvFWN9cQhAKkdWgy0JY6ywVn22+HFpF4cYesHrqFIKUPDMSSIlWjBVmEJZ/MusD44ZT29xcPrOqeZvwtCffKtGAIjLYPZIEbZKnDM1Dm3q2K/xS5h+xdhjnndhsrkwm9U9oyA2wxzSXFL+pdfj2fOdRwuR5nW0J2NFrq3kJjkRmpO/Genq1UW+TEknIWAb6VzJJJA244K/H8cnSx2+nSNZO3bbo6Ys228ruV9A8m6DhxmS+bihN3ttQ==";
+
+/// Which generated keys the fake damages, for the unlock-failure
+/// proofs (M2.12).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum KeyFault {
+    /// Every key unlocks.
+    #[default]
+    None,
+    /// The legacy address key is mislocked, so it fails to unlock.
+    OneAddressKey,
+    /// Every address key is mislocked, so none unlocks.
+    AllAddressKeys,
+}
 
 /// A synthetic test account. The password and TOTP are test values,
 /// never an owner's.
@@ -48,6 +77,9 @@ pub const MODULUS_B64: &str = "W2z5HBi8RvsfYzZTS7qBaUxxPhsfHJFZpu3Kd6s1JafNrCCH9
 pub struct TestAccount {
     pub username: String,
     pub password: String,
+    /// The password that unlocks the keys: the mailbox password in
+    /// two-password mode, else the login password.
+    pub mailbox_password: Option<String>,
     pub totp: Option<String>,
     /// 1 = one-password, 2 = separate mailbox password.
     pub password_mode: u8,
@@ -55,6 +87,7 @@ pub struct TestAccount {
     /// A registered security key; alone it is FIDO2-only, beside
     /// `totp` it reports `2FA.Enabled` 3.
     pub fido2_only: bool,
+    pub key_fault: KeyFault,
 }
 
 impl TestAccount {
@@ -62,10 +95,12 @@ impl TestAccount {
         Self {
             username: username.to_owned(),
             password: password.to_owned(),
+            mailbox_password: None,
             totp: None,
             password_mode: 1,
             hv_required: false,
             fido2_only: false,
+            key_fault: KeyFault::None,
         }
     }
 
@@ -74,8 +109,9 @@ impl TestAccount {
         self
     }
 
-    pub fn with_mailbox_password(mut self) -> Self {
+    pub fn with_mailbox_password(mut self, password: &str) -> Self {
         self.password_mode = 2;
+        self.mailbox_password = Some(password.to_owned());
         self
     }
 
@@ -88,6 +124,30 @@ impl TestAccount {
         self.fido2_only = true;
         self
     }
+
+    pub fn with_key_fault(mut self, fault: KeyFault) -> Self {
+        self.key_fault = fault;
+        self
+    }
+
+    /// The password the key passphrase derives from (spec/04 "Keys").
+    pub fn key_password(&self) -> &str {
+        self.mailbox_password.as_deref().unwrap_or(&self.password)
+    }
+}
+
+/// One address the fake serves, with its locked keys. Synthetic
+/// addresses on `example.test` only.
+#[derive(Debug, Clone)]
+struct FakeAddress {
+    id: String,
+    email: String,
+    display_name: String,
+    send: bool,
+    receive: bool,
+    status: u8,
+    order: u32,
+    keys: Vec<LockedKey>,
 }
 
 /// One logged request. The log deliberately records only header
@@ -133,6 +193,14 @@ struct Account {
     password_mode: u8,
     hv_required: bool,
     fido2_only: bool,
+    key_salts: Vec<Salt>,
+    user_keys: UserKeys,
+    addresses: Vec<FakeAddress>,
+    message_body: String,
+    damaged_body: String,
+    attachment_key_packets: Vec<u8>,
+    attachment_data_packet: Vec<u8>,
+    attachment_plaintext: Vec<u8>,
 }
 
 struct Session {
@@ -185,11 +253,12 @@ impl FakeProtonServer {
             signed_modulus,
             public_key,
         };
+        let provider = ProtonPGP::new_rust_sync();
+        let srp = proton_crypto::ProtonSRP::new_sync();
         for spec in accounts {
+            let random = SeededRandom::new(seed(&spec.username));
             let mut salt = [0u8; 10];
-            SeededRandom::new(seed(&spec.username))
-                .fill(&mut salt)
-                .expect("salt");
+            random.fill(&mut salt).expect("salt");
             let salt_b64 = base64::engine::general_purpose::STANDARD.encode(salt);
             let verifier = SRPAuth::generate_verifier(
                 &TestVerifier(state.public_key.clone()),
@@ -198,6 +267,165 @@ impl FakeProtonServer {
                 &state.signed_modulus,
             )
             .expect("the test modulus verifies with the test key");
+
+            // The keys and fixtures are generated in code at start-up
+            // (spec/11); the salts are seeded from the username, the key
+            // material from the OS RNG. No binary fixtures.
+            let mut key_salt_bytes = [0u8; 16];
+            random.fill(&mut key_salt_bytes).expect("key salt");
+            let key_salt = KeySalt::from_bytes(&key_salt_bytes);
+            let key_secret = key_salt
+                .salted_key_passphrase(&srp, spec.key_password().as_bytes())
+                .expect("the key passphrase derives");
+            let user_local =
+                LocalUserKey::generate(&provider, KeyGeneratorAlgorithm::default(), &key_secret)
+                    .expect("the user key generates");
+            let user_keys = UserKeys::new(vec![user_locked_key(
+                &format!("user-key-{}", spec.username),
+                user_local,
+            )]);
+            let user_unlocked = user_keys
+                .unlock(&provider, &key_secret)
+                .unlocked_keys
+                .first()
+                .expect("the fresh user key unlocks")
+                .clone();
+            let local = spec.username.split('@').next().unwrap_or("user");
+            let (primary_email, alias_email, disabled_email) = (
+                format!("{local}@example.test"),
+                format!("{local}-alias@example.test"),
+                format!("{local}-disabled@example.test"),
+            );
+            let mut addresses = Vec::new();
+            let primary_local = LocalAddressKey::generate(
+                &provider,
+                &primary_email,
+                KeyGeneratorAlgorithm::default(),
+                KeyFlag::default(),
+                true,
+                &user_unlocked,
+            )
+            .expect("the primary address key generates");
+            let primary_unlocked = primary_local
+                .unlock_and_assign_key_id(
+                    &provider,
+                    KeyId::from(format!("{local}-primary-key")),
+                    &user_unlocked,
+                )
+                .expect("the primary address key unlocks");
+            let mut primary = address_locked_key(&format!("{local}-primary-key"), primary_local);
+            let legacy_token = LocalAddressKey::generate(
+                &provider,
+                &alias_email,
+                KeyGeneratorAlgorithm::default(),
+                KeyFlag::default(),
+                false,
+                &user_unlocked,
+            )
+            .expect("the legacy address key generates");
+            let legacy_unlocked = legacy_token
+                .unlock_and_assign_key_id(
+                    &provider,
+                    KeyId::from(format!("{local}-legacy-key")),
+                    &user_unlocked,
+                )
+                .expect("the legacy address key unlocks");
+            let mut legacy = address_locked_key(
+                &format!("{local}-legacy-key"),
+                LocalAddressKey::relock_address_key_legacy(
+                    &provider,
+                    &legacy_unlocked,
+                    &key_secret,
+                )
+                .expect("the legacy address key relocks"),
+            );
+            let disabled_local = LocalAddressKey::generate(
+                &provider,
+                &disabled_email,
+                KeyGeneratorAlgorithm::default(),
+                KeyFlag::default(),
+                false,
+                &user_unlocked,
+            )
+            .expect("the disabled address key generates");
+            let disabled_unlocked = disabled_local
+                .unlock_and_assign_key_id(
+                    &provider,
+                    KeyId::from(format!("{local}-disabled-key")),
+                    &user_unlocked,
+                )
+                .expect("the disabled address key unlocks");
+            let mut disabled = address_locked_key(&format!("{local}-disabled-key"), disabled_local);
+            if spec.key_fault != KeyFault::None {
+                mislock_key(&provider, &mut legacy, &legacy_unlocked);
+            }
+            if spec.key_fault == KeyFault::AllAddressKeys {
+                mislock_key(&provider, &mut primary, &primary_unlocked);
+                mislock_key(&provider, &mut disabled, &disabled_unlocked);
+            }
+            addresses.push(FakeAddress {
+                id: format!("{local}-primary"),
+                email: primary_email.clone(),
+                display_name: format!("{local} primary"),
+                send: true,
+                receive: true,
+                status: 1,
+                order: 1,
+                keys: vec![primary],
+            });
+            addresses.push(FakeAddress {
+                id: format!("{local}-alias"),
+                email: alias_email,
+                display_name: format!("{local} alias"),
+                send: false,
+                receive: true,
+                status: 1,
+                order: 2,
+                keys: vec![legacy],
+            });
+            addresses.push(FakeAddress {
+                id: format!("{local}-disabled"),
+                email: disabled_email,
+                display_name: format!("{local} disabled"),
+                send: true,
+                receive: true,
+                status: 0,
+                order: 3,
+                keys: vec![disabled],
+            });
+
+            // The fixtures are encrypted to the primary address key.
+            let mut body = Vec::new();
+            provider
+                .new_encryptor()
+                .with_encryption_key(&primary_unlocked.public_key)
+                .with_signing_key(&primary_unlocked.private_key)
+                .encrypt_to_writer(
+                    MESSAGE_PLAINTEXT.as_bytes(),
+                    DataEncoding::Armor,
+                    SigningMode::Inline,
+                    WritingMode::All,
+                    &mut body,
+                )
+                .expect("the message body encrypts");
+            let message_body = String::from_utf8(body).expect("the armored body is ASCII");
+            let damaged_body = damage_armor(&message_body);
+            let mut data_packet = Vec::new();
+            let detached = provider
+                .new_encryptor()
+                .with_encryption_key(&primary_unlocked.public_key)
+                .encrypt_to_writer(
+                    ATTACHMENT_PLAINTEXT,
+                    DataEncoding::Bytes,
+                    SigningMode::Inline,
+                    WritingMode::SplitKeyPackets,
+                    &mut data_packet,
+                )
+                .expect("the attachment encrypts");
+            let attachment_key_packets = detached
+                .key_packets
+                .expect("split mode returns the key packets");
+
             state.accounts.insert(
                 spec.username.clone(),
                 Account {
@@ -207,6 +435,17 @@ impl FakeProtonServer {
                     password_mode: spec.password_mode,
                     hv_required: spec.hv_required,
                     fido2_only: spec.fido2_only,
+                    key_salts: vec![Salt {
+                        id: KeyId::from(format!("user-key-{}", spec.username)),
+                        key_salt: Some(key_salt),
+                    }],
+                    user_keys,
+                    addresses,
+                    message_body,
+                    damaged_body,
+                    attachment_key_packets,
+                    attachment_data_packet: data_packet,
+                    attachment_plaintext: ATTACHMENT_PLAINTEXT.to_vec(),
                 },
             );
         }
@@ -299,6 +538,33 @@ impl FakeProtonServer {
     /// The largest number of requests being handled at once.
     pub fn max_in_flight(&self) -> usize {
         self.max_in_flight.load(Ordering::SeqCst)
+    }
+
+    /// The encrypted message body fixture and a damaged copy. Taken
+    /// from the server's first account; M2.12's servers hold one.
+    pub fn message_fixtures(&self) -> (String, String) {
+        let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let account = state
+            .accounts
+            .values()
+            .next()
+            .expect("the server has an account");
+        (account.message_body.clone(), account.damaged_body.clone())
+    }
+
+    /// The attachment fixture: key packets, data packet and plaintext.
+    pub fn attachment_fixture(&self) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
+        let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let account = state
+            .accounts
+            .values()
+            .next()
+            .expect("the server has an account");
+        (
+            account.attachment_key_packets.clone(),
+            account.attachment_data_packet.clone(),
+            account.attachment_plaintext.clone(),
+        )
     }
 }
 
@@ -417,6 +683,9 @@ async fn dispatch(
         ("POST", "/auth/v4/2fa") => handle_2fa(&body, state, headers),
         ("POST", "/auth/v4/refresh") => handle_refresh(&body, state),
         ("DELETE", "/auth/v4") => handle_logout(state, headers),
+        ("GET", "/core/v4/keys/salts") => handle_salts(state, headers),
+        ("GET", "/core/v4/users") => handle_user(state, headers),
+        ("GET", "/core/v4/addresses") => handle_addresses(state, headers),
         ("GET", "/tests/ping") => Ok(json_response(200, json!({"Code": 1000}))),
         _ => Ok(json_response(
             404,
@@ -741,6 +1010,189 @@ fn handle_logout(
         state.sessions.remove(&uid);
     }
     Ok(json_response(200, json!({"Code": 1000})))
+}
+
+/// The session's username, or `None` when the headers don't match a
+/// live session (the fake's authenticated routes).
+fn authenticated(state: &mut State, headers: &hyper::HeaderMap) -> Option<String> {
+    let uid = header_str(headers, "x-pm-uid")?;
+    let bearer = headers
+        .get("authorization")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))?;
+    let session = state.sessions.get(&uid)?;
+    (session.access_token == bearer).then(|| session.user_id.clone())
+}
+
+fn unauthorized() -> Response<Full<Bytes>> {
+    json_response(401, json!({"Code": 401, "Error": "Invalid access token"}))
+}
+
+fn handle_salts(
+    state: &Arc<Mutex<State>>,
+    headers: &hyper::HeaderMap,
+) -> Result<Response<Full<Bytes>>, io::Error> {
+    let mut state = state.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(username) = authenticated(&mut state, headers) else {
+        return Ok(unauthorized());
+    };
+    let account = state
+        .accounts
+        .get(&username)
+        .expect("the session's account exists");
+    let salts: Vec<Value> = account
+        .key_salts
+        .iter()
+        .map(|salt| {
+            json!({
+                "ID": salt.id.0,
+                "KeySalt": salt.key_salt.as_ref().map(|value| value.0.clone()),
+            })
+        })
+        .collect();
+    Ok(json_response(200, json!({"Code": 1000, "KeySalts": salts})))
+}
+
+fn handle_user(
+    state: &Arc<Mutex<State>>,
+    headers: &hyper::HeaderMap,
+) -> Result<Response<Full<Bytes>>, io::Error> {
+    let mut state = state.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(username) = authenticated(&mut state, headers) else {
+        return Ok(unauthorized());
+    };
+    let account = state
+        .accounts
+        .get(&username)
+        .expect("the session's account exists");
+    let keys: Vec<Value> = account
+        .user_keys
+        .0
+        .iter()
+        .map(|key| serde_json::to_value(key).expect("a locked key serializes"))
+        .collect();
+    Ok(json_response(
+        200,
+        json!({
+            "Code": 1000,
+            "User": {
+                "ID": format!("user-{username}"),
+                "Name": username,
+                "DisplayName": username,
+                "Email": account.addresses.first().map(|a| a.email.clone()).unwrap_or_default(),
+                "Keys": keys,
+            }
+        }),
+    ))
+}
+
+fn handle_addresses(
+    state: &Arc<Mutex<State>>,
+    headers: &hyper::HeaderMap,
+) -> Result<Response<Full<Bytes>>, io::Error> {
+    let mut state = state.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(username) = authenticated(&mut state, headers) else {
+        return Ok(unauthorized());
+    };
+    let account = state
+        .accounts
+        .get(&username)
+        .expect("the session's account exists");
+    let addresses: Vec<Value> = account
+        .addresses
+        .iter()
+        .map(|address| {
+            let keys: Vec<Value> = address
+                .keys
+                .iter()
+                .map(|key| serde_json::to_value(key).expect("a locked key serializes"))
+                .collect();
+            json!({
+                "ID": address.id,
+                "Email": address.email,
+                "DisplayName": address.display_name,
+                "Send": address.send,
+                "Receive": address.receive,
+                "Status": address.status,
+                "Order": address.order,
+                "Keys": keys,
+            })
+        })
+        .collect();
+    Ok(json_response(
+        200,
+        json!({"Code": 1000, "Addresses": addresses}),
+    ))
+}
+
+/// Builds the `LockedKey` the API stores for a generated user key.
+fn user_locked_key(id: &str, local: LocalUserKey) -> LockedKey {
+    LockedKey {
+        id: KeyId::from(id.to_owned()),
+        version: 4,
+        private_key: local.private_key,
+        token: None,
+        signature: None,
+        activation: None,
+        primary: true,
+        active: true,
+        flags: None,
+        recovery_secret: None,
+        recovery_secret_signature: None,
+        address_forwarding_id: None,
+    }
+}
+
+/// Builds the `LockedKey` the API stores for a generated address key.
+fn address_locked_key(id: &str, local: LocalAddressKey) -> LockedKey {
+    LockedKey {
+        id: KeyId::from(id.to_owned()),
+        version: 4,
+        private_key: local.private_key,
+        token: local.token,
+        signature: local.signature,
+        activation: None,
+        primary: local.primary,
+        active: true,
+        flags: Some(local.flags),
+        recovery_secret: None,
+        recovery_secret_signature: None,
+        address_forwarding_id: None,
+    }
+}
+
+/// Damages an armored private key in place, so unlocking it fails while
+/// the rest of the account stays valid.
+/// Re-locks a generated address key with a passphrase that matches
+/// neither its token nor the key secret, so unlocking it fails while
+/// the rest of the account stays valid.
+fn mislock_key<P: PGPProviderSync>(
+    provider: &P,
+    key: &mut LockedKey,
+    unlocked: &DecryptedAddressKey<P::PrivateKey, P::PublicKey>,
+) {
+    let wrong = provider
+        .private_key_export(
+            &unlocked.private_key,
+            b"sweetbriar-wrong-passphrase",
+            DataEncoding::Armor,
+        )
+        .expect("the key exports");
+    key.private_key = ArmoredPrivateKey(
+        String::from_utf8(wrong.as_ref().to_vec()).expect("the armored key is ASCII"),
+    );
+}
+
+/// Flips a run of characters in the middle of an armored message,
+/// which is enough to make the ciphertext undecodeable.
+fn damage_armor(armored: &str) -> String {
+    let mut chars: Vec<char> = armored.chars().collect();
+    let middle = chars.len() / 2;
+    for offset in 0..8 {
+        let index = (middle + offset).min(chars.len() - 1);
+        chars[index] = if chars[index] == 'A' { 'B' } else { 'A' };
+    }
+    chars.into_iter().collect()
 }
 
 /// Issues a human-verification token and answers 9001 with Proton's
