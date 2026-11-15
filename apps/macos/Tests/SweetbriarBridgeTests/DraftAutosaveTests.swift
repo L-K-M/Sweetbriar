@@ -132,6 +132,14 @@ private actor AutosaveStore: DraftStore {
         record = autosaveDraft(state: .discarded, revision: record.revision)
         return Receipt(command: "discard_draft", resultJson: "{}", createdAtMs: 2)
     }
+    func publishDraftAttachment(file: URL) async throws -> DraftAttachmentObject {
+        throw CoreFailure.internalError(detail: "attachment publication is not used by this fixture")
+    }
+    func republishDraftAttachment(
+        draftId: String, revisionId: String, reference: DraftAttachmentRef
+    ) async throws -> DraftAttachmentObject {
+        throw CoreFailure.internalError(detail: "attachment republication is not used by this fixture")
+    }
 }
 
 @MainActor

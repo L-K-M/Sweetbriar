@@ -630,6 +630,17 @@ private final class ComposeSavePolicy: DraftStore {
         try requireWrites()
         return try await source.discardDraft(idempotencyKey: idempotencyKey, draftId: draftId)
     }
+    func publishDraftAttachment(file: URL) async throws -> DraftAttachmentObject {
+        try requireWrites()
+        return try await source.publishDraftAttachment(file: file)
+    }
+    func republishDraftAttachment(
+        draftId: String, revisionId: String, reference: DraftAttachmentRef
+    ) async throws -> DraftAttachmentObject {
+        try requireWrites()
+        return try await source.republishDraftAttachment(
+            draftId: draftId, revisionId: revisionId, reference: reference)
+    }
     private func requireWrites() throws {
         guard canWrite() else {
             throw CoreFailure.unavailable(

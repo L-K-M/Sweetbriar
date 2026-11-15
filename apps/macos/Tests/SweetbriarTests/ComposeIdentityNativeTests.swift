@@ -119,6 +119,14 @@ private actor NativeIdentitySource: DraftStore, ComposeCatalogSource, RecipientS
     func discardDraft(idempotencyKey: String, draftId: String) async throws -> Receipt {
         throw CoreFailure.internalError(detail: "Closing must not discard a saved draft.")
     }
+    func publishDraftAttachment(file: URL) async throws -> DraftAttachmentObject {
+        throw CoreFailure.internalError(detail: "attachment publication is not used by this fixture")
+    }
+    func republishDraftAttachment(
+        draftId: String, revisionId: String, reference: DraftAttachmentRef
+    ) async throws -> DraftAttachmentObject {
+        throw CoreFailure.internalError(detail: "attachment republication is not used by this fixture")
+    }
     private static func revision(_ c: DraftContent, seq: Int64, base: String?) -> DraftRevision {
         DraftRevision(
             revisionId: "r\(seq)", seq: seq, baseRevisionId: base,
