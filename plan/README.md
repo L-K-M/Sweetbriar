@@ -41,6 +41,26 @@ code implementation and qualification separately: a merged implementation
 does not make a step or milestone qualified. The definition of done below
 is unchanged.
 
+**Owner decisions, 2026-11-15:**
+
+- **Agents run owner qualification.** Steps marked `owner` and the
+  M*.Q checklists are run by agents on the owner's Mac, which holds the
+  real Apple Mail data. Record each result in `plan/qualification/` as
+  agent-run, with the date, the tested commit, the commands or UI steps
+  and the evidence (counts and pass/fail only, never mail content).
+  Agents still ask the owner first to enter account credentials, for
+  any effect on a real remote account (sending, flags, moves) and for
+  the target of such effects. The two-week daily-use criterion below
+  stays the owner's.
+- **Sweetbriar implements the Proton API itself.** It must not depend on
+  Proton Mail Bridge. Sync, flags, sending and filing talk to Proton's
+  API directly through Sweetbriar's own client. Merged IMAP work stays
+  as tested code but is no longer the Proton path. The spec and the
+  M2–M5 plans are revised in their own PR, spec first; until then, do
+  not start Bridge-specific steps (M2.3 onward, M2.8).
+- **Right-size steps; run lanes in parallel.** See "Sizing" and
+  "Lanes" below.
+
 A second model on a Mac can run automated checks. Push commit-pinned
 requests on `bench/requests`: benchmarks under `bench-requests/`, general
 tests under `test-requests/`. Benchmark requests require `REF`, `LABEL`,
@@ -67,9 +87,39 @@ Every step has:
 - **Size:** S (under ~300 changed lines), M (~300–800), L (~800–1,500).
   Anything larger is split before starting.
 
+## Sizing
+
+A PR has a fixed cost (local gate, macOS CI, review), so size each one
+to use the 1,450-line limit rather than to minimise it:
+
+- Split a step only when its measured or carefully estimated diff,
+  tests included, exceeds the limit. Record the measurement in the
+  split note. Never split a step that fits, and never split a slice of
+  a slice preemptively.
+- Combine adjacent steps of one lane in one PR when together they stay
+  under the limit. Name the PR after the steps it completes.
+- Every deliverable and acceptance check stays assigned when steps are
+  split or combined.
+
+## Lanes
+
+Steps that don't depend on each other run in parallel lanes, each with
+its own branch, worktree and PR:
+
+- the **native lane** (Swift app and bridge, macOS CI), and one or more
+  **core lanes** (Rust crates, Linux CI);
+- helper agents implement bounded core-lane steps; the lead agent
+  reviews each PR against the spec before merging it;
+- a step that depends on an unmerged PR is stacked on that branch and
+  rebased once it merges, rather than waiting idle;
+- at most two full local gates run at once on one Mac (they are
+  disk-bound), and a docs- or spec-only commit after a green gate
+  relies on hosted CI instead of a fresh local gate.
+
 ## Rules for agents
 
-1. **One step per PR.** The title is "M1.3: List windows and
+1. **One step per PR,** or adjacent steps of one lane combined under
+   "Sizing". The title is "M1.3: List windows and
    subscriptions". The body lists the acceptance checks with their
    results.
 2. **Before opening a PR,** run `cargo xtask ci` (fmt, clippy with

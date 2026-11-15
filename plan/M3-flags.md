@@ -1,5 +1,12 @@
 # M3 — Flags (read/unread, star)
 
+> **Revision pending (owner decision, 2026-11-15):** Sweetbriar implements
+> the Proton API itself and must not depend on Proton Mail Bridge. This
+> milestone's Bridge, IMAP-intent and SMTP-through-Bridge steps are
+> superseded by the revised spec and plan that follow in their own PR.
+> Do not start unmerged steps here until then. Merged steps stay as
+> tested code.
+
 **Outcome:** marking read and unread, and starring, syncs to Proton
 through durable intents. This is the first remote effect, and it builds
 the intent framework every later mutation uses.
