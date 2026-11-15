@@ -11,7 +11,8 @@ use proton_crypto::crypto::{
     DataEncoding, Decryptor, DecryptorSync, PGPProviderSync, VerifiedData,
 };
 use proton_crypto_account::keys::{
-    AddressKeys, UnlockResult, UnlockedAddressKey, UnlockedUserKey, UnlockedUserKeys, UserKeys,
+    AddressKeys, LockedKey, UnlockResult, UnlockedAddressKey, UnlockedUserKey, UnlockedUserKeys,
+    UserKeys,
 };
 use proton_crypto_account::salts::{KeySecret, Salts};
 use serde::Deserialize;
@@ -269,7 +270,7 @@ impl<P: PGPProviderSync> KeySet<P> {
         user_keys: &UserKeys,
         addresses: &[Address],
     ) -> Result<Self, KeyUnlockError> {
-        let Some(primary) = user_keys.0.first() else {
+        let Some(primary) = primary_user_key(user_keys) else {
             return Err(KeyUnlockError::NoUserKey);
         };
         let srp = proton_crypto::ProtonSRP::new_sync();
@@ -384,6 +385,14 @@ impl<P: PGPProviderSync> KeySet<P> {
             .map(|key| &key.private_key)
             .collect()
     }
+}
+
+/// The user key whose salt derives the key passphrase: the one marked
+/// primary, since the API doesn't promise to list it first; the first
+/// key when none is marked.
+fn primary_user_key(user_keys: &UserKeys) -> Option<&LockedKey> {
+    let mut keys = user_keys.0.iter();
+    keys.clone().find(|key| key.primary).or_else(|| keys.next())
 }
 
 impl Client {
@@ -521,5 +530,34 @@ mod tests {
         let user_keys = UserKeys::new([]);
         let error = KeySet::<_>::unlock(provider, b"password", &salts, &user_keys, &[]);
         assert!(matches!(error, Err(KeyUnlockError::NoUserKey)));
+    }
+
+    fn locked_key(id: &str, primary: bool) -> LockedKey {
+        LockedKey {
+            id: id.to_owned().into(),
+            version: 4,
+            private_key: String::new().into(),
+            token: None,
+            signature: None,
+            activation: None,
+            primary,
+            active: true,
+            flags: None,
+            recovery_secret: None,
+            recovery_secret_signature: None,
+            address_forwarding_id: None,
+        }
+    }
+
+    #[test]
+    fn the_primary_user_key_salts_the_passphrase_wherever_it_is_listed() {
+        let keys = UserKeys::new([locked_key("old", false), locked_key("primary", true)]);
+        let chosen = primary_user_key(&keys).map(|key| key.id.to_string());
+        assert_eq!(chosen.as_deref(), Some("primary"));
+
+        let unmarked = UserKeys::new([locked_key("first", false), locked_key("second", false)]);
+        let chosen = primary_user_key(&unmarked).map(|key| key.id.to_string());
+        assert_eq!(chosen.as_deref(), Some("first"));
+        assert!(primary_user_key(&UserKeys::new([])).is_none());
     }
 }
