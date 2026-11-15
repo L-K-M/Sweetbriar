@@ -2187,9 +2187,26 @@ local drafts. No network yet.
                               exercise the actual selected-row surfaces, two
                               real full-screen compose windows, text size,
                               restore/reopen, multiwindow propagation and
-                              source/undo checks above. The full workflow is
-                              not qualified until this and the later native
-                              acceptance step pass.
+                              source/undo checks above. Re-sized before
+                              implementation; all three artifacts and the
+                              earlier cue settings control are required:
+                              - **b2b2b2b2b2a Selected surfaces (M):** test
+                                actual selected native row surfaces with core
+                                tokens, both appearances and accessibility
+                                contrast modes. Preserve native selection and
+                                prove marker and outline contrast there.
+                              - **b2b2b2b2b2b Full-screen and text size (L):**
+                                exercise two real full-screen compose windows,
+                                attached strip sizing and larger text, with
+                                route, source, undo and shared preference
+                                propagation intact.
+                              - **b2b2b2b2b2c Restored appearance (L):** use a
+                                real synthetic backup and restore to reopen
+                                compose windows and verify restored identity
+                                cues, multiwindow propagation, neutral editor,
+                                source and undo. The full workflow remains
+                                unqualified until all three artifacts and the
+                                later native acceptance step pass.
         Optional Contacts stays optional; complete native workflow and
         owner input-method/accessibility gates remain c2e and owner work.
       - **M1.9c2c Attachment and conflict editing (L):** picking/dragging

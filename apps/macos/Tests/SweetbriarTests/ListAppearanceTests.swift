@@ -212,6 +212,99 @@ struct ListAppearanceTests {
         await bridge.shutdown()
     }
 
+    @Test func coreTokensContrastOnActualSelectedRows() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let config = CoreConfig(dataRoot: root.appendingPathComponent("data").path,
+                                cacheRoot: root.appendingPathComponent("cache").path)
+        let bridge = try await CoreBridge.open(
+            config: config, snapshots: FrameBatcher<[Setting]>(clock: ImmediateClock()) { _ in })
+        let initial: AccountAppearance
+        do {
+            initial = try #require(try await bridge.appearance().accounts.first)
+        } catch {
+            await bridge.shutdown()
+            throw error
+        }
+        var current = initial
+        let model = ListWindowModel(source: OneRowSource(accountID: current.accountId),
+                                    spec: .debugSynthetic, clock: ImmediateClock())
+        let list = AppKitPrototypeList(model: model, formatter: MessageRowFormatter(),
+                                       accountLabel: { _ in "Work" })
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 300, height: 100),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = list
+        window.orderFront(nil)
+        let result: Result<Void, any Error>
+        do {
+            try await model.open()
+            for _ in 0..<200 where model.row(at: 0) == nil {
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            try #require(model.row(at: 0) != nil)
+            let scroll = try #require(list.listView as? NSScrollView)
+            let table = try #require(scroll.documentView as? NSTableView)
+            table.reloadData()
+            table.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
+            let colors: [AccountColor] = (0..<7).map { .paletteV1(slot: UInt8($0)) }
+                + [.custom(colorSrgb: "#000000"), .custom(colorSrgb: "#ffffff")]
+            for color in colors {
+                _ = try await bridge.setAccountAppearance(
+                    accountId: current.accountId, expectedRevision: current.revision,
+                    change: AccountAppearanceChange(color: color, symbol: nil))
+                current = try #require(try await bridge.appearance().accounts.first)
+                for name: NSAppearance.Name in [.aqua, .darkAqua, .accessibilityHighContrastAqua,
+                                                .accessibilityHighContrastDarkAqua] {
+                    window.appearance = NSAppearance(named: name)
+                    table.layoutSubtreeIfNeeded()
+                    let row = try #require(table.rowView(atRow: 0, makeIfNecessary: true))
+                    let cell = try #require(table.view(atColumn: 0, row: 0, makeIfNecessary: true) as? MessageRowCellView)
+                    #expect(row.isSelected && table.selectedRowIndexes == IndexSet(integer: 0))
+                    for differentiate in [false, true] {
+                        cell.contrastOptions = { (false, differentiate) }
+                        for emphasized in [false, true] {
+                            row.isEmphasized = emphasized
+                            cell.configure(content: content, account: nil, usesAppearance: true)
+                            row.layoutSubtreeIfNeeded()
+                            row.needsDisplay = true
+                            row.displayIfNeeded()
+                            let nativeSelection = try renderSRGB(row)
+                            cell.configure(content: content, account: current, accountLabel: "Work", usesAppearance: true)
+                            row.layoutSubtreeIfNeeded()
+                            row.needsDisplay = true
+                            row.displayIfNeeded()
+                            let selected = try renderSRGB(row)
+                            let scale = CGFloat(selected.pixelsWide) / row.bounds.width
+                            let x = Int(cell.convert(.zero, to: row).x * scale)
+                            let y = selected.pixelsHigh / 2
+                            // colorAt returns a calibrated NSColor even for an
+                            // sRGB bitmap. Its components are the bitmap's sRGB
+                            // bytes; converting that wrapper again mislabels them.
+                            let background = try #require(selected.colorAt(x: selected.pixelsWide - 8, y: y))
+                            let native = try #require(nativeSelection.colorAt(x: nativeSelection.pixelsWide - 8, y: y))
+                            let outline = try #require(selected.colorAt(x: x, y: y))
+                            let strip = try #require(selected.colorAt(x: x + Int(1.5 * scale), y: y))
+                            let marker = try #require(selected.colorAt(x: x + Int(4.5 * scale), y: y))
+                            #expect(background.alphaComponent > 0.99 && native.alphaComponent > 0.99)
+                            #expect(contrast(background, native) < 1.01)
+                            #expect(contrast(marker, strip) >= 3)
+                            #expect(contrast(outline, strip) >= 3)
+                            #expect(max(contrast(outline, background), contrast(strip, background)) >= 3)
+                        }
+                    }
+                }
+            }
+            result = .success(())
+        } catch {
+            result = .failure(error)
+        }
+        window.close()
+        await model.close()
+        await bridge.shutdown()
+        if case .success = result { try FileManager.default.removeItem(at: root) }
+        try result.get()
+    }
+
     private func checkRail(_ bitmap: NSBitmapImageRep) throws {
         let edge = try #require(bitmap.colorAt(x: 0, y: 28)?.usingColorSpace(.sRGB))
         let strip = try #require(bitmap.colorAt(x: 1, y: 28)?.usingColorSpace(.sRGB))
@@ -413,6 +506,20 @@ struct ListAppearanceTests {
         await model.close()
     }
 
+    private func renderSRGB(_ view: NSView) throws -> NSBitmapImageRep {
+        // A window-backed default cache uses the display profile. Its cached
+        // bytes are not sRGB-tagged; use an explicit sRGB target before
+        // calculating WCAG contrast, independent of the attached monitor.
+        let space = try #require(CGColorSpace(name: CGColorSpace.sRGB))
+        let context = try #require(CGContext(data: nil, width: Int(view.bounds.width), height: Int(view.bounds.height),
+                                             bitsPerComponent: 8, bytesPerRow: 0, space: space,
+                                             bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        let image = try #require(context.makeImage())
+        let bitmap = NSBitmapImageRep(cgImage: image)
+        view.cacheDisplay(in: view.bounds, to: bitmap)
+        return bitmap
+    }
+
     private func render(_ view: NSView) throws -> NSBitmapImageRep {
         let bitmap = try #require(view.bitmapImageRepForCachingDisplay(in: view.bounds))
         view.cacheDisplay(in: view.bounds, to: bitmap)
@@ -494,8 +601,12 @@ private actor TwoFlaggedRows: ListWindowSource, WindowEventSource {
 }
 
 private actor OneRowSource: ListWindowSource, WindowEventSource {
+    private let accountID: String
+
+    init(accountID: String = "account-1") { self.accountID = accountID }
+
     private var row: ListRow {
-        ListRow(occurrenceId: 1, messageId: 1, accountId: "account-1", mailboxId: 1,
+        ListRow(occurrenceId: 1, messageId: 1, accountId: accountID, mailboxId: 1,
                 sortDate: 0, sender: "Sender", subject: "Subject", snippet: "Snippet",
                 unread: false, flagged: false, hasAttachments: false, tags: [])
     }
