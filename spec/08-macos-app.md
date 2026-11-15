@@ -402,6 +402,19 @@ Neither unsaved text nor a delayed draft save may cross a swap.
     (`republish_draft_attachment`), so undo after a saved removal is not
     a conflict. References compare by UTF-8 bytes; same-byte attachments
     stay independent entries.
+  - **Native controls (M1.9c2cc):** Attach… opens a file sheet (several
+    files at once, no folders); files dropped on the editor attach the
+    same way and never insert their paths as text. Each attachment has a
+    row with its name and a Remove button; each unfinished publication a
+    row saying it is attaching, and each failed one a row with the
+    reason and Dismiss. Attaching and removing are undoable edits on the
+    window's undo stack ("Undo Attach File", "Undo Remove Attachment"),
+    with redo; an undo whose attachment is no longer at its place does
+    nothing. New attachments are admitted only while the editor is
+    editable and archive writes are available. Close settles begun
+    publications before its final save, so a finished file is saved,
+    then fences and drains them; Close Without Saving fences first and
+    drops unwanted results unreferenced.
 - **Paste:** pasting HTML offers "Paste as Markdown" with a preview and a
   lossy-conversion warning; plain paste is the default.
 - **Sending** shows the Out Box entry. During the undo window (default
