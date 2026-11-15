@@ -2230,14 +2230,15 @@ local drafts. No network yet.
           show publication and actionable failures, and wire attachment
           removal and native undo/redo to the model. Test native interaction,
           health admission, close and quit without losing text or objects.
-        - **M1.9c2cd Keep-both model (L):** preserve both conflict contents,
-          create the explicit copy without automatic retry, republish retained
-          attachments with exact source authority, and drain begun work.
-          Test failures, retries, concurrent edits and reservation lifetimes.
-        - **M1.9c2ce Native conflict recovery (L):** expose explicit keep-both
-          and safe refusal paths, preserve both windows' content, and test
-          close, quit, errors and native interaction. The full workflow is
-          not qualified until all slices and later acceptance pass.
+        - **M1.9c2cd Keep-both conflict recovery (L):** preserve both
+          conflict contents, create the explicit copy without automatic
+          retry, republish retained attachments with exact source authority,
+          drain begun work, and expose explicit keep-both and safe refusal
+          paths natively. Test failures, retries, concurrent edits,
+          reservation lifetimes, close, quit and native interaction. One PR
+          (combined 2026-11-15 under "Sizing"); split model from native
+          only if the diff exceeds the limit. The full workflow is not
+          qualified until c2e passes.
       - **M1.9c2d Drafts navigation and restoration (L):** the sidebar's
         Drafts (local) list, open/reopen by draft id, one window per draft,
         and AppKit draft-id restoration. Include refresh/error handling

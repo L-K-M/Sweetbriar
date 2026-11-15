@@ -39,6 +39,10 @@ checked.
 | [14](14-system-accounts.md) | System accounts | Can Sweetbriar use accounts signed in at system level: macOS Internet Accounts, GNOME Online Accounts, KDE? (owner's question) |
 | [15](15-account-colors.md) | Account colors | How to color-code accounts clearly, including the compose window (owner's requirement) |
 
+Proton API (2026-11-15): [proton-api/](proton-api/README.md), the
+research behind the own-client decision: auth, sync, mutations, sending,
+terms and risk.
+
 Per-client deep dives: [classics/eudora.md](classics/eudora.md),
 [classics/mailsmith.md](classics/mailsmith.md),
 [classics/claris-emailer.md](classics/claris-emailer.md),
