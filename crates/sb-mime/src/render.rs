@@ -349,7 +349,7 @@ pub(crate) fn sanitize_run(
 
 // These are the five escapes emitted by the pinned HTML5 serializer, not a
 // decoder for sender HTML. Decode ampersands last to avoid recursive decoding.
-fn decode_serialized(value: &str) -> String {
+pub(crate) fn decode_serialized(value: &str) -> String {
     value
         .replace("&lt;", "<")
         .replace("&gt;", ">")
@@ -516,7 +516,7 @@ fn per_text_node(
 /// ordinary text: html5ever 0.40's algorithm (tokenizer/char_ref), with
 /// the same entity table and C1 remapping, so the sanitized text reads
 /// exactly as the sender's would.
-fn decode_references(text: &str) -> String {
+pub(crate) fn decode_references(text: &str) -> String {
     use markup5ever::data::{C1_REPLACEMENTS, NAMED_ENTITIES};
     let mut out = String::with_capacity(text.len());
     let mut rest = text;

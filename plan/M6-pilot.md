@@ -53,17 +53,21 @@ as view", sidebar views, a tag picker and a reader note editor.
 - **Spec:** research 12; 08 (Reader: Reading view).
 - **Depends on:** M1.5.
 - **Deliverables:**
-  - `sb-mime::document`: a semantic document model for plain personal
-    mail and simple HTML (paragraphs, quotes, lists, links, images),
-    with source-part references;
-  - a positive structure detector, with sender layout otherwise;
-  - the reader toggle with per-sender memory;
-  - local corpus tooling that runs on the owner's Mac against their own
-    mail and is never committed.
+  - **M6.3a (core):** `sb-mime::document`, a versioned semantic
+    document model for plain personal mail and simple HTML (paragraphs,
+    headings, emphasis, explicit line breaks, preformatted blocks,
+    quotes, lists, links, images), with source-part references; a
+    positive structure detector, with sender layout otherwise. This
+    step.
+  - **M6.3b (toggle, memory, corpus tool, owner review):** the reader
+    toggle with per-sender memory; local corpus tooling that runs on the
+    owner's Mac against their own mail and is never committed.
 - **Acceptance:**
-  - fixtures with tables, receipts or complex layout are classified
-    unsupported;
-  - the toggle is instant;
+  - **M6.3a:** fixtures with tables, receipts or complex layout are
+    classified unsupported; plain text with quotes and lists and simple
+    HTML round-trip into the expected document; nodes keep source-part
+    references; the hostile corpus still passes;
+  - **M6.3b:** the toggle is instant;
   - **owner:** runs the corpus tool on 200+ of their own messages and
     reviews the flagged critical failures. Results summary only goes in
     `plan/qualification/M6-reading.md`.

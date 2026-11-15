@@ -10,6 +10,7 @@
 
 #![forbid(unsafe_code)]
 
+mod document;
 mod extract;
 mod import_flags;
 mod limits;
@@ -24,6 +25,11 @@ mod search_document;
 mod summary;
 mod walk;
 
+pub use document::{
+    Block, DOCUMENT_VERSION, DocumentSupport, Heading, HeadingLevel, Image, ImageReference, Inline,
+    LineBreak, Link, List, ListItem, MailDocument, Paragraph, Preformatted, Quote, Text,
+    mail_document,
+};
 pub use import_flags::{ImportFlags, import_flags};
 pub use limits::{
     Limits, MAX_DECODED_PART_BYTES, MAX_DEPTH, MAX_HEADER_BYTES, MAX_HEADER_FIELDS,
