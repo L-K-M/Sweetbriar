@@ -8,15 +8,20 @@
 
 use crate::PartId;
 
+use super::html::MAX_DEPTH;
 use super::{Block, Inline, LineBreak, List, ListItem, Paragraph, Quote, Text};
 
-pub(super) fn blocks(text: &str, part: &PartId) -> Vec<Block> {
-    let normalized = text.replace('\r', "\n");
+/// Literal blocks, or `None` once quote or bullet nesting passes the model's
+/// maximum depth (sender layout, not personal mail).
+pub(super) fn blocks(text: &str, part: &PartId) -> Option<Vec<Block>> {
+    // A CRLF pair is one line break; a lone CR is another. Collapsing both
+    // at once would turn every CRLF into a blank line.
+    let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
     let lines: Vec<&str> = normalized.split('\n').collect();
-    blocks_from_lines(&lines, part)
+    blocks_from_lines(&lines, part, 0)
 }
 
-fn blocks_from_lines(lines: &[&str], part: &PartId) -> Vec<Block> {
+fn blocks_from_lines(lines: &[&str], part: &PartId, depth: usize) -> Option<Vec<Block>> {
     let mut blocks = Vec::new();
     let mut index = 0;
     while index < lines.len() {
@@ -25,6 +30,9 @@ fn blocks_from_lines(lines: &[&str], part: &PartId) -> Vec<Block> {
             continue;
         }
         if quote_depth(lines[index]).is_some() {
+            if depth >= MAX_DEPTH {
+                return None;
+            }
             let mut quoted = Vec::new();
             while index < lines.len() && quote_depth(lines[index]).is_some() {
                 quoted.push(lines[index]);
@@ -38,7 +46,7 @@ fn blocks_from_lines(lines: &[&str], part: &PartId) -> Vec<Block> {
             let inner_lines: Vec<&str> = inner.split('\n').collect();
             blocks.push(Block::Quote(Quote {
                 part: part.clone(),
-                blocks: blocks_from_lines(&inner_lines, part),
+                blocks: blocks_from_lines(&inner_lines, part, depth + 1)?,
             }));
             continue;
         }
@@ -60,10 +68,13 @@ fn blocks_from_lines(lines: &[&str], part: &PartId) -> Vec<Block> {
                     item_lines.push(lines[index]);
                     index += 1;
                 }
+                if depth >= MAX_DEPTH {
+                    return None;
+                }
                 items.push(ListItem {
                     part: part.clone(),
                     number: None,
-                    blocks: blocks_from_lines(&item_lines, part),
+                    blocks: blocks_from_lines(&item_lines, part, depth + 1)?,
                 });
             }
             blocks.push(Block::List(List {
@@ -86,7 +97,7 @@ fn blocks_from_lines(lines: &[&str], part: &PartId) -> Vec<Block> {
         }
         blocks.push(paragraph_block(&paragraph, part));
     }
-    blocks
+    Some(blocks)
 }
 
 /// Depth of a `>` quote run: `> > text` is two levels deep.

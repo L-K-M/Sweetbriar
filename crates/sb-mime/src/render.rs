@@ -516,7 +516,7 @@ fn per_text_node(
 /// ordinary text: html5ever 0.40's algorithm (tokenizer/char_ref), with
 /// the same entity table and C1 remapping, so the sanitized text reads
 /// exactly as the sender's would.
-fn decode_references(text: &str) -> String {
+pub(crate) fn decode_references(text: &str) -> String {
     use markup5ever::data::{C1_REPLACEMENTS, NAMED_ENTITIES};
     let mut out = String::with_capacity(text.len());
     let mut rest = text;

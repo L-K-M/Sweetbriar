@@ -20,7 +20,7 @@ use std::collections::{HashMap, HashSet};
 use lol_html::{RewriteStrSettings, element, rewrite_str};
 use url::Url;
 
-use crate::render::{ResourcePolicy, decode_serialized, sanitize_run};
+use crate::render::{ResourcePolicy, decode_references, sanitize_run};
 use crate::rendition::decode_cid;
 use crate::{Limits, ParseFailure, PartId, RelatedResource, RenderInput, SelectedBody};
 
@@ -324,7 +324,9 @@ pub fn mail_document(bytes: &[u8], limits: &Limits) -> Result<DocumentSupport, P
     let Some(plain) = input.plain() else {
         return Ok(DocumentSupport::Unsupported);
     };
-    let blocks = plain::blocks(plain.text(), plain.part_id());
+    let Some(blocks) = plain::blocks(plain.text(), plain.part_id()) else {
+        return Ok(DocumentSupport::Unsupported);
+    };
     if blocks.is_empty() {
         return Ok(DocumentSupport::Unsupported);
     }
@@ -356,6 +358,17 @@ fn html_document(input: &RenderInput, body: &SelectedBody) -> Option<MailDocumen
 /// resource's content id and part.
 const CID_TOKEN: &str = "sb-document";
 
+/// The inverse of [`crate::render::decode_serialized`]: the five escapes the
+/// pinned HTML5 serializer emits, ampersands first so none is escaped twice.
+fn encode_serialized(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('\u{a0}', "&nbsp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+}
+
 fn rewrite_images(
     source: &str,
     resources: &[RelatedResource],
@@ -368,7 +381,11 @@ fn rewrite_images(
             let Some(src) = el.get_attribute("src") else {
                 return Ok(());
             };
-            let src = decode_serialized(&src);
+            // lol_html hands back the source attribute value with entities
+            // intact. Decode it exactly once here and write the escaped form
+            // below, so the sanitizer's later parse restores this same value
+            // instead of decoding sender HTML a second time.
+            let src = decode_references(&src);
             let final_src = if is_cid(&src) {
                 let id = decode_cid(&src[4..]).ok_or("dangling cid reference")?;
                 let (index, resource) = resources
@@ -396,7 +413,7 @@ fn rewrite_images(
                     .borrow_mut()
                     .insert(url.clone(), ImageReference::Remote { url: url.clone() });
                 minted.borrow_mut().insert(url.clone());
-                url
+                encode_serialized(&url)
             };
             el.set_attribute("src", &final_src)?;
             Ok(())
@@ -519,10 +536,11 @@ fn build_list(
     images: &HashMap<String, ImageReference>,
 ) -> Option<List> {
     let ordered = tag == "ol";
-    let start = match attr(attrs, "start") {
-        Some(value) => parse_number(value)?,
-        None => 1,
-    };
+    // An invalid numbering attribute is ignored, as HTML does; the default
+    // numbering stands.
+    let start = attr(attrs, "start")
+        .and_then(|value| parse_number(value))
+        .unwrap_or(1);
     let reversed = attr(attrs, "reversed").is_some();
     let mut items = Vec::new();
     for child in children {
@@ -533,10 +551,7 @@ fn build_list(
                 attrs,
                 children,
             } if tag == "li" => {
-                let number = match attr(attrs, "value") {
-                    Some(value) => Some(parse_number(value)?),
-                    None => None,
-                };
+                let number = attr(attrs, "value").and_then(|value| parse_number(value));
                 items.push(ListItem {
                     part: part.clone(),
                     number,

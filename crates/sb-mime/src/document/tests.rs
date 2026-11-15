@@ -333,6 +333,71 @@ fn unsafe_link_destinations_are_dropped_by_the_sanitizer() {
 }
 
 #[test]
+fn hostile_plain_quote_and_bullet_runs_are_unsupported() {
+    let quotes = format!("{}x", "> ".repeat(20_000));
+    let bullets = format!("{}x", "- ".repeat(20_000));
+    for body in [quotes, bullets] {
+        assert_eq!(
+            document(&plain(&body)),
+            DocumentSupport::Unsupported,
+            "leading {}",
+            if body.starts_with('>') { '>' } else { '-' }
+        );
+    }
+}
+
+#[test]
+fn crlf_plain_body_keeps_one_paragraph() {
+    // render_input folds CRLF before plain text reaches the document.
+    let raw = plain("first\r\nsecond");
+    let input = crate::render_input(raw.as_bytes(), &Limits::default()).unwrap();
+    assert_eq!(input.plain().expect("plain body").text(), "first\nsecond");
+    let part = input.plain().expect("plain body").part_id().clone();
+    // A literal CRLF at this boundary must still fold to one line break.
+    let blocks = super::plain::blocks("first\r\nsecond", &part).expect("literal text");
+    assert_eq!(blocks.len(), 1);
+    let Block::Paragraph(paragraph) = &blocks[0] else {
+        panic!("one paragraph")
+    };
+    assert_eq!(paragraph.inlines().len(), 3);
+    assert_eq!(text_of(&paragraph.inlines()[0]), "first");
+    assert!(matches!(paragraph.inlines()[1], Inline::LineBreak(_)));
+    assert_eq!(text_of(&paragraph.inlines()[2]), "second");
+}
+
+#[test]
+fn dense_html_nodes_over_budget_are_unsupported() {
+    let body = "<br>".repeat(super::html::MAX_NODES + 1);
+    assert_eq!(document(&html(&body)), DocumentSupport::Unsupported);
+}
+
+#[test]
+fn image_src_entities_decode_exactly_once() {
+    let document = supported(&html(
+        "<p><img src=\"https://example.invalid/a?x=&amp;amp;\"></p>",
+    ));
+    let paragraph = block!(document.blocks(), 0, Paragraph);
+    let image = inline!(paragraph.inlines(), 0, Image);
+    let ImageReference::Remote { url } = image.reference() else {
+        panic!("remote reference")
+    };
+    assert_eq!(url, "https://example.invalid/a?x=&amp;");
+}
+
+#[test]
+fn invalid_list_numbering_attributes_use_defaults() {
+    let document = supported(&html(
+        "<ol start=\"x\"><li>a</li><li value=\"y\">b</li></ol>",
+    ));
+    let list = block!(document.blocks(), 0, List);
+    assert!(list.ordered());
+    assert_eq!(list.start(), 1);
+    assert_eq!(list.items().len(), 2);
+    assert_eq!(list.items()[0].number(), None);
+    assert_eq!(list.items()[1].number(), None);
+}
+
+#[test]
 fn empty_bodies_are_unsupported() {
     for raw in [
         "From: sender@example.invalid\r\nContent-Type: text/plain\r\n\r\n",

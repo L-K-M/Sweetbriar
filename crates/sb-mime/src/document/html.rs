@@ -16,9 +16,9 @@ use html5ever::tokenizer::{Tag, TagKind, Token, TokenSink, TokenSinkResult, Toke
 
 /// Nesting deeper than this is not a personal-mail structure the model
 /// renders faithfully, so it classifies as unsupported.
-const MAX_DEPTH: usize = 128;
+pub(super) const MAX_DEPTH: usize = 128;
 /// Node budget for one document body.
-const MAX_NODES: usize = 100_000;
+pub(super) const MAX_NODES: usize = 100_000;
 const CHUNK: usize = 1_024;
 const VOID: &[&str] = &["br", "img"];
 
@@ -111,6 +111,18 @@ impl Parser {
         }
     }
 
+    /// Charge one node against the body budget. `false` once the budget is
+    /// spent; the caller classifies the document unsupported.
+    fn charge(&self) -> bool {
+        let nodes = self.nodes.get() + 1;
+        self.nodes.set(nodes);
+        if nodes > MAX_NODES {
+            self.supported.set(false);
+            return false;
+        }
+        true
+    }
+
     fn check(&self, tag: &Tag) {
         if !supported_tag(tag.name.as_ref()) {
             self.supported.set(false);
@@ -137,6 +149,9 @@ impl TokenSink for Parser {
                 match tag.kind {
                     TagKind::StartTag => {
                         if VOID.contains(&name.as_str()) {
+                            if !self.charge() {
+                                return TokenSinkResult::Continue;
+                            }
                             self.append(RawNode::Element {
                                 tag: name,
                                 attrs: attrs(&tag),
@@ -144,9 +159,11 @@ impl TokenSink for Parser {
                             });
                             return TokenSinkResult::Continue;
                         }
-                        self.nodes.set(self.nodes.get() + 1);
+                        if !self.charge() {
+                            return TokenSinkResult::Continue;
+                        }
                         let depth = self.stack.borrow().len();
-                        if depth >= MAX_DEPTH || self.nodes.get() > MAX_NODES {
+                        if depth >= MAX_DEPTH {
                             self.supported.set(false);
                             return TokenSinkResult::Continue;
                         }
@@ -172,8 +189,8 @@ impl TokenSink for Parser {
                     }
                 }
             }
-            Token::CharacterTokens(text) if self.build && !text.is_empty() => {
-                self.append(RawNode::Text(text.to_string()));
+            Token::CharacterTokens(text) if self.build && !text.is_empty() && self.charge() => {
+                self.append(RawNode::Text(text.to_string()))
             }
             _ => {}
         }
