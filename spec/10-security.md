@@ -20,10 +20,57 @@ and D24, D29.
   written to files, logs, crash reports or exports.
 - **The Bridge password** (Bridge generates it; it is not the Proton
   password) is entered once at account setup and stored as above.
-- **A Keychain error puts the account in `needs_attention`** (04). It
+- **Proton accounts** (04-sync-proton): the Proton password, the mailbox
+  password and 2FA codes are entered at sign-in only and are never
+  stored. They live in zeroizing buffers (`secrecy`) and are dropped as
+  soon as the SRP proofs and the key passphrase exist. The key
+  passphrase is derived from the password that unlocks the keys (the
+  Proton password in one-password mode, the mailbox password in two)
+  with Proton's key salt: it can't sign in, but it unlocks the keys,
+  so it is guarded like a password. The secret store holds one item per
+  account: the session UID, the refresh token and the key passphrase.
+  Access tokens stay in memory.
+- **Proton private keys** are unlocked in memory from the key passphrase
+  and are never written anywhere, decrypted or not; Proton's encrypted
+  key blobs are fetched again on each start. Decrypted key material is
+  zeroized on drop.
+- **A Keychain error puts the account in `needs_attention`** (04-sync-imap,
+  04-sync-proton). It
   never deletes or recreates
   anything. Logs redact anything that looks like a token or password; a
   CI test scans for this.
+
+## The Proton API
+
+- **TLS:** connections to the Proton API host use `rustls` with the
+  platform verifier (the system trust store, hostname checked). Pinning
+  Proton's keys is *later*: a stale pin would lock the owner out. A
+  certificate error is never accepted.
+- **SRP:** the modulus must carry a valid signature from the Proton
+  modulus key embedded in `proton-srp`, and the server proof must match
+  before any token is used (04-sync-proton).
+- **Honest identity:** every request sends `x-pm-appversion: Other` and
+  `User-Agent: Sweetbriar/<version> (macOS <version>)`. Sweetbriar never
+  sends another client's identity, even when Proton refuses Sweetbriar's;
+  the refusal is shown to the user (04-sync-proton). A test asserts both headers on
+  every request the fake server sees.
+- **Human verification** opens Proton's verification page in a
+  non-persistent `WKWebView` (08) that loads only `verify.proton.me`
+  and Proton's CAPTCHA providers' hosts, shares no cookies with
+  anything else and is torn down afterwards. Sweetbriar reads only the
+  returned token.
+- **Decryption:** bodies and attachments are decrypted with
+  `proton-crypto` (01) in the core, never in the UI. Decrypted messages
+  are stored like any other original (03), so the store holds
+  plaintext. FileVault covers it at rest (Privacy, below), as with
+  Bridge before.
+- **Signatures:** a body's signature is verified against the sender's
+  keys when Proton supplies them. The pilot records the result for
+  diagnostics only; showing it, like `Authentication-Results`, needs a
+  trust design first (*later*).
+- **Never logged:** passwords, tokens, the key passphrase, key material,
+  decrypted content, the human-verification token, the session UID.
+  The log-redaction CI test (Credentials) covers the Proton transport.
 
 ## TLS and the Bridge certificate
 
@@ -101,14 +148,17 @@ and D24, D29.
 - **Attachments:** the user opens them explicitly. Files are written to a
   per-lease cache directory with the quarantine attribute set, so
   Gatekeeper applies.
-- **Trust display:** `Authentication-Results` is not shown for Bridge
-  accounts in the pilot. Proton's own verification isn't exposed through
-  Bridge in a form Sweetbriar can trust.
+- **Trust display:** `Authentication-Results` is not shown for Proton
+  accounts in the pilot, through Bridge or the API. Proton's own
+  verification and the API's signature results need a trust design
+  first.
 
 ## Privacy
 
 - **No telemetry.** Nothing leaves the machine except mail protocol
-  traffic to configured servers.
+  traffic to configured servers, and for Proton accounts the API
+  traffic to Proton and, during human verification, the verification
+  page's own traffic.
 - **Diagnostics:** a diagnostics package is assembled on demand with
   redaction (tokens, passwords, addresses and subjects masked). The user
   previews it before saving.

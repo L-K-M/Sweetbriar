@@ -203,6 +203,91 @@ does not suppress independent list/Search announcements. Register an observer
 before reading the initial generation; registration does not invent a commit.
 Engine/Service queries, receipts and subscriptions remain M1.10c2.
 
+## Proton accounts (pending: the Proton migration, plan M2.13)
+
+Owner decision 2026-11-15: Proton accounts use Sweetbriar's own Proton
+API client (04-sync-proton). This section is the schema contract for
+the migration that M2.13 adds; until it lands, the blocks are `text`, so
+the schema drift test (Migrations) still compares the current schema.
+M2.13 moves them into the SQL blocks above and below in the same PR as
+the migration.
+
+**Changed `CHECK` values:**
+
+- `accounts.kind` gains `'proton'`; `accounts.provider` gains
+  `'proton_api'`. Accounts added through Proton Bridge before 2026-11-15
+  keep `proton_bridge`; no new ones are created.
+- `acquisition_sources.source_kind` gains `'proton_fetch'`: Sweetbriar's
+  deterministic reconstruction of a decrypted Proton message
+  (04-sync-proton), with `source_ref` `<message id>#r<reconstruction
+  version>`.
+- `intents.wait_reason` gains `'resync'`: waiting for a Proton refresh's
+  listing to complete.
+- A Proton refresh is that account's epoch change: its breaker event is
+  `epoch_change`, so `breaker_events` is unchanged.
+
+**New column:** `mailboxes.provider_key TEXT` (the Proton label id, NULL
+elsewhere), with `CREATE UNIQUE INDEX mailboxes_provider_key ON
+mailboxes(account_id, provider_key) WHERE provider_key IS NOT NULL`.
+`remote_name` is the display path for Proton mailboxes.
+
+**New tables:**
+
+```text
+CREATE TABLE proton_accounts (                        -- one per Proton API account
+  account_id         TEXT PRIMARY KEY REFERENCES accounts(account_id),
+  api_base_url       TEXT NOT NULL,                   -- 'https://mail.proton.me/api' in the pilot
+  username           TEXT NOT NULL,                   -- Proton's canonical name after sign-in
+  proton_user_id     TEXT NOT NULL UNIQUE,            -- a later sign-in must name the same user; one account per Proton user
+  credential_ref     TEXT NOT NULL,                   -- secret store key: session UID, refresh token, key passphrase (10)
+  password_mode      INTEGER NOT NULL CHECK (password_mode IN (1,2)), -- 2: a separate mailbox password
+  key_generation     INTEGER NOT NULL DEFAULT 1,      -- bumped when key unlocking changes what it unlocked
+  event_cursor       TEXT,                            -- last applied event id; NULL until the first bootstrap completes
+  pending_cursor     TEXT,                            -- cursor read before the running bootstrap's listing
+  listing_state      TEXT NOT NULL CHECK (listing_state IN ('none','listing','complete')),
+  listing_checkpoint TEXT,                            -- last committed page's position while listing
+  refresh_count      INTEGER NOT NULL DEFAULT 0,      -- Proton refreshes applied
+  diagnostics_json   TEXT,                            -- last refusal code and message, redacted (10)
+  revision           INTEGER NOT NULL DEFAULT 1,
+  CHECK ((listing_state = 'listing') = (pending_cursor IS NOT NULL)),
+  CHECK (listing_checkpoint IS NULL OR listing_state = 'listing')
+) STRICT;
+
+CREATE TABLE proton_body_failures (                   -- bodies that couldn't be acquired
+  message_id     INTEGER PRIMARY KEY REFERENCES logical_messages(message_id),
+  reason         TEXT NOT NULL CHECK (reason IN ('no_key','decrypt','attachment','too_large','reconstruct')),
+  detail         TEXT,                                -- redacted (10)
+  attempts       INTEGER NOT NULL,
+  key_generation INTEGER NOT NULL,                    -- retried once the account's key_generation moves past it
+  last_at        INTEGER NOT NULL
+) STRICT;
+```
+
+**Rules:**
+
+- `proton_user_id` keeps the account UUID tied to one Proton user:
+  signing in as another user is refused, never merged.
+- `logical_messages.provider_key` is the Proton message id, and it is
+  authoritative (ids are stable).
+- **Occurrences** have NULL `uidvalidity` and `uid`, like the local
+  archive. There is one current occurrence per (mailbox, logical
+  message); the engine keeps that invariant and a test checks it, since
+  an index can't tell Proton mailboxes from local ones. A label the
+  message lost makes its occurrence `vanished`; regaining it inserts a
+  new one. Flags are the message's and are equal on every occurrence.
+- **Headers before bodies:** until a body arrives, `message_headers.
+  raw_fields` holds the canonical metadata JSON as received
+  (`{"v":1,"proton_metadata":{…}}`) and the parsed columns come from it;
+  In-Reply-To and References stay NULL until the stored header block
+  replaces it along with the body.
+- A Proton intent's `target_json` names occurrence ids with the
+  message's `provider_key`.
+- **The migration** rebuilds `accounts`, `acquisition_sources` and
+  `intents` in place, since SQLite can't alter a `CHECK` (create, copy,
+  drop, rename, foreign keys checked afterwards), keeping every row and
+  id. It is the first migration that rewrites data, so it brings the
+  `VACUUM INTO` snapshot (Migrations).
+
 ## Acquisitions: immutable originals
 
 ```sql
@@ -351,7 +436,7 @@ CREATE TABLE mailboxes (
 CREATE TABLE logical_messages (
   message_id       INTEGER PRIMARY KEY AUTOINCREMENT,
   account_id       TEXT NOT NULL REFERENCES accounts(account_id),
-  provider_key     TEXT,                               -- provider object id when one exists; Proton: X-Pm-Internal-Id (04)
+  provider_key     TEXT,                               -- provider object id when one exists; Bridge: X-Pm-Internal-Id (04)
   acquisition_id   INTEGER REFERENCES acquisitions(acquisition_id), -- best complete body, NULL until fetched
   created_at       INTEGER NOT NULL,
   UNIQUE (account_id, provider_key),
@@ -1108,7 +1193,8 @@ CREATE INDEX intents_runnable ON intents(account_id, state, next_attempt_at);
     engine enforces.
   - `wait_reason` separates waiting from failing.
 - The execution and reconciliation rules are in
-  [04-sync-imap](04-sync-imap.md).
+  [04-sync-imap](04-sync-imap.md), with Proton's evidence in
+  [04-sync-proton](04-sync-proton.md).
 
 ## Sending
 

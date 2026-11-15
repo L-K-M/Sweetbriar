@@ -1,18 +1,31 @@
-# M2 — Proton Mail read-only through Bridge
+# M2 — Proton Mail read-only through Sweetbriar's Proton API client
 
-> **Revision pending (owner decision, 2026-11-15):** Sweetbriar implements
-> the Proton API itself and must not depend on Proton Mail Bridge. This
-> milestone's Bridge-dependent steps are
-> superseded by the revised spec and plan that follow in their own PR.
-> Do not start unmerged steps here until then. Merged steps stay as
-> tested code.
+**Revised 2026-11-15 (owner decision):** Sweetbriar implements the Proton
+API itself and doesn't depend on Proton Mail Bridge (spec/04-sync-proton,
+research/proton-api).
 
-**Outcome:** the owner's Proton account syncs read-only through Bridge:
-mailboxes, headers, bodies, search, coverage and account health. No
-remote changes yet.
+- **Merged and kept as tested code:** M2.1 and M2.2 (the generic IMAP
+  transport), M2.3 (secret store seam, Bridge account setup and sheet)
+  and M2.4a–d (provider policy, discovery, header columns, account
+  worker, sync pass, IDLE watcher). The secret store, the account worker
+  and the pass framework carry over to Proton accounts; the Bridge
+  policy and sheet are no longer reached by new accounts (M2.14 removes
+  the sheet from the app).
+- **Deferred to generic IMAP accounts (*later*):** M2.5 and M2.6, which
+  are IMAP-specific. Their Proton counterparts are M2.15 and M2.16.
+- **Cancelled:** M2.8, the real-Bridge CI lane; M2.17 replaces it with
+  Proton's own MIT-licensed development server.
+- **New:** M2.11–M2.17 below, then M2.7 (adapted) and M2.Q (revised).
+  Order: M2.11 → M2.12 → M2.13 → M2.14 (native lane) and M2.15 (core
+  lane) in parallel → M2.16 → M2.7; M2.17 may start after M2.15.
 
-**Prerequisite (owner, O6):** Bridge 3.27.1 or later installed and
-signed in, with its TLS certificate exported.
+**Outcome:** the owner's Proton account syncs read-only through
+Sweetbriar's own client: mailboxes, headers, bodies, search, coverage
+and account health. No remote changes yet.
+
+**Prerequisite (owner, O6):** a Proton account with Mail. The agent asks
+the owner to sign in on this Mac when M2.Q starts; nobody else enters
+the owner's credentials.
 
 ### M2.1 IMAP crate spike — M, linux
 
@@ -401,7 +414,7 @@ the provider policies (`proton_bridge`, `generic_imap`) live in
   - schema-level cross-account rejection: inserting an occurrence whose
     message belongs to another account fails.
 
-### M2.5 Flag sweep, inventory, breaker and epochs — L, linux
+### M2.5 Flag sweep, inventory, breaker and epochs — L, linux (deferred: generic IMAP)
 
 - **Goal:** flags converge, disappearances are confirmed safely, and
   epoch changes and mass disappearances stop for review.
@@ -425,7 +438,7 @@ the provider policies (`proton_bridge`, `generic_imap`) live in
   - an epoch change quarantines targeting intents (inserted directly in
     the test).
 
-### M2.6 Body acquisition and coverage — M, linux
+### M2.6 Body acquisition and coverage — M, linux (deferred: generic IMAP)
 
 - **Goal:** bodies download once per logical message, and coverage and
   recovery are queryable.
@@ -456,17 +469,145 @@ the provider policies (`proton_bridge`, `generic_imap`) live in
   - reading never sends `\Seen` (command trace);
   - coverage numbers match fixture expectations.
 
+### M2.11 Proton transport and SRP sign-in — L, linux
+
+- **Goal:** the `sb-proton` crate signs in to the fake Proton server and
+  keeps a session, with honest identity and paced, bounded traffic.
+- **Spec:** 04-sync-proton (Facts, Sign-in steps 1–3, Connections and
+  pacing), 10 (The Proton API), 01 (Crates: HTTP, Proton auth), 11 (The
+  fake Proton API server).
+- **Depends on:** spec revision (this PR).
+- **Deliverables:**
+  - `sb-proton` at L5 in `layers.toml`; `hyper` client over
+    `tokio-rustls` with the platform verifier; the honest headers;
+    per-account pacing, timeouts, `Retry-After` and backoff; the
+    response-code table with citations;
+  - SRP sign-in with `proton-srp` (modulus signature, server proof),
+    2FA TOTP, human-verification and mailbox-password challenges,
+    FIDO2-only refusal, refresh and logout;
+  - the fake server's auth half in `sb-test-support`;
+  - `deny.toml`: the new crates, the `rsa` advisory exception with its
+    reasoning, licence clarifications; regenerated notices.
+- **Acceptance:**
+  - a wrong modulus signature or server proof aborts before any token
+    is used;
+  - every request the fake sees carries `x-pm-appversion: Other` and the
+    Sweetbriar user agent;
+  - 429 and 503 honour `Retry-After`; no more than two requests are in
+    flight per account (request log);
+  - each challenge and refusal maps as 07 says; no secret appears in
+    logs (redaction scan);
+  - `cargo deny` passes.
+
+### M2.12 Keys and addresses — L, linux
+
+- **Goal:** a signed-in session unlocks the user's keys in memory and
+  lists addresses as identities.
+- **Spec:** 04-sync-proton (Sign-in: keys, identities; Restore on start),
+  10 (Proton private keys).
+- **Depends on:** M2.11.
+- **Deliverables:** salts and the key passphrase; user and address key
+  unlocking (token-encrypted and legacy) with `proton-crypto-account`
+  and `proton-crypto`'s `rustpgp` feature; address listing; message and attachment
+  decryption primitives used by M2.16; the fake server's keys,
+  addresses and encrypted fixtures, generated by a committed script.
+- **Acceptance:** a key that fails to unlock is reported without failing
+  the sign-in unless none unlock; decrypted key material is zeroized on
+  drop (test with an observable buffer); a restored session unlocks
+  keys without the password; damaged ciphertext is a typed failure.
+
+### M2.13 Proton accounts in the core — L, linux
+
+- **Goal:** the sign-in conversation creates a Proton account through
+  the public API, durably and idempotently.
+- **Spec:** 02 (Proton accounts, Migrations), 07 (Proton sign-in), 04-sync-proton
+  (Sign-in, Disconnect).
+- **Depends on:** M2.12.
+- **Deliverables:** the Proton migration (moving 02's pending blocks
+  into SQL, rebuilding `accounts`, `acquisition_sources` and `intents`,
+  and the first `VACUUM INTO` snapshot); `begin_proton_sign_in`,
+  `continue_proton_sign_in` and `cancel_proton_sign_in` through engine
+  and service; the secret item; session restore on start; disconnect
+  revoking the session.
+- **Acceptance:** nothing is stored before `Complete` (schema and secret
+  store inspected after each refusal); a repeated idempotency key
+  answers the receipt without contacting the fake; signing in as
+  another Proton user is refused; the migration keeps every row and id
+  and the drift test passes; a secret-store failure leaves the account
+  `needs_attention`, never deleted.
+
+### M2.14 Sign-in sheet — M, macos-ci
+
+- **Goal:** the owner can add a Proton account from the app.
+- **Spec:** 08 (Proton sign-in), 07 (FFI), 10 (Human verification).
+- **Depends on:** M2.13.
+- **Deliverables:** FFI exports and Swift bridge types for the
+  conversation; the sheet with its steps, the risk note and inline
+  refusals; the human-verification `WKWebView` child sheet; "Sign in
+  again"; File → Add Proton Account…, with the Bridge sheet removed from
+  the menu.
+- **Acceptance:** native tests drive each step against a fake Proton
+  sign-in source; secure fields are cleared after each step; the web view is
+  non-persistent and refuses other hosts (unit-tested navigation
+  policy).
+
+### M2.15 Bootstrap, events and refresh — L, linux
+
+- **Goal:** labels and message metadata sync with checkpoints, follow
+  the events stream, and survive refreshes.
+- **Spec:** 04-sync-proton (Mailbox mapping, Sync loop steps 1–2,
+  Refresh, The breaker, Coverage), 02 (Proton occurrences).
+- **Depends on:** M2.13.
+- **Deliverables:** the `proton_api` policy; the account worker driving
+  `sb-proton` for Proton accounts; bootstrap listing with page
+  checkpoints; event polling and application; refresh handling;
+  Proton's breaker classes; the coverage counts.
+- **Acceptance:** a proptest model of server changes (new, label
+  changes, deletes, refreshes, disconnects) converges to the model's
+  state; crash cuts during listing and event batches resume without
+  gaps or duplicates; a cursor read before listing loses no change made
+  during it; a mass delete opens the breaker; retention deletes don't;
+  the one-current-occurrence invariant holds.
+
+### M2.16 Bodies, decryption and reconstruction — L, linux
+
+- **Goal:** bodies download once per message, decrypt, and become
+  deterministic originals that search and the reader use.
+- **Spec:** 04-sync-proton (Sync loop step 3, Reconstruction), 02
+  (`proton_fetch`, `proton_body_failures`), 06 (Coverage).
+- **Depends on:** M2.15.
+- **Deliverables:** the body queue; `sb_mime::reconstruct` with its
+  fixtures; acquisition, header refresh and search queueing; decryption
+  failures and their retry on key change.
+- **Acceptance:** the same parts always give the same bytes (proptest);
+  each fixture shape reconstructs and parses back to the same structure;
+  a message in three labels is fetched once (request log); a wrong id
+  in a response is refused; reading sends no mutation.
+
+### M2.17 `go-proton-api` lane — M, linux (nightly)
+
+- **Goal:** run the read-only sync suite against Proton's own
+  development server.
+- **Spec:** 11 (The fake Proton API server: the lane).
+- **Depends on:** M2.15 (bodies once M2.16 lands).
+- **Deliverables:** a CI-only directory with the pinned `go-proton-api`
+  commit and a small Go driver (MIT) that seeds users and messages; the
+  nightly job; the documented differences from production.
+- **Acceptance:** the lane runs green and records a dated artifact.
+
 ### M2.7 Account health and the Activity window — M, linux + macos-ci
 
 - **Goal:** accounts can be managed and repaired, and their health is
   visible in the app.
-- **Spec:** 04 (Account states and health), 07 (Accounts commands), 08
-  (Activity / account health window), 10 (diagnostics, notifications).
-- **Depends on:** M2.6.
+- **Spec:** 04-sync-proton (Account states and health), 07 (Accounts
+  commands), 08 (Activity / account health window), 10 (diagnostics,
+  notifications).
+- **Depends on:** M2.16 (revised 2026-11-15; was M2.6).
 - **Deliverables:**
   - `health()`;
-  - `update_account` (endpoint, credentials, certificate re-trust; keeps
-    the account UUID and bumps `config_generation`), `pause_account`,
+  - `update_account` (display name; Proton accounts sign in again
+    through 07's conversation, keeping the account UUID and bumping
+    `config_generation`), `pause_account`,
     `resume_account` and `disconnect_account`, tested through the public
     API, including resuming after a restore;
   - the diagnostics package (redacted, previewed, saved by the user; 10),
@@ -480,55 +621,39 @@ the provider policies (`proton_bridge`, `generic_imap`) live in
   - breaker Accept and Keep work end to end (UI test with the fake),
     leaving the event `accepted` or `kept`; an event whose messages
     reappear becomes `cleared`;
-  - a re-trusted certificate and repaired credentials keep the account's
-    UUID and data;
+  - signing in again keeps the account's UUID and data;
   - the diagnostics package contains no secret (log-scan test).
 
-### M2.8 Real-Bridge CI lane — L, linux (nightly)
+### M2.8 Real-Bridge CI lane — cancelled 2026-11-15 (replaced by M2.17)
 
-- **Goal:** run Sweetbriar's engine against **real Bridge code** with
-  Proton's mock API, without credentials.
-- **Spec:** 11 (Test layers), research
-  [raw/plan-proton-bridge](../research/raw/plan-proton-bridge/codex.md)
-  §2.7.
-- **Depends on:** M2.5.
-- **Deliverables:**
-  - a separate CI-only component (its own directory, licensed per
-    Bridge's GPLv3, never linked into Sweetbriar);
-  - a small Go driver inside a pinned Bridge v3.27.1 checkout that
-    provisions mock users and messages, starts the Bridge core, and
-    prints ports and the test certificate;
-  - a nightly job runs the Rust read-only sync suite against it;
-  - the Go toolchain pinned by Bridge's `go.mod` (Go 1.26.x) and Bridge's
-    native (CGO) build prerequisites from its `BUILDS.md`, without the
-    Qt GUI, installed in that job;
-  - the lane is built to grow: M3.2, M4.3 and M5.1 each add their suites
-    to it.
-- **Acceptance:**
-  - the nightly lane runs green;
-  - its results include the actual capability set, LIST output and
-    `X-Pm-Internal-Id` behaviour, recorded as a dated artifact;
-  - the README states that the component is GPL test tooling, not part
-    of the app.
+Not built. It would have run the engine against a pinned GPL Bridge
+checkout with Proton's mock API; the app no longer talks to Bridge, so
+M2.17 runs the same idea against `go-proton-api`'s server instead. Do
+not start this step.
 
-### M2.Q Owner qualification (read-only)
+### M2.Q Qualification (read-only)
 
-Recorded in `plan/qualification/M2.md` from the Bridge checklist, items
-1–7:
-1. **Setup and lifecycle:** Bridge GUI startup and open-on-startup;
-   Sweetbriar started before Bridge; Bridge quit and restart; sleep and
-   wake; network loss; offline reading survives all of them.
-2. **TLS:** ports, modes and fingerprints recorded; certificate import;
-   a replaced certificate produces a recoverable error.
-3. **Protocol:** CAPABILITY before and after login, LIST attributes,
-   SELECT data and IDLE, captured in a diagnostics export.
-4. **Coverage and identity:** one known message in its folder, two
-   labels, All Mail and Starred, with matching `X-Pm-Internal-Id`;
-   Spam, Trash and drafts present.
-5. **Epoch lifecycle:** identity inventory after a Bridge restart and
-   after logout and login. A mode switch and a repair are tested only
-   after a backup.
-6. **MIME:** PGP-signed, encrypted, S/MIME, HTML with CID, nested
-   messages, bad charsets.
-7. **Performance:** time to first inbox, headers complete, bodies
-   complete, RAM and disk, and new-mail latency at p50 and p95.
+Agent-run on the owner's Mac (plan/README.md), recorded in
+`plan/qualification/M2.md` with counts and pass/fail only. The owner
+signs in; the agent never handles the owner's password.
+
+1. **Sign-in and lifecycle:** sign-in with the account's real 2FA;
+   relaunch restores the session without the password; sleep and wake,
+   network loss and offline reading; "Sign in again" after revoking the
+   session from Proton's web settings.
+2. **Identity and refusals:** Proton accepts `Other`; any human
+   verification is completed in the sheet; the diagnostics export
+   records Proton's codes, redacted.
+3. **Coverage:** local per-folder and per-label totals equal Proton's
+   counts; a known message in a folder, two labels, Starred and All
+   Mail is one logical message with five occurrences.
+4. **Refresh:** if Proton sends one during the period, the account
+   resyncs without losing local data and its occurrences match
+   Proton's again (observed, not provoked).
+5. **MIME:** reconstructed PGP-signed, encrypted, HTML with CID, nested
+   and bad-charset messages open in the reader and parse.
+6. **Pacing and performance:** request rate within 04-sync-proton's
+   limits over the initial sync (request log); time to first inbox,
+   headers complete, bodies complete, RAM and disk, and new-mail latency
+   at p50 and p95.
+

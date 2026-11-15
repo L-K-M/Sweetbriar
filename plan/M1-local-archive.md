@@ -2235,7 +2235,7 @@ local drafts. No network yet.
           retry, republish retained attachments with exact source authority,
           drain begun work, and expose explicit keep-both and safe refusal
           paths natively. Test failures, retries, concurrent edits,
-          reservation lifetimes, close, quit and native interaction. One PR
+          reservation lifetimes, close, quit, errors and native interaction. One PR
           (combined 2026-11-15 under "Sizing"); split model from native
           only if the diff exceeds the limit. The full workflow is not
           qualified until M1.9c2e passes.
