@@ -41,6 +41,9 @@ final class ComposeWindows {
             defer { pending[request] = nil }
             do {
                 let source = try await openCore()
+                // Restore is excluded by compose admission. A refused cue means
+                // the shared context is fenced or mismatched; do not create an
+                // orphan draft or a window that cannot ever follow its cue.
                 guard let cue = cues.model(source: source) else {
                     throw CoreFailure.unavailable(
                         reason: "Compose appearance is unavailable. Try again after the current operation.")

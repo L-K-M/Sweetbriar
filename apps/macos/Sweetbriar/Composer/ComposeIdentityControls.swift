@@ -20,6 +20,12 @@ final class ComposeIdentityControls: NSObject {
     private(set) var isPublishing = false
     private(set) var problem: String?
     var isDeciding: Bool { model.pendingDecision != nil }
+    var isCatalogLoading: Bool {
+        switch model.readState {
+        case .unloaded, .loading: true
+        default: false
+        }
+    }
     var titleContext: String? {
         guard let identity = model.selectedIdentity else { return nil }
         return "\(identity.accountName) · \(identity.email)"
@@ -241,8 +247,11 @@ final class ComposeIdentityControls: NSObject {
             }
         }
         if selected != nil, selectedIndex == 0 {
-            popup.addItem(
-                withTitle: "Unavailable identity: \(model.selectedIdentity?.email ?? selected ?? "")")
+            let title =
+                isCatalogLoading && model.selectedIdentity == nil
+                ? "Loading sending identity…"
+                : "Unavailable identity: \(model.selectedIdentity?.email ?? selected ?? "")"
+            popup.addItem(withTitle: title)
             popup.lastItem?.isEnabled = false
             selectedIndex = popup.numberOfItems - 1
         }

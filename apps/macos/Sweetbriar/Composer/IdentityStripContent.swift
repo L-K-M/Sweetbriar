@@ -11,9 +11,7 @@ enum IdentityStripContent {
         guard let identity, sameBytes(route, identity.identityId) else {
             return .unavailable(label: "Unavailable identity: \(route)")
         }
-        let name = identity.displayName.isEmpty ? "" : "\(identity.displayName) "
-        let provisional = identity.sendable == .provisional ? " (provisional)" : ""
-        let label = "\(identity.accountName) · \(name)<\(identity.email)>\(provisional)"
+        let label = label(for: identity)
         guard identity.sendable != .unavailable else {
             return .unavailable(label: "Unavailable identity: \(label)")
         }
@@ -21,6 +19,12 @@ enum IdentityStripContent {
             return .unavailable(label: "Appearance unavailable: \(label)")
         }
         return .identity(label: label, monogram: resolved.monogram, tokens: resolved.tokens)
+    }
+
+    static func label(for identity: ComposeIdentity) -> String {
+        let name = identity.displayName.isEmpty ? "" : "\(identity.displayName) "
+        let provisional = identity.sendable == .provisional ? " (provisional)" : ""
+        return "\(identity.accountName) · \(name)<\(identity.email)>\(provisional)"
     }
 
     static func matchingAppearance(for identity: ComposeIdentity, in appearance: Appearance?)

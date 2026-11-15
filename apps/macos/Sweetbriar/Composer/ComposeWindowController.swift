@@ -435,6 +435,7 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
     private func observeAppearance() {
         withObservationTracking {
             _ = appearance?.appearance
+            _ = appearance?.lastError
         } onChange: { [weak self] in
             Task { @MainActor [weak self] in
                 guard let self, !finished else { return }
@@ -456,6 +457,22 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
                 render()
                 observeCue()
             }
+        }
+    }
+
+    private var identityAppearanceIsLoading: Bool {
+        guard let content = model.content else { return model.failure == nil }
+        guard content.identityId != nil else { return false }
+        switch identityControls.model.readState {
+        case .unloaded, .loading:
+            return true
+        case .loaded:
+            guard let identity = identityControls.model.selectedIdentity, identity.sendable != .unavailable,
+                let appearance
+            else { return false }
+            return appearance.appearance == nil && appearance.lastError == nil
+        case .failed, .stopped:
+            return false
         }
     }
 
@@ -491,7 +508,10 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
         } else if cue?.mode == nil {
             message = "Loading compose appearance…"
         } else if cue?.mode == .strong && tint == nil {
-            message = "Strong appearance is unavailable for this sending identity."
+            message =
+                identityAppearanceIsLoading
+                ? "Loading compose appearance…"
+                : "Strong appearance is unavailable for this sending identity."
         } else {
             message = nil
         }
@@ -526,9 +546,21 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
         identityControls.render()
         let stripContent: IdentityStripView.Content
         if let content = model.content {
-            stripContent = IdentityStripContent.resolve(
-                route: content.identityId, identity: identityControls.model.selectedIdentity,
-                appearance: appearance?.appearance)
+            if content.identityId != nil && identityControls.isCatalogLoading
+                && identityControls.model.selectedIdentity == nil
+            {
+                stripContent = .unavailable(label: "Loading sending identity…")
+            } else if let identity = identityControls.model.selectedIdentity,
+                identity.sendable != .unavailable,
+                let appearance, appearance.appearance == nil, appearance.lastError == nil
+            {
+                stripContent = .unavailable(
+                    label: "Loading appearance: \(IdentityStripContent.label(for: identity))")
+            } else {
+                stripContent = IdentityStripContent.resolve(
+                    route: content.identityId, identity: identityControls.model.selectedIdentity,
+                    appearance: appearance?.appearance)
+            }
         } else {
             stripContent = .unavailable(label: "Loading sending identity…")
         }
