@@ -374,6 +374,20 @@ Neither unsaved text nor a delayed draft save may cross a swap.
     flushes instead. This path must remain usable when a read-only core
     refuses saving, so recovery is not trapped behind a compose window.
     A begun save is awaited, not cancelled because its waiter was cancelled.
+  - **Keep Both (M1.9c2cd):** a conflicted window offers Keep Both. It
+    settles begun attachment publications, then saves the window's
+    content as the first revision of a new draft (same reply source; a
+    forward can't be copied yet and is refused with an explanation),
+    opens that draft in its own window and closes this one without
+    another save. The draft the other window saved is unchanged. The
+    copy has no base, so its stored references and spent handles are
+    republished from this draft's revisions that store them; one with no
+    known source refuses the copy before anything is written. A refusal
+    before the copy's create began leaves the window editable. Once the
+    create began, the window stays frozen with its text and the failure,
+    and only an explicit Keep Both retries, with the same keys and
+    content, so a lost receipt never makes a second copy. Keep Both is
+    unavailable while archive writes are.
   - A save whose answer failed after it began may have committed. Its
     exact intent (key, base and content) is retried before any different
     save: a replay answers the lost receipt, otherwise that older content
