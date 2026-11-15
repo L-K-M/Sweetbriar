@@ -33,6 +33,7 @@ mod rebuild;
 mod restore;
 mod search;
 mod sidebar;
+mod views;
 mod windows;
 
 pub use api::{Core, CoreConfig, Receipt, Setting, open_core};
@@ -61,10 +62,12 @@ pub use search::{
     SearchRebuildProgress, SearchScope, SearchSort, SearchSpec, SearchStatus,
 };
 pub use sidebar::{Account, AccountKind, AccountState, Mailbox, MailboxKind, Mailboxes};
+pub use views::{SavedView, SavedViewParams, SavedViewSort};
 pub use windows::{
     Anchor, Count, ListRow, MailboxRole, Subscription, Window, WindowEvent, WindowIds, WindowSpec,
 };
 
 pub use messages::{
-    BodyAvailability, ReaderAddress, ReaderHeaders, ReaderMessage, ReaderOccurrence, ReaderTag,
+    BodyAvailability, MessageSelection, ReaderAddress, ReaderHeaders, ReaderMessage,
+    ReaderOccurrence, ReaderTag,
 };

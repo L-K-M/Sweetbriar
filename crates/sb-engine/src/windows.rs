@@ -196,6 +196,9 @@ pub enum WindowSpec {
     Thread(i64),
     /// Logical-message Search over either complete Store ordering.
     Search(SearchSpec),
+    /// A saved view's query results; `open_window` resolves its AST
+    /// to a checked [`SearchSpec`] first (spec/07).
+    View(String),
 }
 
 enum WindowSource<'a> {
@@ -216,6 +219,7 @@ impl WindowSpec {
             Self::Unified(role) => format!("unified:{}", role.as_str()),
             Self::Flagged => "flagged".to_owned(),
             Self::Thread(id) => format!("thread:{id}"),
+            Self::View(id) => format!("view:{id}"),
             Self::Search(_) => "search".into(), // Search never uses the list codec.
         }
     }
@@ -228,6 +232,8 @@ impl WindowSpec {
             Self::Unified(role) => WindowSource::List(ListScope::Unified(*role)),
             Self::Flagged => WindowSource::List(ListScope::Flagged),
             Self::Thread(id) => WindowSource::List(ListScope::Thread(*id)),
+            // `open_window` resolves a view to its Search spec first.
+            Self::View(_) => unreachable!("a saved view resolves before registration"),
             Self::Search(spec) => WindowSource::Search(spec),
         }
     }
@@ -779,6 +785,16 @@ impl Windows {
         window_id
     }
 
+    /// Whether `window_id` names an open store-backed window: a tag
+    /// or note selection resolves occurrence ids to logical messages,
+    /// which the debug source's synthetic ids have none of.
+    pub(crate) fn store_backed(&self, window_id: WindowId) -> bool {
+        self.lock()
+            .open
+            .get(&window_id)
+            .is_some_and(|open| !matches!(open.spec, WindowSpec::DebugSynthetic))
+    }
+
     /// An open window, or `NotFound`.
     fn window(&self, window_id: WindowId) -> Result<OpenWindow, EngineError> {
         self.lock()
@@ -1208,6 +1224,12 @@ impl Engine {
         check_limit(limit)?;
         let spec = match spec {
             WindowSpec::Search(search) => {
+                return self.open_search_window(search, anchor, limit).await;
+            }
+            // A view is its stored query: resolve it before registering,
+            // so the window holds the Search spec its pages read.
+            WindowSpec::View(view_id) => {
+                let search = self.view_query(&view_id).await?;
                 return self.open_search_window(search, anchor, limit).await;
             }
             spec => spec,
