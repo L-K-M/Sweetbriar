@@ -33,8 +33,17 @@ rustls = { version = "=0.23.46", default-features = false, features = [
 ] }
 # The fake Proton API server (spec/11): HTTPS on 127.0.0.1 with the
 # committed test certificate, SRP sign-in through proton-srp's server
-# side, and the auth routes sb-proton drives (M2.11).
+# side, and the auth routes sb-proton drives (M2.11). From M2.12 it
+# also generates the synthetic user and address keys and the encrypted
+# message/attachment fixtures, through Proton's key model
+# (research/proton-api/keys-crypto.md).
 proton-srp = "=0.8.4"
+proton-crypto = { version = "=0.14.1", default-features = false, features = [
+    "rustpgp",
+] }
+proton-crypto-account = { version = "=0.20.1", default-features = false, features = [
+    "rustpgp",
+] }
 # Signing the fake server's test modulus with a test key.
 pgp = "=0.21.1"
 rand = "=0.8.6"

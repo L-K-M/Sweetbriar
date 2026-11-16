@@ -51,8 +51,18 @@ tokio = { version = "=1.54.1", default-features = false, features = [
 # `pgpinternal` feature verifies the modulus with rPGP and Proton's
 # embedded key; the server side drives the fake in sb-test-support.
 proton-srp = "=0.8.4"
+# Proton AG's key model and OpenPGP (spec/01's Crates table), pure Rust:
+# `rustpgp` only, no default features, so no Go/cgo backend is built
+# (research/proton-api/keys-crypto.md §6).
+proton-crypto = { version = "=0.14.1", default-features = false, features = [
+    "rustpgp",
+] }
+proton-crypto-account = { version = "=0.20.1", default-features = false, features = [
+    "rustpgp",
+] }
 # Zeroizing in-memory secrets (spec/10): passwords, codes and tokens.
 secrecy = "=0.10.3"
+zeroize = "=1.9.1"
 serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = "=1.0.154"
 # Request diagnostics only; never bodies or credentials (spec/10).

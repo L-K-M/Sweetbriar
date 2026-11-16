@@ -20,6 +20,7 @@ used. Future research and CI never probe the live API (spec/11).
 | Report | Covers |
 |---|---|
 | [auth-session.md](auth-session.md) | Hosts and headers, `x-pm-appversion`, SRP login, 2FA, human verification, tokens, key passphrase, TLS, rate limits, what to persist |
+| [keys-crypto.md](keys-crypto.md) | The key model (user and address keys, salts, tokens), body and attachment decryption, the send-package model, the Rust crates and their licences/advisories |
 | [mail-sync.md](mail-sync.md) | Labels and folders, the message model, listing and paging, full messages and attachments, events, mutations, drafts and sending, RFC 822 reconstruction, import |
 | [policy-risk.md](policy-risk.md) | Proton's terms, client identity, observed blocks, human verification, free versus paid plans, 2FA and FIDO2, the risk summary |
 
