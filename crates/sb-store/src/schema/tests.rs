@@ -1097,6 +1097,25 @@ fn migration_28_snapshot_is_taken_before_the_rewrite() {
     );
 }
 
+/// A new store migrating from version 0 has nothing to preserve, so
+/// migration 28 takes no snapshot for it.
+#[test]
+fn a_new_store_takes_no_migration_snapshot() {
+    let (_scratch, paths) = scratch_paths("schema-proton-new-store");
+    let seams = test_seams(real_fs());
+    let store = crate::store::open_with(
+        &paths,
+        &seams,
+        WRITER_PRAGMAS,
+        crate::store::READER_PRAGMAS,
+        &PINNED_SQLITE,
+        MIGRATIONS,
+    )
+    .unwrap();
+    store.close().unwrap();
+    assert!(snapshots(&paths).is_empty());
+}
+
 /// Only the last two snapshots are kept, the oldest removed.
 #[test]
 fn migration_28_keeps_two_snapshots() {

@@ -166,22 +166,6 @@ fn backup_pins(store: &Store) -> Vec<String> {
     })
 }
 
-/// Recovery entries that are not a migration snapshot: the verifier's
-/// own evidence, which is what these tests count.
-fn verifier_recovery_entries(dir: &Path) -> usize {
-    std::fs::read_dir(dir)
-        .unwrap()
-        .filter(|entry| {
-            !entry
-                .as_ref()
-                .unwrap()
-                .file_name()
-                .to_string_lossy()
-                .starts_with("pre-migration-")
-        })
-        .count()
-}
-
 /// The generation row's `(state, location, started_at)` for `id`.
 fn generation_row(store: &Store, id: &str) -> Option<(String, String, i64)> {
     reading(store, |tx| {
@@ -3587,7 +3571,7 @@ fn retained_image_callback_outcomes_clean_owned_evidence() {
             |_| ControlFlow::Continue(()),
             |conn, _| {
                 called = true;
-                assert_eq!(verifier_recovery_entries(paths.recovery()), 2);
+                assert_eq!(std::fs::read_dir(paths.recovery()).unwrap().count(), 2);
                 let _: i64 = conn
                     .query_row("PRAGMA user_version", [], |r| r.get(0))
                     .unwrap();
@@ -3638,7 +3622,7 @@ fn retained_image_callback_outcomes_clean_owned_evidence() {
         ).map_err(bug)
         });
         assert_eq!(counts, (0, 0), "{mode}");
-        assert_eq!(verifier_recovery_entries(paths.recovery()), 0);
+        assert_eq!(std::fs::read_dir(paths.recovery()).unwrap().count(), 0);
     }
 }
 
@@ -3690,7 +3674,7 @@ fn retained_image_callback_uses_pinned_connection_after_path_replacement() {
         result,
         Ok(crate::BackupImageInspection::Inspected { .. })
     ));
-    assert_eq!(verifier_recovery_entries(paths.recovery()), 0);
+    assert_eq!(std::fs::read_dir(paths.recovery()).unwrap().count(), 0);
 }
 
 #[test]
@@ -3942,7 +3926,7 @@ fn verifier_image_remains_pinned_when_scratch_parent_is_replaced() {
         std::fs::read(paths.recovery().join("untouched")).unwrap(),
         b"replacement"
     );
-    assert_eq!(verifier_recovery_entries(&old), 0);
+    assert_eq!(std::fs::read_dir(&old).unwrap().count(), 0);
 }
 
 #[test]
@@ -4247,7 +4231,7 @@ fn verifier_image_atomic_cancellation_cleans_scratch() {
             .map_err(bug)
     });
     assert_eq!(count, 0);
-    assert_eq!(verifier_recovery_entries(paths.recovery()), 0);
+    assert_eq!(std::fs::read_dir(paths.recovery()).unwrap().count(), 0);
 }
 
 const IMAGE_CUT_N: &str = "SB_IMAGE_CUT_N";

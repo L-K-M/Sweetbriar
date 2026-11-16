@@ -197,8 +197,9 @@ pub(crate) fn run_migrations(
     let mut ran = false;
     for migration in migrations.iter().filter(|m| m.version as i64 > current) {
         // The snapshot precedes the transaction that rewrites data, so a
-        // failed snapshot leaves the store untouched (spec/02).
-        if SNAPSHOTTED_MIGRATIONS.contains(&migration.version) {
+        // failed snapshot leaves the store untouched (spec/02). A new
+        // store (version 0) holds nothing to preserve and takes none.
+        if current >= 1 && SNAPSHOTTED_MIGRATIONS.contains(&migration.version) {
             snapshot_before_migration(conn, seams, migration.version)?;
         }
         apply(conn, migration, seams)?;
