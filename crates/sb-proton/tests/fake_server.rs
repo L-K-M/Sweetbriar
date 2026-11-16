@@ -509,13 +509,16 @@ async fn no_secret_appears_in_debug_or_logs() {
     const PASSWORD: &str = "unique-log-scan-password";
     const TOTP: &str = "654321";
 
-    struct Capture(Mutex<Vec<String>>);
+    struct Capture(Mutex<Vec<(String, String)>>);
     impl log::Log for Capture {
         fn enabled(&self, _: &log::Metadata<'_>) -> bool {
             true
         }
         fn log(&self, record: &log::Record<'_>) {
-            self.0.lock().unwrap().push(record.args().to_string());
+            self.0
+                .lock()
+                .unwrap()
+                .push((record.target().to_owned(), record.args().to_string()));
         }
         fn flush(&self) {}
     }
@@ -555,7 +558,21 @@ async fn no_secret_appears_in_debug_or_logs() {
 
     let records = CAPTURE.0.lock().unwrap().clone();
     assert!(!records.is_empty(), "the log capture is active");
-    let mut haystack = records.join("\n");
+    // The `pgp` crate's DEBUG records dump public key material (it
+    // prints secret fields as ".."), and their long decimal field
+    // elements can contain any six digits, so the TOTP code is only
+    // scanned for outside them; the longer secrets are scanned in both.
+    let mut haystack = String::new();
+    let mut pgp_records = String::new();
+    for (target, text) in &records {
+        let sink = if target.starts_with("pgp") {
+            &mut pgp_records
+        } else {
+            &mut haystack
+        };
+        sink.push_str(text);
+        sink.push('\n');
+    }
     haystack.push_str(&session_debug);
     haystack.push_str(&step_debug);
     haystack.push_str(&error_debug);
@@ -572,6 +589,17 @@ async fn no_secret_appears_in_debug_or_logs() {
         assert!(
             !haystack.contains(secret),
             "a secret ({secret}) appeared in Debug output or logs"
+        );
+    }
+    for secret in [
+        PASSWORD,
+        "wrong-log-scan-password",
+        access.as_str(),
+        refresh.as_str(),
+    ] {
+        assert!(
+            !pgp_records.contains(secret),
+            "a secret ({secret}) appeared in the pgp crate's logs"
         );
     }
 }
