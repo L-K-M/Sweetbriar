@@ -290,7 +290,9 @@ impl Client {
                     }
                     if status.is_server_error() {
                         let (_, body) = read_body(response).await?;
-                        if network_attempt >= MAX_NETWORK_RETRIES {
+                        // A server error answered a request that reached
+                        // Proton, so only an idempotent one is sent again.
+                        if !may_retry(&method, true) || network_attempt >= MAX_NETWORK_RETRIES {
                             return Err(ProtonError::Unavailable {
                                 message: error_message(&body),
                             });
@@ -603,6 +605,29 @@ mod tests {
     async fn a_dropped_post_is_not_sent_again() {
         let server = FakeProtonServer::serve(Vec::new()).await.expect("serve");
         server.set_fault(Some(Fault::Drop));
+        let client = test_client(&server);
+        let result = client
+            .send(
+                Method::POST,
+                "/tests/ping",
+                Some(Bytes::from_static(b"{}")),
+                Priority::Interactive,
+                None,
+            )
+            .await;
+        assert!(matches!(result, Err(ProtonError::Unavailable { .. })));
+        assert_eq!(server.requests().len(), 1, "the POST went out once");
+    }
+
+    #[tokio::test]
+    async fn a_post_answered_with_a_server_error_is_not_sent_again() {
+        // A 5xx answer reached Proton, so a sign-in or refresh must not be
+        // replayed (spec/04 "Backoff").
+        let server = FakeProtonServer::serve(Vec::new()).await.expect("serve");
+        server.set_fault(Some(Fault::Code {
+            status: 500,
+            code: 500,
+        }));
         let client = test_client(&server);
         let result = client
             .send(
