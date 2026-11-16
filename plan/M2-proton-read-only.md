@@ -540,7 +540,10 @@ the provider policies (`proton_bridge`, `generic_imap`) live in
   `proton_body_failures` accessors (the migration and drift checks
   below); **M2.13b**, on M2.12, the sign-in conversation through engine
   and service, the secret item, restore on start and disconnect (the
-  other checks).
+  other checks). M2.13b is split again (1,566 lines measured): **M2.13b1**
+  a new account's conversation through engine and service, idempotency
+  and the secret item; **M2.13b2** an existing account's session: sign
+  in again (and another Proton user refused), restore, disconnect.
 - **Acceptance:** nothing is stored before `Complete` (schema and secret
   store inspected after each refusal); a repeated idempotency key
   answers the receipt without contacting the fake; signing in as
