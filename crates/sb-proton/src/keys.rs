@@ -181,11 +181,10 @@ impl SecretBuffer {
         &self.0
     }
 
-    /// Consumes the buffer and yields the plaintext. The caller owns
-    /// the bytes from here; the buffer's own (now empty) copy is
-    /// zeroized on drop.
-    pub fn into_vec(mut self) -> Vec<u8> {
-        std::mem::take(&mut *self.0)
+    /// Consumes the buffer and yields the plaintext, still zeroized on
+    /// drop (spec/10).
+    pub fn into_vec(self) -> Zeroizing<Vec<u8>> {
+        self.0
     }
 }
 
@@ -496,8 +495,8 @@ mod tests {
 
         impl Zeroize for SpyByte {
             fn zeroize(&mut self) {
-                self.0 = 0;
                 self.1.lock().expect("the spy lock").push(self.0);
+                self.0 = 0;
             }
         }
 
@@ -511,7 +510,7 @@ mod tests {
         }
         assert_eq!(
             *seen.lock().expect("the spy lock"),
-            vec![0, 0],
+            vec![0xAB, 0xCD],
             "the zeroizing buffer wiped its contents on drop"
         );
     }
