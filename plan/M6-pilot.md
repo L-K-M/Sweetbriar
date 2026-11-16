@@ -76,10 +76,15 @@ views, a tag picker and a reader note editor.
     with its service DTOs, plus `cargo xtask reading-corpus`, a local
     tool that runs the model over the owner's own mail and prints
     counts only.
-  - **M6.3b2 (FFI and reader toggle):** the FFI export and bindings;
-    the reader toggle with per-sender memory. Split from M6.3b1
-    2026-11-15: together they measure about 1,620 hand-written lines
-    before the Swift toggle.
+  - **M6.3b2 (FFI and sender memory):** the FFI export and bindings;
+    the `reader.reading_view_senders` setting and its bridge model.
+    Split from M6.3b1 2026-11-15: together they measure about 1,620
+    hand-written lines before the Swift toggle.
+  - **M6.3b3 (renderer and reader toggle):** the native renderer of
+    the semantic document and the reader's Reading view toggle over
+    it, keeping both renditions and recording the sender. Split from
+    M6.3b2 2026-11-16: with the renderer, M6.3b2 measures about 1,530
+    hand-written lines.
   - **Owner corpus review:** the owner runs the corpus tool on their
     own mail and reviews the flagged critical failures. Results summary
     only goes in `plan/qualification/M6-reading.md`.
@@ -91,8 +96,10 @@ views, a tag picker and a reader note editor.
   - **M6.3b1:** the query answers the semantic document for supported
     structures and `Unsupported` otherwise, over the reader body query's
     lookup and errors; the corpus tool prints counts only;
-  - **M6.3b2:** each DTO crosses the FFI field for field; the toggle is
-    instant and remembered per sender;
+  - **M6.3b2:** each DTO crosses the FFI field for field; the sender
+    list keeps the registry's canonical form and refuses a full list;
+  - **M6.3b3:** each node kind renders; the toggle is instant and
+    remembered per sender;
   - **owner:** runs the corpus tool on 200+ of their own messages and
     reviews the flagged critical failures. Results summary only goes in
     `plan/qualification/M6-reading.md`.

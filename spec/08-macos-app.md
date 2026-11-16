@@ -369,6 +369,19 @@ is up. Choosing any other entry brings its message list back.
   literal, no Markdown interpretation, with quotes styled by depth.
 - **Reading view:** a toggle, off by default. It renders the semantic
   document model for supported structures only (12-markdown-first).
+  - The toggle is remembered per sender: turning it on adds the
+    message's sender address, lowercased, to `reader.reading_view_senders`
+    (02), and turning it off removes it. Their later messages open in
+    the Reading view when the core reports a supported document, and in
+    sender layout otherwise. A full list (1,000 senders) refuses another
+    with an inline note; the toggle still applies to the open message.
+  - Switching is instant: while a message is shown, both its reading
+    document and its sender-layout rendition are kept, so toggling
+    fetches nothing. Links in the Reading view follow the same click
+    rule and warnings as in sender layout.
+  - In the pilot, images in the Reading view show as their alt text
+    (or "Image" when there is none). Inline images show in sender
+    layout; remote ones stay blocked in both.
   - Per-category defaults wait for the fidelity corpus (D16).
   - "Sender layout" and "View source" are always one click away.
 - **Header area:**

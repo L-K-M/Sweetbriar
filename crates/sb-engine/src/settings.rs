@@ -29,6 +29,7 @@ struct RegisteredSetting {
 enum Values {
     Choices(&'static [&'static str]),
     BackupDirectory,
+    SenderList,
 }
 
 impl Values {
@@ -36,6 +37,7 @@ impl Values {
         match self {
             Self::Choices(values) => values.contains(&value),
             Self::BackupDirectory => valid_backup_destination(value),
+            Self::SenderList => valid_sender_list(value),
         }
     }
 
@@ -45,8 +47,31 @@ impl Values {
             Self::BackupDirectory => {
                 "an absolute directory path without NUL, or empty for the default".into()
             }
+            Self::SenderList => {
+                "lowercase addresses, each with one '@' and at most 254 bytes, sorted and unique, joined by newlines; at most 1,000, or empty".into()
+            }
         }
     }
+}
+
+/// `reader.reading_view_senders`'s canonical form (spec/02): empty, or
+/// lowercase addresses, each with one `@` and at most 254 bytes, sorted
+/// and unique, joined by newlines; at most 1,000. Any other spelling is
+/// refused, so one set of senders has one stored value.
+fn valid_sender_list(value: &str) -> bool {
+    if value.is_empty() {
+        return true;
+    }
+    let addresses: Vec<&str> = value.split('\n').collect();
+    if addresses.len() > 1_000 {
+        return false;
+    }
+    addresses.iter().enumerate().all(|(index, address)| {
+        address.len() <= 254
+            && address.matches('@').count() == 1
+            && address.to_lowercase() == *address
+            && (index == 0 || addresses[index - 1] < *address)
+    })
 }
 
 /// The pilot's settings registry (spec/02), which later steps extend.
@@ -59,6 +84,11 @@ const REGISTRY: &[RegisteredSetting] = &[
     RegisteredSetting {
         key: BACKUP_DESTINATION_SETTING,
         values: Values::BackupDirectory,
+        default: "",
+    },
+    RegisteredSetting {
+        key: "reader.reading_view_senders",
+        values: Values::SenderList,
         default: "",
     },
 ];

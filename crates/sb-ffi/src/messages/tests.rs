@@ -367,7 +367,11 @@ fn reader_queries_honor_cancellation() {
         Err(CoreError::Cancelled)
     ));
     assert!(matches!(
-        block_on(core.message_for_occurrence(cancelled, -1)),
+        block_on(core.message_for_occurrence(cancelled.clone(), -1)),
+        Err(CoreError::Cancelled)
+    ));
+    assert!(matches!(
+        block_on(core.reading_document(cancelled, -1)),
         Err(CoreError::Cancelled)
     ));
     block_on(core.shutdown());

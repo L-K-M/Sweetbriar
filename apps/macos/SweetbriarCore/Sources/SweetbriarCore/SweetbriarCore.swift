@@ -1375,6 +1375,16 @@ public protocol CoreProtocol: AnyObject, Sendable {
     func openBody(token: CancelToken, messageId: Int64, preferred: BodyKind) async throws  -> BodyLease
     
     /**
+     * The reading document for one message (spec/08 Reader: Reading
+     * view), over the same lookup as [`Core::open_body`]: unknown
+     * messages are `NotFound`, a missing body or a parse failure is
+     * `Unavailable`, and an unsupported structure answers
+     * [`ReadingSupport::Unsupported`] (sender layout), never a lossy
+     * guess.
+     */
+    func readingDocument(token: CancelToken, messageId: Int64) async throws  -> ReadingSupport
+    
+    /**
      * Revoke in memory now; the engine removes files on its cleanup worker.
      */
     func releaseLease(leaseId: String) 
@@ -2340,6 +2350,30 @@ open func openBody(token: CancelToken, messageId: Int64, preferred: BodyKind)asy
             completeFunc: ffi_sb_ffi_rust_future_complete_rust_buffer,
             freeFunc: ffi_sb_ffi_rust_future_free_rust_buffer,
             liftFunc: FfiConverterTypeBodyLease_lift,
+            errorHandler: FfiConverterTypeCoreError_lift
+        )
+}
+    
+    /**
+     * The reading document for one message (spec/08 Reader: Reading
+     * view), over the same lookup as [`Core::open_body`]: unknown
+     * messages are `NotFound`, a missing body or a parse failure is
+     * `Unavailable`, and an unsupported structure answers
+     * [`ReadingSupport::Unsupported`] (sender layout), never a lossy
+     * guess.
+     */
+open func readingDocument(token: CancelToken, messageId: Int64)async throws  -> ReadingSupport  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_sb_ffi_fn_method_core_reading_document(
+                        self.uniffiCloneHandle(),FfiConverterTypeCancelToken_lower(token),FfiConverterInt64.lower(messageId)
+                )
+            },
+            pollFunc: ffi_sb_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_sb_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_sb_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeReadingSupport_lift,
             errorHandler: FfiConverterTypeCoreError_lift
         )
 }
@@ -6810,6 +6844,713 @@ public func FfiConverterTypeReaderTag_lower(_ value: ReaderTag) -> RustBuffer {
 
 
 /**
+ * The semantic reading document: the displayed part, the model version
+ * that produced it, and its blocks.
+ */
+public struct ReadingDocument: Equatable, Hashable {
+    public var sourcePartId: String
+    public var version: UInt32
+    public var blocks: [ReadingBlock]
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(sourcePartId: String, version: UInt32, blocks: [ReadingBlock]) {
+        self.sourcePartId = sourcePartId
+        self.version = version
+        self.blocks = blocks
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension ReadingDocument: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeReadingDocument: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ReadingDocument {
+        return
+            try ReadingDocument(
+                sourcePartId: FfiConverterString.read(from: &buf), 
+                version: FfiConverterUInt32.read(from: &buf), 
+                blocks: FfiConverterSequenceTypeReadingBlock.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: ReadingDocument, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.sourcePartId, into: &buf)
+        FfiConverterUInt32.write(value.version, into: &buf)
+        FfiConverterSequenceTypeReadingBlock.write(value.blocks, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeReadingDocument_lift(_ buf: RustBuffer) throws -> ReadingDocument {
+    return try FfiConverterTypeReadingDocument.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeReadingDocument_lower(_ value: ReadingDocument) -> RustBuffer {
+    return FfiConverterTypeReadingDocument.lower(value)
+}
+
+
+/**
+ * `em`/`i` are emphasis, `strong`/`b` are strong.
+ */
+public struct ReadingEmphasis: Equatable, Hashable {
+    public var partId: String
+    public var strong: Bool
+    public var inlines: [ReadingInline]
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(partId: String, strong: Bool, inlines: [ReadingInline]) {
+        self.partId = partId
+        self.strong = strong
+        self.inlines = inlines
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension ReadingEmphasis: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeReadingEmphasis: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ReadingEmphasis {
+        return
+            try ReadingEmphasis(
+                partId: FfiConverterString.read(from: &buf), 
+                strong: FfiConverterBool.read(from: &buf), 
+                inlines: FfiConverterSequenceTypeReadingInline.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: ReadingEmphasis, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.partId, into: &buf)
+        FfiConverterBool.write(value.strong, into: &buf)
+        FfiConverterSequenceTypeReadingInline.write(value.inlines, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeReadingEmphasis_lift(_ buf: RustBuffer) throws -> ReadingEmphasis {
+    return try FfiConverterTypeReadingEmphasis.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeReadingEmphasis_lower(_ value: ReadingEmphasis) -> RustBuffer {
+    return FfiConverterTypeReadingEmphasis.lower(value)
+}
+
+
+public struct ReadingHeading: Equatable, Hashable {
+    public var partId: String
+    public var level: ReadingHeadingLevel
+    public var inlines: [ReadingInline]
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(partId: String, level: ReadingHeadingLevel, inlines: [ReadingInline]) {
+        self.partId = partId
+        self.level = level
+        self.inlines = inlines
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension ReadingHeading: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeReadingHeading: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ReadingHeading {
+        return
+            try ReadingHeading(
+                partId: FfiConverterString.read(from: &buf), 
+                level: FfiConverterTypeReadingHeadingLevel.read(from: &buf), 
+                inlines: FfiConverterSequenceTypeReadingInline.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: ReadingHeading, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.partId, into: &buf)
+        FfiConverterTypeReadingHeadingLevel.write(value.level, into: &buf)
+        FfiConverterSequenceTypeReadingInline.write(value.inlines, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeReadingHeading_lift(_ buf: RustBuffer) throws -> ReadingHeading {
+    return try FfiConverterTypeReadingHeading.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeReadingHeading_lower(_ value: ReadingHeading) -> RustBuffer {
+    return FfiConverterTypeReadingHeading.lower(value)
+}
+
+
+public struct ReadingImage: Equatable, Hashable {
+    public var partId: String
+    public var alt: String
+    /**
+     * Where the image comes from. The pipeline never fetches it.
+     */
+    public var reference: ReadingImageReference
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(partId: String, alt: String, 
+        /**
+         * Where the image comes from. The pipeline never fetches it.
+         */reference: ReadingImageReference) {
+        self.partId = partId
+        self.alt = alt
+        self.reference = reference
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension ReadingImage: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeReadingImage: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ReadingImage {
+        return
+            try ReadingImage(
+                partId: FfiConverterString.read(from: &buf), 
+                alt: FfiConverterString.read(from: &buf), 
+                reference: FfiConverterTypeReadingImageReference.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: ReadingImage, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.partId, into: &buf)
+        FfiConverterString.write(value.alt, into: &buf)
+        FfiConverterTypeReadingImageReference.write(value.reference, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeReadingImage_lift(_ buf: RustBuffer) throws -> ReadingImage {
+    return try FfiConverterTypeReadingImage.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeReadingImage_lower(_ value: ReadingImage) -> RustBuffer {
+    return FfiConverterTypeReadingImage.lower(value)
+}
+
+
+public struct ReadingLineBreak: Equatable, Hashable {
+    public var partId: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(partId: String) {
+        self.partId = partId
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension ReadingLineBreak: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeReadingLineBreak: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ReadingLineBreak {
+        return
+            try ReadingLineBreak(
+                partId: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: ReadingLineBreak, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.partId, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeReadingLineBreak_lift(_ buf: RustBuffer) throws -> ReadingLineBreak {
+    return try FfiConverterTypeReadingLineBreak.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeReadingLineBreak_lower(_ value: ReadingLineBreak) -> RustBuffer {
+    return FfiConverterTypeReadingLineBreak.lower(value)
+}
+
+
+public struct ReadingLink: Equatable, Hashable {
+    public var partId: String
+    /**
+     * The sanitizer's canonical destination, never one rebuilt from the
+     * label.
+     */
+    public var destination: String
+    public var inlines: [ReadingInline]
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(partId: String, 
+        /**
+         * The sanitizer's canonical destination, never one rebuilt from the
+         * label.
+         */destination: String, inlines: [ReadingInline]) {
+        self.partId = partId
+        self.destination = destination
+        self.inlines = inlines
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension ReadingLink: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeReadingLink: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ReadingLink {
+        return
+            try ReadingLink(
+                partId: FfiConverterString.read(from: &buf), 
+                destination: FfiConverterString.read(from: &buf), 
+                inlines: FfiConverterSequenceTypeReadingInline.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: ReadingLink, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.partId, into: &buf)
+        FfiConverterString.write(value.destination, into: &buf)
+        FfiConverterSequenceTypeReadingInline.write(value.inlines, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeReadingLink_lift(_ buf: RustBuffer) throws -> ReadingLink {
+    return try FfiConverterTypeReadingLink.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeReadingLink_lower(_ value: ReadingLink) -> RustBuffer {
+    return FfiConverterTypeReadingLink.lower(value)
+}
+
+
+public struct ReadingList: Equatable, Hashable {
+    public var partId: String
+    public var ordered: Bool
+    public var start: Int64
+    public var reversed: Bool
+    public var items: [ReadingListItem]
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(partId: String, ordered: Bool, start: Int64, reversed: Bool, items: [ReadingListItem]) {
+        self.partId = partId
+        self.ordered = ordered
+        self.start = start
+        self.reversed = reversed
+        self.items = items
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension ReadingList: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeReadingList: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ReadingList {
+        return
+            try ReadingList(
+                partId: FfiConverterString.read(from: &buf), 
+                ordered: FfiConverterBool.read(from: &buf), 
+                start: FfiConverterInt64.read(from: &buf), 
+                reversed: FfiConverterBool.read(from: &buf), 
+                items: FfiConverterSequenceTypeReadingListItem.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: ReadingList, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.partId, into: &buf)
+        FfiConverterBool.write(value.ordered, into: &buf)
+        FfiConverterInt64.write(value.start, into: &buf)
+        FfiConverterBool.write(value.reversed, into: &buf)
+        FfiConverterSequenceTypeReadingListItem.write(value.items, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeReadingList_lift(_ buf: RustBuffer) throws -> ReadingList {
+    return try FfiConverterTypeReadingList.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeReadingList_lower(_ value: ReadingList) -> RustBuffer {
+    return FfiConverterTypeReadingList.lower(value)
+}
+
+
+public struct ReadingListItem: Equatable, Hashable {
+    public var partId: String
+    /**
+     * The HTML `value` override, or the explicit plain-text number.
+     */
+    public var number: Int64?
+    public var blocks: [ReadingBlock]
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(partId: String, 
+        /**
+         * The HTML `value` override, or the explicit plain-text number.
+         */number: Int64?, blocks: [ReadingBlock]) {
+        self.partId = partId
+        self.number = number
+        self.blocks = blocks
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension ReadingListItem: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeReadingListItem: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ReadingListItem {
+        return
+            try ReadingListItem(
+                partId: FfiConverterString.read(from: &buf), 
+                number: FfiConverterOptionInt64.read(from: &buf), 
+                blocks: FfiConverterSequenceTypeReadingBlock.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: ReadingListItem, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.partId, into: &buf)
+        FfiConverterOptionInt64.write(value.number, into: &buf)
+        FfiConverterSequenceTypeReadingBlock.write(value.blocks, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeReadingListItem_lift(_ buf: RustBuffer) throws -> ReadingListItem {
+    return try FfiConverterTypeReadingListItem.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeReadingListItem_lower(_ value: ReadingListItem) -> RustBuffer {
+    return FfiConverterTypeReadingListItem.lower(value)
+}
+
+
+public struct ReadingParagraph: Equatable, Hashable {
+    public var partId: String
+    public var inlines: [ReadingInline]
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(partId: String, inlines: [ReadingInline]) {
+        self.partId = partId
+        self.inlines = inlines
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension ReadingParagraph: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeReadingParagraph: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ReadingParagraph {
+        return
+            try ReadingParagraph(
+                partId: FfiConverterString.read(from: &buf), 
+                inlines: FfiConverterSequenceTypeReadingInline.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: ReadingParagraph, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.partId, into: &buf)
+        FfiConverterSequenceTypeReadingInline.write(value.inlines, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeReadingParagraph_lift(_ buf: RustBuffer) throws -> ReadingParagraph {
+    return try FfiConverterTypeReadingParagraph.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeReadingParagraph_lower(_ value: ReadingParagraph) -> RustBuffer {
+    return FfiConverterTypeReadingParagraph.lower(value)
+}
+
+
+public struct ReadingPreformatted: Equatable, Hashable {
+    public var partId: String
+    public var text: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(partId: String, text: String) {
+        self.partId = partId
+        self.text = text
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension ReadingPreformatted: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeReadingPreformatted: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ReadingPreformatted {
+        return
+            try ReadingPreformatted(
+                partId: FfiConverterString.read(from: &buf), 
+                text: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: ReadingPreformatted, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.partId, into: &buf)
+        FfiConverterString.write(value.text, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeReadingPreformatted_lift(_ buf: RustBuffer) throws -> ReadingPreformatted {
+    return try FfiConverterTypeReadingPreformatted.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeReadingPreformatted_lower(_ value: ReadingPreformatted) -> RustBuffer {
+    return FfiConverterTypeReadingPreformatted.lower(value)
+}
+
+
+public struct ReadingQuote: Equatable, Hashable {
+    public var partId: String
+    public var blocks: [ReadingBlock]
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(partId: String, blocks: [ReadingBlock]) {
+        self.partId = partId
+        self.blocks = blocks
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension ReadingQuote: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeReadingQuote: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ReadingQuote {
+        return
+            try ReadingQuote(
+                partId: FfiConverterString.read(from: &buf), 
+                blocks: FfiConverterSequenceTypeReadingBlock.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: ReadingQuote, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.partId, into: &buf)
+        FfiConverterSequenceTypeReadingBlock.write(value.blocks, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeReadingQuote_lift(_ buf: RustBuffer) throws -> ReadingQuote {
+    return try FfiConverterTypeReadingQuote.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeReadingQuote_lower(_ value: ReadingQuote) -> RustBuffer {
+    return FfiConverterTypeReadingQuote.lower(value)
+}
+
+
+public struct ReadingText: Equatable, Hashable {
+    public var partId: String
+    public var text: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(partId: String, text: String) {
+        self.partId = partId
+        self.text = text
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension ReadingText: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeReadingText: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ReadingText {
+        return
+            try ReadingText(
+                partId: FfiConverterString.read(from: &buf), 
+                text: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: ReadingText, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.partId, into: &buf)
+        FfiConverterString.write(value.text, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeReadingText_lift(_ buf: RustBuffer) throws -> ReadingText {
+    return try FfiConverterTypeReadingText.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeReadingText_lower(_ value: ReadingText) -> RustBuffer {
+    return FfiConverterTypeReadingText.lower(value)
+}
+
+
+/**
  * The record of one command that committed (spec/07 "Commands"),
  * mirroring the service's receipt.
  */
@@ -10273,6 +11014,459 @@ public func FfiConverterTypeMessageSelection_lower(_ value: MessageSelection) ->
 
 
 
+public indirect enum ReadingBlock: Equatable, Hashable {
+    
+    case paragraph(ReadingParagraph
+    )
+    case heading(ReadingHeading
+    )
+    case quote(ReadingQuote
+    )
+    case list(ReadingList
+    )
+    case preformatted(ReadingPreformatted
+    )
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension ReadingBlock: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeReadingBlock: FfiConverterRustBuffer {
+    typealias SwiftType = ReadingBlock
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ReadingBlock {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .paragraph(try FfiConverterTypeReadingParagraph.read(from: &buf)
+        )
+        
+        case 2: return .heading(try FfiConverterTypeReadingHeading.read(from: &buf)
+        )
+        
+        case 3: return .quote(try FfiConverterTypeReadingQuote.read(from: &buf)
+        )
+        
+        case 4: return .list(try FfiConverterTypeReadingList.read(from: &buf)
+        )
+        
+        case 5: return .preformatted(try FfiConverterTypeReadingPreformatted.read(from: &buf)
+        )
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: ReadingBlock, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case let .paragraph(v1):
+            writeInt(&buf, Int32(1))
+            FfiConverterTypeReadingParagraph.write(v1, into: &buf)
+            
+        
+        case let .heading(v1):
+            writeInt(&buf, Int32(2))
+            FfiConverterTypeReadingHeading.write(v1, into: &buf)
+            
+        
+        case let .quote(v1):
+            writeInt(&buf, Int32(3))
+            FfiConverterTypeReadingQuote.write(v1, into: &buf)
+            
+        
+        case let .list(v1):
+            writeInt(&buf, Int32(4))
+            FfiConverterTypeReadingList.write(v1, into: &buf)
+            
+        
+        case let .preformatted(v1):
+            writeInt(&buf, Int32(5))
+            FfiConverterTypeReadingPreformatted.write(v1, into: &buf)
+            
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeReadingBlock_lift(_ buf: RustBuffer) throws -> ReadingBlock {
+    return try FfiConverterTypeReadingBlock.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeReadingBlock_lower(_ value: ReadingBlock) -> RustBuffer {
+    return FfiConverterTypeReadingBlock.lower(value)
+}
+
+
+
+
+public enum ReadingHeadingLevel: Equatable, Hashable {
+    
+    case h1
+    case h2
+    case h3
+    case h4
+    case h5
+    case h6
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension ReadingHeadingLevel: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeReadingHeadingLevel: FfiConverterRustBuffer {
+    typealias SwiftType = ReadingHeadingLevel
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ReadingHeadingLevel {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .h1
+        
+        case 2: return .h2
+        
+        case 3: return .h3
+        
+        case 4: return .h4
+        
+        case 5: return .h5
+        
+        case 6: return .h6
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: ReadingHeadingLevel, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .h1:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .h2:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .h3:
+            writeInt(&buf, Int32(3))
+        
+        
+        case .h4:
+            writeInt(&buf, Int32(4))
+        
+        
+        case .h5:
+            writeInt(&buf, Int32(5))
+        
+        
+        case .h6:
+            writeInt(&buf, Int32(6))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeReadingHeadingLevel_lift(_ buf: RustBuffer) throws -> ReadingHeadingLevel {
+    return try FfiConverterTypeReadingHeadingLevel.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeReadingHeadingLevel_lower(_ value: ReadingHeadingLevel) -> RustBuffer {
+    return FfiConverterTypeReadingHeadingLevel.lower(value)
+}
+
+
+
+
+public enum ReadingImageReference: Equatable, Hashable {
+    
+    /**
+     * A remote URL. Kept as a reference; remote content stays blocked.
+     */
+    case remote(url: String
+    )
+    /**
+     * A `cid:` reference the reader resolves against the current
+     * message's resources.
+     */
+    case attachment(contentId: String, partId: String
+    )
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension ReadingImageReference: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeReadingImageReference: FfiConverterRustBuffer {
+    typealias SwiftType = ReadingImageReference
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ReadingImageReference {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .remote(url: try FfiConverterString.read(from: &buf)
+        )
+        
+        case 2: return .attachment(contentId: try FfiConverterString.read(from: &buf), partId: try FfiConverterString.read(from: &buf)
+        )
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: ReadingImageReference, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case let .remote(url):
+            writeInt(&buf, Int32(1))
+            FfiConverterString.write(url, into: &buf)
+            
+        
+        case let .attachment(contentId,partId):
+            writeInt(&buf, Int32(2))
+            FfiConverterString.write(contentId, into: &buf)
+            FfiConverterString.write(partId, into: &buf)
+            
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeReadingImageReference_lift(_ buf: RustBuffer) throws -> ReadingImageReference {
+    return try FfiConverterTypeReadingImageReference.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeReadingImageReference_lower(_ value: ReadingImageReference) -> RustBuffer {
+    return FfiConverterTypeReadingImageReference.lower(value)
+}
+
+
+
+
+public indirect enum ReadingInline: Equatable, Hashable {
+    
+    case text(ReadingText
+    )
+    case emphasis(ReadingEmphasis
+    )
+    case link(ReadingLink
+    )
+    case image(ReadingImage
+    )
+    case lineBreak(ReadingLineBreak
+    )
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension ReadingInline: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeReadingInline: FfiConverterRustBuffer {
+    typealias SwiftType = ReadingInline
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ReadingInline {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .text(try FfiConverterTypeReadingText.read(from: &buf)
+        )
+        
+        case 2: return .emphasis(try FfiConverterTypeReadingEmphasis.read(from: &buf)
+        )
+        
+        case 3: return .link(try FfiConverterTypeReadingLink.read(from: &buf)
+        )
+        
+        case 4: return .image(try FfiConverterTypeReadingImage.read(from: &buf)
+        )
+        
+        case 5: return .lineBreak(try FfiConverterTypeReadingLineBreak.read(from: &buf)
+        )
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: ReadingInline, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case let .text(v1):
+            writeInt(&buf, Int32(1))
+            FfiConverterTypeReadingText.write(v1, into: &buf)
+            
+        
+        case let .emphasis(v1):
+            writeInt(&buf, Int32(2))
+            FfiConverterTypeReadingEmphasis.write(v1, into: &buf)
+            
+        
+        case let .link(v1):
+            writeInt(&buf, Int32(3))
+            FfiConverterTypeReadingLink.write(v1, into: &buf)
+            
+        
+        case let .image(v1):
+            writeInt(&buf, Int32(4))
+            FfiConverterTypeReadingImage.write(v1, into: &buf)
+            
+        
+        case let .lineBreak(v1):
+            writeInt(&buf, Int32(5))
+            FfiConverterTypeReadingLineBreak.write(v1, into: &buf)
+            
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeReadingInline_lift(_ buf: RustBuffer) throws -> ReadingInline {
+    return try FfiConverterTypeReadingInline.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeReadingInline_lower(_ value: ReadingInline) -> RustBuffer {
+    return FfiConverterTypeReadingInline.lower(value)
+}
+
+
+
+/**
+ * The reading view's answer for one message: the semantic document, or
+ * sender layout when the structure is unsupported (spec/08 Reader:
+ * Reading view). Mirrors the service DTO field by field, with nested
+ * blocks and inlines as recursive enums, as the model nests them.
+ */
+
+public enum ReadingSupport: Equatable, Hashable {
+    
+    case supported(ReadingDocument
+    )
+    case unsupported
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension ReadingSupport: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeReadingSupport: FfiConverterRustBuffer {
+    typealias SwiftType = ReadingSupport
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ReadingSupport {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .supported(try FfiConverterTypeReadingDocument.read(from: &buf)
+        )
+        
+        case 2: return .unsupported
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: ReadingSupport, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case let .supported(v1):
+            writeInt(&buf, Int32(1))
+            FfiConverterTypeReadingDocument.write(v1, into: &buf)
+            
+        
+        case .unsupported:
+            writeInt(&buf, Int32(2))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeReadingSupport_lift(_ buf: RustBuffer) throws -> ReadingSupport {
+    return try FfiConverterTypeReadingSupport.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeReadingSupport_lower(_ value: ReadingSupport) -> RustBuffer {
+    return FfiConverterTypeReadingSupport.lower(value)
+}
+
+
+
+
 public enum RenderWarningCode: Equatable, Hashable {
     
     case partialParse
@@ -12252,6 +13446,31 @@ fileprivate struct FfiConverterSequenceTypeReaderTag: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterSequenceTypeReadingListItem: FfiConverterRustBuffer {
+    typealias SwiftType = [ReadingListItem]
+
+    public static func write(_ value: [ReadingListItem], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeReadingListItem.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [ReadingListItem] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [ReadingListItem]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeReadingListItem.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterSequenceTypeRenderWarning: FfiConverterRustBuffer {
     typealias SwiftType = [RenderWarning]
 
@@ -12394,6 +13613,56 @@ fileprivate struct FfiConverterSequenceTypeDraftAttachment: FfiConverterRustBuff
         seq.reserveCapacity(Int(len))
         for _ in 0 ..< len {
             seq.append(try FfiConverterTypeDraftAttachment.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeReadingBlock: FfiConverterRustBuffer {
+    typealias SwiftType = [ReadingBlock]
+
+    public static func write(_ value: [ReadingBlock], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeReadingBlock.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [ReadingBlock] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [ReadingBlock]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeReadingBlock.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeReadingInline: FfiConverterRustBuffer {
+    typealias SwiftType = [ReadingInline]
+
+    public static func write(_ value: [ReadingInline], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeReadingInline.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [ReadingInline] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [ReadingInline]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeReadingInline.read(from: &buf))
         }
         return seq
     }
@@ -12663,6 +13932,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sb_ffi_checksum_method_core_open_body() != 26124) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sb_ffi_checksum_method_core_reading_document() != 45274) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sb_ffi_checksum_method_core_release_lease() != 61314) {

@@ -169,6 +169,17 @@ public final class CoreBridge: Sendable {
         return ReaderMessage(value)
     }
 
+    /// The semantic reading document, or nil for sender layout when the
+    /// structure is unsupported (spec/08 Reader: Reading view).
+    public func readingDocument(messageId: Int64) async throws -> ReadingDocument? {
+        let token = SweetbriarCore.CancelToken()
+        let value = try await Self.withCancellation(token: token) {
+            try await self.core.readingDocument(token: token, messageId: messageId)
+        }
+        guard case .supported(let document) = value else { return nil }
+        return ReadingDocument(document)
+    }
+
     /// Open a body file. Release the lease when the reader discards it.
     public func openBody(messageID: Int64, preferred: BodyKind) async throws -> BodyLease {
         let token = SweetbriarCore.CancelToken()
@@ -394,7 +405,8 @@ public final class CoreBridge: Sendable {
     public func startRestore(idempotencyKey: String, generationId: String) async throws -> RestoreOutcome {
         let token = SweetbriarCore.CancelToken()
         let value = try await Self.withCancellation(token: token) {
-            try await self.core.startRestore(token: token, idempotencyKey: idempotencyKey, generationId: generationId)
+            try await self.core.startRestore(
+                token: token, idempotencyKey: idempotencyKey, generationId: generationId)
         }
         return RestoreOutcome(value)
     }
@@ -1264,5 +1276,98 @@ extension AttachmentLease {
             byteLength: generated.byteLength, partId: generated.partId,
             displayName: generated.displayName, mediaType: generated.mediaType
         )
+    }
+}
+
+// The reading document's generated DTOs cross L1 field for field; the
+// app only sees ReadingTypes.swift's mirror (spec/08 import boundary).
+
+extension ReadingDocument {
+    fileprivate init(_ generated: SweetbriarCore.ReadingDocument) {
+        self.init(
+            sourcePartID: generated.sourcePartId, version: generated.version,
+            blocks: generated.blocks.map(ReadingBlock.init)
+        )
+    }
+}
+
+extension ReadingBlock {
+    fileprivate init(_ generated: SweetbriarCore.ReadingBlock) {
+        switch generated {
+        case .paragraph(let value):
+            self = .paragraph(partID: value.partId, inlines: value.inlines.map(ReadingInline.init))
+        case .heading(let value):
+            self = .heading(
+                partID: value.partId, level: ReadingHeadingLevel(value.level),
+                inlines: value.inlines.map(ReadingInline.init)
+            )
+        case .quote(let value):
+            self = .quote(partID: value.partId, blocks: value.blocks.map(ReadingBlock.init))
+        case .list(let value):
+            self = .list(
+                partID: value.partId, ordered: value.ordered, start: value.start,
+                reversed: value.reversed, items: value.items.map(ReadingListItem.init)
+            )
+        case .preformatted(let value):
+            self = .preformatted(partID: value.partId, text: value.text)
+        }
+    }
+}
+
+extension ReadingListItem {
+    fileprivate init(_ generated: SweetbriarCore.ReadingListItem) {
+        self.init(
+            partID: generated.partId, number: generated.number,
+            blocks: generated.blocks.map(ReadingBlock.init)
+        )
+    }
+}
+
+extension ReadingInline {
+    fileprivate init(_ generated: SweetbriarCore.ReadingInline) {
+        switch generated {
+        case .text(let value):
+            self = .text(partID: value.partId, text: value.text)
+        case .emphasis(let value):
+            self = .emphasis(
+                partID: value.partId, strong: value.strong,
+                inlines: value.inlines.map(ReadingInline.init)
+            )
+        case .link(let value):
+            self = .link(
+                partID: value.partId, destination: value.destination,
+                inlines: value.inlines.map(ReadingInline.init)
+            )
+        case .image(let value):
+            self = .image(
+                partID: value.partId, alt: value.alt,
+                reference: ReadingImageReference(value.reference)
+            )
+        case .lineBreak(let value):
+            self = .lineBreak(partID: value.partId)
+        }
+    }
+}
+
+extension ReadingHeadingLevel {
+    fileprivate init(_ generated: SweetbriarCore.ReadingHeadingLevel) {
+        switch generated {
+        case .h1: self = .h1
+        case .h2: self = .h2
+        case .h3: self = .h3
+        case .h4: self = .h4
+        case .h5: self = .h5
+        case .h6: self = .h6
+        }
+    }
+}
+
+extension ReadingImageReference {
+    fileprivate init(_ generated: SweetbriarCore.ReadingImageReference) {
+        switch generated {
+        case .remote(let url): self = .remote(url: url)
+        case .attachment(let contentId, let partId):
+            self = .attachment(contentId: contentId, partId: partId)
+        }
     }
 }

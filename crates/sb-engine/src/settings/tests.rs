@@ -5,12 +5,90 @@ use sb_test_support::{ScratchDir, block_on};
 
 use crate::{BackupEnd, Engine, EngineError};
 
+const READING_VIEW_SENDERS: &str = "reader.reading_view_senders";
+
 fn configured(engine: &Engine) -> super::Setting {
     block_on(engine.settings())
         .unwrap()
         .into_iter()
         .find(|setting| setting.key() == BACKUP_DESTINATION_SETTING)
         .unwrap()
+}
+
+fn reading_senders(engine: &Engine) -> super::Setting {
+    block_on(engine.settings())
+        .unwrap()
+        .into_iter()
+        .find(|setting| setting.key() == READING_VIEW_SENDERS)
+        .unwrap()
+}
+
+#[test]
+fn reading_view_senders_accept_only_the_canonical_list() {
+    let scratch = ScratchDir::new("engine-reading-senders");
+    let engine = block_on(Engine::open(scratch.path().join("store"))).unwrap();
+    let default = reading_senders(&engine);
+    assert_eq!(default.value(), "");
+    assert!(default.is_default());
+    let list = |count: usize| {
+        (0..count)
+            .map(|index| format!("user{index:04}@example.test"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    for value in [
+        "",
+        "a@b",
+        "a@b\nc@d",
+        &format!("{}@x", "a".repeat(252)),
+        &list(1_000),
+    ] {
+        block_on(engine.set_setting(&engine.new_idempotency_key(), READING_VIEW_SENDERS, value))
+            .unwrap();
+        assert_eq!(reading_senders(&engine).value(), value);
+    }
+    let last = reading_senders(&engine).value().to_owned();
+    for value in [
+        "A@b",
+        "a@b@c",
+        &format!("{}@x", "a".repeat(253)),
+        "b@x\na@x",
+        "a@b\na@b",
+        "a@b\n",
+        &list(1_001),
+    ] {
+        assert!(matches!(block_on(engine.set_setting(
+                &engine.new_idempotency_key(),
+                READING_VIEW_SENDERS,
+                value
+            )), Err(EngineError::InvalidInput { field, .. }) if field == "value"));
+        assert_eq!(reading_senders(&engine).value(), last);
+    }
+    block_on(engine.shutdown()).unwrap();
+}
+
+#[test]
+fn malformed_stored_reading_senders_is_corrupt() {
+    let scratch = ScratchDir::new("engine-reading-senders-corrupt");
+    let engine = block_on(Engine::open(scratch.path().join("store"))).unwrap();
+    for raw in [
+        "null",
+        r#""A@b""#,
+        r#""a@b\na@b""#,
+        r#""a@b\n""#,
+        r#""\/noncanonical""#,
+    ] {
+        let now = engine.resources().now();
+        block_on(engine.resources().write(WritePriority::User, {
+            let raw = raw.to_owned();
+            move |tx| upsert(tx, READING_VIEW_SENDERS, &raw, now)
+        }))
+        .unwrap();
+        assert!(
+            matches!(block_on(engine.settings()), Err(EngineError::Corrupt { detail }) if detail.contains(READING_VIEW_SENDERS))
+        );
+    }
+    block_on(engine.shutdown()).unwrap();
 }
 
 #[test]
