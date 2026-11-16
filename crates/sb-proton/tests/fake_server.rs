@@ -387,6 +387,19 @@ async fn mailbox_password_mode_surfaces_the_challenge() {
 
 #[tokio::test]
 async fn refusals_map_to_typed_results() {
+    // A security key beside TOTP (mask 3) takes the TOTP path.
+    let both = server_with(
+        TestAccount::new(USER, PASSWORD)
+            .with_totp("123456")
+            .fido2_only(),
+    )
+    .await;
+    let (_, step) = client(&both)
+        .begin_sign_in(USER, SecretString::from(PASSWORD))
+        .await
+        .expect("TOTP beside FIDO2 asks for the code");
+    assert!(matches!(step, SignInStep::NeedsSecondFactor));
+
     let server = server_with(TestAccount::new(USER, PASSWORD).fido2_only()).await;
     let client = client(&server);
     let error = client

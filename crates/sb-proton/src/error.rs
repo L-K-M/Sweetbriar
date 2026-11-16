@@ -132,8 +132,10 @@ pub enum ProtonError {
     /// sign-in aborted before `/auth/v4` (spec/10).
     ModulusSignatureInvalid,
     /// 9001 outside the sign-in conversation (an authenticated endpoint
-    /// asked for human verification).
-    HumanVerificationRequired { url: String, methods: Vec<String> },
+    /// asked for human verification). Only the sign-in conversation
+    /// parses the verification details, into its `Challenge`; this
+    /// mapper sees Proton's `Error` text alone.
+    HumanVerificationRequired,
     /// 12087: the human-verification token was rejected.
     HumanVerificationInvalid {
         /// Proton's `Error` text.
@@ -193,12 +195,8 @@ impl ProtonError {
             // `auth-session.md` §4: 8002 is a wrong password; the 2FA
             // step re-labels it `SecondFactor`.
             ApiCode::PasswordWrong => Self::InvalidInput(InvalidField::Password),
-            // `auth-session.md` §5: 9001 carries the verification URL
-            // and methods.
-            ApiCode::HumanVerificationRequired => Self::HumanVerificationRequired {
-                url: String::new(),
-                methods: Vec::new(),
-            },
+            // `auth-session.md` §5: 9001 asks for human verification.
+            ApiCode::HumanVerificationRequired => Self::HumanVerificationRequired,
             // `auth-session.md` §5: 12087 is a rejected HV token.
             ApiCode::HumanVerificationTokenInvalid => Self::HumanVerificationInvalid {
                 message: message.to_owned(),
@@ -226,9 +224,7 @@ impl fmt::Display for ProtonError {
             Self::ModulusSignatureInvalid => {
                 f.write_str("the SRP modulus signature did not verify with Proton's key")
             }
-            Self::HumanVerificationRequired { .. } => {
-                f.write_str("Proton asked for human verification")
-            }
+            Self::HumanVerificationRequired => f.write_str("Proton asked for human verification"),
             Self::HumanVerificationInvalid { message } => {
                 write!(f, "Proton rejected the human-verification token: {message}")
             }

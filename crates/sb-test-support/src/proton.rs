@@ -52,6 +52,8 @@ pub struct TestAccount {
     /// 1 = one-password, 2 = separate mailbox password.
     pub password_mode: u8,
     pub hv_required: bool,
+    /// A registered security key; alone it is FIDO2-only, beside
+    /// `totp` it reports `2FA.Enabled` 3.
     pub fido2_only: bool,
 }
 
@@ -544,13 +546,8 @@ fn handle_auth(
     let uid = format!("uid-{}", state.counter);
     let access = format!("access-{}", state.counter);
     let refresh = format!("refresh-{}", state.counter);
-    let two_fa = if fido2_only {
-        2
-    } else if totp.is_some() {
-        1
-    } else {
-        0
-    };
+    // `2FA.Enabled` is a bitmask: 1 = TOTP, 2 = FIDO2, 3 = both.
+    let two_fa = u8::from(totp.is_some()) | (u8::from(fido2_only) << 1);
     let bad_proof = matches!(
         *faults.lock().unwrap_or_else(|e| e.into_inner()),
         Some(Fault::BadServerProof)
