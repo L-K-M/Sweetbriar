@@ -90,7 +90,10 @@ Every step has:
 - **Runs on:** `linux` (agent and Linux CI), `macos-ci` (only in macOS
   CI) or `owner` (agent-run on the owner's Mac, see below).
 - **Size:** S (under ~300 changed lines), M (~300–800), L (~800–1,450).
-  Anything larger is split before starting.
+  Anything larger is split before starting. Changed lines count code,
+  tests and docs, added plus removed; generated files don't count
+  (`Cargo.lock`, `THIRD_PARTY_NOTICES.md` and the UniFFI bindings
+  under `apps/macos/SweetbriarCore/`).
 
 ## Sizing
 

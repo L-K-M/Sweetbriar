@@ -6,6 +6,7 @@
 //! macOS-only checks, which `.github/workflows/macos.yml` covers.
 
 use std::env;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 use std::time::Duration;
@@ -32,6 +33,7 @@ fn main() -> ExitCode {
         "check-layers" => check_layers(),
         "ffi" => ffi(),
         "check-ffi" => check_ffi(),
+        "reading-corpus" => reading_corpus(),
         _ => {
             usage();
             ExitCode::FAILURE
@@ -55,6 +57,70 @@ fn ffi() -> ExitCode {
         ExitCode::SUCCESS
     } else {
         ExitCode::FAILURE
+    }
+}
+
+/// `cargo xtask reading-corpus <mbox-or-directory> [--out <file>]`
+/// (plan M6.3b1): run the reading document model over every message
+/// and print counts only. The command never writes message content:
+/// the report is total, supported, unsupported and parse failures, and
+/// `--out` receives the same counts, never a subject or body.
+fn reading_corpus() -> ExitCode {
+    let args: Vec<String> = env::args().skip(2).collect();
+    let mut path = None;
+    let mut out = None;
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--out" => {
+                index += 1;
+                let Some(file) = args.get(index) else {
+                    eprintln!("reading-corpus: --out needs a file path");
+                    return ExitCode::FAILURE;
+                };
+                out = Some(PathBuf::from(file));
+            }
+            arg if arg.starts_with("--") => {
+                eprintln!("reading-corpus: unknown option {arg}");
+                return ExitCode::FAILURE;
+            }
+            arg => {
+                if path.is_some() {
+                    eprintln!("reading-corpus: expected one mbox or directory");
+                    return ExitCode::FAILURE;
+                }
+                path = Some(PathBuf::from(arg));
+            }
+        }
+        index += 1;
+    }
+    let Some(path) = path else {
+        usage();
+        return ExitCode::FAILURE;
+    };
+    match xtask::reading_corpus::count_path(&path) {
+        Ok(counts) => {
+            let report = counts.report();
+            let written = match &out {
+                Some(file) => fs::write(file, report)
+                    .map_err(|error| format!("cannot write {}: {error}", file.display())),
+                None => {
+                    print!("{report}");
+                    Ok(())
+                }
+            };
+            match written {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(error) => {
+                    eprintln!("reading-corpus: {error}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
+        Err(error) => {
+            eprintln!("reading-corpus: {error}");
+            ExitCode::FAILURE
+        }
     }
 }
 
@@ -677,6 +743,6 @@ fn workspace_root() -> PathBuf {
 
 fn usage() {
     eprintln!(
-        "usage: cargo xtask <ci [--docker]|dovecot|notices|check-layers|ffi [--bindings-only]|check-ffi>"
+        "usage: cargo xtask <ci [--docker]|dovecot|notices|check-layers|ffi [--bindings-only]|check-ffi|reading-corpus <mbox-or-directory> [--out <file>]>"
     );
 }

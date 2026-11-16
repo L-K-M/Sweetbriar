@@ -29,6 +29,7 @@ mod exports;
 mod health;
 mod imports;
 mod messages;
+mod reading;
 mod rebuild;
 mod restore;
 mod search;
@@ -52,6 +53,12 @@ pub use health::{Health, HealthSubscription, Integrity};
 pub use imports::{
     ImportJob, ImportJobState, ImportProblem, ImportProblemKind, ImportReport, ImportSource,
     ImportSourceKind, ImportStarted, ImportTarget, ImportTotals, MboxVariant,
+};
+pub use reading::{
+    ReadingBlock, ReadingDocument, ReadingEmphasis, ReadingHeading, ReadingHeadingLevel,
+    ReadingImage, ReadingImageReference, ReadingInline, ReadingLineBreak, ReadingLink, ReadingList,
+    ReadingListItem, ReadingParagraph, ReadingPreformatted, ReadingQuote, ReadingSupport,
+    ReadingText,
 };
 pub use rebuild::SearchRebuildStarted;
 pub use restore::{

@@ -4063,6 +4063,7 @@ dependencies = [
 name = "xtask"
 version = "0.0.1"
 dependencies = [
+ "sb-mime",
  "serde",
  "serde_json",
  "toml",

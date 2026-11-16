@@ -22,3 +22,7 @@ toml = "=1.1.8"
 # metadata types.
 uniffi_bindgen = { version = "=0.32.2", default-features = false }
 uniffi_meta = "=0.32.2"
+# `reading-corpus` runs the reading document model over an owner's
+# mail (plan M6.3b1). An existing workspace crate, not a new external
+# dependency; the tool role is outside the layer graph.
+sb-mime = { version = "0.0.1", path = "../crates/sb-mime" }

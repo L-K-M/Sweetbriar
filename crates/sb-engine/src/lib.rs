@@ -105,5 +105,6 @@ pub use sb_resources::{
     ViewSort,
 };
 pub use sb_resources::{
-    BodyAvailability, ReaderAddress, ReaderHeaders, ReaderMessage, ReaderOccurrence, ReaderTag,
+    Block, BodyAvailability, DOCUMENT_VERSION, DocumentSupport, HeadingLevel, ImageReference,
+    Inline, MailDocument, ReaderAddress, ReaderHeaders, ReaderMessage, ReaderOccurrence, ReaderTag,
 };

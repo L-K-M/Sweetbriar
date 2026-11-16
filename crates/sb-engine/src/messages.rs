@@ -1,7 +1,7 @@
 //! Reader metadata queries on the runtime's blocking pool (spec/07).
 
 use crate::{Engine, EngineError};
-use sb_resources::{ReaderMessage, get_message, message_for_occurrence};
+use sb_resources::{DocumentSupport, ReaderMessage, get_message, message_for_occurrence};
 
 impl Engine {
     /// Read metadata in one short snapshot. Unknown messages are `NotFound`.
@@ -17,4 +17,17 @@ impl Engine {
         })
         .await
     }
+
+    /// The reading document for one message (spec/08 Reader: Reading
+    /// view), over the same acquisition lookup as the body query:
+    /// unknown messages are `NotFound`, a missing body or a parse
+    /// failure is `Unavailable`, and unsupported structure is
+    /// [`DocumentSupport::Unsupported`] (sender layout).
+    pub async fn reading_document(&self, message_id: i64) -> Result<DocumentSupport, EngineError> {
+        self.read_through(move |resources| resources.reading_document(message_id))
+            .await
+    }
 }
+
+#[cfg(test)]
+mod tests;
