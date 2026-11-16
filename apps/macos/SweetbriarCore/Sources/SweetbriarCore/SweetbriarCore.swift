@@ -1347,6 +1347,14 @@ public protocol CoreProtocol: AnyObject, Sendable {
     func startImport(token: CancelToken, idempotencyKey: String, paths: [String], target: ImportTarget) async throws  -> ImportStarted
     
     /**
+     * `add_tag(selection, tag)` (spec/07 Messages): attach the named
+     * tag, creating the definition when the name is new. A repeated
+     * key answers its stored receipt. Like every command it honours
+     * the token only until it holds the core.
+     */
+    func addTag(token: CancelToken, idempotencyKey: String, selection: MessageSelection, tag: String) async throws  -> Receipt
+    
+    /**
      * Reader metadata; unknown messages are `NotFound`.
      */
     func getMessage(token: CancelToken, messageId: Int64) async throws  -> ReaderMessage
@@ -1370,6 +1378,20 @@ public protocol CoreProtocol: AnyObject, Sendable {
      * Revoke in memory now; the engine removes files on its cleanup worker.
      */
     func releaseLease(leaseId: String) 
+    
+    /**
+     * `remove_tag(selection, tag)` (spec/07 Messages): detach the
+     * named tag; the definition stays. A repeated key answers its
+     * stored receipt.
+     */
+    func removeTag(token: CancelToken, idempotencyKey: String, selection: MessageSelection, tag: String) async throws  -> Receipt
+    
+    /**
+     * `set_note(message_id, text)` (spec/07 Messages): write Markdown,
+     * one note per message; empty text removes it. A repeated key
+     * answers its stored receipt.
+     */
+    func setNote(token: CancelToken, idempotencyKey: String, messageId: Int64, text: String) async throws  -> Receipt
     
     /**
      * Replay before preparation; otherwise verify/stage with the core usable,
@@ -1430,6 +1452,25 @@ public protocol CoreProtocol: AnyObject, Sendable {
      * or closed window answers `NotFound` on the first `next`.
      */
     func subscribe(token: CancelToken, windowId: UInt64) async throws  -> Subscription
+    
+    /**
+     * `delete_saved_view(id)` (spec/07 Views): remove one view; an
+     * unknown id is `NotFound`. The receipt names the id.
+     */
+    func deleteSavedView(token: CancelToken, idempotencyKey: String, viewId: String) async throws  -> Receipt
+    
+    /**
+     * `saved_views()` (spec/07 Queries): every view in sidebar order.
+     */
+    func savedViews(token: CancelToken) async throws  -> [SavedView]
+    
+    /**
+     * `upsert_saved_view(params)` (spec/07 Views): insert the view or
+     * update the row `params.view_id` names. The receipt names the
+     * stored id; a repeated key answers its stored receipt. Like every
+     * command it honours the token only until it holds the core.
+     */
+    func upsertSavedView(token: CancelToken, idempotencyKey: String, params: SavedViewParams) async throws  -> Receipt
     
     /**
      * `close_window` (spec/07): release the handle. No token — like
@@ -2206,6 +2247,28 @@ open func startImport(token: CancelToken, idempotencyKey: String, paths: [String
 }
     
     /**
+     * `add_tag(selection, tag)` (spec/07 Messages): attach the named
+     * tag, creating the definition when the name is new. A repeated
+     * key answers its stored receipt. Like every command it honours
+     * the token only until it holds the core.
+     */
+open func addTag(token: CancelToken, idempotencyKey: String, selection: MessageSelection, tag: String)async throws  -> Receipt  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_sb_ffi_fn_method_core_add_tag(
+                        self.uniffiCloneHandle(),FfiConverterTypeCancelToken_lower(token),FfiConverterString.lower(idempotencyKey),FfiConverterTypeMessageSelection_lower(selection),FfiConverterString.lower(tag)
+                )
+            },
+            pollFunc: ffi_sb_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_sb_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_sb_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeReceipt_lift,
+            errorHandler: FfiConverterTypeCoreError_lift
+        )
+}
+    
+    /**
      * Reader metadata; unknown messages are `NotFound`.
      */
 open func getMessage(token: CancelToken, messageId: Int64)async throws  -> ReaderMessage  {
@@ -2291,6 +2354,48 @@ open func releaseLease(leaseId: String)  {try! rustCall() {
         FfiConverterString.lower(leaseId),uniffiCallStatus
     )
 }
+}
+    
+    /**
+     * `remove_tag(selection, tag)` (spec/07 Messages): detach the
+     * named tag; the definition stays. A repeated key answers its
+     * stored receipt.
+     */
+open func removeTag(token: CancelToken, idempotencyKey: String, selection: MessageSelection, tag: String)async throws  -> Receipt  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_sb_ffi_fn_method_core_remove_tag(
+                        self.uniffiCloneHandle(),FfiConverterTypeCancelToken_lower(token),FfiConverterString.lower(idempotencyKey),FfiConverterTypeMessageSelection_lower(selection),FfiConverterString.lower(tag)
+                )
+            },
+            pollFunc: ffi_sb_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_sb_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_sb_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeReceipt_lift,
+            errorHandler: FfiConverterTypeCoreError_lift
+        )
+}
+    
+    /**
+     * `set_note(message_id, text)` (spec/07 Messages): write Markdown,
+     * one note per message; empty text removes it. A repeated key
+     * answers its stored receipt.
+     */
+open func setNote(token: CancelToken, idempotencyKey: String, messageId: Int64, text: String)async throws  -> Receipt  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_sb_ffi_fn_method_core_set_note(
+                        self.uniffiCloneHandle(),FfiConverterTypeCancelToken_lower(token),FfiConverterString.lower(idempotencyKey),FfiConverterInt64.lower(messageId),FfiConverterString.lower(text)
+                )
+            },
+            pollFunc: ffi_sb_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_sb_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_sb_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeReceipt_lift,
+            errorHandler: FfiConverterTypeCoreError_lift
+        )
 }
     
     /**
@@ -2489,6 +2594,67 @@ open func subscribe(token: CancelToken, windowId: UInt64)async throws  -> Subscr
             completeFunc: ffi_sb_ffi_rust_future_complete_u64,
             freeFunc: ffi_sb_ffi_rust_future_free_u64,
             liftFunc: FfiConverterTypeSubscription_lift,
+            errorHandler: FfiConverterTypeCoreError_lift
+        )
+}
+    
+    /**
+     * `delete_saved_view(id)` (spec/07 Views): remove one view; an
+     * unknown id is `NotFound`. The receipt names the id.
+     */
+open func deleteSavedView(token: CancelToken, idempotencyKey: String, viewId: String)async throws  -> Receipt  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_sb_ffi_fn_method_core_delete_saved_view(
+                        self.uniffiCloneHandle(),FfiConverterTypeCancelToken_lower(token),FfiConverterString.lower(idempotencyKey),FfiConverterString.lower(viewId)
+                )
+            },
+            pollFunc: ffi_sb_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_sb_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_sb_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeReceipt_lift,
+            errorHandler: FfiConverterTypeCoreError_lift
+        )
+}
+    
+    /**
+     * `saved_views()` (spec/07 Queries): every view in sidebar order.
+     */
+open func savedViews(token: CancelToken)async throws  -> [SavedView]  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_sb_ffi_fn_method_core_saved_views(
+                        self.uniffiCloneHandle(),FfiConverterTypeCancelToken_lower(token)
+                )
+            },
+            pollFunc: ffi_sb_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_sb_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_sb_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterSequenceTypeSavedView.lift,
+            errorHandler: FfiConverterTypeCoreError_lift
+        )
+}
+    
+    /**
+     * `upsert_saved_view(params)` (spec/07 Views): insert the view or
+     * update the row `params.view_id` names. The receipt names the
+     * stored id; a repeated key answers its stored receipt. Like every
+     * command it honours the token only until it holds the core.
+     */
+open func upsertSavedView(token: CancelToken, idempotencyKey: String, params: SavedViewParams)async throws  -> Receipt  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_sb_ffi_fn_method_core_upsert_saved_view(
+                        self.uniffiCloneHandle(),FfiConverterTypeCancelToken_lower(token),FfiConverterString.lower(idempotencyKey),FfiConverterTypeSavedViewParams_lower(params)
+                )
+            },
+            pollFunc: ffi_sb_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_sb_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_sb_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeReceipt_lift,
             errorHandler: FfiConverterTypeCoreError_lift
         )
 }
@@ -6834,6 +7000,143 @@ public func FfiConverterTypeRestoreArtifact_lower(_ value: RestoreArtifact) -> R
 }
 
 
+/**
+ * One saved view as `saved_views()` reports it (spec/07 Views), in
+ * sidebar order (new views append).
+ */
+public struct SavedView: Equatable, Hashable {
+    public var viewId: String
+    public var name: String
+    public var queryJson: String
+    public var sort: SavedViewSort
+    public var revision: Int64
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(viewId: String, name: String, queryJson: String, sort: SavedViewSort, revision: Int64) {
+        self.viewId = viewId
+        self.name = name
+        self.queryJson = queryJson
+        self.sort = sort
+        self.revision = revision
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension SavedView: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeSavedView: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SavedView {
+        return
+            try SavedView(
+                viewId: FfiConverterString.read(from: &buf), 
+                name: FfiConverterString.read(from: &buf), 
+                queryJson: FfiConverterString.read(from: &buf), 
+                sort: FfiConverterTypeSavedViewSort.read(from: &buf), 
+                revision: FfiConverterInt64.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: SavedView, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.viewId, into: &buf)
+        FfiConverterString.write(value.name, into: &buf)
+        FfiConverterString.write(value.queryJson, into: &buf)
+        FfiConverterTypeSavedViewSort.write(value.sort, into: &buf)
+        FfiConverterInt64.write(value.revision, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSavedView_lift(_ buf: RustBuffer) throws -> SavedView {
+    return try FfiConverterTypeSavedView.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSavedView_lower(_ value: SavedView) -> RustBuffer {
+    return FfiConverterTypeSavedView.lower(value)
+}
+
+
+/**
+ * `upsert_saved_view`'s parameters (spec/07 Views): the view to
+ * update, or `None` to create one, with its name, canonical v1 query
+ * JSON (spec/06) and sort.
+ */
+public struct SavedViewParams: Equatable, Hashable {
+    public var viewId: String?
+    public var name: String
+    public var queryJson: String
+    public var sort: SavedViewSort
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(viewId: String?, name: String, queryJson: String, sort: SavedViewSort) {
+        self.viewId = viewId
+        self.name = name
+        self.queryJson = queryJson
+        self.sort = sort
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension SavedViewParams: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeSavedViewParams: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SavedViewParams {
+        return
+            try SavedViewParams(
+                viewId: FfiConverterOptionString.read(from: &buf), 
+                name: FfiConverterString.read(from: &buf), 
+                queryJson: FfiConverterString.read(from: &buf), 
+                sort: FfiConverterTypeSavedViewSort.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: SavedViewParams, into buf: inout [UInt8]) {
+        FfiConverterOptionString.write(value.viewId, into: &buf)
+        FfiConverterString.write(value.name, into: &buf)
+        FfiConverterString.write(value.queryJson, into: &buf)
+        FfiConverterTypeSavedViewSort.write(value.sort, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSavedViewParams_lift(_ buf: RustBuffer) throws -> SavedViewParams {
+    return try FfiConverterTypeSavedViewParams.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSavedViewParams_lower(_ value: SavedViewParams) -> RustBuffer {
+    return FfiConverterTypeSavedViewParams.lower(value)
+}
+
+
 public struct SearchRebuildProgress: Equatable, Hashable {
     public var jobId: String
     public var phase: SearchRebuildPhase
@@ -9884,6 +10187,91 @@ public func FfiConverterTypeMboxVariant_lower(_ value: MboxVariant) -> RustBuffe
 
 
 
+/**
+ * A message selection (spec/07): up to 1,000 explicit occurrence
+ * ids, or one open window's rows at the generation its caller holds.
+ * Tags resolve to logical messages, not occurrences.
+ */
+
+public enum MessageSelection: Equatable, Hashable {
+    
+    /**
+     * Explicit occurrence ids.
+     */
+    case occurrenceIds([Int64]
+    )
+    /**
+     * An open window's rows at `generation`; a stale generation is
+     * `ResetRequired`.
+     */
+    case window(windowId: UInt64, generation: UInt64
+    )
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension MessageSelection: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeMessageSelection: FfiConverterRustBuffer {
+    typealias SwiftType = MessageSelection
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> MessageSelection {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .occurrenceIds(try FfiConverterSequenceInt64.read(from: &buf)
+        )
+        
+        case 2: return .window(windowId: try FfiConverterUInt64.read(from: &buf), generation: try FfiConverterUInt64.read(from: &buf)
+        )
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: MessageSelection, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case let .occurrenceIds(v1):
+            writeInt(&buf, Int32(1))
+            FfiConverterSequenceInt64.write(v1, into: &buf)
+            
+        
+        case let .window(windowId,generation):
+            writeInt(&buf, Int32(2))
+            FfiConverterUInt64.write(windowId, into: &buf)
+            FfiConverterUInt64.write(generation, into: &buf)
+            
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeMessageSelection_lift(_ buf: RustBuffer) throws -> MessageSelection {
+    return try FfiConverterTypeMessageSelection.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeMessageSelection_lower(_ value: MessageSelection) -> RustBuffer {
+    return FfiConverterTypeMessageSelection.lower(value)
+}
+
+
+
 
 public enum RenderWarningCode: Equatable, Hashable {
     
@@ -10159,6 +10547,86 @@ public func FfiConverterTypeRestoreOutcome_lift(_ buf: RustBuffer) throws -> Res
 #endif
 public func FfiConverterTypeRestoreOutcome_lower(_ value: RestoreOutcome) -> RustBuffer {
     return FfiConverterTypeRestoreOutcome.lower(value)
+}
+
+
+
+/**
+ * A saved view's stored message order (spec/02).
+ */
+
+public enum SavedViewSort: Equatable, Hashable {
+    
+    case dateDesc
+    /**
+     * Reserved in the pilot: saving it is `InvalidInput` on `sort`
+     * (spec/07 Views).
+     */
+    case dateAsc
+    case relevance
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension SavedViewSort: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeSavedViewSort: FfiConverterRustBuffer {
+    typealias SwiftType = SavedViewSort
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SavedViewSort {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .dateDesc
+        
+        case 2: return .dateAsc
+        
+        case 3: return .relevance
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: SavedViewSort, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .dateDesc:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .dateAsc:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .relevance:
+            writeInt(&buf, Int32(3))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSavedViewSort_lift(_ buf: RustBuffer) throws -> SavedViewSort {
+    return try FfiConverterTypeSavedViewSort.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSavedViewSort_lower(_ value: SavedViewSort) -> RustBuffer {
+    return FfiConverterTypeSavedViewSort.lower(value)
 }
 
 
@@ -10864,6 +11332,12 @@ public enum WindowSpec: Equatable, Hashable {
      */
     case search(spec: SearchSpec
     )
+    /**
+     * A saved view's query results, resolved when the window opens
+     * (spec/07 Views).
+     */
+    case view(viewId: String
+    )
 
 
 
@@ -10901,6 +11375,9 @@ public struct FfiConverterTypeWindowSpec: FfiConverterRustBuffer {
         case 6: return .search(spec: try FfiConverterTypeSearchSpec.read(from: &buf)
         )
         
+        case 7: return .view(viewId: try FfiConverterString.read(from: &buf)
+        )
+        
         default: throw UniffiInternalError.unexpectedEnumCase
         }
     }
@@ -10935,6 +11412,11 @@ public struct FfiConverterTypeWindowSpec: FfiConverterRustBuffer {
         case let .search(spec):
             writeInt(&buf, Int32(6))
             FfiConverterTypeSearchSpec.write(spec, into: &buf)
+            
+        
+        case let .view(viewId):
+            writeInt(&buf, Int32(7))
+            FfiConverterString.write(viewId, into: &buf)
             
         }
     }
@@ -11820,6 +12302,31 @@ fileprivate struct FfiConverterSequenceTypeRestoreArtifact: FfiConverterRustBuff
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterSequenceTypeSavedView: FfiConverterRustBuffer {
+    typealias SwiftType = [SavedView]
+
+    public static func write(_ value: [SavedView], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeSavedView.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [SavedView] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [SavedView]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeSavedView.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterSequenceTypeSetting: FfiConverterRustBuffer {
     typealias SwiftType = [Setting]
 
@@ -12143,6 +12650,9 @@ private let initializationResult: InitializationResult = {
     if (uniffi_sb_ffi_checksum_method_core_start_import() != 35998) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_sb_ffi_checksum_method_core_add_tag() != 58021) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_sb_ffi_checksum_method_core_get_message() != 43860) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -12156,6 +12666,12 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sb_ffi_checksum_method_core_release_lease() != 61314) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sb_ffi_checksum_method_core_remove_tag() != 41442) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sb_ffi_checksum_method_core_set_note() != 52753) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sb_ffi_checksum_method_core_start_restore() != 32123) {
@@ -12186,6 +12702,15 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sb_ffi_checksum_method_core_subscribe() != 24172) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sb_ffi_checksum_method_core_delete_saved_view() != 14459) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sb_ffi_checksum_method_core_saved_views() != 12611) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sb_ffi_checksum_method_core_upsert_saved_view() != 61186) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sb_ffi_checksum_method_core_close_window() != 3551) {

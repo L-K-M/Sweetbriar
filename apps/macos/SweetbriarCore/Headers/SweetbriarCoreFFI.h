@@ -403,6 +403,11 @@ uint64_t uniffi_sb_ffi_fn_method_core_import_report(uint64_t ptr, uint64_t token
 uint64_t uniffi_sb_ffi_fn_method_core_start_import(uint64_t ptr, uint64_t token, RustBuffer idempotency_key, RustBuffer paths, RustBuffer target
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_ADD_TAG
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_ADD_TAG
+uint64_t uniffi_sb_ffi_fn_method_core_add_tag(uint64_t ptr, uint64_t token, RustBuffer idempotency_key, RustBuffer selection, RustBuffer tag
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_GET_MESSAGE
 #define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_GET_MESSAGE
 uint64_t uniffi_sb_ffi_fn_method_core_get_message(uint64_t ptr, uint64_t token, int64_t message_id
@@ -426,6 +431,16 @@ uint64_t uniffi_sb_ffi_fn_method_core_open_body(uint64_t ptr, uint64_t token, in
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_RELEASE_LEASE
 #define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_RELEASE_LEASE
 void uniffi_sb_ffi_fn_method_core_release_lease(uint64_t ptr, RustBuffer lease_id, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_REMOVE_TAG
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_REMOVE_TAG
+uint64_t uniffi_sb_ffi_fn_method_core_remove_tag(uint64_t ptr, uint64_t token, RustBuffer idempotency_key, RustBuffer selection, RustBuffer tag
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_SET_NOTE
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_SET_NOTE
+uint64_t uniffi_sb_ffi_fn_method_core_set_note(uint64_t ptr, uint64_t token, RustBuffer idempotency_key, int64_t message_id, RustBuffer text
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_START_RESTORE
@@ -476,6 +491,21 @@ uint64_t uniffi_sb_ffi_fn_method_core_mailboxes(uint64_t ptr, uint64_t token, Ru
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_SUBSCRIBE
 #define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_SUBSCRIBE
 uint64_t uniffi_sb_ffi_fn_method_core_subscribe(uint64_t ptr, uint64_t token, uint64_t window_id
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_DELETE_SAVED_VIEW
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_DELETE_SAVED_VIEW
+uint64_t uniffi_sb_ffi_fn_method_core_delete_saved_view(uint64_t ptr, uint64_t token, RustBuffer idempotency_key, RustBuffer view_id
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_SAVED_VIEWS
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_SAVED_VIEWS
+uint64_t uniffi_sb_ffi_fn_method_core_saved_views(uint64_t ptr, uint64_t token
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_UPSERT_SAVED_VIEW
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_UPSERT_SAVED_VIEW
+uint64_t uniffi_sb_ffi_fn_method_core_upsert_saved_view(uint64_t ptr, uint64_t token, RustBuffer idempotency_key, RustBuffer params
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_CLOSE_WINDOW
@@ -1095,6 +1125,12 @@ uint16_t uniffi_sb_ffi_checksum_method_core_start_import(void
     
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_ADD_TAG
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_ADD_TAG
+uint16_t uniffi_sb_ffi_checksum_method_core_add_tag(void
+    
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_GET_MESSAGE
 #define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_GET_MESSAGE
 uint16_t uniffi_sb_ffi_checksum_method_core_get_message(void
@@ -1122,6 +1158,18 @@ uint16_t uniffi_sb_ffi_checksum_method_core_open_body(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_RELEASE_LEASE
 #define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_RELEASE_LEASE
 uint16_t uniffi_sb_ffi_checksum_method_core_release_lease(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_REMOVE_TAG
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_REMOVE_TAG
+uint16_t uniffi_sb_ffi_checksum_method_core_remove_tag(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_SET_NOTE
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_SET_NOTE
+uint16_t uniffi_sb_ffi_checksum_method_core_set_note(void
     
 );
 #endif
@@ -1182,6 +1230,24 @@ uint16_t uniffi_sb_ffi_checksum_method_core_mailboxes(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_SUBSCRIBE
 #define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_SUBSCRIBE
 uint16_t uniffi_sb_ffi_checksum_method_core_subscribe(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_DELETE_SAVED_VIEW
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_DELETE_SAVED_VIEW
+uint16_t uniffi_sb_ffi_checksum_method_core_delete_saved_view(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_SAVED_VIEWS
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_SAVED_VIEWS
+uint16_t uniffi_sb_ffi_checksum_method_core_saved_views(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_UPSERT_SAVED_VIEW
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_UPSERT_SAVED_VIEW
+uint16_t uniffi_sb_ffi_checksum_method_core_upsert_saved_view(void
     
 );
 #endif

@@ -35,6 +35,7 @@ mod restore;
 mod search;
 mod sidebar;
 mod subscribe;
+mod views;
 mod windows;
 
 pub use accounts::{
@@ -71,11 +72,12 @@ pub use search::{
 };
 pub use sidebar::{Account, AccountKind, AccountState, Mailbox, MailboxKind, Mailboxes};
 pub use subscribe::{Subscription, WindowEvent};
+pub use views::{SavedView, SavedViewParams, SavedViewSort};
 pub use windows::{Anchor, Count, ListRow, MailboxRole, Window, WindowIds, WindowSpec};
 
 uniffi::setup_scaffolding!();
 
 pub use messages::{
-    AttachmentLease, BodyAvailability, BodyKind, BodyLease, ReaderAddress, ReaderHeaders,
-    ReaderMessage, ReaderOccurrence, ReaderTag, RenderWarning, RenderWarningCode,
+    AttachmentLease, BodyAvailability, BodyKind, BodyLease, MessageSelection, ReaderAddress,
+    ReaderHeaders, ReaderMessage, ReaderOccurrence, ReaderTag, RenderWarning, RenderWarningCode,
 };
