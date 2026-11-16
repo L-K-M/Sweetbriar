@@ -24,6 +24,8 @@ private final class MemorySource: ReadingViewMemorySource, @unchecked Sendable {
 struct ReadingViewMemoryTests {
     @Test func canonicalEncodingIsLowercaseSortedUnique() {
         #expect(ReadingViewMemory.encode(["B@x", "a@x", "A@x"]) == "a@x\nb@x")
+        // The engine requires byte order; a non-NFC address sorts first.
+        #expect(ReadingViewMemory.encode(["z@x", "e\u{301}@x"]) == "e\u{301}@x\nz@x")
         #expect(ReadingViewMemory.decode("") == [])
         #expect(ReadingViewMemory.decode("a@x\nb@x") == ["a@x", "b@x"])
     }
@@ -39,6 +41,8 @@ struct ReadingViewMemoryTests {
         try await memory.removeSender("ONE@example")
         #expect(memory.senders == ["two@example"])
         #expect(source.stored == ["two@example"])
+        #expect(source.writes == 3)
+        try await memory.removeSender("absent@example")
         #expect(source.writes == 3)
     }
 

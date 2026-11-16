@@ -43,7 +43,11 @@ public final class ReadingViewMemory {
     }
 
     public nonisolated static func encode(_ senders: [String]) -> String {
-        Array(Set(senders.map { $0.lowercased() })).sorted().joined(separator: "\n")
+        // Byte order, as the engine checks it: Swift's `<` compares
+        // canonical forms, which disagrees for non-NFC addresses.
+        Set(senders.map { $0.lowercased() })
+            .sorted { $0.utf8.lexicographicallyPrecedes($1.utf8) }
+            .joined(separator: "\n")
     }
 
     public func reload() async {
@@ -65,7 +69,9 @@ public final class ReadingViewMemory {
     }
 
     public func removeSender(_ address: String) async throws {
-        try await write(senders.filter { $0 != address.lowercased() })
+        let address = address.lowercased()
+        guard senders.contains(address) else { return }
+        try await write(senders.filter { $0 != address })
     }
 
     private func write(_ list: [String]) async throws {
