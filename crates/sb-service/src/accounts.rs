@@ -318,6 +318,9 @@ pub struct ProtonSignInParams {
     pub display_name: String,
     pub username: String,
     pub password: Vec<u8>,
+    /// Signs an existing Proton account in again, keeping its UUID and
+    /// data (spec/07); `None` starts a new account.
+    pub account_id: Option<String>,
 }
 
 impl ProtonSignInParams {
@@ -327,6 +330,7 @@ impl ProtonSignInParams {
             username: self.username,
             // Into the zeroizing secret before anything can fail below.
             password: sb_engine::Secret::new(self.password),
+            account_id: self.account_id,
         }
     }
 }
@@ -385,6 +389,15 @@ impl Core {
     /// `cancel_proton_sign_in` (spec/07): drop the conversation.
     pub async fn cancel_proton_sign_in(&self, sign_in_id: &str) -> Result<(), CoreError> {
         self.engine().cancel_proton_sign_in(sign_in_id).await?;
+        Ok(())
+    }
+
+    /// `disconnect_account(id)` (spec/07, 04): revoke a Proton
+    /// account's session, delete its secret and mark it disconnected,
+    /// keeping every row and its data. Only a Proton account; another
+    /// kind is `InvalidInput` on `account`.
+    pub async fn disconnect_account(&self, account_id: &str) -> Result<(), CoreError> {
+        self.engine().disconnect_account(account_id).await?;
         Ok(())
     }
 }

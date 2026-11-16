@@ -63,15 +63,17 @@ pub use index::{
 mod maintenance;
 mod proton;
 pub use proton::{
-    BEGIN_PROTON_SIGN_IN, PROTON_API_BASE_URL, ProtonRefusal, ProtonSignInParams, ProtonTransport,
-    encode_proton_session,
+    BEGIN_PROTON_SIGN_IN, PROTON_API_BASE_URL, ProtonAccount, ProtonRefusal, ProtonSessionError,
+    ProtonSessionSecret, ProtonSignInParams, ProtonTransport, RestoredProtonSession,
+    decode_proton_session, disconnect_proton_account, encode_proton_session, pause_for_session,
+    proton_account,
 };
 // The transport items an account's sign-in conversation drives
 // (spec/01 rule 3): the engine keeps them in memory and maps errors
 // without depending on a leaf.
 pub use sb_proton::{
-    CertificateDer, Challenge, FinishedSignIn, KeyStore, ModulusSignatureVerifier, ProtonError,
-    SecretString, Session, SignIn, SignInStep, Trust,
+    CertificateDer, Challenge, FinishedSignIn, Identity, KeyStore, ModulusSignatureVerifier,
+    ProtonError, SecretString, Session, SignIn, SignInStep, Trust,
 };
 mod renditions;
 mod repair;
@@ -350,6 +352,13 @@ impl Resources {
     /// [`Resources::set_secret`].
     pub fn get_secret(&self, credential_ref: &str) -> Result<Secret, SecretError> {
         self.secrets.get(credential_ref)
+    }
+
+    /// Delete the secret under `credential_ref` (spec/10): only an
+    /// explicit, authorized disconnect calls this. Blocking, like
+    /// [`Resources::set_secret`].
+    pub fn delete_secret(&self, credential_ref: &str) -> Result<(), SecretError> {
+        self.secrets.delete(credential_ref)
     }
 
     /// Submit one write to the store's writer (spec/03 "Write

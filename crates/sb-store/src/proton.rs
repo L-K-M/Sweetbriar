@@ -158,15 +158,21 @@ pub struct NewProtonSignIn {
     pub identities: Vec<NewIdentity>,
 }
 
-/// Commit a new account's completed sign-in. It lands paused with
-/// `CredentialPause::NotStored` until the secret is stored (spec/10); a
-/// Proton user another account holds is `Conflict`, never merged
-/// (spec/02).
+/// Commit a completed sign-in. A new account inserts its rows and
+/// lands paused with `CredentialPause::NotStored` until the secret is
+/// stored (spec/10); an existing account is signed in again in place:
+/// same UUID, `config_generation` and `revision` bumped, username and
+/// password mode replaced, identities upserted (spec/07). A Proton
+/// user another account holds, or another user than the account's, is
+/// `Conflict`, never merged (spec/02).
 pub fn commit_proton_sign_in(
     tx: &Transaction,
     new: &NewProtonSignIn,
     now: Timestamp,
 ) -> Result<(), StoreError> {
+    if let Some(current) = proton_account(tx, &new.account_id)? {
+        return replace_proton_account(tx, new, &current);
+    }
     tx.execute(
         "INSERT INTO accounts (account_id, kind, provider, display_name,
           state, state_reason, sort_order, created_at)
@@ -201,11 +207,92 @@ pub fn commit_proton_sign_in(
                 new.account_id,
                 identity.email,
                 identity.display_name,
-                i64::from(index == 0 || identity.is_default),
+                i64::from(index == 0),
                 identity.sendable.as_str(),
             ],
         )
         .map_err(|e| classify(e, "write an identity"))?;
+    }
+    Ok(())
+}
+
+/// Sign an existing account in again (spec/07): update its rows in
+/// place, keeping the UUID and every other account's data. The state
+/// is left as it is; the caller activates the account once the new
+/// secret is stored.
+fn replace_proton_account(
+    tx: &Transaction,
+    new: &NewProtonSignIn,
+    current: &ProtonAccount,
+) -> Result<(), StoreError> {
+    if current.proton_user_id != new.proton_user_id {
+        return Err(StoreError::conflict(format!(
+            "Proton user {} does not match account {}, which holds {}",
+            new.proton_user_id, new.account_id, current.proton_user_id
+        )));
+    }
+    tx.execute(
+        "UPDATE accounts
+         SET display_name = ?2,
+             config_generation = config_generation + 1, revision = revision + 1
+         WHERE account_id = ?1",
+        params![new.account_id, new.display_name],
+    )
+    .map_err(|e| classify(e, "update the account"))?;
+    tx.execute(
+        "UPDATE proton_accounts
+         SET api_base_url = ?2, username = ?3, credential_ref = ?4,
+             password_mode = ?5, revision = revision + 1
+         WHERE account_id = ?1",
+        params![
+            new.account_id,
+            new.api_base_url,
+            new.username,
+            new.credential_ref,
+            new.password_mode.as_i64(),
+        ],
+    )
+    .map_err(|e| classify(e, "update the Proton account"))?;
+    // Every existing default clears first, so the upsert's first
+    // identity is the account's one default. An address the new session
+    // no longer returns keeps its row, since removal never deletes
+    // (spec/02), but can't send; the upsert restores the ones returned.
+    tx.execute(
+        "UPDATE identities
+         SET is_default = 0, sendable = 'unavailable', revision = revision + 1
+         WHERE account_id = ?1",
+        params![new.account_id],
+    )
+    .map_err(|e| classify(e, "clear the account's identities"))?;
+    for (index, identity) in new.identities.iter().enumerate() {
+        // An id another account holds is never moved here: the guarded
+        // update changes nothing, which is refused below.
+        let changed = tx.execute(
+            "INSERT INTO identities (identity_id, account_id, email, display_name, is_default, sendable)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+             ON CONFLICT(identity_id) DO UPDATE SET
+               email = excluded.email,
+               display_name = excluded.display_name,
+               is_default = excluded.is_default,
+               sendable = excluded.sendable,
+               revision = identities.revision + 1
+             WHERE identities.account_id = excluded.account_id",
+            params![
+                identity.identity_id,
+                new.account_id,
+                identity.email,
+                identity.display_name,
+                i64::from(index == 0),
+                identity.sendable.as_str(),
+            ],
+        )
+        .map_err(|e| classify(e, "upsert an identity"))?;
+        if changed == 0 {
+            return Err(StoreError::conflict(format!(
+                "identity {} belongs to another account than {}",
+                identity.identity_id, new.account_id
+            )));
+        }
     }
     Ok(())
 }
@@ -226,6 +313,108 @@ pub fn proton_account_by_user_id(
     proton_user_id: &str,
 ) -> Result<Option<ProtonAccount>, StoreError> {
     read_account(tx, "proton_user_id", proton_user_id)
+}
+
+/// spec/04's user-visible reason for a Proton account whose session
+/// could not be restored: the owner must sign in again.
+pub const SESSION_REFUSED_REASON: &str = "Sign in again";
+
+/// Put an active or already-attentioned Proton account in
+/// `needs_attention` with [`SESSION_REFUSED_REASON`], keeping every
+/// row and its data (spec/04 "Account states and health"). A
+/// user-paused or disconnected account is left as it is; an unknown
+/// account is `NotFound`.
+pub fn pause_for_session(tx: &Transaction, account_id: &str) -> Result<(), StoreError> {
+    let changed = tx
+        .execute(
+            "UPDATE accounts
+             SET state = 'needs_attention', state_reason = ?2, revision = revision + 1
+             WHERE account_id = ?1 AND kind = 'proton'
+               AND state IN ('active', 'needs_attention')",
+            params![account_id, SESSION_REFUSED_REASON],
+        )
+        .map_err(|e| classify(e, "pause the Proton account's session"))?;
+    if changed == 1 || proton_account(tx, account_id)?.is_some() {
+        return Ok(());
+    }
+    Err(StoreError::not_found(format!("account {account_id}")))
+}
+
+/// Record a Proton sign-in's credential failure (spec/10): the account
+/// waits for its new secret with `pause`'s reason. The user's own
+/// sign-in outranks a pause or disconnect, so unlike the sync workers'
+/// [`crate::accounts::pause_for_credential`] this applies to any
+/// Proton account state; every row and all data are kept. `NotFound`
+/// for an unknown account.
+pub fn pause_for_proton_credential(
+    tx: &Transaction,
+    account_id: &str,
+    pause: CredentialPause,
+) -> Result<(), StoreError> {
+    let changed = tx
+        .execute(
+            "UPDATE accounts
+             SET state = 'needs_attention', state_reason = ?2, revision = revision + 1
+             WHERE account_id = ?1 AND kind = 'proton'",
+            params![account_id, pause.reason()],
+        )
+        .map_err(|e| classify(e, "pause the Proton account's credential"))?;
+    if changed == 1 || proton_account(tx, account_id)?.is_some() {
+        return Ok(());
+    }
+    Err(StoreError::not_found(format!("account {account_id}")))
+}
+
+/// Return a Proton account to `active` once its new secret is stored
+/// (spec/04, 07): the user has just signed in, so any prior state
+/// clears. An already-active account writes nothing. `NotFound` for an
+/// unknown account.
+pub fn reactivate_proton_account(tx: &Transaction, account_id: &str) -> Result<(), StoreError> {
+    let changed = tx
+        .execute(
+            "UPDATE accounts
+             SET state = 'active', state_reason = NULL, revision = revision + 1
+             WHERE account_id = ?1 AND kind = 'proton' AND state != 'active'",
+            params![account_id],
+        )
+        .map_err(|e| classify(e, "reactivate the Proton account"))?;
+    if changed == 1 || proton_account(tx, account_id)?.is_some() {
+        return Ok(());
+    }
+    Err(StoreError::not_found(format!("account {account_id}")))
+}
+
+/// Disconnect a Proton account: `state='disconnected'`, every other row
+/// and all of its data kept (spec/02, 04). A repeated disconnect
+/// writes nothing; another account kind is `Conflict`; an unknown
+/// account is `NotFound`.
+pub fn disconnect_proton_account(tx: &Transaction, account_id: &str) -> Result<(), StoreError> {
+    let changed = tx
+        .execute(
+            "UPDATE accounts
+             SET state = 'disconnected', state_reason = NULL, revision = revision + 1
+             WHERE account_id = ?1 AND kind = 'proton' AND state != 'disconnected'",
+            params![account_id],
+        )
+        .map_err(|e| classify(e, "disconnect the Proton account"))?;
+    if changed == 1 {
+        return Ok(());
+    }
+    let kind: Option<String> = tx
+        .query_row(
+            "SELECT kind FROM accounts WHERE account_id = ?1",
+            params![account_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|e| classify(e, "read the account kind"))?;
+    match kind.as_deref() {
+        Some("proton") => Ok(()),
+        Some(_) => Err(StoreError::conflict(
+            "only a Proton account can be disconnected here",
+        )),
+        None => Err(StoreError::not_found(format!("account {account_id}"))),
+    }
 }
 
 /// One account read by a fixed key column. `Corrupt` for a stored

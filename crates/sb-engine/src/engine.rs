@@ -84,6 +84,14 @@ pub struct Engine {
     /// keys (spec/07): at most ten minutes, nothing durable before
     /// `Complete`.
     pub(crate) proton_sign_ins: Arc<tokio::sync::Mutex<crate::proton::SignIns>>,
+    /// The sessions restored from the secret store at open, one per
+    /// Proton account, with their unlocked keys (spec/04 "Restore on
+    /// start"). In memory only.
+    pub(crate) proton_sessions:
+        Arc<tokio::sync::Mutex<std::collections::HashMap<String, crate::proton::RestoredSession>>>,
+    /// Fires once the open-time Proton restore pass has finished, so a
+    /// test can await it without polling.
+    pub(crate) proton_restore_done: Arc<tokio::sync::Notify>,
     leases: Arc<crate::bodies::Leases>,
     search_memo: Arc<crate::search::SearchMemo>,
     /// Fires each draft-write point inside a draft command's write,
@@ -577,6 +585,8 @@ impl Engine {
                         backup_copies: Arc::default(),
                         accounts: Arc::default(),
                         proton_sign_ins: Arc::default(),
+                        proton_sessions: Arc::default(),
+                        proton_restore_done: Arc::new(tokio::sync::Notify::new()),
                         leases: Arc::default(),
                         search_memo: Arc::default(),
                         #[cfg(test)]
@@ -776,6 +786,7 @@ impl Engine {
         self.schedule_index();
         self.schedule_received();
         self.schedule_accounts();
+        self.schedule_proton_restore();
     }
 
     /// Durable target reconciliation at open (spec/06): an older

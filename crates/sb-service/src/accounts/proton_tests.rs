@@ -1,8 +1,8 @@
 //! Proton sign-in through the service API against the fake server.
 
 use crate::{
-    AccountState, BeginProtonSignIn, Core, CoreError, ProtonSignInParams, ProtonSignInStep,
-    SignInState,
+    AccountKind, AccountState, BeginProtonSignIn, Core, CoreError, ProtonSignInParams,
+    ProtonSignInStep, SignInState,
 };
 
 use sb_engine::{Clock, Engine, SecretError, SecretStore, Timestamp};
@@ -88,19 +88,45 @@ fn params() -> ProtonSignInParams {
         display_name: "Owner".to_owned(),
         username: USER.to_owned(),
         password: PASSWORD.as_bytes().to_vec(),
+        account_id: None,
     }
 }
 
 async fn begin(h: &Harness, key: &str) -> (String, SignInState) {
+    begin_with(h, key, params()).await
+}
+
+async fn begin_with(h: &Harness, key: &str, params: ProtonSignInParams) -> (String, SignInState) {
     match h
         .core
-        .begin_proton_sign_in(key, params())
+        .begin_proton_sign_in(key, params)
         .await
         .expect("begin")
     {
         BeginProtonSignIn::Open { sign_in_id, state } => (sign_in_id, state),
         BeginProtonSignIn::Complete { .. } => panic!("an unused key replayed a receipt"),
     }
+}
+
+/// Reopen the same store against the same fake server and secrets, as a
+/// relaunch would. The first core must have been shut down.
+async fn reopen(
+    scratch: &ScratchDir,
+    secrets: &Arc<FakeSecrets>,
+    server: &FakeProtonServer,
+    clock: &Arc<MovableClock>,
+) -> Core {
+    let engine = Engine::open_with_proton(
+        &scratch.path().join("store"),
+        secrets.clone(),
+        server.base_url().to_owned(),
+        vec![cert_der()],
+        server.verifier(),
+        clock.clone(),
+    )
+    .await
+    .expect("the engine reopens");
+    Core::around(engine)
 }
 
 fn account_id(state: &SignInState) -> String {
@@ -110,23 +136,43 @@ fn account_id(state: &SignInState) -> String {
     }
 }
 
-fn count(h: &Harness, table: &str) -> i64 {
-    let db = h.scratch.path().join("store/state.sqlite");
+fn count(scratch: &ScratchDir, table: &str) -> i64 {
+    let db = scratch.path().join("store/state.sqlite");
     count_rows(&db, &format!("SELECT COUNT(*) FROM {table}"))
 }
 
 fn proton_accounts(h: &Harness) -> i64 {
-    count(h, "accounts WHERE kind = 'proton'")
+    count(&h.scratch, "accounts WHERE kind = 'proton'")
 }
 
-async fn account(h: &Harness, id: &str) -> crate::Account {
-    h.core
-        .accounts()
+async fn account(core: &Core, id: &str) -> crate::Account {
+    core.accounts()
         .await
         .expect("accounts")
         .into_iter()
         .find(|account| account.account_id == id)
         .expect("the account row")
+}
+
+/// One integer column of the account's row.
+fn account_column(h: &Harness, id: &str, column: &str) -> i64 {
+    let db = h.scratch.path().join("store/state.sqlite");
+    count_rows(
+        &db,
+        &format!("SELECT {column} FROM accounts WHERE account_id = '{id}'"),
+    )
+}
+
+/// One hex field of the stored secret item, read as text.
+fn secret_field(secrets: &FakeSecrets, id: &str, field: &str) -> String {
+    let credential_ref = format!("account/{id}/proton-session");
+    let secret = secrets.get(&credential_ref).expect("the secret item");
+    let text = String::from_utf8(secret.expose().to_vec()).expect("the item is UTF-8");
+    let needle = format!("\"{field}\":\"");
+    let start = text.find(&needle).expect("the field is present") + needle.len();
+    let rest = &text[start..];
+    let end = rest.find('"').expect("the field ends");
+    rest[..end].to_owned()
 }
 
 fn invalid_field(error: &CoreError, field: &str) {
@@ -139,7 +185,7 @@ fn invalid_field(error: &CoreError, field: &str) {
 /// No account row, no Proton row, no secret item.
 fn stores_nothing(h: &Harness) {
     assert_eq!(proton_accounts(h), 0);
-    assert_eq!(count(h, "proton_accounts"), 0);
+    assert_eq!(count(&h.scratch, "proton_accounts"), 0);
     assert_eq!(h.secrets.calls(SecretOp::Set), 0);
 }
 
@@ -273,7 +319,7 @@ async fn completing_a_sign_in_commits_and_replays_its_key_without_contacting_pro
 
     // The completion committed the account, identities and secret.
     assert_eq!(proton_accounts(&h), 1);
-    assert_eq!(count(&h, "identities"), 2);
+    assert_eq!(count(&h.scratch, "identities"), 2);
     let credential_ref = format!("account/{id}/proton-session");
     assert_eq!(
         h.secrets.recorded(),
@@ -330,9 +376,12 @@ async fn a_secret_store_failure_leaves_the_account_needs_attention_never_deleted
     let (_id, state) = begin(&h, "paused").await;
     let id = account_id(&state);
     assert_eq!(proton_accounts(&h), 1, "the account stays");
-    assert_eq!(count(&h, "proton_accounts"), 1);
-    assert_eq!(count(&h, "identities"), 2);
-    assert_eq!(account(&h, &id).await.state, AccountState::NeedsAttention);
+    assert_eq!(count(&h.scratch, "proton_accounts"), 1);
+    assert_eq!(count(&h.scratch, "identities"), 2);
+    assert_eq!(
+        account(&h.core, &id).await.state,
+        AccountState::NeedsAttention
+    );
     let credential_ref = format!("account/{id}/proton-session");
     assert!(h.secrets.get(&credential_ref).is_err());
 }
@@ -354,4 +403,300 @@ async fn an_expired_or_unknown_sign_in_id_is_not_found() {
         .await
         .expect_err("an unknown id is not found");
     assert!(matches!(error, CoreError::NotFound { .. }), "{error:?}");
+}
+
+#[tokio::test]
+async fn signing_in_again_keeps_the_uuid_and_bumps_the_generation() {
+    let h = setup(vec![TestAccount::new(USER, PASSWORD)]).await;
+    let (_id, state) = begin(&h, "first").await;
+    let id = account_id(&state);
+    let generation = account_column(&h, &id, "config_generation");
+    let revision = account_column(&h, &id, "revision");
+    let before = secret_field(&h.secrets, &id, "refresh_token_hex");
+
+    let mut again = params();
+    again.account_id = Some(id.clone());
+    let (_sign_in_id, state) = begin_with(&h, "again", again).await;
+    assert_eq!(account_id(&state), id);
+    assert_eq!(account_column(&h, &id, "config_generation"), generation + 1);
+    assert_eq!(account_column(&h, &id, "revision"), revision + 1);
+    assert_eq!(proton_accounts(&h), 1);
+    assert_eq!(count(&h.scratch, "identities"), 2);
+    assert_eq!(count(&h.scratch, "identities WHERE is_default = 1"), 1);
+    let after = secret_field(&h.secrets, &id, "refresh_token_hex");
+    assert_ne!(after, before, "the refresh token was replaced");
+    assert_eq!(account(&h.core, &id).await.state, AccountState::Active);
+    assert!(h.core.engine().proton_session(&id).await.is_some());
+}
+
+#[tokio::test]
+async fn signing_in_again_as_another_proton_user_changes_nothing() {
+    let other = "other@example.test";
+    let h = setup(vec![
+        TestAccount::new(USER, PASSWORD),
+        TestAccount::new(other, PASSWORD),
+    ])
+    .await;
+    let (_id, state) = begin(&h, "first").await;
+    let id = account_id(&state);
+    let generation = account_column(&h, &id, "config_generation");
+    let revision = account_column(&h, &id, "revision");
+    let sets = h.secrets.calls(SecretOp::Set);
+    let secret = secret_field(&h.secrets, &id, "refresh_token_hex");
+    let owner_rows = count(
+        &h.scratch,
+        "proton_accounts WHERE proton_user_id = 'user-owner@example.test'",
+    );
+
+    let mut again = params();
+    again.username = other.to_owned();
+    again.account_id = Some(id.clone());
+    let error = h
+        .core
+        .begin_proton_sign_in("again", again)
+        .await
+        .expect_err("another Proton user is refused");
+    invalid_field(&error, "account");
+    assert_eq!(account_column(&h, &id, "config_generation"), generation);
+    assert_eq!(account_column(&h, &id, "revision"), revision);
+    assert_eq!(proton_accounts(&h), 1);
+    assert_eq!(
+        count(
+            &h.scratch,
+            "proton_accounts WHERE proton_user_id = 'user-owner@example.test'",
+        ),
+        owner_rows
+    );
+    assert_eq!(h.secrets.calls(SecretOp::Set), sets);
+    assert_eq!(secret_field(&h.secrets, &id, "refresh_token_hex"), secret);
+    assert_eq!(count(&h.scratch, "identities"), 2);
+}
+
+#[tokio::test]
+async fn signing_in_again_requires_an_existing_proton_account() {
+    let h = setup(vec![TestAccount::new(USER, PASSWORD)]).await;
+    let requests = h.server.requests().len();
+
+    let mut missing = params();
+    missing.account_id = Some("no-such-account".to_owned());
+    let error = h
+        .core
+        .begin_proton_sign_in("missing", missing)
+        .await
+        .expect_err("an unknown account is refused");
+    invalid_field(&error, "account");
+
+    let local = h
+        .core
+        .accounts()
+        .await
+        .expect("accounts")
+        .into_iter()
+        .find(|account| account.kind == AccountKind::Local)
+        .expect("the local archive")
+        .account_id;
+    let mut not_proton = params();
+    not_proton.account_id = Some(local);
+    let error = h
+        .core
+        .begin_proton_sign_in("local", not_proton)
+        .await
+        .expect_err("a non-Proton account is refused");
+    invalid_field(&error, "account");
+
+    assert_eq!(
+        h.server.requests().len(),
+        requests,
+        "Proton was not contacted"
+    );
+    stores_nothing(&h);
+}
+
+#[tokio::test]
+async fn a_restart_restores_the_session_without_the_password_and_stores_the_rotation() {
+    let h = setup(vec![TestAccount::new(USER, PASSWORD)]).await;
+    let (_id, state) = begin(&h, "first").await;
+    let id = account_id(&state);
+    let before = h.server.requests().len();
+    let secret_before = secret_field(&h.secrets, &id, "refresh_token_hex");
+    h.core.shutdown().await;
+
+    let core = reopen(&h.scratch, &h.secrets, &h.server, &h.clock).await;
+    core.engine().proton_restore_settled().await;
+
+    let seen = h.server.requests();
+    let requests = &seen[before..];
+    assert!(
+        requests
+            .iter()
+            .all(|request| !(request.method == "POST" && request.path == "/auth/v4")),
+        "no password sign-in: {requests:?}"
+    );
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|request| request.method == "POST" && request.path == "/auth/v4/refresh")
+            .count(),
+        1,
+        "one refresh: {requests:?}"
+    );
+    let secret_after = secret_field(&h.secrets, &id, "refresh_token_hex");
+    assert_ne!(
+        secret_after, secret_before,
+        "the rotated refresh token is stored"
+    );
+    let identities = core
+        .engine()
+        .proton_session(&id)
+        .await
+        .expect("the restored session");
+    assert_eq!(identities.len(), 2);
+    assert!(identities.iter().all(|identity| identity.unlocked_key));
+    assert_eq!(account(&core, &id).await.state, AccountState::Active);
+}
+
+#[tokio::test]
+async fn a_missing_secret_on_start_leaves_the_account_needs_attention() {
+    let h = setup(vec![TestAccount::new(USER, PASSWORD)]).await;
+    let (_id, state) = begin(&h, "first").await;
+    let id = account_id(&state);
+    let credential_ref = format!("account/{id}/proton-session");
+    h.secrets
+        .delete(&credential_ref)
+        .expect("the secret is deleted");
+    h.core.shutdown().await;
+
+    let core = reopen(&h.scratch, &h.secrets, &h.server, &h.clock).await;
+    core.engine().proton_restore_settled().await;
+
+    let account = account(&core, &id).await;
+    assert_eq!(account.state, AccountState::NeedsAttention);
+    assert_eq!(account.state_reason.as_deref(), Some("Sign in again"));
+    assert_eq!(count(&h.scratch, "identities"), 2, "the data stays");
+    assert_eq!(count(&h.scratch, "proton_accounts"), 1);
+}
+
+#[tokio::test]
+async fn a_refused_refresh_on_start_leaves_the_account_needs_attention() {
+    let h = setup(vec![TestAccount::new(USER, PASSWORD)]).await;
+    let (_id, state) = begin(&h, "first").await;
+    let id = account_id(&state);
+    h.server.set_fault(Some(Fault::Code {
+        status: 422,
+        code: 10013,
+    }));
+    h.core.shutdown().await;
+
+    let core = reopen(&h.scratch, &h.secrets, &h.server, &h.clock).await;
+    core.engine().proton_restore_settled().await;
+
+    let account = account(&core, &id).await;
+    assert_eq!(account.state, AccountState::NeedsAttention);
+    assert_eq!(account.state_reason.as_deref(), Some("Sign in again"));
+    assert_eq!(count(&h.scratch, "identities"), 2);
+}
+
+#[tokio::test]
+async fn disconnecting_revokes_the_session_and_keeps_the_account() {
+    let h = setup(vec![TestAccount::new(USER, PASSWORD)]).await;
+    let (_id, state) = begin(&h, "first").await;
+    let id = account_id(&state);
+    h.core.shutdown().await;
+    let core = reopen(&h.scratch, &h.secrets, &h.server, &h.clock).await;
+    core.engine().proton_restore_settled().await;
+    let before = h.server.requests().len();
+    let credential_ref = format!("account/{id}/proton-session");
+    assert!(h.secrets.get(&credential_ref).is_ok());
+
+    core.disconnect_account(&id).await.expect("disconnect");
+
+    let seen = h.server.requests();
+    let requests = &seen[before..];
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|request| request.method == "DELETE" && request.path == "/auth/v4")
+            .count(),
+        1,
+        "one logout: {requests:?}"
+    );
+    assert!(
+        h.secrets.get(&credential_ref).is_err(),
+        "the secret is deleted"
+    );
+    let account = account(&core, &id).await;
+    assert_eq!(account.state, AccountState::Disconnected);
+    assert_eq!(count(&h.scratch, "identities"), 2, "the identities stay");
+    assert_eq!(
+        count(&h.scratch, "proton_accounts"),
+        1,
+        "the Proton row stays"
+    );
+    assert!(core.engine().proton_session(&id).await.is_none());
+
+    let db = h.scratch.path().join("store/state.sqlite");
+    let revision = format!("SELECT revision FROM accounts WHERE account_id = '{id}'");
+    let before = count_rows(&db, &revision);
+    core.disconnect_account(&id).await.expect("again");
+    assert_eq!(count_rows(&db, &revision), before, "no write");
+}
+
+/// The revoke runs once the disconnect is durable and outside the
+/// engine-wide session lock, so a stalled logout neither delays the
+/// disconnect nor every other account's session.
+#[tokio::test]
+async fn a_stalled_revoke_holds_up_neither_the_disconnect_nor_the_sessions() {
+    let h = setup(vec![TestAccount::new(USER, PASSWORD)]).await;
+    let (_id, state) = begin(&h, "first").await;
+    let id = account_id(&state);
+    h.core.shutdown().await;
+    let core = reopen(&h.scratch, &h.secrets, &h.server, &h.clock).await;
+    core.engine().proton_restore_settled().await;
+    let stall = Fault::Stall(std::time::Duration::from_secs(4));
+    h.server.set_fault(Some(Fault::Once(Box::new(stall))));
+
+    let observe = async {
+        let wait = std::time::Duration::from_secs(2);
+        let committed = tokio::time::timeout(wait, async {
+            while account(&core, &id).await.state != AccountState::Disconnected {
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        })
+        .await;
+        assert!(committed.is_ok(), "the disconnect waited for the revoke");
+        let lookup = tokio::time::timeout(wait, core.engine().proton_session("other")).await;
+        assert!(
+            lookup.is_ok(),
+            "the session lock was held across the revoke"
+        );
+    };
+    let (disconnected, ()) = tokio::join!(core.disconnect_account(&id), observe);
+    disconnected.expect("disconnect");
+    assert!(
+        h.server
+            .requests()
+            .iter()
+            .any(|request| request.method == "DELETE" && request.path == "/auth/v4"),
+        "the session was still revoked"
+    );
+}
+
+#[tokio::test]
+async fn disconnecting_a_non_proton_account_is_refused() {
+    let h = setup(vec![TestAccount::new(USER, PASSWORD)]).await;
+    let local = h
+        .core
+        .accounts()
+        .await
+        .expect("accounts")
+        .into_iter()
+        .find(|account| account.kind == AccountKind::Local)
+        .expect("the local archive")
+        .account_id;
+    let error = h
+        .core
+        .disconnect_account(&local)
+        .await
+        .expect_err("only a Proton account can be disconnected here");
+    invalid_field(&error, "account");
 }
