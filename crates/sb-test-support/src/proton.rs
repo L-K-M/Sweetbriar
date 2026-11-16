@@ -1,13 +1,14 @@
 //! The fake Proton API server (spec/11 "The fake Proton API server"):
 //! an in-process HTTPS server on 127.0.0.1 that models SRP sign-in,
-//! sessions and refresh, with fault knobs and a request log. It uses the
-//! same committed test certificate as the IMAP fake (IP SAN 127.0.0.1),
-//! so a test client trusts it through [`Trust::Roots`](sb_proton::Trust::Roots).
+//! 2FA, human verification, two-password mode, sessions and refresh,
+//! with fault knobs and a request log. It uses the same committed test
+//! certificate as the IMAP fake (IP SAN 127.0.0.1), so a test client
+//! trusts it through [`Trust::Roots`](sb_proton::Trust::Roots).
 //!
 //! Written from the protocol facts in research/proton-api; no Proton or
 //! Bridge code. Every account and token here is synthetic.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -41,12 +42,19 @@ use crate::imap_cert::server_config;
 /// suite uses), base64-encoded. Synthetic: no live Proton data.
 pub const MODULUS_B64: &str = "W2z5HBi8RvsfYzZTS7qBaUxxPhsfHJFZpu3Kd6s1JafNrCCH9rfvPLrfuqocxWPgWDH2R8neK7PkNvjxto9TStuY5z7jAzWRvFWN9cQhAKkdWgy0JY6ywVn22+HFpF4cYesHrqFIKUPDMSSIlWjBVmEJZ/MusD44ZT29xcPrOqeZvwtCffKtGAIjLYPZIEbZKnDM1Dm3q2K/xS5h+xdhjnndhsrkwm9U9oyA2wxzSXFL+pdfj2fOdRwuR5nW0J2NFrq3kJjkRmpO/Genq1UW+TEknIWAb6VzJJJA244K/H8cnSx2+nSNZO3bbo6Ys228ruV9A8m6DhxmS+bihN3ttQ==";
 
-/// A synthetic test account. The password is a test value, never an
-/// owner's.
+/// A synthetic test account. The password and TOTP are test values,
+/// never an owner's.
 #[derive(Debug, Clone)]
 pub struct TestAccount {
     pub username: String,
     pub password: String,
+    pub totp: Option<String>,
+    /// 1 = one-password, 2 = separate mailbox password.
+    pub password_mode: u8,
+    pub hv_required: bool,
+    /// A registered security key; alone it is FIDO2-only, beside
+    /// `totp` it reports `2FA.Enabled` 3.
+    pub fido2_only: bool,
 }
 
 impl TestAccount {
@@ -54,13 +62,37 @@ impl TestAccount {
         Self {
             username: username.to_owned(),
             password: password.to_owned(),
+            totp: None,
+            password_mode: 1,
+            hv_required: false,
+            fido2_only: false,
         }
+    }
+
+    pub fn with_totp(mut self, code: &str) -> Self {
+        self.totp = Some(code.to_owned());
+        self
+    }
+
+    pub fn with_mailbox_password(mut self) -> Self {
+        self.password_mode = 2;
+        self
+    }
+
+    pub fn with_human_verification(mut self) -> Self {
+        self.hv_required = true;
+        self
+    }
+
+    pub fn fido2_only(mut self) -> Self {
+        self.fido2_only = true;
+        self
     }
 }
 
 /// One logged request. The log deliberately records only header
 /// presence and the honest identity values: never the UID, the bearer
-/// token or the TOTP (spec/10).
+/// token, the TOTP or the human-verification token (spec/10).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecordedRequest {
     pub method: String,
@@ -97,18 +129,24 @@ pub enum Fault {
 struct Account {
     verifier: ServerClientVerifier,
     salt_b64: String,
+    totp: Option<String>,
+    password_mode: u8,
+    hv_required: bool,
+    fido2_only: bool,
 }
 
 struct Session {
     user_id: String,
     access_token: String,
     refresh_token: String,
+    password_mode: u8,
 }
 
 struct State {
     accounts: HashMap<String, Account>,
     srp: HashMap<String, ServerInteraction>,
     sessions: HashMap<String, Session>,
+    hv_tokens: HashSet<String>,
     counter: u64,
     signed_modulus: String,
     public_key: SignedPublicKey,
@@ -142,6 +180,7 @@ impl FakeProtonServer {
             accounts: HashMap::new(),
             srp: HashMap::new(),
             sessions: HashMap::new(),
+            hv_tokens: HashSet::new(),
             counter: 0,
             signed_modulus,
             public_key,
@@ -164,6 +203,10 @@ impl FakeProtonServer {
                 Account {
                     verifier: ServerClientVerifier::from(&verifier),
                     salt_b64,
+                    totp: spec.totp,
+                    password_mode: spec.password_mode,
+                    hv_required: spec.hv_required,
+                    fido2_only: spec.fido2_only,
                 },
             );
         }
@@ -371,6 +414,7 @@ async fn dispatch(
     match (method.as_str(), path) {
         ("POST", "/auth/v4/info") => handle_info(&body, state),
         ("POST", "/auth/v4") => handle_auth(&body, state, headers, faults),
+        ("POST", "/auth/v4/2fa") => handle_2fa(&body, state, headers),
         ("POST", "/auth/v4/refresh") => handle_refresh(&body, state),
         ("DELETE", "/auth/v4") => handle_logout(state, headers),
         ("GET", "/tests/ping") => Ok(json_response(200, json!({"Code": 1000}))),
@@ -421,7 +465,7 @@ fn handle_info(body: &[u8], state: &Arc<Mutex<State>>) -> Result<Response<Full<B
 fn handle_auth(
     body: &[u8],
     state: &Arc<Mutex<State>>,
-    _headers: &hyper::HeaderMap,
+    headers: &hyper::HeaderMap,
     faults: &Arc<Mutex<Option<Fault>>>,
 ) -> Result<Response<Full<Bytes>>, io::Error> {
     let value: Value = serde_json::from_slice(body).unwrap_or(json!({}));
@@ -448,12 +492,33 @@ fn handle_auth(
     };
 
     let mut state = state.lock().unwrap_or_else(|e| e.into_inner());
-    let Some(_account) = state.accounts.get(&username) else {
+    let Some(account) = state.accounts.get(&username) else {
         return Ok(json_response(
             400,
             json!({"Code": 6003, "Error": "UsernameInvalid"}),
         ));
     };
+    let totp = account.totp.clone();
+    let password_mode = account.password_mode;
+    let hv_required = account.hv_required;
+    let fido2_only = account.fido2_only;
+
+    // Human verification is checked before the SRP session is consumed,
+    // so the retry with the verification token reuses the same session.
+    let hv_token = headers
+        .get("x-pm-human-verification-token")
+        .and_then(|value| value.to_str().ok());
+    if hv_required {
+        let Some(token) = hv_token else {
+            return Ok(human_verification_response(&mut state));
+        };
+        if !state.hv_tokens.contains(token) {
+            return Ok(json_response(
+                422,
+                json!({"Code": 12087, "Error": "CAPTCHA validation failed"}),
+            ));
+        }
+    }
 
     let proof = {
         let Some(server) = state.srp.get_mut(&srp_session) else {
@@ -481,6 +546,8 @@ fn handle_auth(
     let uid = format!("uid-{}", state.counter);
     let access = format!("access-{}", state.counter);
     let refresh = format!("refresh-{}", state.counter);
+    // `2FA.Enabled` is a bitmask: 1 = TOTP, 2 = FIDO2, 3 = both.
+    let two_fa = u8::from(totp.is_some()) | (u8::from(fido2_only) << 1);
     let bad_proof = matches!(
         *faults.lock().unwrap_or_else(|e| e.into_inner()),
         Some(Fault::BadServerProof)
@@ -496,6 +563,7 @@ fn handle_auth(
             user_id: username.clone(),
             access_token: access.clone(),
             refresh_token: refresh.clone(),
+            password_mode,
         },
     );
     Ok(json_response(
@@ -507,9 +575,98 @@ fn handle_auth(
             "RefreshToken": refresh,
             "ServerProof": server_proof,
             "Scope": "full",
-            "2FA": {"Enabled": 0},
-            "PasswordMode": 1,
+            "2FA": {"Enabled": two_fa},
+            "PasswordMode": password_mode,
             "UserID": format!("user-{username}"),
+        }),
+    ))
+}
+
+fn handle_2fa(
+    body: &[u8],
+    state: &Arc<Mutex<State>>,
+    headers: &hyper::HeaderMap,
+) -> Result<Response<Full<Bytes>>, io::Error> {
+    let uid = header_str(headers, "x-pm-uid").unwrap_or_default();
+    let bearer = headers
+        .get("authorization")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .unwrap_or_default()
+        .to_owned();
+    let value: Value = serde_json::from_slice(body).unwrap_or(json!({}));
+    let code = value
+        .get("TwoFactorCode")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let mut state = state.lock().unwrap_or_else(|e| e.into_inner());
+    let (access_ok, user_id, refresh_token, password_mode) = {
+        let Some(session) = state.sessions.get(&uid) else {
+            return Ok(json_response(
+                401,
+                json!({"Code": 401, "Error": "Invalid access token"}),
+            ));
+        };
+        (
+            session.access_token == bearer,
+            session.user_id.clone(),
+            session.refresh_token.clone(),
+            session.password_mode,
+        )
+    };
+    if !access_ok {
+        return Ok(json_response(
+            401,
+            json!({"Code": 401, "Error": "Invalid access token"}),
+        ));
+    }
+    // Human verification can also be raised by the 2FA step; the retry
+    // must carry the verification headers on `/auth/v4/2fa`.
+    let hv_required = state
+        .accounts
+        .get(&user_id)
+        .map(|account| account.hv_required)
+        .unwrap_or(false);
+    let hv_token = headers
+        .get("x-pm-human-verification-token")
+        .and_then(|value| value.to_str().ok());
+    if hv_required {
+        let Some(token) = hv_token else {
+            return Ok(human_verification_response(&mut state));
+        };
+        if !state.hv_tokens.contains(token) {
+            return Ok(json_response(
+                422,
+                json!({"Code": 12087, "Error": "CAPTCHA validation failed"}),
+            ));
+        }
+    }
+    let expected = state
+        .accounts
+        .get(&user_id)
+        .and_then(|account| account.totp.clone());
+    if expected.as_deref() != Some(code) {
+        return Ok(json_response(
+            422,
+            json!({"Code": 8002, "Error": "PasswordWrong"}),
+        ));
+    }
+    state.counter += 1;
+    let access = format!("access-{}", state.counter);
+    if let Some(session) = state.sessions.get_mut(&uid) {
+        session.access_token = access.clone();
+    }
+    Ok(json_response(
+        200,
+        json!({
+            "Code": 1000,
+            "UID": uid,
+            "AccessToken": access,
+            "RefreshToken": refresh_token,
+            "Scope": "full",
+            "2FA": {"Enabled": 0},
+            "PasswordMode": password_mode,
+            "UserID": user_id,
         }),
     ))
 }
@@ -525,14 +682,18 @@ fn handle_refresh(
         .and_then(Value::as_str)
         .unwrap_or_default();
     let mut state = state.lock().unwrap_or_else(|e| e.into_inner());
-    let (refresh_ok, user_id) = {
+    let (refresh_ok, user_id, password_mode) = {
         let Some(session) = state.sessions.get(uid) else {
             return Ok(json_response(
                 422,
                 json!({"Code": 10013, "Error": "Invalid refresh token"}),
             ));
         };
-        (session.refresh_token == refresh, session.user_id.clone())
+        (
+            session.refresh_token == refresh,
+            session.user_id.clone(),
+            session.password_mode,
+        )
     };
     if !refresh_ok {
         return Ok(json_response(
@@ -556,7 +717,7 @@ fn handle_refresh(
             "RefreshToken": refresh,
             "Scope": "full",
             "2FA": {"Enabled": 0},
-            "PasswordMode": 1,
+            "PasswordMode": password_mode,
             "UserID": user_id,
         }),
     ))
@@ -580,6 +741,26 @@ fn handle_logout(
         state.sessions.remove(&uid);
     }
     Ok(json_response(200, json!({"Code": 1000})))
+}
+
+/// Issues a human-verification token and answers 9001 with Proton's
+/// verification details (research `auth-session.md` §5).
+fn human_verification_response(state: &mut State) -> Response<Full<Bytes>> {
+    state.counter += 1;
+    let token = format!("hv-token-{}", state.counter);
+    state.hv_tokens.insert(token.clone());
+    json_response(
+        422,
+        json!({
+            "Code": 9001,
+            "Error": "Human verification required",
+            "Details": {
+                "HumanVerificationMethods": ["captcha"],
+                "HumanVerificationToken": token,
+                "WebUrl": format!("https://verify.proton.me/?methods=captcha&token={token}"),
+            }
+        }),
+    )
 }
 
 fn json_bytes(value: Value) -> Full<Bytes> {

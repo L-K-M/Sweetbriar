@@ -7,6 +7,9 @@ mod auth;
 mod client;
 mod error;
 
-pub use auth::{AUTH_INFO_PATH, PasswordMode, Session, SignIn, SignInComplete, SignInStep};
+pub use auth::{
+    AUTH_INFO_PATH, Challenge, HumanVerification, PasswordMode, Session, SignIn, SignInComplete,
+    SignInStep,
+};
 pub use client::{Client, Config, Priority, Trust};
 pub use error::{ApiCode, InvalidField, ProtonError};

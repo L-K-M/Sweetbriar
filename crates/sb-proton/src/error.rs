@@ -5,19 +5,25 @@
 use std::fmt;
 
 /// Which sign-in field a refusal applies to (spec/07's sign-in
-/// refusals). A wrong password is correctable and the conversation
-/// continues; the account field names the account itself.
+/// refusals). A wrong password or code is correctable and the
+/// conversation continues; the other fields name the account itself.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InvalidField {
     Password,
+    SecondFactor,
+    MailboxPassword,
     Account,
+    HumanVerification,
 }
 
 impl fmt::Display for InvalidField {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
             Self::Password => "password",
+            Self::SecondFactor => "second_factor",
+            Self::MailboxPassword => "mailbox_password",
             Self::Account => "account",
+            Self::HumanVerification => "human_verification",
         })
     }
 }
@@ -53,7 +59,8 @@ pub enum ApiCode {
     /// deprecated but still used; not listed in the research
     /// document).
     UsernameInvalid = 6003,
-    /// 8002: the password is wrong (`auth-session.md` §4).
+    /// 8002: the password (or, in the 2FA step, the TOTP) is wrong
+    /// (`auth-session.md` §4).
     PasswordWrong = 8002,
     /// 9001: human verification (CAPTCHA) is required
     /// (`auth-session.md` §5).
@@ -124,9 +131,19 @@ pub enum ProtonError {
     /// The modulus signature did not verify with Proton's embedded key;
     /// sign-in aborted before `/auth/v4` (spec/10).
     ModulusSignatureInvalid,
-    /// The account needs a sign-in challenge (2FA, human verification or
-    /// a mailbox password) that M2.11a does not drive (spec/04).
-    UnsupportedChallenge,
+    /// 9001 outside the sign-in conversation (an authenticated endpoint
+    /// asked for human verification). Only the sign-in conversation
+    /// parses the verification details, into its `Challenge`; this
+    /// mapper sees Proton's `Error` text alone.
+    HumanVerificationRequired,
+    /// 12087: the human-verification token was rejected.
+    HumanVerificationInvalid {
+        /// Proton's `Error` text.
+        message: String,
+    },
+    /// The account's only second factor is a FIDO2 security key, which
+    /// the pilot does not support (spec/04, `auth-session.md` §9).
+    Fido2Only,
     /// A response didn't decode; it is a failed request, never a
     /// partial observation (spec/04).
     Malformed {
@@ -175,13 +192,15 @@ impl ProtonError {
             // `auth-session.md` §9: 6003 names the account, not the
             // password; the caller maps it to `InvalidInput::Account`.
             ApiCode::UsernameInvalid => Self::InvalidInput(InvalidField::Account),
-            // `auth-session.md` §4: 8002 is a wrong password.
+            // `auth-session.md` §4: 8002 is a wrong password; the 2FA
+            // step re-labels it `SecondFactor`.
             ApiCode::PasswordWrong => Self::InvalidInput(InvalidField::Password),
-            // `auth-session.md` §5: 9001 and 12087 are the human
-            // verification challenge and its rejected token.
-            ApiCode::HumanVerificationRequired | ApiCode::HumanVerificationTokenInvalid => {
-                Self::UnsupportedChallenge
-            }
+            // `auth-session.md` §5: 9001 asks for human verification.
+            ApiCode::HumanVerificationRequired => Self::HumanVerificationRequired,
+            // `auth-session.md` §5: 12087 is a rejected HV token.
+            ApiCode::HumanVerificationTokenInvalid => Self::HumanVerificationInvalid {
+                message: message.to_owned(),
+            },
             // `auth-session.md` §6: 10013 is a refused refresh token.
             ApiCode::RefreshTokenInvalid => Self::RefreshRefused {
                 message: message.to_owned(),
@@ -205,8 +224,13 @@ impl fmt::Display for ProtonError {
             Self::ModulusSignatureInvalid => {
                 f.write_str("the SRP modulus signature did not verify with Proton's key")
             }
-            Self::UnsupportedChallenge => f.write_str(
-                "this account needs a sign-in challenge Sweetbriar does not support yet",
+            Self::HumanVerificationRequired => f.write_str("Proton asked for human verification"),
+            Self::HumanVerificationInvalid { message } => {
+                write!(f, "Proton rejected the human-verification token: {message}")
+            }
+            Self::Fido2Only => f.write_str(
+                "this account's only second factor is a security key; add an authenticator app \
+                 or wait for FIDO2 support",
             ),
             Self::Malformed { message } => write!(f, "a response didn't decode: {message}"),
             Self::Timeout => f.write_str("the request exceeded its 30 s deadline"),

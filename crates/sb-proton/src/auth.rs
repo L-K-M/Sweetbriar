@@ -8,6 +8,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use hyper::Method;
+use hyper::header::{HeaderName, HeaderValue};
 use proton_srp::{SRPAuth, SRPError, SRPProof, SRPProofB64, SrpHashVersion};
 use secrecy::{ExposeSecret, SecretString};
 use serde::Deserialize;
@@ -15,12 +16,14 @@ use serde::Deserialize;
 use crate::client::{
     Client, Priority, SharedVerifier, error_message, expect_success, read_response,
 };
-use crate::error::ProtonError;
+use crate::error::{InvalidField, ProtonError};
 
 /// `POST /auth/v4/info` (research `auth-session.md` §3).
 pub const AUTH_INFO_PATH: &str = "/auth/v4/info";
 /// `POST /auth/v4` (research `auth-session.md` §3).
 pub const AUTH_PATH: &str = "/auth/v4";
+/// `POST /auth/v4/2fa` (research `auth-session.md` §4).
+pub const AUTH_2FA_PATH: &str = "/auth/v4/2fa";
 /// `POST /auth/v4/refresh` (research `auth-session.md` §6).
 pub const AUTH_REFRESH_PATH: &str = "/auth/v4/refresh";
 /// `DELETE /auth/v4` (research `auth-session.md` §6).
@@ -34,9 +37,18 @@ pub enum PasswordMode {
     Two,
 }
 
-/// The next sign-in state. M2.11a establishes a one-password session
-/// directly; the challenge states join in M2.11b.
+/// The next sign-in state. Challenges are values, not errors: the
+/// caller answers them with a [`Challenge`].
 pub enum SignInStep {
+    /// The account has TOTP two-factor authentication; the pre-2FA
+    /// access token is held by the conversation.
+    NeedsSecondFactor,
+    /// The account is in two-password mode; the key passphrase is
+    /// derived from this password in M2.12.
+    NeedsMailboxPassword,
+    /// Proton asked for human verification (9001). `url` is Proton's
+    /// verification page; `methods` names the challenges it accepts.
+    NeedsHumanVerification(HumanVerification),
     /// The session is established.
     Complete(SignInComplete),
 }
@@ -44,21 +56,79 @@ pub enum SignInStep {
 impl fmt::Debug for SignInStep {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::NeedsSecondFactor => f.write_str("NeedsSecondFactor"),
+            Self::NeedsMailboxPassword => f.write_str("NeedsMailboxPassword"),
+            Self::NeedsHumanVerification(challenge) => f
+                .debug_tuple("NeedsHumanVerification")
+                .field(challenge)
+                .finish(),
             Self::Complete(complete) => f.debug_tuple("Complete").field(complete).finish(),
         }
     }
 }
 
-/// A completed sign-in. `Debug` redacts the session's secrets.
+/// The human-verification challenge (9001). The URL carries Proton's
+/// verification token, so `Debug` redacts it (spec/10).
+pub struct HumanVerification {
+    /// Proton's verification page, built from the methods and token.
+    pub url: String,
+    /// The verification methods Proton accepts, e.g. `captcha`.
+    pub methods: Vec<String>,
+}
+
+impl fmt::Debug for HumanVerification {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("HumanVerification")
+            .field("url", &"[redacted]")
+            .field("methods", &self.methods)
+            .finish()
+    }
+}
+
+/// A completed sign-in: the session and, in two-password mode, the
+/// mailbox password the caller supplied (M2.12 derives the key
+/// passphrase from it). `Debug` redacts both.
 pub struct SignInComplete {
     pub session: Session,
+    pub mailbox_password: Option<SecretString>,
 }
 
 impl fmt::Debug for SignInComplete {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("SignInComplete")
             .field("session", &self.session)
+            .field(
+                "mailbox_password",
+                &self.mailbox_password.as_ref().map(|_| "[redacted]"),
+            )
             .finish()
+    }
+}
+
+/// The caller's answer to a challenge.
+pub enum Challenge {
+    /// A TOTP code for `/auth/v4/2fa`.
+    SecondFactor { code: SecretString },
+    /// The mailbox password in two-password mode.
+    MailboxPassword { password: SecretString },
+    /// The human-verification token and its type, from the web view.
+    HumanVerification {
+        token: SecretString,
+        token_type: String,
+    },
+}
+
+impl fmt::Debug for Challenge {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::SecondFactor { .. } => f.write_str("SecondFactor { [redacted] }"),
+            Self::MailboxPassword { .. } => f.write_str("MailboxPassword { [redacted] }"),
+            Self::HumanVerification { token_type, .. } => f
+                .debug_struct("HumanVerification")
+                .field("token", &"[redacted]")
+                .field("token_type", token_type)
+                .finish(),
+        }
     }
 }
 
@@ -161,8 +231,7 @@ struct AuthInfo {
     srp_session: String,
 }
 
-/// `/auth/v4` (research `auth-session.md` §3). The `2FA` mask tells the
-/// caller which second factor the account has.
+/// `/auth/v4` and `/auth/v4/2fa` (research `auth-session.md` §3–4).
 #[derive(Deserialize)]
 struct Auth {
     #[serde(rename = "UID", default)]
@@ -213,6 +282,32 @@ struct TwoFa {
     enabled: u8,
 }
 
+enum AuthResponse {
+    Auth(Auth),
+    HumanVerification(HumanVerification),
+}
+
+/// The pre-2FA or pre-mailbox-password state the conversation holds.
+struct PreAuth {
+    uid: String,
+    access_token: SecretString,
+    refresh_token: SecretString,
+    /// The full session, when `/auth/v4` already returned one
+    /// (two-password mode), or the completed one while waiting for a
+    /// mailbox password after 2FA.
+    session: Option<Session>,
+}
+
+/// Where a human-verification challenge came from, so the retry re-posts
+/// the same request with the verification headers (research
+/// `auth-session.md` §5).
+enum HumanVerificationRetry {
+    /// Raised by `/auth/v4`; the retry re-sends the SRP proofs.
+    Auth,
+    /// Raised by `/auth/v4/2fa`; the retry re-sends the TOTP code.
+    SecondFactor(SecretString),
+}
+
 /// A sign-in conversation. It lives in memory only and holds no
 /// password once the SRP proofs exist.
 pub struct SignIn {
@@ -220,6 +315,8 @@ pub struct SignIn {
     username: String,
     proofs: SRPProof,
     info: AuthInfo,
+    pre_auth: Option<PreAuth>,
+    hv_retry: Option<HumanVerificationRetry>,
 }
 
 impl fmt::Debug for SignIn {
@@ -273,8 +370,10 @@ impl Client {
             username: username.to_owned(),
             proofs,
             info,
+            pre_auth: None,
+            hv_retry: None,
         };
-        let step = sign_in.post_auth().await?;
+        let step = sign_in.post_auth(None).await?;
         Ok((sign_in, step))
     }
 
@@ -297,20 +396,29 @@ impl Client {
                 Some(body.into()),
                 Priority::Interactive,
                 None,
+                &[],
             )
             .await?;
         let (status, bytes) = read_response(response).await?;
-        let mut auth = parse_auth_response(status, &bytes)?;
-        // `auth-session.md` §6: the refreshed `Auth` may omit `UID`; the
-        // caller keeps the established one. A missing refresh token would
-        // strand the caller, so the old one is kept too.
-        if auth.uid.is_none() {
-            auth.uid = Some(uid.to_owned());
+        match parse_auth_response(status, &bytes)? {
+            AuthResponse::Auth(auth) => {
+                // `auth-session.md` §6: the refreshed `Auth` may omit
+                // `UID`; the caller keeps the established one. A
+                // missing refresh token would strand the caller, so
+                // the old one is kept too.
+                let mut auth = auth;
+                if auth.uid.is_none() {
+                    auth.uid = Some(uid.to_owned());
+                }
+                if auth.refresh_token.is_none() {
+                    auth.refresh_token = Some(refresh_token.to_owned());
+                }
+                Session::from_auth(auth)
+            }
+            AuthResponse::HumanVerification(_) => Err(ProtonError::Unavailable {
+                message: "Proton asked for human verification during a refresh".to_owned(),
+            }),
         }
-        if auth.refresh_token.is_none() {
-            auth.refresh_token = Some(refresh_token.to_owned());
-        }
-        Session::from_auth(auth)
     }
 
     /// Revokes the session (`DELETE /auth/v4`). Best effort: a network
@@ -324,6 +432,7 @@ impl Client {
                 None,
                 Priority::Interactive,
                 Some((session.uid(), session.expose_access_token())),
+                &[],
             )
             .await;
         let response = match result {
@@ -345,9 +454,139 @@ impl Client {
 }
 
 impl SignIn {
-    /// `POST /auth/v4`. The server proof is checked before any token is
-    /// used.
-    async fn post_auth(&mut self) -> Result<SignInStep, ProtonError> {
+    /// Answers a challenge. A human-verification retry is attempted
+    /// once; a second 9001 is an `Unavailable` refusal.
+    pub async fn continue_sign_in(
+        &mut self,
+        challenge: Challenge,
+    ) -> Result<SignInStep, ProtonError> {
+        match challenge {
+            Challenge::SecondFactor { code } => self.finish_second_factor(code, None).await,
+            Challenge::MailboxPassword { password } => self.finish_mailbox_password(password).await,
+            Challenge::HumanVerification { token, token_type } => {
+                let retry = self
+                    .hv_retry
+                    .take()
+                    .ok_or_else(|| ProtonError::Unavailable {
+                        message: "the sign-in conversation is not waiting for human verification"
+                            .to_owned(),
+                    })?;
+                let hv = (token.expose_secret(), token_type.as_str());
+                let step = match retry {
+                    HumanVerificationRetry::Auth => self.post_auth(Some(hv)).await?,
+                    HumanVerificationRetry::SecondFactor(code) => {
+                        self.finish_second_factor(code, Some(hv)).await?
+                    }
+                };
+                match step {
+                    SignInStep::NeedsHumanVerification(_) => Err(ProtonError::Unavailable {
+                        message: "Proton still asks for human verification".to_owned(),
+                    }),
+                    other => Ok(other),
+                }
+            }
+        }
+    }
+
+    async fn finish_second_factor(
+        &mut self,
+        code: SecretString,
+        hv: Option<(&str, &str)>,
+    ) -> Result<SignInStep, ProtonError> {
+        let (uid, access_token, refresh_token) = {
+            let pre = self
+                .pre_auth
+                .as_ref()
+                .ok_or_else(|| ProtonError::Unavailable {
+                    message: "the sign-in conversation is not waiting for a second factor"
+                        .to_owned(),
+                })?;
+            (
+                pre.uid.clone(),
+                pre.access_token.expose_secret().to_owned(),
+                pre.refresh_token.expose_secret().to_owned(),
+            )
+        };
+        let body = serde_json::json!({ "TwoFactorCode": code.expose_secret() }).to_string();
+        let extra = hv_headers(hv)?;
+        let response = self
+            .client
+            .send(
+                Method::POST,
+                AUTH_2FA_PATH,
+                Some(body.into()),
+                Priority::Interactive,
+                Some((uid.as_str(), access_token.as_str())),
+                &extra,
+            )
+            .await?;
+        let (status, bytes) = read_response(response).await?;
+        let parsed = parse_auth_response(status, &bytes);
+        let auth = match parsed {
+            Ok(AuthResponse::Auth(auth)) => auth,
+            Ok(AuthResponse::HumanVerification(challenge)) => {
+                self.hv_retry = Some(HumanVerificationRetry::SecondFactor(code));
+                return Ok(SignInStep::NeedsHumanVerification(challenge));
+            }
+            Err(ProtonError::InvalidInput(InvalidField::Password)) => {
+                // 8002 in the 2FA step is a wrong TOTP, not a password.
+                return Err(ProtonError::InvalidInput(InvalidField::SecondFactor));
+            }
+            Err(error) => return Err(error),
+        };
+        // `auth-session.md` §4: 2FA upgrades the scope and does not
+        // necessarily rotate the tokens, so the established ones are
+        // kept when the response omits them.
+        let mut auth = auth;
+        if auth.uid.is_none() {
+            auth.uid = Some(uid);
+        }
+        if auth.access_token.is_none() {
+            auth.access_token = Some(access_token);
+        }
+        if auth.refresh_token.is_none() {
+            auth.refresh_token = Some(refresh_token);
+        }
+        let session = Session::from_auth(auth)?;
+        // A two-password account with 2FA asks for both, in order.
+        if session.password_mode == PasswordMode::Two {
+            if let Some(pre) = self.pre_auth.as_mut() {
+                pre.session = Some(session);
+            }
+            return Ok(SignInStep::NeedsMailboxPassword);
+        }
+        Ok(SignInStep::Complete(SignInComplete {
+            session,
+            mailbox_password: None,
+        }))
+    }
+
+    async fn finish_mailbox_password(
+        &self,
+        password: SecretString,
+    ) -> Result<SignInStep, ProtonError> {
+        let pre = self
+            .pre_auth
+            .as_ref()
+            .ok_or_else(|| ProtonError::Unavailable {
+                message: "the sign-in conversation is not waiting for a mailbox password"
+                    .to_owned(),
+            })?;
+        let session = pre
+            .session
+            .clone()
+            .ok_or_else(|| ProtonError::Unavailable {
+                message: "the sign-in conversation has no session to complete".to_owned(),
+            })?;
+        Ok(SignInStep::Complete(SignInComplete {
+            session,
+            mailbox_password: Some(password),
+        }))
+    }
+
+    /// `POST /auth/v4`, optionally with the human-verification retry
+    /// headers. The server proof is checked before any token is used.
+    async fn post_auth(&mut self, hv: Option<(&str, &str)>) -> Result<SignInStep, ProtonError> {
         let proofs = SRPProofB64::from(self.proofs.clone());
         let body = serde_json::json!({
             "Username": self.username,
@@ -356,6 +595,7 @@ impl SignIn {
             "SRPSession": self.info.srp_session,
         })
         .to_string();
+        let extra = hv_headers(hv)?;
         let response = self
             .client
             .send(
@@ -364,27 +604,62 @@ impl SignIn {
                 Some(body.into()),
                 Priority::Interactive,
                 None,
+                &extra,
             )
             .await?;
         let (status, bytes) = read_response(response).await?;
-        let auth = parse_auth_response(status, &bytes)?;
+        let auth = match parse_auth_response(status, &bytes)? {
+            AuthResponse::Auth(auth) => auth,
+            AuthResponse::HumanVerification(challenge) => {
+                self.hv_retry = Some(HumanVerificationRetry::Auth);
+                return Ok(SignInStep::NeedsHumanVerification(challenge));
+            }
+        };
         let server_proof = auth.server_proof.as_deref().unwrap_or("");
         if !proofs.compare_server_proof(server_proof) {
             return Err(ProtonError::ServerProofMismatch);
         }
-        Self::handle_auth(auth)
+        self.handle_auth(auth)
     }
 
-    /// Maps a successful `/auth/v4` response to the next step. A
-    /// two-factor or two-password account is a challenge M2.11a does not
-    /// drive; it is refused typed rather than guessed at.
-    fn handle_auth(auth: Auth) -> Result<SignInStep, ProtonError> {
+    /// Maps a successful `/auth/v4` response to the next step.
+    fn handle_auth(&mut self, auth: Auth) -> Result<SignInStep, ProtonError> {
         let two_fa = auth.two_fa.as_ref().map_or(0, |two_fa| two_fa.enabled);
         let session = Session::from_auth(auth)?;
-        if two_fa != 0 || session.password_mode == PasswordMode::Two {
-            return Err(ProtonError::UnsupportedChallenge);
+        match two_fa {
+            0 => {
+                if session.password_mode == PasswordMode::Two {
+                    self.pre_auth = Some(PreAuth {
+                        uid: session.uid().to_owned(),
+                        access_token: SecretString::from(session.expose_access_token().to_owned()),
+                        refresh_token: SecretString::from(
+                            session.expose_refresh_token().to_owned(),
+                        ),
+                        session: Some(session),
+                    });
+                    return Ok(SignInStep::NeedsMailboxPassword);
+                }
+                Ok(SignInStep::Complete(SignInComplete {
+                    session,
+                    mailbox_password: None,
+                }))
+            }
+            // TOTP, optionally beside FIDO2: the TOTP path is supported.
+            1 | 3 => {
+                self.pre_auth = Some(PreAuth {
+                    uid: session.uid().to_owned(),
+                    access_token: SecretString::from(session.expose_access_token().to_owned()),
+                    refresh_token: SecretString::from(session.expose_refresh_token().to_owned()),
+                    session: None,
+                });
+                Ok(SignInStep::NeedsSecondFactor)
+            }
+            // FIDO2 only: the pilot refuses with an explanation.
+            2 => Err(ProtonError::Fido2Only),
+            _ => Err(ProtonError::Unavailable {
+                message: format!("Proton reported an unknown second-factor mask {two_fa}"),
+            }),
         }
-        Ok(SignInStep::Complete(SignInComplete { session }))
     }
 }
 
@@ -398,6 +673,7 @@ impl Client {
                 Some(body.into()),
                 Priority::Interactive,
                 None,
+                &[],
             )
             .await?;
         let (status, bytes) = read_response(response).await?;
@@ -410,9 +686,12 @@ impl Client {
     }
 }
 
-/// Parses an auth response: success or a typed refusal. A 9001 human
-/// verification request is refused as an unsupported challenge.
-fn parse_auth_response(status: hyper::StatusCode, body: &[u8]) -> Result<Auth, ProtonError> {
+/// Parses an auth response: success, 9001 (human verification) or a
+/// typed refusal.
+fn parse_auth_response(
+    status: hyper::StatusCode,
+    body: &[u8],
+) -> Result<AuthResponse, ProtonError> {
     let value: serde_json::Value =
         serde_json::from_slice(body).map_err(|e| ProtonError::Malformed {
             message: format!("the auth response didn't decode: {e}"),
@@ -425,7 +704,37 @@ fn parse_auth_response(status: hyper::StatusCode, body: &[u8]) -> Result<Auth, P
         return Err(ProtonError::Unauthorized);
     }
     if code == 9001 {
-        return Err(ProtonError::UnsupportedChallenge);
+        let details = value
+            .get("Details")
+            .cloned()
+            .unwrap_or(serde_json::json!({}));
+        let methods = details
+            .get("HumanVerificationMethods")
+            .and_then(serde_json::Value::as_array)
+            .map(|values| {
+                values
+                    .iter()
+                    .filter_map(serde_json::Value::as_str)
+                    .map(str::to_owned)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let token = details
+            .get("HumanVerificationToken")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        let method_list = methods.join(",");
+        let url = details
+            .get("WebUrl")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned)
+            .unwrap_or_else(|| {
+                format!("https://verify.proton.me/?methods={method_list}&token={token}")
+            });
+        return Ok(AuthResponse::HumanVerification(HumanVerification {
+            url,
+            methods,
+        }));
     }
     if !(status.is_success() && matches!(code, 1000 | 1001)) {
         let message = error_message(body);
@@ -436,9 +745,30 @@ fn parse_auth_response(status: hyper::StatusCode, body: &[u8]) -> Result<Auth, P
             None => ProtonError::Unavailable { message },
         });
     }
-    serde_json::from_value(value).map_err(|e| ProtonError::Malformed {
+    let auth: Auth = serde_json::from_value(value).map_err(|e| ProtonError::Malformed {
         message: format!("the auth response didn't decode: {e}"),
-    })
+    })?;
+    Ok(AuthResponse::Auth(auth))
+}
+
+fn hv_headers(hv: Option<(&str, &str)>) -> Result<Vec<(HeaderName, HeaderValue)>, ProtonError> {
+    let Some((token, token_type)) = hv else {
+        return Ok(Vec::new());
+    };
+    Ok(vec![
+        (
+            HeaderName::from_static("x-pm-human-verification-token"),
+            HeaderValue::from_str(token).map_err(|e| ProtonError::Malformed {
+                message: format!("the human-verification token is not a header value: {e}"),
+            })?,
+        ),
+        (
+            HeaderName::from_static("x-pm-human-verification-token-type"),
+            HeaderValue::from_str(token_type).map_err(|e| ProtonError::Malformed {
+                message: format!("the human-verification token type is not a header value: {e}"),
+            })?,
+        ),
+    ])
 }
 
 fn map_srp_error(error: SRPError) -> ProtonError {
