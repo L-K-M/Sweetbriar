@@ -561,6 +561,9 @@ the provider policies (`proton_bridge`, `generic_imap`) live in
   refusals; the human-verification `WKWebView` child sheet; "Sign in
   again"; File → Add Proton Account…, with the Bridge sheet removed from
   the menu.
+- **Split** (over the PR size limit as one): **M2.14a** the FFI
+  exports and the bridge's sign-in model; **M2.14b** the sheet, the
+  human-verification web view, "Sign in again" and the menu.
 - **Acceptance:** native tests drive each step against a fake Proton
   sign-in source; secure fields are cleared after each step; the web view is
   non-persistent and refuses other hosts (unit-tested navigation

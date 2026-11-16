@@ -1103,6 +1103,14 @@ public protocol CoreProtocol: AnyObject, Sendable {
     func addBridgeAccount(token: CancelToken, idempotencyKey: String, params: BridgeAccountParams) async throws  -> BridgeAccountAdded
     
     /**
+     * `begin_proton_sign_in(params)` (spec/07) under an idempotency
+     * key the shell made. A command: the token counts only until it
+     * holds the core; once begun it runs to completion. A repeated key
+     * answers the open conversation, or its receipt, with no contact.
+     */
+    func beginProtonSignIn(token: CancelToken, idempotencyKey: String, params: ProtonSignInParams) async throws  -> BeginProtonSignIn
+    
+    /**
      * `bridge_certificate(port, security)` (spec/10's fingerprint
      * fallback): the presented certificate's DER SHA-256 as 64
      * lowercase hex digits, read in a handshake the core refuses. A
@@ -1110,6 +1118,27 @@ public protocol CoreProtocol: AnyObject, Sendable {
      * it for the user to confirm; never trust it on its own.
      */
     func bridgeCertificate(token: CancelToken, port: UInt16, security: EndpointSecurity) async throws  -> String
+    
+    /**
+     * `cancel_proton_sign_in(sign_in_id)` (spec/07): drop the
+     * conversation. A command: the token counts only until it holds
+     * the core.
+     */
+    func cancelProtonSignIn(token: CancelToken, signInId: String) async throws 
+    
+    /**
+     * `continue_proton_sign_in(sign_in_id, step)` (spec/07): the next
+     * state; a wrong code or mailbox password keeps the conversation
+     * answerable. A command.
+     */
+    func continueProtonSignIn(token: CancelToken, signInId: String, step: ProtonSignInStep) async throws  -> ProtonSignInState
+    
+    /**
+     * `disconnect_account(id)` (spec/07): revoke a Proton account's
+     * session, delete its secret and mark it disconnected, keeping
+     * every row and its data. A command.
+     */
+    func disconnectAccount(token: CancelToken, accountId: String) async throws 
     
     /**
      * `set_setting` (spec/07 "Commands"): one command under an
@@ -1606,6 +1635,28 @@ open func addBridgeAccount(token: CancelToken, idempotencyKey: String, params: B
 }
     
     /**
+     * `begin_proton_sign_in(params)` (spec/07) under an idempotency
+     * key the shell made. A command: the token counts only until it
+     * holds the core; once begun it runs to completion. A repeated key
+     * answers the open conversation, or its receipt, with no contact.
+     */
+open func beginProtonSignIn(token: CancelToken, idempotencyKey: String, params: ProtonSignInParams)async throws  -> BeginProtonSignIn  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_sb_ffi_fn_method_core_begin_proton_sign_in(
+                        self.uniffiCloneHandle(),FfiConverterTypeCancelToken_lower(token),FfiConverterString.lower(idempotencyKey),FfiConverterTypeProtonSignInParams_lower(params)
+                )
+            },
+            pollFunc: ffi_sb_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_sb_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_sb_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeBeginProtonSignIn_lift,
+            errorHandler: FfiConverterTypeCoreError_lift
+        )
+}
+    
+    /**
      * `bridge_certificate(port, security)` (spec/10's fingerprint
      * fallback): the presented certificate's DER SHA-256 as 64
      * lowercase hex digits, read in a handshake the core refuses. A
@@ -1624,6 +1675,69 @@ open func bridgeCertificate(token: CancelToken, port: UInt16, security: Endpoint
             completeFunc: ffi_sb_ffi_rust_future_complete_rust_buffer,
             freeFunc: ffi_sb_ffi_rust_future_free_rust_buffer,
             liftFunc: FfiConverterString.lift,
+            errorHandler: FfiConverterTypeCoreError_lift
+        )
+}
+    
+    /**
+     * `cancel_proton_sign_in(sign_in_id)` (spec/07): drop the
+     * conversation. A command: the token counts only until it holds
+     * the core.
+     */
+open func cancelProtonSignIn(token: CancelToken, signInId: String)async throws   {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_sb_ffi_fn_method_core_cancel_proton_sign_in(
+                        self.uniffiCloneHandle(),FfiConverterTypeCancelToken_lower(token),FfiConverterString.lower(signInId)
+                )
+            },
+            pollFunc: ffi_sb_ffi_rust_future_poll_void,
+            completeFunc: ffi_sb_ffi_rust_future_complete_void,
+            freeFunc: ffi_sb_ffi_rust_future_free_void,
+            liftFunc: { $0 },
+            errorHandler: FfiConverterTypeCoreError_lift
+        )
+}
+    
+    /**
+     * `continue_proton_sign_in(sign_in_id, step)` (spec/07): the next
+     * state; a wrong code or mailbox password keeps the conversation
+     * answerable. A command.
+     */
+open func continueProtonSignIn(token: CancelToken, signInId: String, step: ProtonSignInStep)async throws  -> ProtonSignInState  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_sb_ffi_fn_method_core_continue_proton_sign_in(
+                        self.uniffiCloneHandle(),FfiConverterTypeCancelToken_lower(token),FfiConverterString.lower(signInId),FfiConverterTypeProtonSignInStep_lower(step)
+                )
+            },
+            pollFunc: ffi_sb_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_sb_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_sb_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeProtonSignInState_lift,
+            errorHandler: FfiConverterTypeCoreError_lift
+        )
+}
+    
+    /**
+     * `disconnect_account(id)` (spec/07): revoke a Proton account's
+     * session, delete its secret and mark it disconnected, keeping
+     * every row and its data. A command.
+     */
+open func disconnectAccount(token: CancelToken, accountId: String)async throws   {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_sb_ffi_fn_method_core_disconnect_account(
+                        self.uniffiCloneHandle(),FfiConverterTypeCancelToken_lower(token),FfiConverterString.lower(accountId)
+                )
+            },
+            pollFunc: ffi_sb_ffi_rust_future_poll_void,
+            completeFunc: ffi_sb_ffi_rust_future_complete_void,
+            freeFunc: ffi_sb_ffi_rust_future_free_void,
+            liftFunc: { $0 },
             errorHandler: FfiConverterTypeCoreError_lift
         )
 }
@@ -6518,6 +6632,89 @@ public func FfiConverterTypeParseContext_lower(_ value: ParseContext) -> RustBuf
 }
 
 
+/**
+ * `begin_proton_sign_in`'s parameters (spec/07). No `Debug` or
+ * `Clone`, so this side never prints or duplicates the password; the
+ * crossing's own copies are as for [`ProtonSignInStep`].
+ */
+public struct ProtonSignInParams: Equatable, Hashable {
+    public var displayName: String
+    public var username: String
+    /**
+     * The Proton password as UTF-8 bytes, moved into the core's
+     * zeroizing secret once the command holds the core.
+     */
+    public var password: Data
+    /**
+     * Signs an existing Proton account in again, keeping its UUID and
+     * data (spec/07); `None` starts a new account.
+     */
+    public var accountId: String?
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(displayName: String, username: String, 
+        /**
+         * The Proton password as UTF-8 bytes, moved into the core's
+         * zeroizing secret once the command holds the core.
+         */password: Data, 
+        /**
+         * Signs an existing Proton account in again, keeping its UUID and
+         * data (spec/07); `None` starts a new account.
+         */accountId: String?) {
+        self.displayName = displayName
+        self.username = username
+        self.password = password
+        self.accountId = accountId
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension ProtonSignInParams: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeProtonSignInParams: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ProtonSignInParams {
+        return
+            try ProtonSignInParams(
+                displayName: FfiConverterString.read(from: &buf), 
+                username: FfiConverterString.read(from: &buf), 
+                password: FfiConverterData.read(from: &buf), 
+                accountId: FfiConverterOptionString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: ProtonSignInParams, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.displayName, into: &buf)
+        FfiConverterString.write(value.username, into: &buf)
+        FfiConverterData.write(value.password, into: &buf)
+        FfiConverterOptionString.write(value.accountId, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeProtonSignInParams_lift(_ buf: RustBuffer) throws -> ProtonSignInParams {
+    return try FfiConverterTypeProtonSignInParams.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeProtonSignInParams_lower(_ value: ProtonSignInParams) -> RustBuffer {
+    return FfiConverterTypeProtonSignInParams.lower(value)
+}
+
+
 public struct ReaderAddress: Equatable, Hashable {
     public var name: String?
     public var address: String?
@@ -9280,6 +9477,83 @@ public func FfiConverterTypeBackupVerdict_lower(_ value: BackupVerdict) -> RustB
 
 
 
+/**
+ * `begin_proton_sign_in`'s answer: the open conversation, or a
+ * replayed key's stored receipt after completion (spec/07).
+ */
+
+public enum BeginProtonSignIn: Equatable, Hashable {
+    
+    case `open`(signInId: String, state: ProtonSignInState
+    )
+    case complete(receipt: Receipt
+    )
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension BeginProtonSignIn: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeBeginProtonSignIn: FfiConverterRustBuffer {
+    typealias SwiftType = BeginProtonSignIn
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> BeginProtonSignIn {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .`open`(signInId: try FfiConverterString.read(from: &buf), state: try FfiConverterTypeProtonSignInState.read(from: &buf)
+        )
+        
+        case 2: return .complete(receipt: try FfiConverterTypeReceipt.read(from: &buf)
+        )
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: BeginProtonSignIn, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case let .`open`(signInId,state):
+            writeInt(&buf, Int32(1))
+            FfiConverterString.write(signInId, into: &buf)
+            FfiConverterTypeProtonSignInState.write(state, into: &buf)
+            
+        
+        case let .complete(receipt):
+            writeInt(&buf, Int32(2))
+            FfiConverterTypeReceipt.write(receipt, into: &buf)
+            
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBeginProtonSignIn_lift(_ buf: RustBuffer) throws -> BeginProtonSignIn {
+    return try FfiConverterTypeBeginProtonSignIn.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBeginProtonSignIn_lower(_ value: BeginProtonSignIn) -> RustBuffer {
+    return FfiConverterTypeBeginProtonSignIn.lower(value)
+}
+
+
+
 
 public enum BodyAvailability: Equatable, Hashable {
     
@@ -11009,6 +11283,190 @@ public func FfiConverterTypeMessageSelection_lift(_ buf: RustBuffer) throws -> M
 #endif
 public func FfiConverterTypeMessageSelection_lower(_ value: MessageSelection) -> RustBuffer {
     return FfiConverterTypeMessageSelection.lower(value)
+}
+
+
+
+/**
+ * The next state of a Proton sign-in (spec/07).
+ */
+
+public enum ProtonSignInState: Equatable, Hashable {
+    
+    case needsSecondFactor
+    case needsMailboxPassword
+    case needsHumanVerification(url: String, methods: [String]
+    )
+    case complete(accountId: String
+    )
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension ProtonSignInState: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeProtonSignInState: FfiConverterRustBuffer {
+    typealias SwiftType = ProtonSignInState
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ProtonSignInState {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .needsSecondFactor
+        
+        case 2: return .needsMailboxPassword
+        
+        case 3: return .needsHumanVerification(url: try FfiConverterString.read(from: &buf), methods: try FfiConverterSequenceString.read(from: &buf)
+        )
+        
+        case 4: return .complete(accountId: try FfiConverterString.read(from: &buf)
+        )
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: ProtonSignInState, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .needsSecondFactor:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .needsMailboxPassword:
+            writeInt(&buf, Int32(2))
+        
+        
+        case let .needsHumanVerification(url,methods):
+            writeInt(&buf, Int32(3))
+            FfiConverterString.write(url, into: &buf)
+            FfiConverterSequenceString.write(methods, into: &buf)
+            
+        
+        case let .complete(accountId):
+            writeInt(&buf, Int32(4))
+            FfiConverterString.write(accountId, into: &buf)
+            
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeProtonSignInState_lift(_ buf: RustBuffer) throws -> ProtonSignInState {
+    return try FfiConverterTypeProtonSignInState.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeProtonSignInState_lower(_ value: ProtonSignInState) -> RustBuffer {
+    return FfiConverterTypeProtonSignInState.lower(value)
+}
+
+
+
+/**
+ * One step's answer to a Proton challenge (spec/07). No `Debug` or
+ * `Clone`, so this side never prints or duplicates the mailbox
+ * password. The copies the crossing itself makes (the shell's bytes,
+ * the lowered buffer) are freed without zeroing; the generated Swift
+ * type is `Equatable` and `Hashable` whatever this side derives.
+ */
+
+public enum ProtonSignInStep: Equatable, Hashable {
+    
+    case secondFactor(code: String
+    )
+    /**
+     * Moved into the core's zeroizing secret once the command holds
+     * the core.
+     */
+    case mailboxPassword(bytes: Data
+    )
+    case humanVerification(token: String, tokenType: String
+    )
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension ProtonSignInStep: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeProtonSignInStep: FfiConverterRustBuffer {
+    typealias SwiftType = ProtonSignInStep
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ProtonSignInStep {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .secondFactor(code: try FfiConverterString.read(from: &buf)
+        )
+        
+        case 2: return .mailboxPassword(bytes: try FfiConverterData.read(from: &buf)
+        )
+        
+        case 3: return .humanVerification(token: try FfiConverterString.read(from: &buf), tokenType: try FfiConverterString.read(from: &buf)
+        )
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: ProtonSignInStep, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case let .secondFactor(code):
+            writeInt(&buf, Int32(1))
+            FfiConverterString.write(code, into: &buf)
+            
+        
+        case let .mailboxPassword(bytes):
+            writeInt(&buf, Int32(2))
+            FfiConverterData.write(bytes, into: &buf)
+            
+        
+        case let .humanVerification(token,tokenType):
+            writeInt(&buf, Int32(3))
+            FfiConverterString.write(token, into: &buf)
+            FfiConverterString.write(tokenType, into: &buf)
+            
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeProtonSignInStep_lift(_ buf: RustBuffer) throws -> ProtonSignInStep {
+    return try FfiConverterTypeProtonSignInStep.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeProtonSignInStep_lower(_ value: ProtonSignInStep) -> RustBuffer {
+    return FfiConverterTypeProtonSignInStep.lower(value)
 }
 
 
@@ -13832,7 +14290,19 @@ private let initializationResult: InitializationResult = {
     if (uniffi_sb_ffi_checksum_method_core_add_bridge_account() != 847) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_sb_ffi_checksum_method_core_begin_proton_sign_in() != 12585) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_sb_ffi_checksum_method_core_bridge_certificate() != 46993) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sb_ffi_checksum_method_core_cancel_proton_sign_in() != 9704) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sb_ffi_checksum_method_core_continue_proton_sign_in() != 25506) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sb_ffi_checksum_method_core_disconnect_account() != 25539) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sb_ffi_checksum_method_core_set_setting() != 25429) {

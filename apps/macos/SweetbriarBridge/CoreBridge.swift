@@ -901,6 +901,48 @@ extension CoreBridge: AccountSetupSource {
     }
 }
 
+/// Proton sign-in (spec/07); the types and their mapping live in
+/// `ProtonSignIn.swift`.
+extension CoreBridge: ProtonSignInSource {
+    public func beginProtonSignIn(
+        idempotencyKey: String, params: ProtonSignInRequest
+    ) async throws -> BeginProtonSignIn {
+        let token = SweetbriarCore.CancelToken()
+        let value = try await Self.withCancellation(token: token) {
+            try await self.core.beginProtonSignIn(
+                token: token, idempotencyKey: idempotencyKey, params: params.generated
+            )
+        }
+        return BeginProtonSignIn(value)
+    }
+
+    public func continueProtonSignIn(
+        signInId: String, step: ProtonSignInStep
+    ) async throws -> ProtonSignInState {
+        let token = SweetbriarCore.CancelToken()
+        let value = try await Self.withCancellation(token: token) {
+            try await self.core.continueProtonSignIn(
+                token: token, signInId: signInId, step: step.generated
+            )
+        }
+        return ProtonSignInState(value)
+    }
+
+    public func cancelProtonSignIn(signInId: String) async throws {
+        let token = SweetbriarCore.CancelToken()
+        _ = try await Self.withCancellation(token: token) {
+            try await self.core.cancelProtonSignIn(token: token, signInId: signInId)
+        }
+    }
+
+    public func disconnectAccount(accountId: String) async throws {
+        let token = SweetbriarCore.CancelToken()
+        _ = try await Self.withCancellation(token: token) {
+            try await self.core.disconnectAccount(token: token, accountId: accountId)
+        }
+    }
+}
+
 extension Receipt {
     /// Map the generated record field by field.
     init(_ generated: SweetbriarCore.Receipt) {
