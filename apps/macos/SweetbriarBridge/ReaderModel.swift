@@ -13,6 +13,9 @@ public protocol ReaderSource: Sendable {
     func addTag(idempotencyKey: String, selection: MessageSelection, tag: String) async throws -> Receipt
     func removeTag(idempotencyKey: String, selection: MessageSelection, tag: String) async throws -> Receipt
     func setNote(idempotencyKey: String, messageId: Int64, text: String) async throws -> Receipt
+    /// The semantic reading document, or nil for sender layout (spec/08
+    /// "Reading view"). Sources without one answer nil.
+    func readingDocument(messageId: Int64) async throws -> ReadingDocument?
 }
 
 extension ReaderSource {
@@ -33,6 +36,8 @@ extension ReaderSource {
     ) async throws -> Receipt {
         throw CoreFailure.unavailable(reason: "This source cannot save notes.")
     }
+
+    public func readingDocument(messageId: Int64) async throws -> ReadingDocument? { nil }
 }
 
 extension CoreBridge: ReaderSource {}
@@ -56,12 +61,23 @@ public final class ReaderModel {
     public private(set) var isShowingSource = false
     public var currentLease: BodyLease? { leaseOwner?.lease }
     public private(set) var manifest: RenditionManifest?
+    /// The shown message's semantic document, nil when the core reports an
+    /// unsupported structure. Kept beside the body rendition so switching to
+    /// the Reading view fetches nothing (spec/08).
+    public private(set) var readingDocument: ReadingDocument?
+    /// Whether the Reading view replaces the body rendition for the shown
+    /// message.
+    public private(set) var showsReadingView = false
     private var leaseOwner: ReaderLeaseOwner?
 
     private let source: any ReaderSource
     private let preferred: BodyKind
     private var closed = false
     private var htmlAvailable = true
+    /// The pane's choice for this message, kept across source toggles.
+    private var readingViewOverride: Bool?
+    /// The per-sender memory's preference, injected by the pane.
+    public var prefersReadingView: @MainActor (String?) -> Bool = { _ in false }
 
     public init(source: any ReaderSource, preferred: BodyKind = .plainText) {
         self.source = source
@@ -73,6 +89,9 @@ public final class ReaderModel {
     public func show(occurrenceID: Int64) async {
         guard !closed else { return }
         manifest = nil
+        readingDocument = nil
+        readingViewOverride = nil
+        showsReadingView = false
         self.occurrenceID = occurrenceID
         isShowingSource = false
         await load(occurrenceID: occurrenceID)
@@ -101,6 +120,9 @@ public final class ReaderModel {
     public func clear() {
         invalidate()
         manifest = nil
+        readingDocument = nil
+        readingViewOverride = nil
+        showsReadingView = false
         occurrenceID = nil
         isShowingSource = false
         state = .empty
@@ -125,6 +147,21 @@ public final class ReaderModel {
             return nil
         }
         return URL(fileURLWithPath: lease.filePath)
+    }
+
+    /// The pane's switch for the shown message. Both renditions are
+    /// already held, so switching fetches nothing; the choice lasts until
+    /// another message is shown.
+    public func setReadingView(_ enabled: Bool) {
+        guard readingDocument != nil else { return }
+        readingViewOverride = enabled
+        showsReadingView = enabled
+    }
+
+    /// The message's sender address, lowercased by the memory's canonical
+    /// form when recorded (spec/08).
+    public static func senderAddress(_ message: ReaderMessage?) -> String? {
+        message?.headers.from.first?.address
     }
 
     public var currentMessage: ReaderMessage? {
@@ -207,11 +244,22 @@ public final class ReaderModel {
             guard ticket == navigationTicket else { return }
             let message = try await source.getMessage(messageId: id)
             guard ticket == navigationTicket else { return }
+            // Both renditions come back under this selection's ticket; a
+            // completion for an older selection is dropped below.
+            let documentFetch = Task { @MainActor [source] in
+                (try? await source.readingDocument(messageId: id)) ?? nil
+            }
             let lease = try await source.openBody(messageID: id, preferred: kind)
             guard ticket == navigationTicket else {
                 source.releaseLease(lease.leaseId)
                 return
             }
+            let document = await documentFetch.value
+            guard ticket == navigationTicket else { return }
+            readingDocument = document
+            showsReadingView =
+                readingViewOverride
+                ?? (document != nil && prefersReadingView(Self.senderAddress(message)))
             leaseOwner = ReaderLeaseOwner(lease: lease, source: source)
             if lease.kind == .sanitizedHtml {
                 guard htmlAvailable, lease.manifestPath != nil else {

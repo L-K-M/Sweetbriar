@@ -278,7 +278,8 @@ struct ArchiveShellLifecycleTests {
                 didRestore: { [weak owner] in await owner?.restore() }, didClose: {}
             )
             let controller = MainWindowController(
-                session: CoreSession { bridge }, appearance: appearance, backups: backups
+                session: CoreSession { bridge }, appearance: appearance, backups: backups,
+                readingViewMemory: SharedReadingViewMemory()
             )
             owner.controller = controller
             do {
@@ -425,6 +426,7 @@ struct DraftsPaneShellTests {
             let opened = OpenedDrafts()
             let controller = MainWindowController(
                 session: CoreSession { bridge }, appearance: appearance, backups: backups,
+                readingViewMemory: SharedReadingViewMemory(),
                 openDraft: { opened.ids.append($0) })
             do {
                 controller.start()

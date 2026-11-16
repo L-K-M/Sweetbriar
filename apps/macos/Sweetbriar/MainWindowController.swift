@@ -28,6 +28,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     private let session: CoreSession
     private let appearance: SharedAppearance
     private let backups: SharedBackups
+    private let readingViewMemory: SharedReadingViewMemory
     private let openBackups: @MainActor () -> Void
     private let openDraft: @MainActor (String) -> Void
     private let writes = ArchiveWriteTasks()
@@ -48,11 +49,13 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
 
 
     init(session: CoreSession, appearance: SharedAppearance, backups: SharedBackups,
+         readingViewMemory: SharedReadingViewMemory,
          openBackups: @escaping @MainActor () -> Void = {},
          openDraft: @escaping @MainActor (String) -> Void = { _ in }) {
         self.session = session
         self.appearance = appearance
         self.backups = backups
+        self.readingViewMemory = readingViewMemory
         self.openBackups = openBackups
         self.openDraft = openDraft
         let window = NSWindow(
@@ -92,7 +95,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
                 let bridge = try await session.bridge()
                 try Task.checkCancellation()
                 guard backups.model(source: bridge) != nil else { return }
-                install(bridge)
+                await install(bridge)
             } catch is CancellationError {
             } catch {
                 statusLabel.stringValue = "Couldn't open the archive: \(error.localizedDescription)"
@@ -155,7 +158,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         do {
             let bridge = try await session.bridge()
             guard !backups.isStopping else { return }
-            install(bridge)
+            await install(bridge)
         } catch {
             showArchiveStatus("Couldn't reopen the restored archive: \(error.localizedDescription)")
         }
@@ -213,7 +216,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         writes.run(revision: writes.revision) { await imports.chooseAndImport() }
     }
 
-    private func install(_ bridge: CoreBridge) {
+    private func install(_ bridge: CoreBridge) async {
         guard let window, let backupsModel = backups.model(source: bridge) else { return }
         if contentTasks.isRetired { contentTasks = ArchiveViewTasks() }
         retirement = nil
@@ -225,7 +228,10 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         let policy = backups
         let messageList = MessageListViewController(bridge: bridge, sidebar: sidebarModel, appearance: appearanceModel,
                                                      writes: writes, canWrite: { policy.canWrite })
-        let reader = ReaderViewController(model: ReaderModel(source: bridge, preferred: .sanitizedHtml))
+        let reader = ReaderViewController(
+            model: ReaderModel(source: bridge, preferred: .sanitizedHtml),
+            memory: await readingViewMemory.model(source: bridge)
+        )
         self.reader = reader
         let drafts = DraftsListViewController(model: DraftListModel(source: bridge))
         let listPane = ListPaneController(messages: messageList, drafts: drafts)

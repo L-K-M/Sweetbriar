@@ -16,12 +16,17 @@ final class ReaderViewController: NSViewController {
     let status = NSTextField(wrappingLabelWithString: "No message selected")
     let remoteContent = NSTextField(labelWithString: "")
     let sourceButton = NSButton(title: "View Source", target: nil, action: nil)
+    let readingViewToggle = NSButton(checkboxWithTitle: "Reading View", target: nil, action: nil)
+    let readingNote = NSTextField(wrappingLabelWithString: "")
+    let readingView = ReadingView()
     let attachments = NSStackView()
     let plainText = PlainTextReaderView()
-    private let textScroll = NSScrollView()
+    let textScroll = NSScrollView()
+    let readingScroll = NSScrollView()
     private let body = NSView()
     private let details = NSStackView()
     private let reads = ArchiveViewTasks()
+    private let memory: ReadingViewMemory
     private let opener: @MainActor (URL) -> Bool
     private let confirmer: @MainActor (URL, [String]) async -> Bool
     private(set) var html: HTMLReaderView!
@@ -31,11 +36,16 @@ final class ReaderViewController: NSViewController {
         opener: @escaping @MainActor (URL) -> Bool = { NSWorkspace.shared.open($0) },
         confirmer: @escaping @MainActor (URL, [String]) async -> Bool = ReaderViewController.confirmLink,
         readResource: @escaping @Sendable (URL) async throws -> Data = { try Data(contentsOf: $0) },
-        compileRules: @escaping @MainActor () async throws -> WKContentRuleList = { try await ReaderContentRules.compiled() }
+        compileRules: @escaping @MainActor () async throws -> WKContentRuleList = { try await ReaderContentRules.compiled() },
+        memory: ReadingViewMemory = ReadingViewMemory(
+            source: UnavailableReadingViewMemorySource()
+        )
     ) {
         self.model = model
         self.opener = opener
         self.confirmer = confirmer
+        self.memory = memory
+        model.prefersReadingView = { address in memory.opensReadingView(from: address) }
         super.init(nibName: nil, bundle: nil)
         html = HTMLReaderView(
             currentTicket: { [weak model] in model?.navigationTicket ?? 0 },
@@ -57,6 +67,11 @@ final class ReaderViewController: NSViewController {
             guard let self, ticket == model.navigationTicket else { return }
             status.stringValue = "Couldn't display the message: \(error.localizedDescription)"
             status.isHidden = false
+        }
+        readingView.linkActivated = { [weak self] url in
+            guard let self else { return }
+            let ticket = model.navigationTicket
+            reads.run { await self.activateLink(url, ticket: ticket) }
         }
     }
 
@@ -85,12 +100,20 @@ final class ReaderViewController: NSViewController {
         sourceButton.target = self
         sourceButton.action = #selector(toggleSource)
         details.addArrangedSubview(sourceButton)
+        readingViewToggle.setAccessibilityIdentifier("readingViewToggle")
+        readingViewToggle.target = self
+        readingViewToggle.action = #selector(toggleReadingView(_:))
+        details.addArrangedSubview(readingViewToggle)
         remoteContent.textColor = .secondaryLabelColor
         remoteContent.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
         details.addArrangedSubview(remoteContent)
         attachments.orientation = .vertical
         attachments.alignment = .leading
         details.addArrangedSubview(attachments)
+        readingNote.textColor = .secondaryLabelColor
+        readingNote.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        readingNote.isHidden = true
+        details.addArrangedSubview(readingNote)
         stack.addArrangedSubview(details)
         stack.addArrangedSubview(status)
         stack.addArrangedSubview(body)
@@ -98,7 +121,11 @@ final class ReaderViewController: NSViewController {
         plainText.setAccessibilityIdentifier("readerBody")
         textScroll.documentView = plainText
         plainText.frame = NSRect(x: 0, y: 0, width: 400, height: 0)
-        let panes: [NSView] = [textScroll, html!]
+        readingScroll.hasVerticalScroller = true
+        readingView.setAccessibilityIdentifier("readerReadingView")
+        readingScroll.documentView = readingView
+        readingView.frame = NSRect(x: 0, y: 0, width: 400, height: 0)
+        let panes: [NSView] = [textScroll, html!, readingScroll]
         for pane in panes {
             pane.translatesAutoresizingMaskIntoConstraints = false
             body.addSubview(pane)
@@ -124,6 +151,7 @@ final class ReaderViewController: NSViewController {
         body.setContentHuggingPriority(.defaultLow, for: .vertical)
         details.isHidden = true
         textScroll.isHidden = true
+        readingScroll.isHidden = true
         html.isHidden = true
         tagPicker.onAdd = { [weak self] name in self?.setTag(name, applied: true) }
         tagPicker.onRemove = { [weak self] tag in self?.setTag(tag.name, applied: false) }
@@ -150,6 +178,9 @@ final class ReaderViewController: NSViewController {
         model.clear()
         html.clear(ticket: model.navigationTicket)
         plainText.text = ""
+        readingView.clear()
+        updateReadingToggle()
+        clearReadingNote()
         details.isHidden = true
         textScroll.isHidden = true
         html.isHidden = true
@@ -164,11 +195,17 @@ final class ReaderViewController: NSViewController {
     private func loadSelection(_ selection: Set<Int64>) async {
         guard selection.count == 1, let id = selection.first else { return }
         await model.show(occurrenceID: id)
+        updateReadingToggle()
+        clearReadingNote()
         await render()
     }
 
     @objc private func toggleSource() {
         reads.run { await self.setSource(!self.model.isShowingSource) }
+    }
+
+    @objc private func toggleReadingView(_ sender: NSButton) {
+        reads.run { await self.setReadingView(sender.state == .on) }
     }
 
     func setSource(_ enabled: Bool) async {
@@ -178,12 +215,54 @@ final class ReaderViewController: NSViewController {
         await render()
     }
 
+    /// Switch the open message between sender layout and the Reading view,
+    /// recording the sender when the list accepts it (spec/08). The toggle
+    /// applies to this message even when the write fails.
+    func setReadingView(_ enabled: Bool) async {
+        guard model.readingDocument != nil else { return }
+        model.setReadingView(enabled)
+        updateReadingToggle()
+        clearReadingNote()
+        await render()
+        guard let address = ReaderModel.senderAddress(model.currentMessage) else { return }
+        do {
+            if enabled {
+                if try await memory.addSender(address) == .listFull {
+                    showReadingNote(
+                        "The Reading view sender list is full (\(ReadingViewMemory.limit) senders), "
+                            + "so this sender was not remembered. The toggle still applies to this message."
+                    )
+                }
+            } else {
+                try await memory.removeSender(address)
+            }
+        } catch {
+            showReadingNote(error.localizedDescription)
+        }
+    }
+
+    private func updateReadingToggle() {
+        readingViewToggle.state = model.showsReadingView ? .on : .off
+        readingViewToggle.isEnabled = model.readingDocument != nil
+    }
+
+    private func clearReadingNote() {
+        readingNote.stringValue = ""
+        readingNote.isHidden = true
+    }
+
+    private func showReadingNote(_ text: String) {
+        readingNote.stringValue = text
+        readingNote.isHidden = false
+    }
+
     func close() {
         reads.retire()
         model.close()
         if isViewLoaded {
             html.clear(ticket: model.navigationTicket)
             plainText.text = ""
+            readingView.clear()
         }
     }
 
@@ -211,14 +290,23 @@ final class ReaderViewController: NSViewController {
             renderMetadata(message)
             rebuildAttachments()
         }
+        // The Reading view replaces the body rendition while both are
+        // kept; source always wins, and a failed load has no message.
+        let showReading =
+            model.showsReadingView && model.readingDocument != nil && !model.isShowingSource
+            && model.currentMessage != nil
         switch model.state {
         case .html(_, let rendition):
-            html.isHidden = false
-            await html.show(rendition, ticket: ticket)
+            if !showReading {
+                html.isHidden = false
+                await html.show(rendition, ticket: ticket)
+            }
         case .plainText(_, let text):
-            plainText.mode = .text
-            plainText.text = text
-            textScroll.isHidden = false
+            if !showReading {
+                plainText.mode = .text
+                plainText.text = text
+                textScroll.isHidden = false
+            }
         case .source(_, let text):
             plainText.mode = .source
             plainText.text = text
@@ -229,6 +317,12 @@ final class ReaderViewController: NSViewController {
             status.stringValue = "Loading message…"
             status.isHidden = false
         case .empty: break
+        }
+        if showReading, let document = model.readingDocument {
+            readingView.show(document)
+            readingScroll.isHidden = false
+        } else {
+            readingScroll.isHidden = true
         }
     }
 
@@ -343,9 +437,15 @@ final class ReaderViewController: NSViewController {
         }
     }
 
-    /// Called only by the pane's current, user-activated navigation policy.
+    /// Called only by a pane's current, user-activated link policy.
     func activateLink(_ url: URL, ticket: UInt64) async {
-        guard ticket == model.navigationTicket, case .html = model.state, let manifest = model.manifest else { return }
+        // Both renditions share one click rule: the manifest lists the
+        // current message's destinations and their warnings. Without one,
+        // no Reading-view destination was recorded, so nothing admits.
+        guard ticket == model.navigationTicket,
+            model.manifest != nil || (model.showsReadingView && model.readingDocument != nil),
+            let manifest = model.manifest ?? Self.emptyManifest
+        else { return }
         switch ReaderLinkDecision.decide(url, manifest: manifest) {
         case .refuse: return
         case .open(let destination):
@@ -361,6 +461,12 @@ final class ReaderViewController: NSViewController {
         status.isHidden = false
     }
 
+    /// A body lease without a manifest records no destinations; a
+    /// Reading-view click is refused against it rather than guessed.
+    private static let emptyManifest = try? RenditionManifest.parse(
+        Data(#"{"v":1,"resources":[],"links":[],"attachments":[]}"#.utf8)
+    )
+
     static func confirmLink(_ url: URL, reasons: [String]) -> Bool {
         let alert = NSAlert()
         alert.messageText = "Open this link?"
@@ -369,5 +475,18 @@ final class ReaderViewController: NSViewController {
         alert.addButton(withTitle: "Open")
         alert.addButton(withTitle: "Cancel")
         return alert.runModal() == .alertFirstButtonReturn
+    }
+}
+
+/// The default for controllers built without the app's shared owner:
+/// senders cannot be remembered, so a write reports an error and the
+/// toggle stays local to the open message.
+private final class UnavailableReadingViewMemorySource: ReadingViewMemorySource {
+    func readingViewSenders() async throws -> [String] {
+        throw CoreFailure.unavailable(reason: "No Reading view sender list is installed.")
+    }
+
+    func setReadingViewSenders(_ senders: [String]) async throws -> Receipt {
+        throw CoreFailure.unavailable(reason: "No Reading view sender list is installed.")
     }
 }
