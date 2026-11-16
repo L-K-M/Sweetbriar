@@ -367,6 +367,87 @@ public final class CoreBridge: Sendable {
         )
     }
 
+    /// `saved_views()` (spec/07 Views): every view in sidebar order.
+    public func savedViews() async throws -> [SavedView] {
+        let token = SweetbriarCore.CancelToken()
+        let views = try await Self.withCancellation(token: token) {
+            try await self.core.savedViews(token: token)
+        }
+        return views.map(SavedView.init)
+    }
+
+    /// `upsert_saved_view(params)` (spec/07 Views) under a shell-made key.
+    @discardableResult
+    public func upsertSavedView(
+        idempotencyKey: String, params: SavedViewParams
+    ) async throws -> Receipt {
+        let token = SweetbriarCore.CancelToken()
+        let receipt = try await Self.withCancellation(token: token) {
+            try await self.core.upsertSavedView(
+                token: token, idempotencyKey: idempotencyKey, params: params.generated
+            )
+        }
+        return Receipt(receipt)
+    }
+
+    /// `delete_saved_view(id)` (spec/07 Views) under a shell-made key.
+    @discardableResult
+    public func deleteSavedView(
+        idempotencyKey: String, viewId: String
+    ) async throws -> Receipt {
+        let token = SweetbriarCore.CancelToken()
+        let receipt = try await Self.withCancellation(token: token) {
+            try await self.core.deleteSavedView(
+                token: token, idempotencyKey: idempotencyKey, viewId: viewId
+            )
+        }
+        return Receipt(receipt)
+    }
+
+    /// `add_tag(selection, tag)` (spec/07 Messages) under a shell-made key.
+    @discardableResult
+    public func addTag(
+        idempotencyKey: String, selection: MessageSelection, tag: String
+    ) async throws -> Receipt {
+        let token = SweetbriarCore.CancelToken()
+        let receipt = try await Self.withCancellation(token: token) {
+            try await self.core.addTag(
+                token: token, idempotencyKey: idempotencyKey,
+                selection: selection.generated, tag: tag
+            )
+        }
+        return Receipt(receipt)
+    }
+
+    /// `remove_tag(selection, tag)` (spec/07 Messages) under a shell-made key.
+    @discardableResult
+    public func removeTag(
+        idempotencyKey: String, selection: MessageSelection, tag: String
+    ) async throws -> Receipt {
+        let token = SweetbriarCore.CancelToken()
+        let receipt = try await Self.withCancellation(token: token) {
+            try await self.core.removeTag(
+                token: token, idempotencyKey: idempotencyKey,
+                selection: selection.generated, tag: tag
+            )
+        }
+        return Receipt(receipt)
+    }
+
+    /// `set_note(message_id, text)` (spec/07 Messages) under a shell-made key.
+    @discardableResult
+    public func setNote(
+        idempotencyKey: String, messageId: Int64, text: String
+    ) async throws -> Receipt {
+        let token = SweetbriarCore.CancelToken()
+        let receipt = try await Self.withCancellation(token: token) {
+            try await self.core.setNote(
+                token: token, idempotencyKey: idempotencyKey, messageId: messageId, text: text
+            )
+        }
+        return Receipt(receipt)
+    }
+
     /// `appearance()` (spec/07 "Other queries"): every account's and
     /// identity's resolved color, monogram and rendering tokens at one
     /// committed appearance generation — `subscribeAppearance`'s mark.
@@ -1070,6 +1151,8 @@ extension WindowSpec {
             return .thread(threadId: threadId)
         case .search(let spec):
             return .search(spec: spec.generated)
+        case .view(let viewId):
+            return .view(viewId: viewId)
         }
     }
 }
@@ -1191,6 +1274,18 @@ extension ReaderTag {
             name: generated.name,
             colorSrgb: generated.colorSrgb
         )
+    }
+}
+
+extension MessageSelection {
+    /// Map the bridge enum onto the generated one.
+    var generated: SweetbriarCore.MessageSelection {
+        switch self {
+        case .occurrenceIds(let ids):
+            return .occurrenceIds(ids)
+        case .window(let windowId, let generation):
+            return .window(windowId: windowId, generation: generation)
+        }
     }
 }
 

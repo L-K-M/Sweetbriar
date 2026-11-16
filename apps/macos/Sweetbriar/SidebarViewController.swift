@@ -10,7 +10,7 @@ import Observation
 import SweetbriarBridge
 
 @MainActor
-final class SidebarViewController: NSViewController {
+final class SidebarViewController: NSViewController, NSMenuDelegate {
     /// The outline's accessibility identifier, for UI tests.
     static let accessibilityID = "sidebar"
     private static let entryCellID = NSUserInterfaceItemIdentifier("SidebarEntry")
@@ -18,6 +18,18 @@ final class SidebarViewController: NSViewController {
     private let model: SidebarModel
     private let appearance: AppearanceModel
     private let outlineView = NSOutlineView()
+    let contextMenu = NSMenu()
+    private let renameItem = NSMenuItem(
+        title: "Rename…", action: #selector(renameSavedViewItem(_:)), keyEquivalent: ""
+    )
+    private let deleteItem = NSMenuItem(
+        title: "Delete", action: #selector(deleteSavedViewItem(_:)), keyEquivalent: ""
+    )
+
+    /// Asks for a new name; tests substitute a direct answer.
+    var promptName: (@MainActor (@escaping (String?) -> Void) -> Void)?
+    /// Asks before a delete; tests substitute a direct answer.
+    var confirmDelete: (@MainActor (String, @escaping (Bool) -> Void) -> Void)?
 
     /// The outline's items, rebuilt per reload: NSOutlineView keys its
     /// rows by object identity.
@@ -75,6 +87,12 @@ final class SidebarViewController: NSViewController {
         outlineView.dataSource = self
         outlineView.delegate = self
         outlineView.setAccessibilityIdentifier(Self.accessibilityID)
+        contextMenu.delegate = self
+        renameItem.target = self
+        deleteItem.target = self
+        contextMenu.addItem(renameItem)
+        contextMenu.addItem(deleteItem)
+        outlineView.menu = contextMenu
 
         let scrollView = NSScrollView()
         scrollView.documentView = outlineView
@@ -97,6 +115,110 @@ final class SidebarViewController: NSViewController {
             outlineView.expandItem(node)
         }
         select(entryID: chosenID)
+    }
+
+    /// Rename the saved view `id`, asking first (spec/08).
+    func renameSavedView(id: String) {
+        let confirm: (@MainActor (String?) -> Void) = { [weak self] name in
+            guard let self, let name, !name.isEmpty else { return }
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                do {
+                    try await self.model.renameView(id: id, to: name)
+                    self.reloadSections()
+                    self.select(entryID: SidebarModel.savedViewEntryID(id))
+                } catch {
+                    self.report(error)
+                }
+            }
+        }
+        if let promptName {
+            promptName(confirm)
+        } else {
+            presentRenameSheet(for: id, confirm: confirm)
+        }
+    }
+
+    /// Delete the saved view `id`, asking first.
+    func deleteSavedView(id: String) {
+        let name = model.savedView(id: id)?.name ?? "this view"
+        let confirm: (@MainActor (Bool) -> Void) = { [weak self] accepted in
+            guard let self, accepted else { return }
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                let entryID = SidebarModel.savedViewEntryID(id)
+                let wasChosen = self.chosenID == entryID
+                do {
+                    try await self.model.deleteView(id: id)
+                    self.reloadSections()
+                    if wasChosen { self.choose(entryID: SidebarModel.unifiedInboxID) }
+                } catch {
+                    self.report(error)
+                }
+            }
+        }
+        if let confirmDelete {
+            confirmDelete(name, confirm)
+        } else {
+            presentDeleteSheet(named: name, confirm: confirm)
+        }
+    }
+
+    /// Show a failed write as an alert sheet.
+    private func report(_ error: any Error) {
+        let alert = NSAlert()
+        alert.messageText = error.localizedDescription
+        alert.alertStyle = .warning
+        if let window = view.window {
+            alert.beginSheetModal(for: window) { _ in }
+        } else {
+            alert.runModal()
+        }
+    }
+
+    /// One alert sheet for Rename and Delete; `confirm` gets the button
+    /// index, 0 for the first.
+    private func presentSheet(
+        message: String, informative: String, buttons: [String],
+        accessory: NSView?, confirm: @escaping @MainActor (Int) -> Void
+    ) {
+        let alert = NSAlert()
+        alert.messageText = message
+        alert.informativeText = informative
+        alert.alertStyle = .warning
+        for button in buttons { alert.addButton(withTitle: button) }
+        alert.accessoryView = accessory
+        let first = NSApplication.ModalResponse.alertFirstButtonReturn.rawValue
+        if let window = view.window {
+            alert.beginSheetModal(for: window) { confirm($0.rawValue - first) }
+        } else {
+            confirm(alert.runModal().rawValue - first)
+        }
+    }
+
+    private func presentRenameSheet(
+        for id: String, confirm: @escaping @MainActor (String?) -> Void
+    ) {
+        let saved = model.savedView(id: id)
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
+        field.stringValue = saved?.name ?? ""
+        presentSheet(
+            message: "Rename View",
+            informative: "Rename \"\(saved?.name ?? "this view")\".",
+            buttons: ["Rename", "Cancel"],
+            accessory: field
+        ) { confirm($0 == 0 ? field.stringValue : nil) }
+    }
+
+    private func presentDeleteSheet(
+        named name: String, confirm: @escaping @MainActor (Bool) -> Void
+    ) {
+        presentSheet(
+            message: "Delete View?",
+            informative: "Delete \"\(name)\"? This cannot be undone.",
+            buttons: ["Delete", "Cancel"],
+            accessory: nil
+        ) { confirm($0 == 0) }
     }
 
     /// Choose the entry `id` names, as a click would: it is selected
@@ -204,6 +326,32 @@ extension SidebarViewController: NSOutlineViewDataSource, NSOutlineViewDelegate 
             as? SidebarEntryCellView ?? SidebarEntryCellView(identifier: Self.entryCellID)
         cell.configure(node.entry)
         return cell
+    }
+
+    /// Only a saved view's row offers Rename and Delete (spec/08).
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        guard menu === contextMenu else { return }
+        let row = outlineView.clickedRow >= 0 ? outlineView.clickedRow : outlineView.selectedRow
+        var viewId: String?
+        if row >= 0, let node = outlineView.item(atRow: row) as? EntryNode {
+            if case .window(.view(let id)) = node.entry.target {
+                viewId = id
+            }
+        }
+        renameItem.isEnabled = viewId != nil
+        deleteItem.isEnabled = viewId != nil
+        renameItem.representedObject = viewId
+        deleteItem.representedObject = viewId
+    }
+
+    @objc private func renameSavedViewItem(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? String else { return }
+        renameSavedView(id: id)
+    }
+
+    @objc private func deleteSavedViewItem(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? String else { return }
+        deleteSavedView(id: id)
     }
 
     func outlineViewSelectionDidChange(_ notification: Notification) {

@@ -107,7 +107,7 @@ public final class ListWindowModel {
     /// fill counter.
     public var listGeneration: UInt64? {
         switch spec {
-        case .search, .debugSynthetic:
+        case .search, .view, .debugSynthetic:
             return nil
         case .mailbox, .unified, .flagged, .thread:
             return hasExactIndex ? generation : nil
@@ -1151,7 +1151,7 @@ extension WindowSpec {
     /// than occurrences (spec/07 grain).
     var listsMessages: Bool {
         switch self {
-        case .flagged, .thread, .search:
+        case .flagged, .thread, .search, .view:
             return true
         case .debugSynthetic, .mailbox, .unified:
             return false

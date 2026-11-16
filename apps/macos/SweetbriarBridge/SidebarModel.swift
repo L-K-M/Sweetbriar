@@ -1,12 +1,15 @@
+import Foundation
+import Observation
+
 // `SidebarModel`: what the main window's sidebar lists (spec/08
 // "Sidebar"), free of AppKit so the bridge's Linux tests exercise it.
 //
 //   Unified                      ← fixed: Inbox, Flagged, Drafts, then
 //     Inbox      unified(inbox)    entries whose steps haven't landed,
-//     Flagged    flagged           disabled
-//     Drafts (local) drafts      ← the local drafts list, not a window
-//     Out Box        ┐ unavailable, with a note
-//     Saved Views    ┘
+//     Flagged    flagged           disabled, then the saved views in
+//     Drafts (local) drafts      ← saved_views() order, each opening
+//     Out Box        unavailable    View(id); Drafts is the local list
+//     <saved view>   view(id)
 //   <account>                    ← one section per account, in order
 //     <mailbox>  mailbox(id)     ← folders, labels, virtual; a mailbox
 //                                  that isn't selectable opens nothing
@@ -16,13 +19,14 @@
 // the oldest list generation the sections show, so a list that saw a
 // newer one can ask for a reload with `noteGeneration`.
 
-import Observation
-
 /// The sidebar queries a model needs from the core (spec/07 "Other
 /// queries"). `CoreBridge` adopts it; tests substitute a fake.
 public protocol SidebarSource: Sendable {
     func accounts() async throws -> [Account]
     func mailboxes(accountId: String) async throws -> Mailboxes
+    func savedViews() async throws -> [SavedView]
+    func upsertSavedView(idempotencyKey: String, params: SavedViewParams) async throws -> Receipt
+    func deleteSavedView(idempotencyKey: String, viewId: String) async throws -> Receipt
 }
 
 extension CoreBridge: SidebarSource {}
@@ -71,13 +75,17 @@ public final class SidebarModel {
     public static let unifiedInboxID = "\(unifiedSectionID)/inbox"
     /// The Drafts (local) entry's id.
     public static let unifiedDraftsID = "\(unifiedSectionID)/drafts"
+    /// A saved view's entry id, stable across reloads.
+    public static func savedViewEntryID(_ viewId: String) -> String {
+        "\(unifiedSectionID)/view/\(viewId)"
+    }
     /// The note on a mailbox that isn't selectable (spec/08).
     static let notSelectableNote = "This mailbox holds no messages of its own."
     /// The note on entries whose steps haven't landed (spec/08).
     static let notYetNote = "Not available yet."
 
     /// The unified section, then one per account.
-    public private(set) var sections: [Section] = [SidebarModel.unifiedSection]
+    public private(set) var sections: [Section] = [SidebarModel.unifiedSection([])]
 
     /// Account context comes from the loaded section, never by splitting an
     /// opaque entry identifier. Unified, removed and unknown entries have none.
@@ -90,6 +98,10 @@ public final class SidebarModel {
     /// The oldest list generation the account sections show; 0 before
     /// the first reload.
     public private(set) var generation: UInt64 = 0
+
+    /// The saved views the unified section lists, in `saved_views()`
+    /// order.
+    public private(set) var savedViews: [SavedView] = []
 
     /// Why the last reload failed, if it did; the sections keep what
     /// they showed before.
@@ -113,6 +125,62 @@ public final class SidebarModel {
             }
         }
         return nil
+    }
+
+    /// The saved view `id` names, if listed.
+    public func savedView(id: String) -> SavedView? {
+        savedViews.first { $0.viewId == id }
+    }
+
+    /// Create a view from a search (spec/08 Search): the query and sort
+    /// are stored, the scope is not part of a saved view (07 Views).
+    @discardableResult
+    public func saveView(
+        name: String, queryJSON: String, sort: SavedViewSort
+    ) async throws -> SavedView {
+        let receipt = try await source.upsertSavedView(
+            idempotencyKey: UUID().uuidString,
+            params: SavedViewParams(viewId: nil, name: name, queryJson: queryJSON, sort: sort)
+        )
+        guard let viewId = receipt.savedViewID else {
+            throw CoreFailure.internalError(detail: "The saved view's receipt named no view id.")
+        }
+        try await reloadSavedViews()
+        guard let view = savedView(id: viewId) else {
+            throw CoreFailure.internalError(detail: "The saved view vanished after writing.")
+        }
+        return view
+    }
+
+    /// Rename a view, keeping its stored query and sort (spec/08).
+    @discardableResult
+    public func renameView(id: String, to name: String) async throws -> SavedView {
+        guard let view = savedView(id: id) else {
+            throw CoreFailure.notFound(what: "saved view \(id)")
+        }
+        _ = try await source.upsertSavedView(
+            idempotencyKey: UUID().uuidString,
+            params: SavedViewParams(
+                viewId: id, name: name, queryJson: view.queryJson, sort: view.sort
+            )
+        )
+        try await reloadSavedViews()
+        guard let renamed = savedView(id: id) else {
+            throw CoreFailure.internalError(detail: "The renamed view vanished after writing.")
+        }
+        return renamed
+    }
+
+    /// Delete a view; an unknown id is `NotFound` (spec/07 Views).
+    public func deleteView(id: String) async throws {
+        _ = try await source.deleteSavedView(idempotencyKey: UUID().uuidString, viewId: id)
+        try await reloadSavedViews()
+    }
+
+    /// Re-read the saved views after a write and refresh the unified
+    /// section (spec/08).
+    private func reloadSavedViews() async throws {
+        updateSavedViews(try await source.savedViews())
     }
 
     /// Re-read every account and its mailboxes. One reload runs at a
@@ -148,7 +216,9 @@ public final class SidebarModel {
                 oldest = min(oldest ?? list.generation, list.generation)
                 accountSections.append(Self.section(for: account, list.mailboxes))
             }
-            sections = [Self.unifiedSection] + accountSections
+            let views = try await source.savedViews()
+            updateSavedViews(views)
+            sections = [Self.unifiedSection(views)] + accountSections
             generation = oldest ?? generation
             lastError = nil
         } catch {
@@ -156,13 +226,18 @@ public final class SidebarModel {
         }
     }
 
+    /// Relist the saved views after a write, without re-reading accounts.
+    private func updateSavedViews(_ views: [SavedView]) {
+        savedViews = views
+        guard !sections.isEmpty else { return }
+        sections[0] = Self.unifiedSection(views)
+    }
+
     /// The unified section: Inbox and Flagged open windows, Drafts
-    /// (local) the drafts list; Out Box and saved views wait for their
-    /// steps (spec/08).
-    private static let unifiedSection = Section(
-        id: unifiedSectionID,
-        title: "Unified",
-        entries: [
+    /// (local) the drafts list; Out Box waits for its step (spec/08);
+    /// each saved view opens `View(id)` (07).
+    private static func unifiedSection(_ views: [SavedView]) -> Section {
+        let fixed: [Entry] = [
             Entry(
                 id: unifiedInboxID,
                 title: "Inbox",
@@ -187,14 +262,20 @@ public final class SidebarModel {
                 unread: nil,
                 target: .unavailable(note: notYetNote)
             ),
-            Entry(
-                id: "\(unifiedSectionID)/views",
-                title: "Saved Views",
-                unread: nil,
-                target: .unavailable(note: notYetNote)
-            ),
         ]
-    )
+        var entries = fixed
+        for view in views {
+            entries.append(
+                Entry(
+                    id: savedViewEntryID(view.viewId),
+                    title: view.name,
+                    unread: nil,
+                    target: .window(.view(view.viewId))
+                )
+            )
+        }
+        return Section(id: unifiedSectionID, title: "Unified", entries: entries)
+    }
 
     /// One account's section: its mailboxes in the core's order,
     /// named as stored (spec/08: imported mailboxes are flat).
