@@ -205,7 +205,10 @@ final class ReaderViewController: NSViewController {
     }
 
     @objc private func toggleReadingView(_ sender: NSButton) {
-        reads.run { await self.setReadingView(sender.state == .on) }
+        // The state at the click: a render may reset the box before the
+        // task runs.
+        let enabled = sender.state == .on
+        reads.run { await self.setReadingView(enabled) }
     }
 
     func setSource(_ enabled: Bool) async {
@@ -220,11 +223,14 @@ final class ReaderViewController: NSViewController {
     /// applies to this message even when the write fails.
     func setReadingView(_ enabled: Bool) async {
         guard model.readingDocument != nil else { return }
+        // The sender of the message the toggle applies to: reader tasks
+        // interleave, so another selection may be current after the render.
+        let address = ReaderModel.senderAddress(model.currentMessage)
         model.setReadingView(enabled)
         updateReadingToggle()
         clearReadingNote()
         await render()
-        guard let address = ReaderModel.senderAddress(model.currentMessage) else { return }
+        guard let address else { return }
         do {
             if enabled {
                 if try await memory.addSender(address) == .listFull {
