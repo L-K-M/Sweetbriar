@@ -93,7 +93,7 @@ struct PlainTextReaderViewTests {
 
         // Depth 0: the body font, the plain color, no indent.
         #expect(try attributes(at: 1)[.font] as? NSFont
-            == PlainTextReaderView.bodyFont)
+            == QuoteDepth.bodyFont)
         #expect(try !displayFont(at: 1, has: .italic))
         #expect(try attributes(at: 1)[.foregroundColor] as? NSColor
             == .textColor)
@@ -104,14 +104,14 @@ struct PlainTextReaderViewTests {
         for (location, depth) in [(5, 1), (12, 2), (20, 3)] {
             #expect(try displayFont(at: location, has: .italic))
             #expect(try attributes(at: location)[.foregroundColor]
-                as? NSColor == PlainTextReaderView.quoteColors[depth - 1])
+                as? NSColor == QuoteDepth.colors[depth - 1])
             let style = try #require(
                 attributes(at: location)[.paragraphStyle]
                     as? NSParagraphStyle
             )
             #expect(
                 style.headIndent
-                    == PlainTextReaderView.quoteIndent * CGFloat(depth)
+                    == QuoteDepth.indent * CGFloat(depth)
             )
         }
         #expect(try attributes(at: 5)[.foregroundColor] as? NSColor
@@ -159,7 +159,7 @@ struct PlainTextReaderViewTests {
             let style = try #require(
                 attributes(at: range.location)[.paragraphStyle] as? NSParagraphStyle
             )
-            #expect(style.headIndent == PlainTextReaderView.quoteIndent * CGFloat(depth))
+            #expect(style.headIndent == QuoteDepth.indent * CGFloat(depth))
         }
         #expect(view.string == body)
         #expect(view.isOnTextKit2)
