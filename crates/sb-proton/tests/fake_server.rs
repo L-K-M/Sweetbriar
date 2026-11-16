@@ -5,11 +5,12 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use sb_proton::{
-    ApiCode, Challenge, Client, Config, InvalidField, PasswordMode, ProtonError, SignInStep, Trust,
+    ApiCode, Challenge, Client, Config, EventAction, InvalidField, LabelKind, PasswordMode,
+    ProtonError, SignInStep, Trust,
 };
 use sb_test_support::{
-    ATTACHMENT_PLAINTEXT, FakeProtonServer, Fault, KeyFault, MESSAGE_PLAINTEXT,
-    ModulusSignatureVerifier, TestAccount, cert_der,
+    ATTACHMENT_PLAINTEXT, FakeLabel, FakeMessage, FakeProtonServer, Fault, KeyFault,
+    MESSAGE_PLAINTEXT, ModulusSignatureVerifier, TestAccount, cert_der,
 };
 use secrecy::{ExposeSecret, SecretString};
 
@@ -901,4 +902,275 @@ async fn damaged_ciphertext_is_a_typed_failure() {
         keys.decrypt_attachment(&key_packets, &damaged_packet),
         Err(sb_proton::DecryptError::Damaged)
     ));
+}
+
+// ---- M2.15a: mail read calls (spec/04 "Sync loop") ----
+
+#[tokio::test]
+async fn labels_decode_with_their_kinds_and_paths() {
+    let server = server_with(TestAccount::new(USER, PASSWORD)).await;
+    let client = client(&server);
+    let session = sign_in(&client, USER, PASSWORD).await;
+    server.add_label(USER, FakeLabel::new("label-1", 1, "Projects"));
+    server.add_label(USER, FakeLabel::new("folder-1", 3, "Work"));
+    server.add_label(
+        USER,
+        FakeLabel::new("folder-2", 3, "Deep")
+            .with_parent("folder-1")
+            .with_path("Work/Deep"),
+    );
+
+    let labels = client.labels(&session).await.expect("the labels");
+    let find = |id: &str| {
+        labels
+            .iter()
+            .find(|label| label.id == id)
+            .expect("the label")
+    };
+    assert_eq!(find("0").kind, LabelKind::System);
+    assert_eq!(find("0").path, "Inbox");
+    assert_eq!(find("label-1").kind, LabelKind::Label);
+    assert_eq!(find("folder-2").kind, LabelKind::Folder);
+    assert_eq!(find("folder-2").path, "Work/Deep");
+    assert_eq!(find("folder-2").parent_id.as_deref(), Some("folder-1"));
+
+    let request = server
+        .requests()
+        .into_iter()
+        .find(|request| request.path == "/core/v4/labels")
+        .expect("the labels request");
+    assert_eq!(request.query.as_deref(), Some("Type=1&Type=3&Type=4"));
+}
+
+#[tokio::test]
+async fn paging_covers_every_message_exactly_once_newest_first() {
+    let server = server_with(TestAccount::new(USER, PASSWORD)).await;
+    let client = client(&server);
+    let session = sign_in(&client, USER, PASSWORD).await;
+    for (index, time) in [100, 300, 200, 500, 400].iter().enumerate() {
+        server.add_message(
+            USER,
+            FakeMessage::new(&format!("msg-{index}")).with_time(*time),
+        );
+    }
+
+    let mut seen = Vec::new();
+    let mut first = None;
+    for (page, expected) in [
+        (0, vec!["msg-3", "msg-4"]),
+        (1, vec!["msg-1", "msg-2"]),
+        (2, vec!["msg-0"]),
+    ] {
+        let batch = client
+            .message_page(&session, page, 2)
+            .await
+            .expect("the page");
+        assert_eq!(batch.total, 5);
+        let ids: Vec<&str> = batch.messages.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(ids, expected);
+        seen.extend(ids.into_iter().map(str::to_owned));
+        if page == 0 {
+            first = Some(batch);
+        }
+    }
+    assert_eq!(seen, ["msg-3", "msg-4", "msg-1", "msg-2", "msg-0"]);
+
+    let first = first.expect("the first page");
+    assert_eq!(first.messages[0].raw["ID"], "msg-3");
+    assert_eq!(
+        first.messages[0]
+            .sender
+            .as_ref()
+            .map(|a| a.address.as_str()),
+        Some("sender@example.test")
+    );
+    assert!(!first.stale);
+    server.set_stale_pages(true);
+    let stale = client
+        .message_page(&session, 0, 2)
+        .await
+        .expect("the stale page");
+    assert!(stale.stale);
+
+    // A page size above 150 is clamped before it reaches the wire.
+    let clamped = client
+        .message_page(&session, 0, 500)
+        .await
+        .expect("the clamped page");
+    assert_eq!(clamped.messages.len(), 5);
+    let request = server
+        .requests()
+        .into_iter()
+        .rfind(|request| request.path == "/mail/v4/messages")
+        .expect("the listing request");
+    assert_eq!(
+        request.query.as_deref(),
+        Some("Page=0&PageSize=150&Sort=Time&Desc=1")
+    );
+}
+
+#[tokio::test]
+async fn counts_decode() {
+    let server = server_with(TestAccount::new(USER, PASSWORD)).await;
+    let client = client(&server);
+    let session = sign_in(&client, USER, PASSWORD).await;
+    server.add_message(USER, FakeMessage::new("msg-0").with_labels(&["0"]));
+    server.add_message(
+        USER,
+        FakeMessage::new("msg-1").with_labels(&["0", "5"]).read(),
+    );
+    server.add_message(USER, FakeMessage::new("msg-2").with_labels(&["6"]));
+
+    let counts = client.message_counts(&session).await.expect("the counts");
+    let count = |id: &str| {
+        let count = counts
+            .iter()
+            .find(|count| count.label_id == id)
+            .expect("the count");
+        (count.total, count.unread)
+    };
+    assert_eq!(count("0"), (2, 1));
+    assert_eq!(count("5"), (1, 0));
+    assert_eq!(count("6"), (1, 1));
+    assert_eq!(count("10"), (0, 0));
+}
+
+#[tokio::test]
+async fn latest_then_events_since_returns_changes_in_order_and_follows_more() {
+    let server = server_with(TestAccount::new(USER, PASSWORD)).await;
+    let client = client(&server);
+    let session = sign_in(&client, USER, PASSWORD).await;
+    let cursor = client.latest_event(&session).await.expect("the cursor");
+    assert_eq!(cursor.as_str(), "0");
+
+    server.add_message(USER, FakeMessage::new("msg-0"));
+    server.update_message(USER, FakeMessage::new("msg-0").read());
+    server.delete_message(USER, "msg-0");
+    server.add_label(USER, FakeLabel::new("label-1", 1, "Projects"));
+    server.update_label(USER, FakeLabel::new("label-1", 1, "Work"));
+    server.delete_label(USER, "label-1");
+    server.set_refresh_mail(USER);
+    server.touch_user(USER);
+    server.set_max_events_per_response(3);
+
+    let mut cursor = cursor;
+    let mut message_events = Vec::new();
+    let mut label_events = Vec::new();
+    let mut batches = 0;
+    loop {
+        let batch = client
+            .events_since(&session, &cursor)
+            .await
+            .expect("a batch");
+        batches += 1;
+        message_events.extend(batch.messages.iter().map(|e| (e.id.clone(), e.action)));
+        label_events.extend(batch.labels.iter().map(|e| (e.id.clone(), e.action)));
+        assert!(
+            batch
+                .messages
+                .iter()
+                .all(|e| e.message.is_some() == (e.action != EventAction::Delete))
+        );
+        for event in &batch.messages {
+            if let Some(message) = &event.message {
+                assert_eq!(
+                    message.raw["ID"], event.id,
+                    "an event's metadata keeps its raw object (spec/02)"
+                );
+            }
+        }
+        assert!(
+            batch
+                .labels
+                .iter()
+                .all(|e| e.label.is_some() == (e.action != EventAction::Delete))
+        );
+        cursor = batch.event_id.clone();
+        if !batch.more {
+            assert!(batch.user_changed, "the last batch carried the user change");
+            assert!(batch.refresh_mail, "the refresh event set the mail bit");
+            break;
+        }
+        assert!(batches < 10, "the cursor advances");
+    }
+    assert_eq!(batches, 3, "seven events split three per batch");
+    assert_eq!(
+        message_events,
+        vec![
+            ("msg-0".to_owned(), EventAction::Create),
+            ("msg-0".to_owned(), EventAction::Update),
+            ("msg-0".to_owned(), EventAction::Delete),
+        ]
+    );
+    assert_eq!(
+        label_events,
+        vec![
+            ("label-1".to_owned(), EventAction::Create),
+            ("label-1".to_owned(), EventAction::Update),
+            ("label-1".to_owned(), EventAction::Delete),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn a_malformed_message_response_is_an_error_not_a_partial_batch() {
+    let server = server_with(TestAccount::new(USER, PASSWORD)).await;
+    let client = client(&server);
+    let session = sign_in(&client, USER, PASSWORD).await;
+    server.add_message(USER, FakeMessage::new("msg-0"));
+    server.add_message(USER, FakeMessage::new("msg-1"));
+    server.set_undecodable_message(USER, true);
+
+    let error = client
+        .message_page(&session, 0, 150)
+        .await
+        .expect_err("a numeric ID must not decode");
+    assert!(
+        matches!(&error, ProtonError::Malformed { message } if message.contains("message 0 of page 0")),
+        "the error names the message that failed: {error:?}"
+    );
+
+    server.set_undecodable_message(USER, false);
+    let page = client
+        .message_page(&session, 0, 150)
+        .await
+        .expect("the knob off decodes");
+    assert_eq!(page.messages.len(), 2);
+}
+
+#[tokio::test]
+async fn mail_reads_are_paced_as_background_calls() {
+    let server = server_with(TestAccount::new(USER, PASSWORD)).await;
+    let client = client(&server);
+    let session = sign_in(&client, USER, PASSWORD).await;
+
+    // Three background reads are paced at 250 ms intervals (spec/04
+    // "Connections and pacing").
+    let start = std::time::Instant::now();
+    for _ in 0..3 {
+        client.labels(&session).await.expect("the labels");
+    }
+    assert!(
+        start.elapsed() >= Duration::from_millis(400),
+        "three background reads were paced"
+    );
+}
+
+#[tokio::test]
+async fn unauthenticated_mail_requests_are_refused() {
+    let server = server_with(TestAccount::new(USER, PASSWORD)).await;
+    let client = client(&server);
+    let session = sign_in(&client, USER, PASSWORD).await;
+    client.logout(&session).await.expect("logout");
+
+    let error = client
+        .labels(&session)
+        .await
+        .expect_err("the revoked session is refused");
+    assert!(matches!(error, ProtonError::Unauthorized));
+    let error = client
+        .latest_event(&session)
+        .await
+        .expect_err("the revoked session is refused");
+    assert!(matches!(error, ProtonError::Unauthorized));
 }

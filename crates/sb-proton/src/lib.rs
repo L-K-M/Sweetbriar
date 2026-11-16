@@ -7,6 +7,7 @@ mod auth;
 mod client;
 mod error;
 mod keys;
+mod mail;
 
 pub use auth::{
     AUTH_INFO_PATH, Challenge, FinishedSignIn, HumanVerification, PasswordMode, Session, SignIn,
@@ -17,6 +18,11 @@ pub use error::{ApiCode, InvalidField, ProtonError};
 pub use keys::{
     ADDRESS_STATUS_ENABLED, ADDRESSES_PATH, Address, DecryptError, Identity, KEY_SALTS_PATH,
     KeySet, KeyStore, KeyUnlockError, SecretBuffer, Sendable, USER_PATH,
+};
+pub use mail::{
+    AddressEvent, EVENTS_LATEST_PATH, EVENTS_PATH, EventAction, EventBatch, EventId, LABELS_PATH,
+    Label, LabelCount, LabelEvent, LabelKind, MAX_PAGE_SIZE, MESSAGE_COUNTS_PATH, MESSAGES_PATH,
+    MailAddress, MessageEvent, MessageMetadata, MessagePage, REFRESH_MAIL,
 };
 // Trust types the layers above name for their transport seam (spec/01
 // rule 3).
