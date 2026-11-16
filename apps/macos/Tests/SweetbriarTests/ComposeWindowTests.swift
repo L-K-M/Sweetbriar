@@ -190,7 +190,7 @@ private final class ComposeFixture {
         let owner = ComposeWindows(
             backups: backups, appearance: appearance, cues: cues, openCore: { source },
             reportError: { [weak self] in
-                self?.errors.append($0)
+                self?.errors.append($1)
             })
         self.owner = owner
         return owner
@@ -1332,3 +1332,173 @@ struct ComposeKeepBothTests {
         }
     }
 }
+
+@MainActor
+private final class ChangeCount { var value = 0 }
+
+@MainActor
+private final class RestoredWindows { var results: [(window: NSWindow?, refused: Bool)] = [] }
+
+private actor ListedDrafts: DraftListSource {
+    private var rows: [DraftSummary]
+    private var failure: CoreFailure?
+    init(_ ids: [String]) {
+        rows = ids.map {
+            DraftSummary(
+                draftId: $0, state: .editing, accountId: nil, identityId: nil, subject: "Subject \($0)",
+                to: [], cc: [], bcc: [], updatedAtMs: 0, attempt: nil)
+        }
+    }
+    func fail(_ failure: CoreFailure?) { self.failure = failure }
+    func drafts() async throws -> [DraftSummary] {
+        if let failure { throw failure }
+        return rows
+    }
+}
+
+/// Opening stored drafts and restoring compose windows (spec/08
+/// "Drafts (local)" and "Windows", M1.9c2d).
+@Suite(.serialized, .timeLimit(.minutes(1))) @MainActor
+struct ComposeDraftsNavigationTests {
+    @Test func openingADraftTwiceKeepsOneWindowAndReportsEachChange() async throws {
+        try await withComposeFixture { f in
+            let owner = f.makeOwner()
+            let changes = ChangeCount()
+            owner.onWindowsChanged = { changes.value += 1 }
+            let id = try await f.bridge.createDraft(idempotencyKey: UUID().uuidString, source: .new).draftId
+            owner.open(draftId: id)
+            owner.open(draftId: id)
+            try #require(await composeEventually { owner.windows[id]?.model.content != nil })
+            owner.open(draftId: id)
+            #expect(owner.windows.count == 1)
+            #expect(changes.value == 1)
+            #expect(f.errors.isEmpty)
+
+            let controller = try #require(owner.windows[id])
+            #expect(await controller.closeAndWait())
+            #expect(owner.windows.isEmpty)
+            #expect(changes.value == 2)
+            #expect(f.backups.restoreBlockedReason == nil)
+        }
+    }
+
+    @Test func openingADiscardedDraftOpensNothingReportsItAndReloadsTheList() async throws {
+        try await withComposeFixture { f in
+            let owner = f.makeOwner()
+            let changes = ChangeCount()
+            owner.onWindowsChanged = { changes.value += 1 }
+            let id = try await f.bridge.createDraft(idempotencyKey: UUID().uuidString, source: .new).draftId
+            _ = try await f.bridge.discardDraft(idempotencyKey: UUID().uuidString, draftId: id)
+            owner.open(draftId: id)
+            try #require(await composeEventually { changes.value == 1 })
+            #expect(owner.windows.isEmpty)
+            #expect(f.errors.count == 1)
+            #expect(f.backups.restoreBlockedReason == nil)
+        }
+    }
+
+    @Test func restoringReturnsTheDraftsOneWindowAndAGoneDraftQuietlyNothing() async throws {
+        try await withComposeFixture { f in
+            let owner = f.makeOwner()
+            let id = try await f.bridge.createDraft(idempotencyKey: UUID().uuidString, source: .new).draftId
+            let window = try #require(await owner.restore(draftId: id))
+            #expect(window === owner.windows[id]?.window)
+            #expect(await owner.restore(draftId: id) === window)
+            #expect(owner.windows.count == 1)
+            #expect(await owner.restore(draftId: "missing-draft") == nil)
+            #expect(owner.windows.count == 1)
+            #expect(f.errors.isEmpty)
+        }
+    }
+
+    @Test func restorationWaitsForTheComposeOwnerAndRefusesAMissingId() async throws {
+        try await withComposeFixture { f in
+            let owner = f.makeOwner()
+            let id = try await f.bridge.createDraft(idempotencyKey: UUID().uuidString, source: .new).draftId
+            let restorer = ComposeRestorer()
+            let restored = RestoredWindows()
+            restorer.restore(draftId: nil) { restored.results.append(($0, $1 != nil)) }
+            #expect(restored.results.count == 1 && restored.results[0].refused)
+            restorer.restore(draftId: id) { restored.results.append(($0, $1 != nil)) }
+            #expect(restored.results.count == 1)
+            restorer.attach(owner)
+            try #require(await composeEventually { restored.results.count == 2 })
+            #expect(!restored.results[1].refused)
+            #expect(restored.results[1].window === owner.windows[id]?.window)
+        }
+    }
+
+    @Test func aComposeWindowEncodesOnlyItsDraftIdForRestoration() async throws {
+        try await withComposeFixture { f in
+            let controller = try await f.makeWindow()
+            let window = try #require(controller.window)
+            #expect(window.identifier == ComposeRestoration.windowIdentifier)
+            #expect(window.isRestorable)
+            let restoration = window.restorationClass.map(ObjectIdentifier.init)
+            #expect(restoration == ObjectIdentifier(ComposeRestoration.self))
+            let coder = NSKeyedArchiver(requiringSecureCoding: true)
+            controller.window(window, willEncodeRestorableState: coder)
+            coder.finishEncoding()
+            let decoder = try NSKeyedUnarchiver(forReadingFrom: coder.encodedData)
+            decoder.requiresSecureCoding = true
+            #expect(ComposeRestoration.draftId(from: decoder) == controller.model.draftId)
+        }
+    }
+
+    @Test func noStoredDraftOpensOnceQuitHasBegun() async throws {
+        try await withComposeFixture { f in
+            let owner = f.makeOwner()
+            let id = try await f.bridge.createDraft(idempotencyKey: UUID().uuidString, source: .new).draftId
+            #expect(await owner.closeForQuit())
+            owner.open(draftId: id)
+            #expect(await owner.restore(draftId: id) == nil)
+            #expect(owner.windows.isEmpty)
+            #expect(f.errors.isEmpty)
+        }
+    }
+
+    @Test func theDraftsListOpensTheChosenRowOnReturnAndNothingOnceRetired() async throws {
+        let list = DraftsListViewController(model: DraftListModel(source: ListedDrafts(["d1", "d2"])))
+        _ = list.view
+        let opened = OpenedRows()
+        list.onOpen = { opened.ids.append($0) }
+        list.reload()
+        try #require(await composeEventually { list.tableView.numberOfRows == 2 })
+        list.tableView.selectRowIndexes([1], byExtendingSelection: false)
+        list.openChosen()
+        let enter = try #require(
+            NSEvent.keyEvent(
+                with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: 0,
+                context: nil, characters: "\r", charactersIgnoringModifiers: "\r", isARepeat: false,
+                keyCode: 36))
+        list.tableView.keyDown(with: enter)
+        #expect(opened.ids == ["d2", "d2"])
+
+        list.retire()
+        #expect(list.tableView.numberOfRows == 0)
+        list.openChosen()
+        list.reload()
+        await list.waitForRetirement()
+        #expect(list.tableView.numberOfRows == 0)
+        #expect(opened.ids == ["d2", "d2"])
+    }
+
+    @Test func aFailedDraftsLoadShowsTheErrorAndRetryReloads() async throws {
+        let source = ListedDrafts(["d1"])
+        await source.fail(.unavailable(reason: "offline"))
+        let list = DraftsListViewController(model: DraftListModel(source: source))
+        _ = list.view
+        list.reload()
+        try #require(await composeEventually { !list.errorLabel.isHiddenOrHasHiddenAncestor })
+        #expect(list.errorLabel.stringValue.hasPrefix("Couldn't load drafts"))
+        #expect(list.tableView.numberOfRows == 0)
+
+        await source.fail(nil)
+        list.retryButton.performClick(nil)
+        try #require(await composeEventually { list.tableView.numberOfRows == 1 })
+        #expect(list.errorLabel.isHiddenOrHasHiddenAncestor)
+    }
+}
+
+@MainActor
+private final class OpenedRows { var ids: [String] = [] }

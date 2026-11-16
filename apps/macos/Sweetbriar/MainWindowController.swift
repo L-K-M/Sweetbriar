@@ -10,6 +10,8 @@
 //        │ choose(spec) │   selection    │
 //        └──────────────┘ ───────────────┘
 //   a list's newer generation ──► the sidebar re-reads its counts
+//   Drafts (local) puts the drafts list in the list pane instead; the
+//   reader then shows nothing (spec/08 "Drafts (local)").
 
 import AppKit
 import SwiftUI
@@ -27,6 +29,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     private let appearance: SharedAppearance
     private let backups: SharedBackups
     private let openBackups: @MainActor () -> Void
+    private let openDraft: @MainActor (String) -> Void
     private let writes = ArchiveWriteTasks()
     private var bridge: CoreBridge?
     private var contentTasks = ArchiveViewTasks()
@@ -36,6 +39,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     private(set) var sidebarModel: SidebarModel?
     private(set) var sidebar: SidebarViewController?
     private(set) var messageList: MessageListViewController?
+    private(set) var drafts: DraftsListViewController?
+    private var listPane: ListPaneController?
     private var imports: ImportCoordinator?
     private var accountSetup: BridgeAccountSheet?
     private var reader: ReaderViewController?
@@ -43,11 +48,13 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
 
 
     init(session: CoreSession, appearance: SharedAppearance, backups: SharedBackups,
-         openBackups: @escaping @MainActor () -> Void = {}) {
+         openBackups: @escaping @MainActor () -> Void = {},
+         openDraft: @escaping @MainActor (String) -> Void = { _ in }) {
         self.session = session
         self.appearance = appearance
         self.backups = backups
         self.openBackups = openBackups
+        self.openDraft = openDraft
         let window = NSWindow(
             contentRect: NSRect(origin: .zero, size: Self.defaultContentSize),
             styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
@@ -97,7 +104,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         super.showWindow(sender)
         guard closed else { return }
         closed = false
-        reader?.select(messageList?.list?.selectedIDs ?? [])
+        if listPane?.showsDrafts != true { reader?.select(messageList?.list?.selectedIDs ?? []) }
     }
 
     func windowWillClose(_ notification: Notification) {
@@ -112,6 +119,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         contentSerial &+= 1
         contentTasks.retire()
         sidebar?.onChoose = nil
+        sidebar?.onChooseDrafts = nil
+        let drafts = self.drafts
+        drafts?.retire()
         messageList?.onGeneration = nil
         messageList?.onSelectionChange = nil
         retireWritersForRestore()
@@ -121,6 +131,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         sidebarModel = nil
         sidebar = nil
         messageList = nil
+        self.drafts = nil
+        listPane = nil
         self.reader = nil
         imports = nil
         accountSetup = nil
@@ -130,6 +142,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         let task = Task {
             await writes.waitForRetirement()
             await list?.close()
+            await drafts?.waitForRetirement()
             await reader?.closeAndWait()
             await tasks.waitForRetirement()
         }
@@ -214,8 +227,24 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
                                                      writes: writes, canWrite: { policy.canWrite })
         let reader = ReaderViewController(model: ReaderModel(source: bridge, preferred: .sanitizedHtml))
         self.reader = reader
-        sidebar.onChoose = { [weak messageList] spec in
+        let drafts = DraftsListViewController(model: DraftListModel(source: bridge))
+        let listPane = ListPaneController(messages: messageList, drafts: drafts)
+        drafts.onOpen = { [weak self] id in
+            guard let self, contentSerial == serial else { return }
+            openDraft(id)
+        }
+        sidebar.onChoose = { [weak self, weak messageList, weak listPane] spec in
+            guard let self, contentSerial == serial else { return }
+            let wasDrafts = listPane?.showsDrafts == true
+            listPane?.show(drafts: false)
             messageList?.show(spec)
+            if wasDrafts, !closed { self.reader?.select(messageList?.list?.selectedIDs ?? []) }
+        }
+        sidebar.onChooseDrafts = { [weak self, weak drafts, weak listPane] in
+            guard let self, contentSerial == serial else { return }
+            listPane?.show(drafts: true)
+            self.reader?.select([])
+            drafts?.reload()
         }
         messageList.onGeneration = { [weak self] generation in
             guard let self, contentSerial == serial else { return }
@@ -223,13 +252,14 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         }
         messageList.onSelectionChange = { [weak self] ids in
             guard let self, !closed, contentSerial == serial else { return }
+            guard self.listPane?.showsDrafts != true else { return }
             self.reader?.select(ids)
         }
 
         let split = NSSplitViewController()
         let sidebarItem = NSSplitViewItem(sidebarWithViewController: sidebar)
         sidebarItem.minimumThickness = Self.sidebarMinimumWidth
-        let listItem = NSSplitViewItem(contentListWithViewController: messageList)
+        let listItem = NSSplitViewItem(contentListWithViewController: listPane)
         listItem.minimumThickness = Self.listMinimumWidth
         split.addSplitViewItem(sidebarItem)
         split.addSplitViewItem(listItem)
@@ -264,6 +294,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         self.sidebarModel = sidebarModel
         self.sidebar = sidebar
         self.messageList = messageList
+        self.drafts = drafts
+        self.listPane = listPane
         contentTasks.run { [weak self] in
             await sidebarModel.reload()
             guard let self, !Task.isCancelled, contentSerial == serial else { return }
@@ -294,6 +326,13 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
             }
             accountSetup = owner
         }
+    }
+
+    /// A compose window opened or closed: the drafts list, if shown,
+    /// re-reads (spec/08 "Drafts (local)").
+    func draftsChanged() {
+        guard listPane?.showsDrafts == true else { return }
+        drafts?.reload()
     }
 
     /// Re-read the sidebar: an import changed what it lists.

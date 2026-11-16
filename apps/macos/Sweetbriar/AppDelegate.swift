@@ -75,9 +75,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         composeCues = composeCue
         composeWindows = ComposeWindows(backups: backups, appearance: appearance, cues: composeCue,
             openCore: { try await session.bridge() },
-            reportError: { [weak self] error in self?.presentError("Couldn't create a draft", error) })
+            reportError: { [weak self] action, error in
+                switch action {
+                case .create: self?.presentError("Couldn't create a draft", error)
+                case .open: self?.presentError("Couldn't open the draft", error)
+                }
+            })
+        if let composeWindows { ComposeRestorer.shared.attach(composeWindows) }
         let mainWindow = MainWindowController(session: session, appearance: appearance, backups: backups,
-                                              openBackups: { [weak self] in self?.showSettings(tab: .backups) })
+                                              openBackups: { [weak self] in self?.showSettings(tab: .backups) },
+                                              openDraft: { [weak self] in self?.composeWindows?.open(draftId: $0) })
+        composeWindows?.onWindowsChanged = { [weak mainWindow] in mainWindow?.draftsChanged() }
         self.mainWindow = mainWindow
         mainWindow.showWindow(nil)
         mainWindow.start()
@@ -372,6 +380,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// spec/07 "Lifecycle": the app can't die while the core is
     /// closing — defer, await `shutdown()` (uncancellable, waits for
     /// calls in flight), then let the quit proceed.
+    /// Compose windows restore by draft id only (spec/08 "Windows").
+    func applicationSupportsSecureRestorableState(_ app: NSApplication) -> Bool { true }
+
     func applicationShouldTerminate(_ sender: NSApplication)
         -> NSApplication.TerminateReply
     {

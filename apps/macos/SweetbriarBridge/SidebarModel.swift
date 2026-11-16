@@ -1,11 +1,11 @@
 // `SidebarModel`: what the main window's sidebar lists (spec/08
 // "Sidebar"), free of AppKit so the bridge's Linux tests exercise it.
 //
-//   Unified                      ← fixed: Inbox, Flagged, then entries
-//     Inbox      unified(inbox)    whose steps haven't landed, disabled
-//     Flagged    flagged
-//     Drafts (local) ┐
-//     Out Box        ├ unavailable, with a note
+//   Unified                      ← fixed: Inbox, Flagged, Drafts, then
+//     Inbox      unified(inbox)    entries whose steps haven't landed,
+//     Flagged    flagged           disabled
+//     Drafts (local) drafts      ← the local drafts list, not a window
+//     Out Box        ┐ unavailable, with a note
 //     Saved Views    ┘
 //   <account>                    ← one section per account, in order
 //     <mailbox>  mailbox(id)     ← folders, labels, virtual; a mailbox
@@ -59,6 +59,8 @@ public final class SidebarModel {
     public enum Target: Equatable, Sendable {
         /// Open a list over this window.
         case window(WindowSpec)
+        /// Show the local drafts list (spec/08 "Drafts (local)").
+        case drafts
         /// Nothing yet: shown disabled, with why.
         case unavailable(note: String)
     }
@@ -67,6 +69,8 @@ public final class SidebarModel {
     public static let unifiedSectionID = "unified"
     /// The Unified Inbox entry's id: the main window's first choice.
     public static let unifiedInboxID = "\(unifiedSectionID)/inbox"
+    /// The Drafts (local) entry's id.
+    public static let unifiedDraftsID = "\(unifiedSectionID)/drafts"
     /// The note on a mailbox that isn't selectable (spec/08).
     static let notSelectableNote = "This mailbox holds no messages of its own."
     /// The note on entries whose steps haven't landed (spec/08).
@@ -152,8 +156,9 @@ public final class SidebarModel {
         }
     }
 
-    /// The unified section: Inbox and Flagged open windows; Drafts
-    /// (local), Out Box and saved views wait for their steps (spec/08).
+    /// The unified section: Inbox and Flagged open windows, Drafts
+    /// (local) the drafts list; Out Box and saved views wait for their
+    /// steps (spec/08).
     private static let unifiedSection = Section(
         id: unifiedSectionID,
         title: "Unified",
@@ -171,10 +176,10 @@ public final class SidebarModel {
                 target: .window(.flagged)
             ),
             Entry(
-                id: "\(unifiedSectionID)/drafts",
+                id: unifiedDraftsID,
                 title: "Drafts (local)",
                 unread: nil,
-                target: .unavailable(note: notYetNote)
+                target: .drafts
             ),
             Entry(
                 id: "\(unifiedSectionID)/outbox",
