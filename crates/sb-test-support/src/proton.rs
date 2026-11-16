@@ -153,6 +153,157 @@ struct FakeAddress {
     keys: Vec<LockedKey>,
 }
 
+/// A label the fake serves (research `mail-sync.md` §1). `kind` is
+/// Proton's `Type`: 1 user label, 2 contact group, 3 folder, 4 system.
+#[derive(Debug, Clone)]
+pub struct FakeLabel {
+    pub id: String,
+    pub parent_id: Option<String>,
+    pub name: String,
+    pub path: String,
+    pub color: String,
+    pub kind: u8,
+}
+
+impl FakeLabel {
+    /// A label with the given Proton `Type` (1 user, 3 folder, 4
+    /// system); `path` defaults to the name.
+    pub fn new(id: &str, kind: u8, name: &str) -> Self {
+        Self {
+            id: id.to_owned(),
+            parent_id: None,
+            name: name.to_owned(),
+            path: name.to_owned(),
+            color: "#000000".to_owned(),
+            kind,
+        }
+    }
+
+    pub fn with_parent(mut self, parent: &str) -> Self {
+        self.parent_id = Some(parent.to_owned());
+        self
+    }
+
+    /// The `/`-joined display path (research `mail-sync.md` §1).
+    pub fn with_path(mut self, path: &str) -> Self {
+        self.path = path.to_owned();
+        self
+    }
+
+    fn to_json(&self) -> Value {
+        json!({
+            "ID": self.id,
+            "ParentID": self.parent_id,
+            "Name": self.name,
+            "Path": self.path,
+            "Color": self.color,
+            "Type": self.kind,
+        })
+    }
+}
+
+/// One message's metadata as the fake serves it (research
+/// `mail-sync.md` §2). Build one with [`FakeMessage::new`] and the
+/// `with_*` helpers.
+#[derive(Debug, Clone)]
+pub struct FakeMessage {
+    pub id: String,
+    pub label_ids: Vec<String>,
+    pub time: i64,
+    pub unread: bool,
+}
+
+impl FakeMessage {
+    /// A synthetic message in Inbox, unread, from `sender@example.test`.
+    pub fn new(id: &str) -> Self {
+        Self {
+            id: id.to_owned(),
+            label_ids: vec!["0".to_owned()],
+            time: 1_700_000_000,
+            unread: true,
+        }
+    }
+
+    pub fn with_time(mut self, time: i64) -> Self {
+        self.time = time;
+        self
+    }
+
+    pub fn with_labels(mut self, label_ids: &[&str]) -> Self {
+        self.label_ids = label_ids.iter().map(|id| (*id).to_owned()).collect();
+        self
+    }
+
+    pub fn read(mut self) -> Self {
+        self.unread = false;
+        self
+    }
+
+    fn to_json(&self) -> Value {
+        json!({
+            "ID": self.id,
+            "AddressID": "owner-primary",
+            "LabelIDs": self.label_ids,
+            "ExternalID": format!("<{}@example.test>", self.id),
+            "Subject": format!("synthetic subject {}", self.id),
+            "Sender": {"Name": "Sender", "Address": "sender@example.test"},
+            "ToList": [],
+            "CCList": [],
+            "BCCList": [],
+            "ReplyTos": [],
+            "Time": self.time,
+            "Size": 128,
+            "Unread": self.unread,
+            "Flags": 1,
+            "NumAttachments": 0,
+        })
+    }
+}
+
+/// One entry of the account's event log. `number` is assigned when it
+/// is recorded; the wire id is `evt-<number>`. The item arrays hold
+/// the JSON objects the events response will carry.
+#[derive(Default)]
+struct FakeEvent {
+    number: u64,
+    refresh: bool,
+    user: Option<Value>,
+    messages: Vec<Value>,
+    labels: Vec<Value>,
+    addresses: Vec<Value>,
+}
+
+impl FakeEvent {
+    fn label(id: String, action: u8, label: Option<FakeLabel>) -> Self {
+        Self {
+            labels: vec![with_optional(
+                json!({"ID": id, "Action": action}),
+                "Label",
+                label.map(|label| label.to_json()),
+            )],
+            ..Self::default()
+        }
+    }
+
+    fn message(id: String, action: u8, message: Option<FakeMessage>) -> Self {
+        Self {
+            messages: vec![with_optional(
+                json!({"ID": id, "Action": action}),
+                "Message",
+                message.map(|message| message.to_json()),
+            )],
+            ..Self::default()
+        }
+    }
+
+    fn user(user: Value) -> Self {
+        Self {
+            user: Some(user),
+            ..Self::default()
+        }
+    }
+}
+
 /// One logged request. The log deliberately records only header
 /// presence and the honest identity values: never the UID, the bearer
 /// token, the TOTP or the human-verification token (spec/10).
@@ -160,6 +311,9 @@ struct FakeAddress {
 pub struct RecordedRequest {
     pub method: String,
     pub path: String,
+    /// The raw query string, so tests can assert the paging and label
+    /// type parameters the transport sent.
+    pub query: Option<String>,
     pub app_version: Option<String>,
     pub user_agent: Option<String>,
     pub content_type: Option<String>,
@@ -204,6 +358,26 @@ struct Account {
     attachment_key_packets: Vec<u8>,
     attachment_data_packet: Vec<u8>,
     attachment_plaintext: Vec<u8>,
+    labels: Vec<FakeLabel>,
+    messages: Vec<FakeMessage>,
+    events: Vec<FakeEvent>,
+    event_counter: u64,
+    next_refresh: bool,
+    malformed_messages: bool,
+}
+
+impl Account {
+    /// Appends an event, assigning its id and consuming the one-shot
+    /// refresh marker (spec/04 "Refresh").
+    fn record(&mut self, mut event: FakeEvent) {
+        self.event_counter += 1;
+        event.number = self.event_counter;
+        if self.next_refresh {
+            event.refresh = true;
+            self.next_refresh = false;
+        }
+        self.events.push(event);
+    }
 }
 
 struct Session {
@@ -221,6 +395,13 @@ struct State {
     counter: u64,
     signed_modulus: String,
     public_key: SignedPublicKey,
+    /// The fake's own page-size cap; the transport clamps to the same
+    /// 150 (research `mail-sync.md` §3).
+    max_page_size: u32,
+    /// At most this many events per `More` batch; 0 means no split.
+    max_events_per_response: usize,
+    /// Makes the next listing answer `Stale`.
+    stale: bool,
 }
 
 /// The in-process fake. Drop aborts the accept loop.
@@ -255,6 +436,9 @@ impl FakeProtonServer {
             counter: 0,
             signed_modulus,
             public_key,
+            max_page_size: 150,
+            max_events_per_response: 0,
+            stale: false,
         };
         let provider = ProtonPGP::new_rust_sync();
         let srp = proton_crypto::ProtonSRP::new_sync();
@@ -452,6 +636,12 @@ impl FakeProtonServer {
                     attachment_key_packets,
                     attachment_data_packet: data_packet,
                     attachment_plaintext: ATTACHMENT_PLAINTEXT.to_vec(),
+                    labels: system_labels(),
+                    messages: Vec::new(),
+                    events: Vec::new(),
+                    event_counter: 0,
+                    next_refresh: false,
+                    malformed_messages: false,
                 },
             );
         }
@@ -546,6 +736,100 @@ impl FakeProtonServer {
         self.max_in_flight.load(Ordering::SeqCst)
     }
 
+    /// Adds a label and appends a create event.
+    pub fn add_label(&self, username: &str, label: FakeLabel) {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let account = account_mut(&mut state, username);
+        account.record(FakeEvent::label(label.id.clone(), 1, Some(label.clone())));
+        account.labels.push(label);
+    }
+
+    /// Replaces a label and appends an update event.
+    pub fn update_label(&self, username: &str, label: FakeLabel) {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let account = account_mut(&mut state, username);
+        let existing = account
+            .labels
+            .iter_mut()
+            .find(|existing| existing.id == label.id)
+            .expect("the label exists");
+        *existing = label.clone();
+        account.record(FakeEvent::label(label.id.clone(), 2, Some(label)));
+    }
+
+    /// Removes a label and appends a delete event.
+    pub fn delete_label(&self, username: &str, id: &str) {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let account = account_mut(&mut state, username);
+        account.labels.retain(|label| label.id != id);
+        account.record(FakeEvent::label(id.to_owned(), 0, None));
+    }
+
+    /// Adds a message and appends a create event; returns its id.
+    pub fn add_message(&self, username: &str, message: FakeMessage) -> String {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let account = account_mut(&mut state, username);
+        let id = message.id.clone();
+        account.record(FakeEvent::message(id.clone(), 1, Some(message.clone())));
+        account.messages.push(message);
+        id
+    }
+
+    /// Replaces a message's metadata and appends an update event.
+    pub fn update_message(&self, username: &str, message: FakeMessage) {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let account = account_mut(&mut state, username);
+        let existing = account
+            .messages
+            .iter_mut()
+            .find(|existing| existing.id == message.id)
+            .expect("the message exists");
+        *existing = message.clone();
+        account.record(FakeEvent::message(message.id.clone(), 2, Some(message)));
+    }
+
+    /// Removes a message and appends a delete event.
+    pub fn delete_message(&self, username: &str, id: &str) {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let account = account_mut(&mut state, username);
+        account.messages.retain(|message| message.id != id);
+        account.record(FakeEvent::message(id.to_owned(), 0, None));
+    }
+
+    /// Appends an event carrying a `User` object.
+    pub fn touch_user(&self, username: &str) {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let account = account_mut(&mut state, username);
+        let user = json!({"ID": format!("user-{username}"), "Name": username});
+        account.record(FakeEvent::user(user));
+    }
+
+    /// The next recorded event carries the mail `Refresh` bit.
+    pub fn set_refresh_mail(&self, username: &str) {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        account_mut(&mut state, username).next_refresh = true;
+    }
+
+    /// At most `max` events per response; the rest follow under `More`.
+    /// 0 (the default) never splits.
+    pub fn set_max_events_per_response(&self, max: usize) {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        state.max_events_per_response = max;
+    }
+
+    /// Makes message listings answer `Stale`.
+    pub fn set_stale_pages(&self, stale: bool) {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        state.stale = stale;
+    }
+
+    /// Serves listed messages with a numeric `ID`, which the transport
+    /// must refuse as a decode failure.
+    pub fn set_undecodable_message(&self, username: &str, on: bool) {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        account_mut(&mut state, username).malformed_messages = on;
+    }
+
     /// The encrypted message body fixture and a damaged copy. Taken
     /// from the server's first account; M2.12's servers hold one.
     pub fn message_fixtures(&self) -> (String, String) {
@@ -599,12 +883,14 @@ async fn handle_request(
 ) -> Result<Response<Full<Bytes>>, io::Error> {
     let method = request.method().clone();
     let path = request.uri().path().to_owned();
+    let query = request.uri().query().map(str::to_owned);
     let headers = request.headers().clone();
     log.lock()
         .unwrap_or_else(|e| e.into_inner())
         .push(RecordedRequest {
             method: method.as_str().to_owned(),
             path: path.clone(),
+            query: query.clone(),
             app_version: header_str(&headers, "x-pm-appversion"),
             user_agent: header_str(&headers, "user-agent"),
             content_type: header_str(&headers, "content-type"),
@@ -614,7 +900,16 @@ async fn handle_request(
         });
     let now = in_flight.fetch_add(1, Ordering::SeqCst) + 1;
     max_in_flight.fetch_max(now, Ordering::SeqCst);
-    let outcome = dispatch(request, &state, &faults, &headers, &method, &path).await;
+    let outcome = dispatch(
+        request,
+        &state,
+        &faults,
+        &headers,
+        &method,
+        &path,
+        query.as_deref(),
+    )
+    .await;
     in_flight.fetch_sub(1, Ordering::SeqCst);
     outcome
 }
@@ -633,6 +928,7 @@ async fn dispatch(
     headers: &hyper::HeaderMap,
     method: &hyper::Method,
     path: &str,
+    query: Option<&str>,
 ) -> Result<Response<Full<Bytes>>, io::Error> {
     // Read and clear a one-shot fault under one lock, so two concurrent
     // requests can't both take it.
@@ -692,11 +988,23 @@ async fn dispatch(
         ("GET", "/core/v4/keys/salts") => handle_salts(state, headers),
         ("GET", "/core/v4/users") => handle_user(state, headers),
         ("GET", "/core/v4/addresses") => handle_addresses(state, headers),
+        ("GET", "/core/v4/labels") => handle_labels(state, headers, query),
+        ("GET", "/mail/v4/messages") => handle_messages(state, headers, query),
+        ("GET", "/mail/v4/messages/count") => handle_message_counts(state, headers),
+        ("GET", "/core/v4/events/latest") => handle_latest_event(state, headers),
         ("GET", "/tests/ping") => Ok(json_response(200, json!({"Code": 1000}))),
-        _ => Ok(json_response(
-            404,
-            json!({"Code": 2001, "Error": "not found"}),
-        )),
+        _ => {
+            if method.as_str() == "GET"
+                && let Some(id) = path.strip_prefix("/core/v4/events/")
+            {
+                handle_events(state, headers, id)
+            } else {
+                Ok(json_response(
+                    404,
+                    json!({"Code": 2001, "Error": "not found"}),
+                ))
+            }
+        }
     }
 }
 
@@ -1129,6 +1437,260 @@ fn handle_addresses(
         200,
         json!({"Code": 1000, "Addresses": addresses}),
     ))
+}
+
+/// The system labels every account starts with (research
+/// `mail-sync.md` §1).
+fn system_labels() -> Vec<FakeLabel> {
+    [
+        ("0", "Inbox"),
+        ("1", "AllDrafts"),
+        ("2", "AllSent"),
+        ("3", "Trash"),
+        ("4", "Spam"),
+        ("5", "All Mail"),
+        ("6", "Archive"),
+        ("7", "Sent"),
+        ("8", "Drafts"),
+        ("9", "Outbox"),
+        ("10", "Starred"),
+        ("12", "Scheduled"),
+    ]
+    .into_iter()
+    .map(|(id, name)| FakeLabel::new(id, 4, name))
+    .collect()
+}
+
+fn account_mut<'a>(state: &'a mut State, username: &str) -> &'a mut Account {
+    state
+        .accounts
+        .get_mut(username)
+        .expect("the account exists")
+}
+
+fn event_id(number: u64) -> String {
+    format!("evt-{number}")
+}
+
+/// Every value of a query parameter, in order. Proton's query values
+/// are plain (`Page`, `PageSize`, `Type`, `Desc`), so no form decoding
+/// is needed.
+fn query_values(query: Option<&str>, name: &str) -> Vec<String> {
+    let Some(query) = query else {
+        return Vec::new();
+    };
+    query
+        .split('&')
+        .filter_map(|pair| pair.split_once('='))
+        .filter(|(key, _)| *key == name)
+        .map(|(_, value)| value.to_owned())
+        .collect()
+}
+
+fn query_value(query: Option<&str>, name: &str) -> Option<String> {
+    query_values(query, name).into_iter().next()
+}
+
+/// Adds an optional field to an event's JSON object.
+fn with_optional(mut value: Value, key: &str, field: Option<Value>) -> Value {
+    if let Some(field) = field {
+        value[key] = field;
+    }
+    value
+}
+
+fn handle_labels(
+    state: &Arc<Mutex<State>>,
+    headers: &hyper::HeaderMap,
+    query: Option<&str>,
+) -> Result<Response<Full<Bytes>>, io::Error> {
+    let mut state = state.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(username) = authenticated(&mut state, headers) else {
+        return Ok(unauthorized());
+    };
+    let account = state
+        .accounts
+        .get(&username)
+        .expect("the session's account exists");
+    let types: HashSet<u8> = query_values(query, "Type")
+        .iter()
+        .filter_map(|value| value.parse().ok())
+        .collect();
+    let labels: Vec<Value> = account
+        .labels
+        .iter()
+        .filter(|label| types.is_empty() || types.contains(&label.kind))
+        .map(|label| label.to_json())
+        .collect();
+    Ok(json_response(200, json!({"Code": 1000, "Labels": labels})))
+}
+
+fn handle_messages(
+    state: &Arc<Mutex<State>>,
+    headers: &hyper::HeaderMap,
+    query: Option<&str>,
+) -> Result<Response<Full<Bytes>>, io::Error> {
+    let mut state = state.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(username) = authenticated(&mut state, headers) else {
+        return Ok(unauthorized());
+    };
+    let page: usize = query_value(query, "Page")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
+    let page_size: usize = query_value(query, "PageSize")
+        .and_then(|v| v.parse::<u32>().ok())
+        .unwrap_or(100)
+        .min(state.max_page_size) as usize;
+    let desc = query_value(query, "Desc")
+        .map(|value| value != "0")
+        .unwrap_or(true);
+    let stale = state.stale;
+    let account = state
+        .accounts
+        .get(&username)
+        .expect("the session's account exists");
+    let mut ordered: Vec<&FakeMessage> = account.messages.iter().collect();
+    ordered.sort_by(|a, b| b.time.cmp(&a.time).then_with(|| b.id.cmp(&a.id)));
+    if !desc {
+        ordered.reverse();
+    }
+    let total = u32::try_from(ordered.len()).unwrap_or(u32::MAX);
+    let start = page * page_size;
+    let messages: Vec<Value> = ordered
+        .into_iter()
+        .skip(start)
+        .take(page_size)
+        .map(|message| {
+            let mut value = message.to_json();
+            if account.malformed_messages {
+                value["ID"] = json!(7);
+            }
+            value
+        })
+        .collect();
+    Ok(json_response(
+        200,
+        json!({
+            "Code": 1000,
+            "Messages": messages,
+            "Total": total,
+            "Stale": stale,
+        }),
+    ))
+}
+
+fn handle_message_counts(
+    state: &Arc<Mutex<State>>,
+    headers: &hyper::HeaderMap,
+) -> Result<Response<Full<Bytes>>, io::Error> {
+    let mut state = state.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(username) = authenticated(&mut state, headers) else {
+        return Ok(unauthorized());
+    };
+    let account = state
+        .accounts
+        .get(&username)
+        .expect("the session's account exists");
+    let counts: Vec<Value> = account
+        .labels
+        .iter()
+        .map(|label| {
+            let (total, unread) = account
+                .messages
+                .iter()
+                .filter(|message| message.label_ids.contains(&label.id))
+                .fold((0u32, 0u32), |(total, unread), message| {
+                    (total + 1, unread + u32::from(message.unread))
+                });
+            json!({
+                "LabelID": label.id,
+                "Total": total,
+                "Unread": unread,
+            })
+        })
+        .collect();
+    Ok(json_response(200, json!({"Code": 1000, "Counts": counts})))
+}
+
+fn handle_latest_event(
+    state: &Arc<Mutex<State>>,
+    headers: &hyper::HeaderMap,
+) -> Result<Response<Full<Bytes>>, io::Error> {
+    let mut state = state.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(username) = authenticated(&mut state, headers) else {
+        return Ok(unauthorized());
+    };
+    let account = state
+        .accounts
+        .get(&username)
+        .expect("the session's account exists");
+    let id = account
+        .events
+        .last()
+        .map(|event| event_id(event.number))
+        .unwrap_or_else(|| "0".to_owned());
+    Ok(json_response(200, json!({"Code": 1000, "EventID": id})))
+}
+
+fn handle_events(
+    state: &Arc<Mutex<State>>,
+    headers: &hyper::HeaderMap,
+    id: &str,
+) -> Result<Response<Full<Bytes>>, io::Error> {
+    let mut state = state.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(username) = authenticated(&mut state, headers) else {
+        return Ok(unauthorized());
+    };
+    let after = id
+        .strip_prefix("evt-")
+        .and_then(|number| number.parse::<u64>().ok())
+        .unwrap_or(0);
+    let max = state.max_events_per_response;
+    let account = state
+        .accounts
+        .get(&username)
+        .expect("the session's account exists");
+    let events: Vec<&FakeEvent> = account
+        .events
+        .iter()
+        .filter(|event| event.number > after)
+        .collect();
+    let (batch, more) = if max > 0 && events.len() > max {
+        (&events[..max], true)
+    } else {
+        (&events[..], false)
+    };
+    let event_id = batch
+        .last()
+        .map(|event| event_id(event.number))
+        .unwrap_or_else(|| id.to_owned());
+    let refresh = batch.iter().any(|event| event.refresh);
+    let user = batch.iter().find_map(|event| event.user.clone());
+    let messages: Vec<Value> = batch
+        .iter()
+        .flat_map(|event| event.messages.iter().cloned())
+        .collect();
+    let labels: Vec<Value> = batch
+        .iter()
+        .flat_map(|event| event.labels.iter().cloned())
+        .collect();
+    let addresses: Vec<Value> = batch
+        .iter()
+        .flat_map(|event| event.addresses.iter().cloned())
+        .collect();
+    let mut response = json!({
+        "Code": 1000,
+        "EventID": event_id,
+        "More": more,
+        "Refresh": if refresh { 1 } else { 0 },
+        "Messages": messages,
+        "Labels": labels,
+        "Addresses": addresses,
+    });
+    if let Some(user) = user {
+        response["User"] = user;
+    }
+    Ok(json_response(200, response))
 }
 
 /// Builds the `LockedKey` the API stores for a generated user key.

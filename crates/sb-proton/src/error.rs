@@ -165,6 +165,15 @@ pub enum ProtonError {
 }
 
 impl ProtonError {
+    /// A response didn't decode; it is a failed request, never a
+    /// partial observation (spec/04 "Fault handling"). The message
+    /// carries the path and serde's reason, never the body.
+    pub(crate) fn decode(path: &str, error: impl fmt::Display) -> Self {
+        Self::Malformed {
+            message: format!("the {path} response didn't decode: {error}"),
+        }
+    }
+
     /// Maps a numeric Proton code to a typed refusal. `Success` and
     /// `Multi` answer `None`. Each arm cites the research that
     /// establishes the code's meaning.

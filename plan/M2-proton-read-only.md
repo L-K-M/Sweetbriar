@@ -577,6 +577,12 @@ the provider policies (`proton_bridge`, `generic_imap`) live in
   `sb-proton` for Proton accounts; bootstrap listing with page
   checkpoints; event polling and application; refresh handling;
   Proton's breaker classes; the coverage counts.
+- **Split** (over the PR size limit as one): **M2.15a** the transport's
+  read calls (labels, message pages, counts, events) and the fake
+  server's support; **M2.15b** the `proton_api` policy, label mapping,
+  the account worker's bootstrap listing with page checkpoints and
+  coverage; **M2.15c** events application, Refresh, the breaker classes
+  and the proptest model.
 - **Acceptance:** a proptest model of server changes (new, label
   changes, deletes, refreshes, disconnects) converges to the model's
   state; crash cuts during listing and event batches resume without

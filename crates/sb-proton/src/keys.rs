@@ -422,19 +422,25 @@ fn primary_user_key(user_keys: &UserKeys) -> Option<&LockedKey> {
 impl Client {
     /// `GET /core/v4/keys/salts` (research `auth-session.md` §7).
     pub async fn key_salts(&self, session: &Session) -> Result<Salts, ProtonError> {
-        let response: SaltsResponse = self.get_json(KEY_SALTS_PATH, session).await?;
+        let response: SaltsResponse = self
+            .get_json(KEY_SALTS_PATH, session, Priority::Interactive)
+            .await?;
         Ok(response.salts)
     }
 
     /// `GET /core/v4/users`: the user's locked keys.
     pub async fn user_keys(&self, session: &Session) -> Result<UserKeys, ProtonError> {
-        let response: UserResponse = self.get_json(USER_PATH, session).await?;
+        let response: UserResponse = self
+            .get_json(USER_PATH, session, Priority::Interactive)
+            .await?;
         Ok(response.user.keys)
     }
 
     /// `GET /core/v4/addresses` (spec/04 "Identities").
     pub async fn addresses(&self, session: &Session) -> Result<Vec<Address>, ProtonError> {
-        let response: AddressesResponse = self.get_json(ADDRESSES_PATH, session).await?;
+        let response: AddressesResponse = self
+            .get_json(ADDRESSES_PATH, session, Priority::Interactive)
+            .await?;
         Ok(response.addresses)
     }
 
@@ -498,27 +504,28 @@ impl Client {
     }
 
     /// One authenticated `GET` that decodes a JSON body, or a typed
-    /// failure (spec/04 "Fault handling").
-    async fn get_json<T: DeserializeOwned>(
+    /// failure (spec/04 "Fault handling"). Sign-in and key calls are
+    /// interactive; the sync reads in `mail` pass
+    /// [`Priority::Background`].
+    pub(crate) async fn get_json<T: DeserializeOwned>(
         &self,
         path: &str,
         session: &Session,
+        priority: Priority,
     ) -> Result<T, ProtonError> {
         let response = self
             .send(
                 Method::GET,
                 path,
                 None,
-                Priority::Interactive,
+                priority,
                 Some((session.uid(), session.expose_access_token())),
                 &[],
             )
             .await?;
         let (status, bytes) = read_response(response).await?;
         expect_success(status, &bytes)?;
-        serde_json::from_slice(&bytes).map_err(|e| ProtonError::Malformed {
-            message: format!("the {path} response didn't decode: {e}"),
-        })
+        serde_json::from_slice(&bytes).map_err(|e| ProtonError::decode(path, e))
     }
 }
 
