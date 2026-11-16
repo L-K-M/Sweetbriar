@@ -36,7 +36,10 @@ pub use fault::{FaultFs, FaultKind, FsOp};
 pub use imap::{Expect, FakeImapServer, ReceivedCommand, Reply, Script, Step};
 pub use imap_cert::{CERT_PEM, KEY_PEM, TlsIo, cert_der, client_stream, client_stream_with};
 pub use imap_profile::{Profile, RAW_UTF8_ENVELOPE};
-pub use proton::{FakeProtonServer, Fault, RecordedRequest, TestAccount};
+pub use proton::{
+    FakeProtonServer, Fault, MODULUS_B64, ModulusSignatureVerifier, ModulusVerifyError,
+    RecordedRequest, TestAccount,
+};
 pub use secret::{FakeSecrets, SecretOp};
 pub use sim::SimFs;
 pub use sqlite::{damage_an_index, execute_sql, store_meta_value, with_sqlite_write_lock};

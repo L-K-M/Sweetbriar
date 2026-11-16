@@ -118,6 +118,15 @@ pub enum ProtonError {
     },
     /// 401: the access token was rejected. The caller refreshes once.
     Unauthorized,
+    /// The SRP server proof did not match the client's computation;
+    /// no token from that response is usable (spec/10).
+    ServerProofMismatch,
+    /// The modulus signature did not verify with Proton's embedded key;
+    /// sign-in aborted before `/auth/v4` (spec/10).
+    ModulusSignatureInvalid,
+    /// The account needs a sign-in challenge (2FA, human verification or
+    /// a mailbox password) that M2.11a does not drive (spec/04).
+    UnsupportedChallenge,
     /// A response didn't decode; it is a failed request, never a
     /// partial observation (spec/04).
     Malformed {
@@ -169,12 +178,9 @@ impl ProtonError {
             // `auth-session.md` §4: 8002 is a wrong password.
             ApiCode::PasswordWrong => Self::InvalidInput(InvalidField::Password),
             // `auth-session.md` §5: 9001 and 12087 are the human
-            // verification challenge and its rejected token; this
-            // transport slice does not drive them.
+            // verification challenge and its rejected token.
             ApiCode::HumanVerificationRequired | ApiCode::HumanVerificationTokenInvalid => {
-                Self::Unavailable {
-                    message: message.to_owned(),
-                }
+                Self::UnsupportedChallenge
             }
             // `auth-session.md` §6: 10013 is a refused refresh token.
             ApiCode::RefreshTokenInvalid => Self::RefreshRefused {
@@ -193,6 +199,15 @@ impl fmt::Display for ProtonError {
                 write!(f, "Proton refused the refresh token: {message}")
             }
             Self::Unauthorized => f.write_str("Proton rejected the access token"),
+            Self::ServerProofMismatch => {
+                f.write_str("the SRP server proof did not match; no token was used")
+            }
+            Self::ModulusSignatureInvalid => {
+                f.write_str("the SRP modulus signature did not verify with Proton's key")
+            }
+            Self::UnsupportedChallenge => f.write_str(
+                "this account needs a sign-in challenge Sweetbriar does not support yet",
+            ),
             Self::Malformed { message } => write!(f, "a response didn't decode: {message}"),
             Self::Timeout => f.write_str("the request exceeded its 30 s deadline"),
         }

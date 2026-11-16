@@ -104,7 +104,10 @@ where Proton differs.
 - **Backoff:** 429 and 503 wait for `Retry-After` (at least 1 s, at most
   1 h), then retry. Network errors back off exponentially from 1 s to
   5 min, and, as for IMAP, a session that hasn't completed a pass
-  doesn't reset the backoff.
+  doesn't reset the backoff. A request that may have reached Proton (a
+  timeout, or a connection lost after it was sent) is retried only when
+  its method is idempotent; a sign-in or refresh is never replayed. A
+  request holds its in-flight slot until its body has been read.
 - **Fault handling:** a response that doesn't decode is a failed request,
   never a partial observation. Nothing from it is applied.
 
