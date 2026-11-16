@@ -227,25 +227,29 @@ final class ReaderViewController: NSViewController {
         // The sender of the message the toggle applies to: reader tasks
         // interleave, so another selection may be current after the render.
         let address = ReaderModel.senderAddress(model.currentMessage)
+        let ticket = model.navigationTicket
         model.setReadingView(enabled)
         updateReadingToggle()
         clearReadingNote()
         await render()
         guard let address else { return }
+        // The sender is remembered either way; a note about it is only
+        // shown while its message is still the one on screen.
+        var note: String?
         do {
             if enabled {
                 if try await memory.addSender(address) == .listFull {
-                    showReadingNote(
+                    note =
                         "The Reading view sender list is full (\(ReadingViewMemory.limit) senders), "
-                            + "so this sender was not remembered. The toggle still applies to this message."
-                    )
+                        + "so this sender was not remembered. The toggle still applies to this message."
                 }
             } else {
                 try await memory.removeSender(address)
             }
         } catch {
-            showReadingNote(error.localizedDescription)
+            note = error.localizedDescription
         }
+        if let note, ticket == model.navigationTicket { showReadingNote(note) }
     }
 
     private func updateReadingToggle() {

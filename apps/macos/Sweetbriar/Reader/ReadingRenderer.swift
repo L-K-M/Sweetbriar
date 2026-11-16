@@ -84,16 +84,7 @@ enum ReadingRenderer {
             text.append(NSAttributedString(string: ordered ? "\(item.number ?? fallback). " : "• "))
             text.append(content)
             text.append(NSAttributedString(string: "\n"))
-            // The item indent adds to the content's own (a quote's
-            // depth, a nested list), rather than replacing it.
-            let range = NSRange(location: itemStart, length: text.length - itemStart)
-            text.enumerateAttribute(.paragraphStyle, in: range) { style, subrange, _ in
-                let paragraph = NSMutableParagraphStyle()
-                if let style = style as? NSParagraphStyle { paragraph.setParagraphStyle(style) }
-                paragraph.firstLineHeadIndent += 24
-                paragraph.headIndent += 24
-                text.addAttribute(.paragraphStyle, value: paragraph, range: subrange)
-            }
+            indent(NSRange(location: itemStart, length: text.length - itemStart), by: 24, in: text)
         }
     }
 
@@ -103,12 +94,26 @@ enum ReadingRenderer {
     /// links keep the link color.
     private static func quote(_ range: NSRange, depth: Int, in text: NSMutableAttributedString) {
         let attributes = QuoteDepth.attributes(forDepth: depth)
-        text.addAttribute(.paragraphStyle, value: attributes[.paragraphStyle] as Any, range: range)
+        let style = attributes[.paragraphStyle] as? NSParagraphStyle
+        indent(range, by: style?.headIndent ?? 0, in: text)
         text.enumerateAttribute(.link, in: range) { link, subrange, _ in
             guard link == nil else { return }
             text.addAttribute(.foregroundColor, value: attributes[.foregroundColor] as Any, range: subrange)
         }
         add(.italicFontMask, to: range, in: text)
+    }
+
+    /// Adds `points` to the indent of every paragraph in `range`, on top
+    /// of the indent its content already has (a list in a quote, a quote
+    /// or nested list in a list item) rather than replacing it.
+    private static func indent(_ range: NSRange, by points: CGFloat, in text: NSMutableAttributedString) {
+        text.enumerateAttribute(.paragraphStyle, in: range) { style, subrange, _ in
+            let paragraph = NSMutableParagraphStyle()
+            if let style = style as? NSParagraphStyle { paragraph.setParagraphStyle(style) }
+            paragraph.firstLineHeadIndent += points
+            paragraph.headIndent += points
+            text.addAttribute(.paragraphStyle, value: paragraph, range: subrange)
+        }
     }
 
     /// Adds `trait` to every font in `range`, keeping the traits and

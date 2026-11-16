@@ -123,6 +123,10 @@ struct ReadingRendererTests {
         #expect(try indent(of: "Quoted", in: [quoted]) == 24 + QuoteDepth.indent)
         let nested = list([list([paragraph([literal("Inner")])])])
         #expect(try indent(of: "Inner", in: [nested]) == 48)
+        let listInQuote: ReadingBlock = .quote(
+            partID: "p", blocks: [paragraph([literal("Plain")]), list([paragraph([literal("Item")])])])
+        #expect(try indent(of: "Plain", in: [listInQuote]) == QuoteDepth.indent)
+        #expect(try indent(of: "Item", in: [listInQuote]) == QuoteDepth.indent + 24)
     }
 
     @Test func preformattedIsMonospaced() throws {

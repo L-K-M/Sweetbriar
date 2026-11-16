@@ -17,16 +17,33 @@ private final class FakeReadingMemorySource: ReadingViewMemorySource, @unchecked
     var stored: [String]
     var writes = 0
     var error: (any Error)?
+    /// Parks each write until `releaseWrite()`, so a test can change the
+    /// selection while the write is outstanding.
+    var holdsWrites = false
+    private let lock = NSLock()
+    private var parkedWrite: CheckedContinuation<Void, Never>?
 
     init(_ stored: [String] = [], error: (any Error)? = nil) {
         self.stored = stored
         self.error = error
     }
 
+    var hasParkedWrite: Bool { lock.withLock { parkedWrite != nil } }
+
+    func releaseWrite() {
+        lock.withLock {
+            defer { parkedWrite = nil }
+            return parkedWrite
+        }?.resume()
+    }
+
     func readingViewSenders() async throws -> [String] { stored }
 
     func setReadingViewSenders(_ senders: [String]) async throws -> Receipt {
         writes += 1
+        if holdsWrites {
+            await withCheckedContinuation { continuation in lock.withLock { parkedWrite = continuation } }
+        }
         if let error { throw error }
         stored = senders
         return Receipt(command: "set_setting", resultJson: "{}", createdAtMs: Int64(writes))
@@ -320,6 +337,29 @@ struct ReadingViewToggleTests {
         #expect(controller.readingView.string.contains("Reading body"))
         #expect(!controller.readingNote.isHidden)
         #expect(controller.readingNote.stringValue == failure.localizedDescription)
+        controller.close()
+    }
+
+    @Test(.timeLimit(.minutes(1))) func noteForAnEarlierMessageIsNotShownOnTheNextOne() async throws {
+        let source = try ToggleSource()
+        defer { try? FileManager.default.removeItem(at: source.directory) }
+        source.messages[8] = makeMessage(id: 8, address: "second@example.test")
+        source.documents[7] = makeDocument(text: "Reading body")
+        let memorySource = FakeReadingMemorySource([], error: CoreFailure.unavailable(reason: "offline"))
+        let memory = ReadingViewMemory(source: memorySource)
+        await memory.reload()
+        memorySource.holdsWrites = true
+        let controller = ReaderViewController(model: ReaderModel(source: source), memory: memory)
+        await controller.show(selection: [42])
+
+        let toggle = Task { await controller.setReadingView(true) }
+        try #require(await waitUntil { memorySource.hasParkedWrite })
+        await controller.show(selection: [43])
+        memorySource.releaseWrite()
+        await toggle.value
+        #expect(memorySource.writes == 1)
+        #expect(controller.header.stringValue.contains("second@example.test"))
+        #expect(controller.readingNote.isHidden)
         controller.close()
     }
 
