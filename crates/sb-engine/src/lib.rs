@@ -62,8 +62,8 @@ mod windows;
 pub use sb_resources::Clock;
 pub use sb_resources::{
     ADD_BRIDGE_ACCOUNT, AddedAccount, AddressMode, BridgeAccountParams, BridgeIdentity,
-    CertificatePin, CredentialPause, EndpointSecurity, IdentitySendable, ProtonSignInParams,
-    Secret, SecretError, SecretStore,
+    CertificatePin, CredentialPause, EndpointSecurity, Identity, IdentitySendable,
+    ProtonSignInParams, Secret, SecretError, SecretStore,
 };
 pub use sb_resources::{
     AccountColor, AccountKind, AccountState, AppearanceAssignment, ExportSelection,

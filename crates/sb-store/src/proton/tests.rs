@@ -6,12 +6,14 @@ use sb_test_support::{ScratchDir, block_on, real_fs};
 use sb_types::time::Timestamp;
 
 use crate::StoreError;
+use crate::accounts::{CredentialPause, IdentitySendable, NewIdentity};
 use crate::open;
 use crate::proton::{
-    NewProtonAccount, ProtonBodyFailureReason, ProtonListingState, ProtonPasswordMode,
-    begin_listing, body_failure, clear_body_failure, complete_listing, insert_proton_account,
-    proton_account, proton_account_by_user_id, record_body_failure, set_diagnostics,
-    set_event_cursor, update_listing_checkpoint,
+    NewProtonAccount, NewProtonSignIn, ProtonBodyFailureReason, ProtonListingState,
+    ProtonPasswordMode, SESSION_REFUSED_REASON, begin_listing, body_failure, clear_body_failure,
+    commit_proton_sign_in, complete_listing, disconnect_proton_account, insert_proton_account,
+    pause_for_proton_credential, pause_for_session, proton_account, proton_account_by_user_id,
+    record_body_failure, set_diagnostics, set_event_cursor, update_listing_checkpoint,
 };
 use crate::testing::{reading, scratch_paths, test_seams};
 
@@ -52,6 +54,26 @@ fn new_account(account_id: &str, proton_user_id: &str) -> NewProtonAccount {
         proton_user_id: proton_user_id.to_owned(),
         credential_ref: format!("proton-{account_id}"),
         password_mode: ProtonPasswordMode::Mailbox,
+    }
+}
+
+/// A completed sign-in's rows, as the resources layer would build them.
+fn sign_in_for(account_id: &str, proton_user_id: &str) -> NewProtonSignIn {
+    NewProtonSignIn {
+        account_id: account_id.to_owned(),
+        display_name: "Owner".to_owned(),
+        api_base_url: "https://mail.proton.me/api".to_owned(),
+        username: "owner".to_owned(),
+        proton_user_id: proton_user_id.to_owned(),
+        credential_ref: format!("account/{account_id}/proton-session"),
+        password_mode: ProtonPasswordMode::Mailbox,
+        identities: vec![NewIdentity {
+            identity_id: "addr-1".to_owned(),
+            email: "owner@example.test".to_owned(),
+            display_name: "Owner".to_owned(),
+            is_default: true,
+            sendable: IdentitySendable::Validated,
+        }],
     }
 }
 
@@ -107,6 +129,218 @@ fn proton_account_insert_read_and_refuse_another_user() {
         .map_err(|e| crate::schema::classify(e, "insert a duplicate Proton user"))
     }));
     assert!(write.is_err(), "a duplicate proton_user_id was accepted");
+}
+
+/// Signing an existing account in again updates it in place: same
+/// UUID, generation and revision bumped, username and password mode
+/// replaced, identities upserted with exactly one default (spec/07).
+#[test]
+fn signing_in_again_updates_the_account_in_place() {
+    let (_scratch, store) = proton_store("proton-again");
+    block_on(store.write(crate::WritePriority::User, |tx| {
+        insert_account(tx, "a1", 1);
+        insert_proton_account(tx, &new_account("a1", "user-1")).map(|_| ())
+    }))
+    .unwrap();
+
+    let sign_in = NewProtonSignIn {
+        account_id: "a1".to_owned(),
+        display_name: "Renamed".to_owned(),
+        api_base_url: "https://mail.proton.me/api".to_owned(),
+        username: "renamed".to_owned(),
+        proton_user_id: "user-1".to_owned(),
+        credential_ref: "account/a1/proton-session".to_owned(),
+        password_mode: ProtonPasswordMode::Login,
+        identities: vec![
+            NewIdentity {
+                identity_id: "addr-1".to_owned(),
+                email: "one@example.test".to_owned(),
+                display_name: "One".to_owned(),
+                is_default: false,
+                sendable: IdentitySendable::Validated,
+            },
+            NewIdentity {
+                identity_id: "addr-2".to_owned(),
+                email: "two@example.test".to_owned(),
+                display_name: "Two".to_owned(),
+                is_default: false,
+                sendable: IdentitySendable::Unavailable,
+            },
+        ],
+    };
+    block_on(store.write(crate::WritePriority::User, move |tx| {
+        commit_proton_sign_in(tx, &sign_in, now())
+    }))
+    .unwrap();
+
+    let account = reading(&store, |tx| proton_account(tx, "a1")).expect("the row");
+    assert_eq!(account.username, "renamed");
+    assert_eq!(account.password_mode, ProtonPasswordMode::Login);
+    assert_eq!(account.revision, 2);
+    let row: (i64, i64, String, String) = reading(&store, |tx| {
+        tx.query_row(
+            "SELECT config_generation, revision, display_name, state
+             FROM accounts WHERE account_id = 'a1'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .map_err(|e| crate::schema::classify(e, "read the account row"))
+    });
+    assert_eq!(row, (2, 2, "Renamed".to_owned(), "active".to_owned()));
+    let defaults: i64 = reading(&store, |tx| {
+        tx.query_row(
+            "SELECT COUNT(*) FROM identities WHERE account_id = 'a1' AND is_default = 1",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|e| crate::schema::classify(e, "count the default identities"))
+    });
+    assert_eq!(defaults, 1);
+    let emails: Vec<String> = reading(&store, |tx| {
+        let mut statement = tx
+            .prepare("SELECT email FROM identities WHERE account_id = 'a1' ORDER BY email")
+            .map_err(|e| crate::schema::classify(e, "read the identities"))?;
+        let rows = statement
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(|e| crate::schema::classify(e, "read the identities"))?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| crate::schema::classify(e, "read the identities"))
+    });
+    assert_eq!(
+        emails,
+        vec!["one@example.test".to_owned(), "two@example.test".to_owned()]
+    );
+}
+
+/// Another Proton user than the account's is `Conflict`, never merged
+/// (spec/02); the stored row is unchanged.
+#[test]
+fn signing_in_again_as_another_proton_user_is_refused() {
+    let (_scratch, store) = proton_store("proton-again-user");
+    block_on(store.write(crate::WritePriority::User, |tx| {
+        insert_account(tx, "a1", 1);
+        insert_proton_account(tx, &new_account("a1", "user-1")).map(|_| ())
+    }))
+    .unwrap();
+
+    let sign_in = NewProtonSignIn {
+        proton_user_id: "user-2".to_owned(),
+        ..sign_in_for("a1", "user-1")
+    };
+    let write = block_on(store.write(crate::WritePriority::User, move |tx| {
+        commit_proton_sign_in(tx, &sign_in, now())
+    }));
+    expect_conflict(write);
+
+    let account = reading(&store, |tx| proton_account(tx, "a1")).expect("the row");
+    assert_eq!(account.proton_user_id, "user-1");
+    assert_eq!(account.revision, 1);
+    let generation: i64 = reading(&store, |tx| {
+        tx.query_row(
+            "SELECT config_generation FROM accounts WHERE account_id = 'a1'",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|e| crate::schema::classify(e, "read the generation"))
+    });
+    assert_eq!(generation, 1);
+}
+
+/// A refused session pause marks the account without touching its
+/// rows; a user pause stays; a disconnect keeps every row (spec/04).
+#[test]
+fn a_session_refusal_pauses_and_a_disconnect_keeps_the_rows() {
+    let (_scratch, store) = proton_store("proton-session-state");
+    block_on(store.write(crate::WritePriority::User, |tx| {
+        insert_account(tx, "a1", 1);
+        insert_proton_account(tx, &new_account("a1", "user-1")).map(|_| ())
+    }))
+    .unwrap();
+
+    block_on(store.write(crate::WritePriority::User, |tx| pause_for_session(tx, "a1"))).unwrap();
+    let (state, reason): (String, Option<String>) = reading(&store, |tx| {
+        tx.query_row(
+            "SELECT state, state_reason FROM accounts WHERE account_id = 'a1'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .map_err(|e| crate::schema::classify(e, "read the state"))
+    });
+    assert_eq!(state, "needs_attention");
+    assert_eq!(reason.as_deref(), Some(SESSION_REFUSED_REASON));
+
+    // A user pause outranks the restore's refusal.
+    block_on(store.write(crate::WritePriority::User, |tx| {
+        tx.execute(
+            "UPDATE accounts SET state = 'paused', state_reason = NULL WHERE account_id = 'a1'",
+            [],
+        )
+        .map(|_| ())
+        .map_err(|e| crate::schema::classify(e, "pause the account"))
+    }))
+    .unwrap();
+    block_on(store.write(crate::WritePriority::User, |tx| pause_for_session(tx, "a1"))).unwrap();
+    let state: String = reading(&store, |tx| {
+        tx.query_row(
+            "SELECT state FROM accounts WHERE account_id = 'a1'",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|e| crate::schema::classify(e, "read the state"))
+    });
+    assert_eq!(state, "paused");
+
+    block_on(store.write(crate::WritePriority::User, |tx| {
+        disconnect_proton_account(tx, "a1")
+    }))
+    .unwrap();
+    let state: String = reading(&store, |tx| {
+        tx.query_row(
+            "SELECT state FROM accounts WHERE account_id = 'a1'",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|e| crate::schema::classify(e, "read the state"))
+    });
+    assert_eq!(state, "disconnected");
+    assert!(reading(&store, |tx| proton_account(tx, "a1")).is_some());
+
+    // The user's own sign-in outranks the disconnect: a credential
+    // failure while signing in again still pauses the account.
+    block_on(store.write(crate::WritePriority::User, |tx| {
+        pause_for_proton_credential(tx, "a1", CredentialPause::StoreUnavailable)
+    }))
+    .unwrap();
+    let (state, reason): (String, Option<String>) = reading(&store, |tx| {
+        tx.query_row(
+            "SELECT state, state_reason FROM accounts WHERE account_id = 'a1'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .map_err(|e| crate::schema::classify(e, "read the state"))
+    });
+    assert_eq!(state, "needs_attention");
+    assert_eq!(
+        reason.as_deref(),
+        Some(CredentialPause::StoreUnavailable.reason())
+    );
+
+    // Another kind is refused, never disconnected here.
+    block_on(store.write(crate::WritePriority::User, |tx| {
+        tx.execute(
+            "INSERT INTO accounts
+             (account_id, kind, provider, display_name, state, sort_order, created_at)
+             VALUES ('bridge', 'imap', 'proton_bridge', 'Bridge', 'active', 0, 0)",
+            [],
+        )
+        .map(|_| ())
+        .map_err(|e| crate::schema::classify(e, "insert the Bridge account"))
+    }))
+    .unwrap();
+    let write = block_on(store.write(crate::WritePriority::User, |tx| {
+        disconnect_proton_account(tx, "bridge")
+    }));
+    expect_conflict(write);
 }
 
 /// The listing cursors follow the schema's CHECK invariants, and the

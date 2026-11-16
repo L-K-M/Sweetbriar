@@ -2,10 +2,12 @@
 //! without contacting Proton.
 
 use crate::EngineError;
-use crate::engine::{Engine, Worker, validate_idempotency_key};
+use crate::engine::{Engine, Spawn, Worker, validate_idempotency_key};
 use sb_resources::{
-    BEGIN_PROTON_SIGN_IN, FinishedSignIn, ProtonRefusal, ProtonSignInParams, Secret, SecretError,
-    SignIn, SignInStep,
+    AccountKind, AccountState, BEGIN_PROTON_SIGN_IN, CredentialPause, FinishedSignIn, ProtonError,
+    ProtonRefusal, ProtonSignInParams, RestoredProtonSession, Secret, SecretError, Session, SignIn,
+    SignInStep, WritePriority, accounts, decode_proton_session, disconnect_proton_account,
+    pause_for_credential, pause_for_session, proton_account,
 };
 
 use std::collections::HashMap;
@@ -55,6 +57,22 @@ pub(crate) struct SignIns {
     by_key: HashMap<String, String>,
 }
 
+/// A session restored from the secret store at open and kept in memory
+/// with its unlocked keys (spec/04 "Restore on start"). The keys stay
+/// in memory only (spec/10).
+pub(crate) struct RestoredSession {
+    pub session: Session,
+    /// Unlocked for the account's lifetime; the sync steps (M2.15+)
+    /// read them, and the test seam observes them.
+    #[cfg_attr(not(any(test, feature = "test-seams")), allow(dead_code))]
+    pub keys: Box<dyn sb_resources::KeyStore>,
+}
+
+/// The restored sessions by account. Its lock also serializes every
+/// write of an account's secret item (sign-in, restore, disconnect),
+/// so a slower one never stores a session another has replaced.
+pub(crate) type Sessions = tokio::sync::Mutex<HashMap<String, RestoredSession>>;
+
 impl Engine {
     /// `begin_proton_sign_in(params)` (spec/07): a repeated key answers
     /// the open conversation, or its stored receipt, with no contact.
@@ -66,6 +84,7 @@ impl Engine {
         validate_idempotency_key(idempotency_key)?;
         let key = idempotency_key.to_owned();
         let conversations = Arc::clone(&self.proton_sign_ins);
+        let sessions = Arc::clone(&self.proton_sessions);
         self.command(move |worker| async move {
             let now = worker.resources().now().as_millis();
             let mut table = conversations.lock().await;
@@ -88,7 +107,21 @@ impl Engine {
             if let Some(receipt) = receipt {
                 return Ok(BeginProtonSignIn::Complete { receipt });
             }
-            let account_id = worker.resources().new_uuid_string();
+            // Signing an existing account in again names it; an unknown
+            // or non-Proton account is refused before Proton is
+            // contacted (spec/07).
+            if let Some(account_id) = params.account_id.as_deref()
+                && account_kind(&worker, account_id).await? != Some(AccountKind::Proton)
+            {
+                return Err(EngineError::invalid_input(
+                    "account",
+                    format!("account {account_id} is not a Proton account"),
+                ));
+            }
+            let account_id = match &params.account_id {
+                Some(account_id) => account_id.clone(),
+                None => worker.resources().new_uuid_string(),
+            };
             let display_name = params.display_name.clone();
             let username = params.username.clone();
             let started = worker
@@ -105,6 +138,7 @@ impl Engine {
                     })?;
                     let completed = complete_conversation(
                         &worker,
+                        &sessions,
                         &key,
                         &account_id,
                         &display_name,
@@ -152,6 +186,7 @@ impl Engine {
     ) -> Result<ProtonSignInState, EngineError> {
         let id = sign_in_id.to_owned();
         let conversations = Arc::clone(&self.proton_sign_ins);
+        let sessions = Arc::clone(&self.proton_sessions);
         self.command(move |worker| async move {
             let now = worker.resources().now().as_millis();
             let mut table = conversations.lock().await;
@@ -191,6 +226,7 @@ impl Engine {
                     table.by_key.remove(&ended.idempotency_key);
                     let completed = complete_conversation(
                         &worker,
+                        &sessions,
                         &ended.idempotency_key,
                         &ended.account_id,
                         &ended.display_name,
@@ -230,6 +266,272 @@ impl Engine {
         })
         .await
     }
+
+    /// Restore every Proton account's session in the background after
+    /// open (spec/04 "On every start"): the open itself never waits for
+    /// Proton. Each account not disconnected reads its secret item,
+    /// refreshes and unlocks its keys without the password; a missing or
+    /// unreadable item, or a refused refresh, marks it `needs_attention`
+    /// and keeps its data.
+    pub(crate) fn schedule_proton_restore(&self) {
+        let sessions = Arc::clone(&self.proton_sessions);
+        let done = Arc::clone(&self.proton_restore_done);
+        let _ = self.spawn_worker(move |worker| async move {
+            let accounts = worker.blocking(|resources| resources.read(accounts)).await;
+            if let Ok(Ok(accounts)) = accounts {
+                for account in accounts {
+                    if account.kind != AccountKind::Proton
+                        || account.state == AccountState::Disconnected
+                    {
+                        continue;
+                    }
+                    restore_proton_account(&worker, &sessions, &account.account_id).await;
+                }
+            }
+            done.notify_one();
+        });
+    }
+
+    /// `disconnect_account(id)` (spec/07, 04): revoke a Proton
+    /// account's session, delete its secret and mark it disconnected,
+    /// keeping every row and its data. Only a Proton account; another
+    /// kind is `InvalidInput` on `account`.
+    pub async fn disconnect_account(&self, account_id: &str) -> Result<(), EngineError> {
+        let id = account_id.to_owned();
+        let sessions = Arc::clone(&self.proton_sessions);
+        self.command(move |worker| async move {
+            match account_kind(&worker, &id).await? {
+                Some(AccountKind::Proton) => {}
+                Some(_) => {
+                    return Err(EngineError::invalid_input(
+                        "account",
+                        format!("account {id} is not a Proton account"),
+                    ));
+                }
+                None => {
+                    return Err(EngineError::NotFound {
+                        what: format!("account {id}"),
+                    });
+                }
+            }
+            // Held to the end, so a restore finishing meanwhile can't
+            // store the secret again.
+            let mut sessions = sessions.lock().await;
+            let restored = sessions.remove(&id);
+            if let Some(restored) = restored {
+                // Best effort: a failed revoke never blocks the local
+                // disconnect (spec/04).
+                let _ = worker
+                    .resources()
+                    .logout_proton_session(&restored.session)
+                    .await;
+            }
+            let reference = worker
+                .blocking({
+                    let id = id.clone();
+                    move |resources| resources.read(|tx| proton_account(tx, &id))
+                })
+                .await??
+                .ok_or_else(|| EngineError::NotFound {
+                    what: format!("account {id}"),
+                })?
+                .credential_ref;
+            match worker
+                .blocking(move |resources| resources.delete_secret(&reference))
+                .await
+            {
+                Ok(Ok(())) | Ok(Err(SecretError::NotFound)) => {}
+                Ok(Err(error)) => {
+                    let pause = credential_pause(error);
+                    let id = id.clone();
+                    let _ = worker
+                        .resources()
+                        .write(WritePriority::User, move |tx| {
+                            pause_for_credential(tx, &id, pause)
+                        })
+                        .await;
+                    return Err(EngineError::unavailable(format!(
+                        "the credential store could not delete the account's secret: {error}"
+                    )));
+                }
+                Err(error) => return Err(error),
+            }
+            worker
+                .resources()
+                .write(WritePriority::User, move |tx| {
+                    disconnect_proton_account(tx, &id)
+                })
+                .await?;
+            Ok(())
+        })
+        .await
+    }
+
+    /// Test seam: wait for the open-time restore pass to finish.
+    #[cfg(any(test, feature = "test-seams"))]
+    #[doc(hidden)]
+    pub async fn proton_restore_settled(&self) {
+        self.proton_restore_done.notified().await;
+    }
+
+    /// Test seam: the restored session's unlocked identities, or `None`
+    /// when the account has no restored session.
+    #[cfg(any(test, feature = "test-seams"))]
+    #[doc(hidden)]
+    pub async fn proton_session(&self, account_id: &str) -> Option<Vec<sb_resources::Identity>> {
+        let sessions = self.proton_sessions.lock().await;
+        sessions
+            .get(account_id)
+            .map(|restored| restored.keys.identities().to_vec())
+    }
+}
+
+/// Whether the account is disconnected; an unreadable store counts as
+/// disconnected, so restore stores nothing it can't check.
+async fn is_disconnected(worker: &Worker, account_id: &str) -> bool {
+    let id = account_id.to_owned();
+    match worker
+        .blocking(move |resources| resources.read(accounts))
+        .await
+    {
+        Ok(Ok(accounts)) => accounts
+            .iter()
+            .find(|account| account.account_id == id)
+            .is_none_or(|account| account.state == AccountState::Disconnected),
+        _ => true,
+    }
+}
+
+/// The account's kind, or `None` when it doesn't exist.
+async fn account_kind(
+    worker: &Worker,
+    account_id: &str,
+) -> Result<Option<AccountKind>, EngineError> {
+    let id = account_id.to_owned();
+    let accounts = worker
+        .blocking(move |resources| resources.read(accounts))
+        .await??;
+    Ok(accounts
+        .into_iter()
+        .find(|account| account.account_id == id)
+        .map(|account| account.kind))
+}
+
+/// The credential pause a secret-store failure shows (spec/10: kinds
+/// only).
+fn credential_pause(error: SecretError) -> CredentialPause {
+    match error {
+        SecretError::NotFound => CredentialPause::NotStored,
+        SecretError::Unavailable => CredentialPause::StoreUnavailable,
+        SecretError::Refused => CredentialPause::StoreRefused,
+        SecretError::InvalidRef => CredentialPause::StoreFailed,
+    }
+}
+
+/// Restore one account's session (spec/04 "Restore on start").
+async fn restore_proton_account(worker: &Worker, sessions: &Sessions, account_id: &str) {
+    let id = account_id.to_owned();
+    let reference = match worker
+        .blocking({
+            let id = id.clone();
+            move |resources| resources.read(|tx| proton_account(tx, &id))
+        })
+        .await
+    {
+        Ok(Ok(Some(account))) => account.credential_ref,
+        _ => return,
+    };
+    let get_reference = reference.clone();
+    let secret = match worker
+        .blocking(move |resources| resources.get_secret(&get_reference))
+        .await
+    {
+        Ok(Ok(secret)) => secret,
+        Ok(Err(SecretError::NotFound)) => {
+            mark_session_refused(worker, account_id).await;
+            return;
+        }
+        Ok(Err(error)) => {
+            pause_for_secret_error(worker, account_id, error).await;
+            return;
+        }
+        Err(_) => return,
+    };
+    let decoded = match decode_proton_session(secret.expose()) {
+        Ok(decoded) => decoded,
+        Err(_) => {
+            mark_session_refused(worker, account_id).await;
+            return;
+        }
+    };
+    drop(secret);
+    let restored = match worker
+        .resources()
+        .restore_proton_session(
+            decoded.uid(),
+            decoded.refresh_token(),
+            decoded.key_passphrase(),
+        )
+        .await
+    {
+        Ok(restored) => restored,
+        Err(ProtonError::RefreshRefused { .. }) => {
+            mark_session_refused(worker, account_id).await;
+            return;
+        }
+        // Offline and other transport failures leave the account as it
+        // is; the next start tries again (spec/04).
+        Err(_) => return,
+    };
+    // Proton rotated the refresh token: store the new item before the
+    // session is used (spec/04 "Refresh").
+    let RestoredProtonSession {
+        session,
+        keys,
+        secret,
+    } = restored;
+    let mut sessions = sessions.lock().await;
+    // A sign-in or disconnect that ran meanwhile owns the secret item
+    // now: this session is surplus, so it is revoked, never stored.
+    if sessions.contains_key(account_id) || is_disconnected(worker, account_id).await {
+        let _ = worker.resources().logout_proton_session(&session).await;
+        return;
+    }
+    let set_reference = reference.clone();
+    let stored = worker
+        .blocking(move |resources| resources.set_secret(&set_reference, &secret))
+        .await;
+    match stored {
+        Ok(Ok(())) => {
+            sessions.insert(account_id.to_owned(), RestoredSession { session, keys });
+        }
+        Ok(Err(error)) => pause_for_secret_error(worker, account_id, error).await,
+        // The blocking join failed (shutdown): leave the account as it
+        // is rather than report a store condition that never happened.
+        Err(_) => {}
+    }
+}
+
+/// Mark the account `needs_attention` ("Sign in again") without
+/// touching its data (spec/04).
+async fn mark_session_refused(worker: &Worker, account_id: &str) {
+    let id = account_id.to_owned();
+    let _ = worker
+        .resources()
+        .write(WritePriority::Sync, move |tx| pause_for_session(tx, &id))
+        .await;
+}
+
+/// A secret-store failure pauses the account (spec/10), never deletes.
+async fn pause_for_secret_error(worker: &Worker, account_id: &str, error: SecretError) {
+    let pause = credential_pause(error);
+    let id = account_id.to_owned();
+    let _ = worker
+        .resources()
+        .write(WritePriority::Sync, move |tx| {
+            pause_for_credential(tx, &id, pause)
+        })
+        .await;
 }
 
 /// Drops conversations past their ten minutes.
@@ -288,6 +590,7 @@ fn to_challenge(step: ProtonSignInStep) -> Result<sb_resources::Challenge, Engin
 /// Commits a completed conversation, then writes the secret item.
 async fn complete_conversation(
     worker: &Worker,
+    sessions: &Sessions,
     idempotency_key: &str,
     account_id: &str,
     display_name: &str,
@@ -302,7 +605,8 @@ async fn complete_conversation(
             .await
             .unwrap_or(Err(SecretError::Unavailable))
     };
-    worker
+    let mut sessions = sessions.lock().await;
+    let completed = worker
         .resources()
         .complete_proton_sign_in(
             idempotency_key,
@@ -313,7 +617,12 @@ async fn complete_conversation(
             store_secret,
         )
         .await
-        .map_err(EngineError::from)
+        .map_err(EngineError::from)?;
+    // The new session replaces one restored at open, which signing in
+    // again made stale.
+    let FinishedSignIn { session, keys, .. } = finished;
+    sessions.insert(completed.clone(), RestoredSession { session, keys });
+    Ok(completed)
 }
 
 impl From<ProtonRefusal> for EngineError {
