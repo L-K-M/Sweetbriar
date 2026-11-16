@@ -585,6 +585,9 @@ Tags and notes attach to **logical messages**, the provider object,
 deliberately. They survive the message vanishing from the server, and
 they are never written to the server in the pilot.
 
+A tag's and a saved view's name is 1–128 UTF-8 bytes; an empty or
+longer name is `InvalidInput` on `tag` or `name`.
+
 ## Contacts (reservation)
 
 ```sql

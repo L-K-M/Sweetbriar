@@ -7,6 +7,12 @@ final class ReaderViewController: NSViewController {
     let model: ReaderModel
     let header = NSTextField(wrappingLabelWithString: "")
     let accountChip = NSTextField(labelWithString: "")
+    let tagPicker = TagPickerView(frame: .zero)
+    let noteEditor = NoteEditorView(frame: .zero)
+    /// The note last sent: the shown note may lag a write in flight.
+    private var noteSent: (messageID: Int64, text: String)?
+    /// The message the note editor was filled for, and its note then.
+    private var noteDraft: (messageId: Int64, note: String?)?
     let status = NSTextField(wrappingLabelWithString: "No message selected")
     let remoteContent = NSTextField(labelWithString: "")
     let sourceButton = NSButton(title: "View Source", target: nil, action: nil)
@@ -74,6 +80,8 @@ final class ReaderViewController: NSViewController {
         header.isSelectable = true
         details.addArrangedSubview(header)
         details.addArrangedSubview(accountChip)
+        details.addArrangedSubview(tagPicker)
+        details.addArrangedSubview(noteEditor)
         sourceButton.target = self
         sourceButton.action = #selector(toggleSource)
         details.addArrangedSubview(sourceButton)
@@ -108,11 +116,18 @@ final class ReaderViewController: NSViewController {
             stack.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -12),
             body.widthAnchor.constraint(equalTo: stack.widthAnchor),
             header.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            details.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            tagPicker.widthAnchor.constraint(equalTo: details.widthAnchor),
+            noteEditor.widthAnchor.constraint(equalTo: details.widthAnchor),
+            noteEditor.heightAnchor.constraint(equalToConstant: 72),
         ])
         body.setContentHuggingPriority(.defaultLow, for: .vertical)
         details.isHidden = true
         textScroll.isHidden = true
         html.isHidden = true
+        tagPicker.onAdd = { [weak self] name in self?.setTag(name, applied: true) }
+        tagPicker.onRemove = { [weak self] tag in self?.setTag(tag.name, applied: false) }
+        noteEditor.onEndEditing = { [weak self] text in self?.saveNote(text) }
     }
 
     @discardableResult
@@ -193,6 +208,7 @@ final class ReaderViewController: NSViewController {
             let blocked = model.currentLease?.remoteContentBlocked ?? 0
             remoteContent.stringValue = "\(blocked) remote content items blocked"
             remoteContent.isHidden = blocked == 0
+            renderMetadata(message)
             rebuildAttachments()
         }
         switch model.state {
@@ -232,9 +248,68 @@ final class ReaderViewController: NSViewController {
             let seconds = Duration.milliseconds(timestamp) / .seconds(1)
             lines.append(Date(timeIntervalSince1970: seconds).formatted(date: .abbreviated, time: .shortened))
         }
-        if !message.tags.isEmpty { lines.append("Tags: " + message.tags.map(\.name).joined(separator: ", ")) }
-        if let note = message.note, !note.isEmpty { lines.append("Note: " + note) }
         return lines.joined(separator: "\n")
+    }
+
+    /// Show the message's tags and note; the editor keeps the user's
+    /// text while it is being edited.
+    private func renderMetadata(_ message: ReaderMessage) {
+        tagPicker.configure(tags: message.tags)
+        if noteEditor.isEditing {
+            // Navigation moved on mid-edit: save to the edited message.
+            guard let draft = noteDraft, draft.messageId != message.messageId else { return }
+            saveNote(noteEditor.text)
+        }
+        noteEditor.text = message.note ?? ""
+        noteDraft = (message.messageId, message.note)
+    }
+
+    /// Apply or remove a tag on the message shown at the click; the
+    /// reader re-renders on success and shows the error without
+    /// changing the shown tags.
+    private func setTag(_ name: String, applied: Bool) {
+        guard let occurrenceID = model.occurrenceID, let messageID = model.currentMessage?.messageId
+        else { return }
+        let ticket = model.navigationTicket
+        reads.run { [weak self] in
+            guard let self else { return }
+            do {
+                try await self.model.setTag(
+                    name, applied: applied, occurrenceID: occurrenceID, messageID: messageID
+                )
+                guard ticket == self.model.navigationTicket else { return }
+                await self.render()
+            } catch {
+                guard ticket == self.model.navigationTicket else { return }
+                self.showError(error)
+            }
+        }
+    }
+
+    /// Save the note on end-editing; empty text clears it (spec/07).
+    /// The message is the one the editor was filled for. A failure
+    /// restores the shown note and shows even after navigation.
+    private func saveNote(_ text: String) {
+        guard let message = noteDraft else { return }
+        let ticket = model.navigationTicket
+        let sent = noteSent?.messageID == message.messageId ? noteSent?.text : nil
+        let previous = sent ?? message.note ?? ""
+        guard text != previous else { return }
+        noteSent = (message.messageId, text)
+        reads.run { [weak self] in
+            guard let self else { return }
+            do {
+                try await self.model.setNote(text, messageID: message.messageId)
+                guard ticket == self.model.navigationTicket else { return }
+                await self.render()
+            } catch {
+                if self.noteSent?.messageID == message.messageId, self.noteSent?.text == text {
+                    self.noteSent = (message.messageId, previous)
+                }
+                if self.noteDraft?.messageId == message.messageId { self.noteEditor.text = previous }
+                self.showError(error)
+            }
+        }
     }
 
     private func rebuildAttachments() {

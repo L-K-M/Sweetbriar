@@ -40,6 +40,16 @@ actor FakeSidebarSource: SidebarSource {
         }
         return list
     }
+
+    func savedViews() async throws -> [SavedView] { [] }
+
+    func upsertSavedView(idempotencyKey: String, params: SavedViewParams) async throws -> Receipt {
+        throw CoreFailure.unavailable(reason: "unused")
+    }
+
+    func deleteSavedView(idempotencyKey: String, viewId: String) async throws -> Receipt {
+        throw CoreFailure.unavailable(reason: "unused")
+    }
 }
 
 private let archive = Account(
@@ -82,7 +92,7 @@ func theSidebarListsUnifiedThenEachAccount() async throws {
 
     #expect(model.sections.map(\.title) == ["Unified", "Local Archive"])
     let unified = model.sections[0].entries
-    #expect(unified.map(\.title) == ["Inbox", "Flagged", "Drafts (local)", "Out Box", "Saved Views"])
+    #expect(unified.map(\.title) == ["Inbox", "Flagged", "Drafts (local)", "Out Box"])
     #expect(unified[0].target == .window(.unified(.inbox)))
     #expect(unified[1].target == .window(.flagged))
     #expect(unified[2].target == .drafts)

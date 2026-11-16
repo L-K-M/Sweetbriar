@@ -255,6 +255,10 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
             guard self.listPane?.showsDrafts != true else { return }
             self.reader?.select(ids)
         }
+        messageList.onViewSaved = { [weak self] view in
+            guard let self, contentSerial == serial else { return }
+            self.selectSavedView(view)
+        }
 
         let split = NSSplitViewController()
         let sidebarItem = NSSplitViewItem(sidebarWithViewController: sidebar)
@@ -333,6 +337,17 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     func draftsChanged() {
         guard listPane?.showsDrafts == true else { return }
         drafts?.reload()
+    }
+
+    /// Select a freshly saved view in the sidebar (spec/08 Search).
+    private func selectSavedView(_ view: SavedView) {
+        guard let sidebar else { return }
+        let serial = contentSerial
+        contentTasks.run { [weak self] in
+            guard let self, contentSerial == serial else { return }
+            sidebar.reloadSections()
+            sidebar.choose(entryID: SidebarModel.savedViewEntryID(view.viewId))
+        }
     }
 
     /// Re-read the sidebar: an import changed what it lists.

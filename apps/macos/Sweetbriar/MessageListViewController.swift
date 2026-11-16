@@ -68,6 +68,9 @@ final class MessageListViewController: NSViewController {
     /// The selection, by occurrence id, whenever it changes.
     var onSelectionChange: (@MainActor (Set<Int64>) -> Void)?
 
+    /// A search was saved as a view; the shell selects it (spec/08).
+    var onViewSaved: (@MainActor (SavedView) -> Void)?
+
     /// Measurement hooks are installed before each model opens.
     var onPagesDeliveredForBenchmark: (@MainActor ([Int]) -> Void)?
     var onIndexChangedForBenchmark: (@MainActor (UInt64) -> Void)?
@@ -129,6 +132,23 @@ final class MessageListViewController: NSViewController {
             guard model?.isCurrent(ticket) == true else { return }
             self?.show(spec)
         }
+        search.onSaveAsView = { [weak self] name in
+            try await self?.saveView(name: name) ?? ()
+        }
+    }
+
+    /// Save the search field's current query and sort as a view
+    /// (spec/08 Search); a failure reaches the strip's inline error.
+    func saveView(name: String) async throws {
+        guard let queryJSON = searchModel.queryJSON else {
+            throw CoreFailure.invalidInput(
+                field: "query", message: "Search for something before saving a view."
+            )
+        }
+        let view = try await sidebar.saveView(
+            name: name, queryJSON: queryJSON, sort: searchModel.sort.savedViewSort
+        )
+        onViewSaved?(view)
     }
 
     required init?(coder: NSCoder) {

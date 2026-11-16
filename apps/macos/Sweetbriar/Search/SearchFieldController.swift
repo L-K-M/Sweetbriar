@@ -14,6 +14,7 @@ final class SearchFieldController: NSViewController {
     private let field = NSSearchField()
     private let scopePopup = NSPopUpButton()
     private let sortPopup = NSPopUpButton()
+    private let saveButton = NSButton(title: "Save as View…", target: nil, action: nil)
     private let chipScroll = NSScrollView()
     private let chipRow = NSStackView()
     private let statusLabel = NSTextField(labelWithString: "")
@@ -28,6 +29,14 @@ final class SearchFieldController: NSViewController {
     private weak var lastEditor: NSTextView?
     private var underlinedRange: NSRange?
     private var scopeMenuTracking = false
+    /// The last failed Save as View write, shown in the status line.
+    private var saveError: (any Error)?
+
+    /// The app's save: the search's current query and sort cross the
+    /// bridge, and the new view is selected in the sidebar (spec/08).
+    var onSaveAsView: (@MainActor (String) async throws -> Void)?
+    /// Asks for a view name; tests substitute a direct answer.
+    var promptForName: (@MainActor (_ confirm: @escaping (String?) -> Void) -> Void)?
 
     init(
         model: SearchFieldModel,
@@ -73,6 +82,14 @@ final class SearchFieldController: NSViewController {
         sortPopup.setAccessibilityIdentifier("search.sort")
         sortPopup.setAccessibilityLabel("Sort search results")
 
+        saveButton.bezelStyle = .rounded
+        saveButton.controlSize = .small
+        saveButton.target = self
+        saveButton.action = #selector(saveAsView(_:))
+        saveButton.setAccessibilityIdentifier("search.saveView")
+        saveButton.setAccessibilityLabel("Save as View")
+        saveButton.isEnabled = false
+
         chipRow.orientation = .horizontal
         chipRow.spacing = 4
         chipRow.alignment = .centerY
@@ -90,7 +107,7 @@ final class SearchFieldController: NSViewController {
         statusLabel.setAccessibilityIdentifier("search.status")
         statusLabel.isHidden = true
 
-        for subview in [field, scopePopup, sortPopup, chipScroll, statusLabel] {
+        for subview in [field, scopePopup, sortPopup, saveButton, chipScroll, statusLabel] {
             subview.translatesAutoresizingMaskIntoConstraints = false
             strip.addSubview(subview)
         }
@@ -108,8 +125,10 @@ final class SearchFieldController: NSViewController {
             scopePopup.leadingAnchor.constraint(equalTo: field.trailingAnchor, constant: 8),
             scopePopup.centerYAnchor.constraint(equalTo: field.centerYAnchor),
             sortPopup.leadingAnchor.constraint(equalTo: scopePopup.trailingAnchor, constant: 8),
-            sortPopup.trailingAnchor.constraint(equalTo: strip.trailingAnchor, constant: -8),
+            sortPopup.trailingAnchor.constraint(equalTo: saveButton.leadingAnchor, constant: -8),
             sortPopup.centerYAnchor.constraint(equalTo: field.centerYAnchor),
+            saveButton.trailingAnchor.constraint(equalTo: strip.trailingAnchor, constant: -8),
+            saveButton.centerYAnchor.constraint(equalTo: field.centerYAnchor),
             chipTopSpace, chipHeight, statusTopSpace, statusHeight,
             chipScroll.leadingAnchor.constraint(equalTo: strip.leadingAnchor, constant: 8),
             chipScroll.trailingAnchor.constraint(equalTo: strip.trailingAnchor, constant: -8),
@@ -171,6 +190,9 @@ final class SearchFieldController: NSViewController {
         syncText()
         refreshScopeMenu()
         sortPopup.selectItem(at: (model.sort == .date ? SortItem.date : .relevance).rawValue)
+        saveButton.isEnabled = model.queryJSON != nil
+        // A new query replaces the last failed save's message.
+        saveError = nil
         rebuildChips()
         refreshStatus()
         refreshErrorMarking()
@@ -329,7 +351,9 @@ final class SearchFieldController: NSViewController {
 
     private func refreshStatus() {
         var text = ""
-        if let failure = model.failure {
+        if let saveError {
+            text = saveError.localizedDescription
+        } else if let failure = model.failure {
             text = failure.localizedDescription
             if model.queryJSON != nil, !model.lastValidText.isEmpty {
                 text += " Showing results for: \(model.lastValidText)"
@@ -371,6 +395,55 @@ final class SearchFieldController: NSViewController {
     @objc private func submitField(_ sender: NSSearchField) {
         guard !model.isComposing else { return }
         model.updateText(sender.stringValue)
+    }
+
+    // MARK: - Save as view
+
+    /// Ask for a name, then hand it to the app's save (spec/08 Search).
+    @objc private func saveAsView(_ sender: NSButton) {
+        guard model.queryJSON != nil else { return }
+        saveError = nil
+        refreshStatus()
+        let confirm: (@MainActor (String?) -> Void) = { [weak self] name in
+            guard let self,
+                let name,
+                !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            else { return }
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                do {
+                    try await self.onSaveAsView?(name)
+                } catch {
+                    self.saveError = error
+                    self.refreshStatus()
+                }
+            }
+        }
+        if let promptForName {
+            promptForName(confirm)
+        } else {
+            presentNameSheet(confirm)
+        }
+    }
+
+    /// The name sheet: an alert with a text field.
+    private func presentNameSheet(_ confirm: @escaping @MainActor (String?) -> Void) {
+        let alert = NSAlert()
+        alert.messageText = "Save as View"
+        alert.informativeText = "Name this search."
+        alert.addButton(withTitle: "Save")
+        alert.addButton(withTitle: "Cancel")
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
+        field.placeholderString = "Name"
+        alert.accessoryView = field
+        let answer = { (response: NSApplication.ModalResponse) in
+            confirm(response == .alertFirstButtonReturn ? field.stringValue : nil)
+        }
+        if let window = view.window {
+            alert.beginSheetModal(for: window) { answer($0) }
+        } else {
+            answer(alert.runModal())
+        }
     }
 }
 

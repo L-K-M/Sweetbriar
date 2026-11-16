@@ -39,6 +39,15 @@ public enum SearchSort: Sendable, Equatable, Hashable {
         case .relevance: return .relevance
         }
     }
+
+    /// The saved view's stored order (spec/07 Views): Date is the
+    /// pilot's `date_desc`.
+    public var savedViewSort: SavedViewSort {
+        switch self {
+        case .date: return .dateDesc
+        case .relevance: return .relevance
+        }
+    }
 }
 
 /// Facts from the same native read snapshot as the Search page's rows.

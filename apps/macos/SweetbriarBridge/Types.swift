@@ -385,6 +385,8 @@ public enum WindowSpec: Sendable, Equatable, Hashable {
     case thread(Int64)
     /// Logical-message Search hits with same-snapshot status.
     case search(SearchSpec)
+    /// A saved view's stored query results (spec/07 Views).
+    case view(String)
 }
 
 /// What a window's subscription reports (spec/07 "Subscriptions").
@@ -674,6 +676,13 @@ public struct ReaderTag: Sendable, Equatable {
         self.name = name
         self.colorSrgb = colorSrgb
     }
+}
+
+/// A message selection for the metadata commands (spec/07 Messages):
+/// explicit occurrence ids, or one open window's rows at its generation.
+public enum MessageSelection: Sendable, Equatable {
+    case occurrenceIds([Int64])
+    case window(windowId: UInt64, generation: UInt64)
 }
 
 public struct ReaderMessage: Sendable, Equatable {

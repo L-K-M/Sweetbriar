@@ -172,10 +172,14 @@ conversation; the Bridge account sheet is no longer offered.
   role or hierarchy is read into a file name. IMAP hierarchy uses the
   server's delimiter (M2). A mailbox that isn't selectable opens no
   window.
-- **Until their steps land,** Out Box and saved views are shown
-  disabled with a note, and the reader is a placeholder
-  (M1.5). Before M1.10's appearance service, accounts show a neutral
-  symbol and their name; no color is derived from an id.
+- **Saved views** are listed in the unified section in `saved_views()`
+  order, after Drafts (local) and Out Box. Choosing one opens a
+  `View(id)` window (07). Its context menu offers Rename and Delete;
+  Delete asks first. Rename keeps the view's stored query and sort.
+- **Until their steps land,** Out Box is shown disabled with a note,
+  and the reader is a placeholder (M1.5). Before M1.10's appearance
+  service, accounts show a neutral symbol and their name; no color is
+  derived from an id.
 
 ## Drafts (local)
 
@@ -333,6 +337,12 @@ is up. Choosing any other entry brings its message list back.
   in search coverage details even with complete indexing. Empty scopes show
   zero messages, never a misleading incomplete percentage. No automatic
   server search, fuzzy expansion or language-query rewriting in the pilot.
+- The search strip's **Save as View…** command names the current query
+  in a sheet and saves it with the current sort through
+  `upsert_saved_view`; the new view is selected in the sidebar. A saved
+  view stores its query and sort, not the search's scope: `View(id)`
+  runs the stored query over all accounts (07 Views). The name follows
+  spec/02's bound; a failed save shows its error and changes nothing.
 
 ## Reader
 
@@ -389,7 +399,12 @@ is up. Choosing any other entry brings its message list back.
   - the "Received in <account>" chip in the account color with its
     label, from the selected occurrence's account. Until M1.10's
     appearance service the chip is neutral, with its label;
-  - tags and the note, read-only until the metadata commands.
+  - a tag picker and a multi-line note editor. The picker applies and
+    removes the message's tags through `add_tag`/`remove_tag` on the
+    selected occurrence; typing a new name creates the tag, within
+    spec/02's name bound. The note is saved on end-editing through
+    `set_note`; empty text clears it. A failed write shows its error and
+    leaves the previous tags and note.
 - **Links** show their real destination on hover. A warning appears
   when:
   - the link text's domain differs from the target's;

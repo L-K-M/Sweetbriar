@@ -8,6 +8,31 @@ public protocol ReaderSource: Sendable {
     func openBody(messageID: Int64, preferred: BodyKind) async throws -> BodyLease
     func openAttachment(messageID: Int64, partID: String) async throws -> AttachmentLease
     func releaseLease(_ leaseID: String)
+    /// The local metadata commands (spec/07 Messages). A source that
+    /// cannot perform them throws; `CoreBridge` implements them.
+    func addTag(idempotencyKey: String, selection: MessageSelection, tag: String) async throws -> Receipt
+    func removeTag(idempotencyKey: String, selection: MessageSelection, tag: String) async throws -> Receipt
+    func setNote(idempotencyKey: String, messageId: Int64, text: String) async throws -> Receipt
+}
+
+extension ReaderSource {
+    public func addTag(
+        idempotencyKey: String, selection: MessageSelection, tag: String
+    ) async throws -> Receipt {
+        throw CoreFailure.unavailable(reason: "This source cannot apply tags.")
+    }
+
+    public func removeTag(
+        idempotencyKey: String, selection: MessageSelection, tag: String
+    ) async throws -> Receipt {
+        throw CoreFailure.unavailable(reason: "This source cannot remove tags.")
+    }
+
+    public func setNote(
+        idempotencyKey: String, messageId: Int64, text: String
+    ) async throws -> Receipt {
+        throw CoreFailure.unavailable(reason: "This source cannot save notes.")
+    }
 }
 
 extension CoreBridge: ReaderSource {}
@@ -106,6 +131,52 @@ public final class ReaderModel {
         switch state {
         case .plainText(let message, _), .source(let message, _), .html(let message, _): message
         default: nil
+        }
+    }
+
+    /// Apply or remove `name` on the occurrence the user acted on
+    /// (spec/07 Messages), then re-read its metadata if it is still
+    /// shown. The caller names the target: another selection may be
+    /// current by the time the write runs.
+    public func setTag(
+        _ name: String, applied: Bool, occurrenceID: Int64, messageID: Int64
+    ) async throws {
+        guard !closed else { return }
+        let key = UUID().uuidString
+        let selection = MessageSelection.occurrenceIds([occurrenceID])
+        if applied {
+            _ = try await source.addTag(idempotencyKey: key, selection: selection, tag: name)
+        } else {
+            _ = try await source.removeTag(idempotencyKey: key, selection: selection, tag: name)
+        }
+        try await refreshMessage(messageID)
+    }
+
+    /// Save the note of the message it was edited on; empty text
+    /// removes it (spec/07).
+    public func setNote(_ text: String, messageID: Int64) async throws {
+        guard !closed else { return }
+        _ = try await source.setNote(
+            idempotencyKey: UUID().uuidString, messageId: messageID, text: text
+        )
+        try await refreshMessage(messageID)
+    }
+
+    /// Re-read the message's metadata after a write, if it is still the
+    /// shown one.
+    private func refreshMessage(_ messageID: Int64) async throws {
+        guard currentMessage?.messageId == messageID else { return }
+        let fresh = try await source.getMessage(messageId: messageID)
+        guard currentMessage?.messageId == messageID else { return }
+        switch state {
+        case .plainText(_, let text):
+            state = .plainText(message: fresh, text: text)
+        case .source(_, let text):
+            state = .source(message: fresh, text: text)
+        case .html(_, let rendition):
+            state = .html(message: fresh, rendition: rendition)
+        default:
+            break
         }
     }
 
