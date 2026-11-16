@@ -16,15 +16,22 @@ pub enum InvalidField {
     HumanVerification,
 }
 
-impl fmt::Display for InvalidField {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
+impl InvalidField {
+    /// The spec/07 field name, for the refusal's `field`.
+    pub fn as_str(self) -> &'static str {
+        match self {
             Self::Password => "password",
             Self::SecondFactor => "second_factor",
             Self::MailboxPassword => "mailbox_password",
             Self::Account => "account",
             Self::HumanVerification => "human_verification",
-        })
+        }
+    }
+}
+
+impl fmt::Display for InvalidField {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
     }
 }
 
@@ -144,6 +151,9 @@ pub enum ProtonError {
     /// The account's only second factor is a FIDO2 security key, which
     /// the pilot does not support (spec/04, `auth-session.md` §9).
     Fido2Only,
+    /// No address key unlocked from the key passphrase (spec/04); the
+    /// caller names the field (spec/07).
+    KeyUnlock(crate::keys::KeyUnlockError),
     /// A response didn't decode; it is a failed request, never a
     /// partial observation (spec/04).
     Malformed {
@@ -232,6 +242,7 @@ impl fmt::Display for ProtonError {
                 "this account's only second factor is a security key; add an authenticator app \
                  or wait for FIDO2 support",
             ),
+            Self::KeyUnlock(error) => write!(f, "{error}"),
             Self::Malformed { message } => write!(f, "a response didn't decode: {message}"),
             Self::Timeout => f.write_str("the request exceeded its 30 s deadline"),
         }

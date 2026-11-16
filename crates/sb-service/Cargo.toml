@@ -17,5 +17,8 @@ test-seams = ["sb-engine/test-seams"]
 
 [dev-dependencies]
 sb-test-support = { version = "0.0.1", path = "../sb-test-support" }
+# The fake Proton server's sockets and the engine open run on a test
+# runtime; the same pinned tokio as the other crates.
+tokio = { version = "=1.54.1", default-features = false, features = ["rt-multi-thread", "macros", "time"] }
 # This crate's own first-poll tests reach the engine's seam directly.
 sb-engine = { version = "0.0.1", path = "../sb-engine", features = ["test-seams"] }

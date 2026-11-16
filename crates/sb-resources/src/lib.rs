@@ -61,6 +61,18 @@ pub use index::{
     report_index_io_failure, search_io_code, search_io_message,
 };
 mod maintenance;
+mod proton;
+pub use proton::{
+    BEGIN_PROTON_SIGN_IN, PROTON_API_BASE_URL, ProtonRefusal, ProtonSignInParams, ProtonTransport,
+    encode_proton_session,
+};
+// The transport items an account's sign-in conversation drives
+// (spec/01 rule 3): the engine keeps them in memory and maps errors
+// without depending on a leaf.
+pub use sb_proton::{
+    CertificateDer, Challenge, FinishedSignIn, KeyStore, ModulusSignatureVerifier, ProtonError,
+    SecretString, Session, SignIn, SignInStep, Trust,
+};
 mod renditions;
 mod repair;
 mod restore;
@@ -199,6 +211,7 @@ pub struct Resources {
     clock: Arc<dyn Clock>,
     random: Arc<dyn Random>,
     secrets: Arc<dyn SecretStore>,
+    proton: ProtonTransport,
 }
 
 /// The secret store when the platform has none (spec/10): every call is
@@ -266,7 +279,26 @@ impl Resources {
         data_root: &Path,
         secrets: Arc<dyn SecretStore>,
     ) -> Result<Self, StoreError> {
-        Self::open_on_with_secrets(data_root, Arc::new(RealFs), Arc::new(SystemClock), secrets)
+        Self::open_on_with_secrets(
+            data_root,
+            Arc::new(RealFs),
+            Arc::new(SystemClock),
+            secrets,
+            ProtonTransport::default(),
+        )
+    }
+
+    /// [`Resources::open`] on injected secret store and Proton
+    /// transport seams: setup suites use the fake store and the fake
+    /// server's roots and verifier (spec/11).
+    #[cfg(feature = "test-seams")]
+    pub fn open_with_proton(
+        data_root: &Path,
+        clock: Arc<dyn Clock>,
+        secrets: Arc<dyn SecretStore>,
+        proton: ProtonTransport,
+    ) -> Result<Self, StoreError> {
+        Self::open_on_with_secrets(data_root, Arc::new(RealFs), clock, secrets, proton)
     }
 
     fn open_on(
@@ -274,7 +306,13 @@ impl Resources {
         fs: Arc<dyn Fs>,
         clock: Arc<dyn Clock>,
     ) -> Result<Self, StoreError> {
-        Self::open_on_with_secrets(data_root, fs, clock, platform_secrets())
+        Self::open_on_with_secrets(
+            data_root,
+            fs,
+            clock,
+            platform_secrets(),
+            ProtonTransport::default(),
+        )
     }
 
     fn open_on_with_secrets(
@@ -282,6 +320,7 @@ impl Resources {
         fs: Arc<dyn Fs>,
         clock: Arc<dyn Clock>,
         secrets: Arc<dyn SecretStore>,
+        proton: ProtonTransport,
     ) -> Result<Self, StoreError> {
         let paths = StorePaths::new(data_root)?;
         let random: Arc<dyn Random> = Arc::new(OsRandom);
@@ -293,6 +332,7 @@ impl Resources {
             clock,
             random,
             secrets,
+            proton,
         })
     }
 

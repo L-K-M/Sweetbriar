@@ -14,6 +14,8 @@ use crate::schema::classify;
 pub enum AccountKind {
     Local,
     Imap,
+    /// Sweetbriar's own Proton API account (spec/02 "Proton accounts").
+    Proton,
 }
 
 /// Whether an account syncs (spec/02 `accounts.state`).
@@ -105,6 +107,7 @@ pub fn accounts(tx: &Transaction) -> Result<Vec<StoredAccount>, StoreError> {
             kind: match kind.as_str() {
                 "local" => AccountKind::Local,
                 "imap" => AccountKind::Imap,
+                "proton" => AccountKind::Proton,
                 other => return Err(unknown("account kind", other)),
             },
             state: match state.as_str() {

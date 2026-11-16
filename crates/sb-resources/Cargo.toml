@@ -12,6 +12,9 @@ sb-mime = { version = "0.0.1", path = "../sb-mime" }
 sb-imap = { version = "0.0.1", path = "../sb-imap" }
 sb-smtp = { version = "0.0.1", path = "../sb-smtp" }
 sb-platform = { version = "0.0.1", path = "../sb-platform" }
+# The Proton API transport (spec/01): L4 is the only layer that composes
+# it with the store for sign-in (M2.13b).
+sb-proton = { version = "0.0.1", path = "../sb-proton" }
 # Version-1 `import_job_sources.source_json` metadata (spec/09); same
 # pin as sb-store, no serde derive.
 serde_json = "=1.0.154"

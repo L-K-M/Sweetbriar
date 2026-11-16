@@ -17,6 +17,7 @@ use crate::client::{
     Client, Priority, SharedVerifier, error_message, expect_success, read_response,
 };
 use crate::error::{InvalidField, ProtonError};
+use crate::keys::KeyStore;
 
 /// `POST /auth/v4/info` (research `auth-session.md` §3).
 pub const AUTH_INFO_PATH: &str = "/auth/v4/info";
@@ -308,11 +309,20 @@ enum HumanVerificationRetry {
     SecondFactor(SecretString),
 }
 
-/// A sign-in conversation. It lives in memory only and holds no
-/// password once the SRP proofs exist.
+/// A completed sign-in with its keys unlocked (spec/10).
+pub struct FinishedSignIn {
+    pub session: Session,
+    pub keys: Box<dyn KeyStore>,
+    /// Wiped on drop: it unlocks the keys (spec/10).
+    pub key_passphrase: zeroize::Zeroizing<Vec<u8>>,
+}
+
+/// A sign-in conversation; it keeps the login password only until the
+/// key passphrase exists (spec/10), then drops it.
 pub struct SignIn {
     client: Client,
     username: String,
+    password: Option<SecretString>,
     proofs: SRPProof,
     info: AuthInfo,
     pre_auth: Option<PreAuth>,
@@ -361,13 +371,10 @@ impl Client {
             .map_err(|e| ProtonError::Unavailable {
                 message: format!("the SRP proofs failed: {e}"),
             })?;
-        // The password is no longer needed: the proofs and the hashed
-        // password inside `SRPAuth` are all the protocol keeps.
-        drop(password);
-
         let mut sign_in = SignIn {
             client: self.clone(),
             username: username.to_owned(),
+            password: Some(password),
             proofs,
             info,
             pre_auth: None,
@@ -454,6 +461,39 @@ impl Client {
 }
 
 impl SignIn {
+    /// Unlocks the keys with the login (or mailbox) password and
+    /// returns the derived key passphrase (spec/10). A refused unlock
+    /// leaves the conversation answerable (spec/07).
+    pub async fn finish_keys(
+        &mut self,
+        complete: SignInComplete,
+    ) -> Result<FinishedSignIn, ProtonError> {
+        let password = zeroize::Zeroizing::new(match complete.mailbox_password.as_ref() {
+            Some(mailbox) => mailbox.expose_secret().as_bytes().to_vec(),
+            None => self
+                .password
+                .as_ref()
+                .map(|password| password.expose_secret().as_bytes().to_vec())
+                .ok_or_else(|| ProtonError::Unavailable {
+                    message: "the sign-in conversation kept no password to unlock the keys"
+                        .to_owned(),
+                })?,
+        });
+        let (keys, key_passphrase) = self
+            .client
+            .unlock_keys_for_storage(&complete.session, &password)
+            .await?;
+        // The key passphrase exists, so the login password goes now,
+        // not with the conversation; a refused unlock above keeps it
+        // for another answer.
+        self.password = None;
+        Ok(FinishedSignIn {
+            session: complete.session,
+            keys,
+            key_passphrase,
+        })
+    }
+
     /// Answers a challenge. A human-verification retry is attempted
     /// once; a second 9001 is an `Unavailable` refusal.
     pub async fn continue_sign_in(

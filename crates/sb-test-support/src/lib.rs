@@ -42,7 +42,9 @@ pub use proton::{
 };
 pub use secret::{FakeSecrets, SecretOp};
 pub use sim::SimFs;
-pub use sqlite::{damage_an_index, execute_sql, store_meta_value, with_sqlite_write_lock};
+pub use sqlite::{
+    count_rows, damage_an_index, execute_sql, store_meta_value, with_sqlite_write_lock,
+};
 #[cfg(target_os = "linux")]
 pub use threads::with_new_threads_refused;
 

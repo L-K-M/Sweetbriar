@@ -262,6 +262,136 @@ pub fn certificate_fingerprint_from_pem(pem: &[u8]) -> Result<String, CoreError>
     Ok(sb_engine::Engine::certificate_pin_from_pem(pem)?.hex())
 }
 
+/// The next state of a Proton sign-in (spec/07).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SignInState {
+    NeedsSecondFactor,
+    NeedsMailboxPassword,
+    NeedsHumanVerification { url: String, methods: Vec<String> },
+    Complete { account_id: String },
+}
+
+impl SignInState {
+    fn from_engine(state: sb_engine::ProtonSignInState) -> Self {
+        match state {
+            sb_engine::ProtonSignInState::NeedsSecondFactor => Self::NeedsSecondFactor,
+            sb_engine::ProtonSignInState::NeedsMailboxPassword => Self::NeedsMailboxPassword,
+            sb_engine::ProtonSignInState::NeedsHumanVerification { url, methods } => {
+                Self::NeedsHumanVerification { url, methods }
+            }
+            sb_engine::ProtonSignInState::Complete { account_id } => Self::Complete { account_id },
+        }
+    }
+}
+
+/// One step's answer to a challenge (spec/07).
+pub enum ProtonSignInStep {
+    SecondFactor {
+        code: String,
+    },
+    /// Moved into the core's zeroizing secret on submission.
+    MailboxPassword {
+        bytes: Vec<u8>,
+    },
+    HumanVerification {
+        token: String,
+        token_type: String,
+    },
+}
+
+impl ProtonSignInStep {
+    fn into_engine(self) -> sb_engine::ProtonSignInStep {
+        match self {
+            Self::SecondFactor { code } => sb_engine::ProtonSignInStep::SecondFactor { code },
+            Self::MailboxPassword { bytes } => sb_engine::ProtonSignInStep::MailboxPassword {
+                bytes: sb_engine::Secret::new(bytes),
+            },
+            Self::HumanVerification { token, token_type } => {
+                sb_engine::ProtonSignInStep::HumanVerification { token, token_type }
+            }
+        }
+    }
+}
+
+/// `begin_proton_sign_in`'s parameters (spec/07).
+pub struct ProtonSignInParams {
+    pub display_name: String,
+    pub username: String,
+    pub password: Vec<u8>,
+}
+
+impl ProtonSignInParams {
+    fn into_engine(self) -> sb_engine::ProtonSignInParams {
+        sb_engine::ProtonSignInParams {
+            display_name: self.display_name,
+            username: self.username,
+            // Into the zeroizing secret before anything can fail below.
+            password: sb_engine::Secret::new(self.password),
+        }
+    }
+}
+
+/// `begin_proton_sign_in`'s answer: the open conversation, or a
+/// replayed key's stored receipt after completion (spec/07).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BeginProtonSignIn {
+    Open {
+        sign_in_id: String,
+        state: SignInState,
+    },
+    Complete {
+        receipt: Receipt,
+    },
+}
+
+impl Core {
+    /// `begin_proton_sign_in(params)` (spec/07): a repeated key answers
+    /// the open conversation, or its receipt, with no contact. A
+    /// `Complete` commits the account here.
+    pub async fn begin_proton_sign_in(
+        &self,
+        idempotency_key: &str,
+        params: ProtonSignInParams,
+    ) -> Result<BeginProtonSignIn, CoreError> {
+        let answer = self
+            .engine()
+            .begin_proton_sign_in(idempotency_key, params.into_engine())
+            .await?;
+        Ok(match answer {
+            sb_engine::BeginProtonSignIn::Open { sign_in_id, state } => BeginProtonSignIn::Open {
+                sign_in_id,
+                state: SignInState::from_engine(state),
+            },
+            sb_engine::BeginProtonSignIn::Complete { receipt } => BeginProtonSignIn::Complete {
+                receipt: Receipt::from_engine(&receipt),
+            },
+        })
+    }
+
+    /// `continue_proton_sign_in` (spec/07): the next state; a wrong code
+    /// or mailbox password keeps the conversation answerable.
+    pub async fn continue_proton_sign_in(
+        &self,
+        sign_in_id: &str,
+        step: ProtonSignInStep,
+    ) -> Result<SignInState, CoreError> {
+        let state = self
+            .engine()
+            .continue_proton_sign_in(sign_in_id, step.into_engine())
+            .await?;
+        Ok(SignInState::from_engine(state))
+    }
+
+    /// `cancel_proton_sign_in` (spec/07): drop the conversation.
+    pub async fn cancel_proton_sign_in(&self, sign_in_id: &str) -> Result<(), CoreError> {
+        self.engine().cancel_proton_sign_in(sign_in_id).await?;
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod proton_tests;
+
 #[cfg(test)]
 mod tests {
     use super::*;

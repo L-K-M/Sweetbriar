@@ -70,7 +70,11 @@ impl Core {
                 account_id: account.account_id,
                 kind: match account.kind {
                     sb_engine::AccountKind::Local => AccountKind::Local,
-                    sb_engine::AccountKind::Imap => AccountKind::Imap,
+                    // A Proton account shows as IMAP until M2.14 gives it
+                    // its own case.
+                    sb_engine::AccountKind::Imap | sb_engine::AccountKind::Proton => {
+                        AccountKind::Imap
+                    }
                 },
                 display_name: account.display_name,
                 state: match account.state {

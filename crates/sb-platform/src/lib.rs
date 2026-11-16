@@ -13,6 +13,7 @@ mod location;
 mod random;
 mod roots;
 mod secret;
+mod version;
 
 pub use clock::SystemClock;
 pub use fs::RealFs;
@@ -20,6 +21,7 @@ pub use random::OsRandom;
 pub use roots::{default_cache_root, default_data_root};
 pub use sb_types::secret::{Secret, SecretError, SecretStore, valid_credential_ref};
 pub use secret::PlatformSecrets;
+pub use version::macos_version;
 
 // Adjacent item exports let resources compose platform seams without a store.
 pub use sb_types::fs::{Fs, Lease, Location, LockError, Metadata, ReadFile, WriteFile};

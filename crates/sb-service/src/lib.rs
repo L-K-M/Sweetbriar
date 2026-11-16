@@ -8,8 +8,9 @@ mod accounts;
 mod appearance;
 mod bodies;
 pub use accounts::{
-    AddressMode, BridgeAccountAdded, BridgeAccountParams, BridgeIdentity, CredentialPause,
-    EndpointSecurity, IdentitySendable, certificate_fingerprint_from_pem,
+    AddressMode, BeginProtonSignIn, BridgeAccountAdded, BridgeAccountParams, BridgeIdentity,
+    CredentialPause, EndpointSecurity, IdentitySendable, ProtonSignInParams, ProtonSignInStep,
+    SignInState, certificate_fingerprint_from_pem,
 };
 pub use appearance::{
     AccountAppearance, AccountAppearanceChange, AccountColor, Appearance, AppearanceAssignment,
