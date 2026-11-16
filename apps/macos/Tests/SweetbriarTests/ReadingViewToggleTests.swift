@@ -205,6 +205,10 @@ struct ReadingViewToggleTests {
         #expect(controller.textScroll.isHidden)
         #expect(controller.readingView.string.contains("Reading body"))
         #expect(controller.model.readingDocument != nil)
+
+        // Clearing the selection hides the Reading pane with the rest.
+        await controller.show(selection: [])
+        #expect(controller.readingScroll.isHidden)
         controller.close()
     }
 

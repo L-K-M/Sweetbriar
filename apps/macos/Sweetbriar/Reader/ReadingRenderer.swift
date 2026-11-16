@@ -84,13 +84,16 @@ enum ReadingRenderer {
             text.append(NSAttributedString(string: ordered ? "\(item.number ?? fallback). " : "• "))
             text.append(content)
             text.append(NSAttributedString(string: "\n"))
-            let paragraph = NSMutableParagraphStyle()
-            paragraph.firstLineHeadIndent = 24
-            paragraph.headIndent = 24
-            text.addAttributes(
-                [.paragraphStyle: paragraph],
-                range: NSRange(location: itemStart, length: text.length - itemStart)
-            )
+            // The item indent adds to the content's own (a quote's
+            // depth, a nested list), rather than replacing it.
+            let range = NSRange(location: itemStart, length: text.length - itemStart)
+            text.enumerateAttribute(.paragraphStyle, in: range) { style, subrange, _ in
+                let paragraph = NSMutableParagraphStyle()
+                if let style = style as? NSParagraphStyle { paragraph.setParagraphStyle(style) }
+                paragraph.firstLineHeadIndent += 24
+                paragraph.headIndent += 24
+                text.addAttribute(.paragraphStyle, value: paragraph, range: subrange)
+            }
         }
     }
 

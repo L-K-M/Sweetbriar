@@ -183,6 +183,7 @@ final class ReaderViewController: NSViewController {
         clearReadingNote()
         details.isHidden = true
         textScroll.isHidden = true
+        readingScroll.isHidden = true
         html.isHidden = true
         status.isHidden = false
         guard selection.count == 1 else {

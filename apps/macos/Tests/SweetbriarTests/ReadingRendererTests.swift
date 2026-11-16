@@ -106,6 +106,25 @@ struct ReadingRendererTests {
             text([.list(partID: "p", ordered: false, start: 1, reversed: false, items: [item])]) == "• One\n")
     }
 
+    @Test func listItemsIndentOnTopOfTheirContent() throws {
+        func list(_ blocks: [ReadingBlock]) -> ReadingBlock {
+            .list(
+                partID: "p", ordered: false, start: 1, reversed: false,
+                items: [ReadingListItem(partID: "p", number: nil, blocks: blocks)])
+        }
+        func indent(of word: String, in blocks: [ReadingBlock]) throws -> CGFloat {
+            let rendered = render(blocks)
+            let at = (rendered.string as NSString).range(of: word).location
+            return try #require(
+                rendered.attributes(at: at, effectiveRange: nil)[.paragraphStyle] as? NSParagraphStyle
+            ).headIndent
+        }
+        let quoted = list([.quote(partID: "p", blocks: [paragraph([literal("Quoted")])])])
+        #expect(try indent(of: "Quoted", in: [quoted]) == 24 + QuoteDepth.indent)
+        let nested = list([list([paragraph([literal("Inner")])])])
+        #expect(try indent(of: "Inner", in: [nested]) == 48)
+    }
+
     @Test func preformattedIsMonospaced() throws {
         #expect(try font([.preformatted(partID: "p", text: "code")], at: 0).isFixedPitch)
     }
