@@ -11,6 +11,8 @@ final class ReaderViewController: NSViewController {
     let noteEditor = NoteEditorView(frame: .zero)
     /// The note last sent: the shown note may lag a write in flight.
     private var noteSent: (messageID: Int64, text: String)?
+    /// The message the note editor was filled for, and its note then.
+    private var noteDraft: (messageId: Int64, note: String?)?
     let status = NSTextField(wrappingLabelWithString: "No message selected")
     let remoteContent = NSTextField(labelWithString: "")
     let sourceButton = NSButton(title: "View Source", target: nil, action: nil)
@@ -253,9 +255,13 @@ final class ReaderViewController: NSViewController {
     /// text while it is being edited.
     private func renderMetadata(_ message: ReaderMessage) {
         tagPicker.configure(tags: message.tags)
-        if !noteEditor.isEditing {
-            noteEditor.text = message.note ?? ""
+        if noteEditor.isEditing {
+            // Navigation moved on mid-edit: save to the edited message.
+            guard let draft = noteDraft, draft.messageId != message.messageId else { return }
+            saveNote(noteEditor.text)
         }
+        noteEditor.text = message.note ?? ""
+        noteDraft = (message.messageId, message.note)
     }
 
     /// Apply or remove a tag on the message shown at the click; the
@@ -281,11 +287,10 @@ final class ReaderViewController: NSViewController {
     }
 
     /// Save the note on end-editing; empty text clears it (spec/07).
-    /// The message is the one edited: ending the edit by clicking
-    /// another message selects it before this write runs. A failure
+    /// The message is the one the editor was filled for. A failure
     /// restores the shown note and shows even after navigation.
     private func saveNote(_ text: String) {
-        guard let message = model.currentMessage else { return }
+        guard let message = noteDraft else { return }
         let ticket = model.navigationTicket
         let sent = noteSent?.messageID == message.messageId ? noteSent?.text : nil
         let previous = sent ?? message.note ?? ""
@@ -301,7 +306,7 @@ final class ReaderViewController: NSViewController {
                 if self.noteSent?.messageID == message.messageId, self.noteSent?.text == text {
                     self.noteSent = (message.messageId, previous)
                 }
-                if ticket == self.model.navigationTicket { self.noteEditor.text = previous }
+                if self.noteDraft?.messageId == message.messageId { self.noteEditor.text = previous }
                 self.showError(error)
             }
         }

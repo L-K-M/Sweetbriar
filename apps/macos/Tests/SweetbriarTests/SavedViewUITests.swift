@@ -1,8 +1,5 @@
-// The saved-view and reader-metadata surfaces (spec/08): saving a
-// search lists a view in the sidebar and selecting it opens its
-// window; rename and delete go through the context menu; the tag
-// picker applies and removes a tag; the note editor saves and clears;
-// a failed write shows an error and keeps the previous state.
+// The saved-view and reader-metadata surfaces (spec/08): the sidebar's
+// views, the tag picker and the note editor.
 
 import AppKit
 import Testing
@@ -21,9 +18,7 @@ private actor ViewSidebarSource: SidebarSource {
 
     func accounts() async throws -> [Account] { [] }
 
-    func mailboxes(accountId: String) async throws -> Mailboxes {
-        Mailboxes(generation: 0, mailboxes: [])
-    }
+    func mailboxes(accountId: String) async throws -> Mailboxes { Mailboxes(generation: 0, mailboxes: []) }
 
     func savedViews() async throws -> [SavedView] { views }
 
@@ -32,37 +27,25 @@ private actor ViewSidebarSource: SidebarSource {
         let view = SavedView(
             viewId: id, name: params.name, queryJson: params.queryJson, sort: params.sort, revision: 1
         )
-        if let index = views.firstIndex(where: { $0.viewId == id }) {
-            views[index] = view
-        } else {
-            views.append(view)
-        }
-        return Receipt(
-            command: "upsert_saved_view", resultJson: "{\"view_id\":\"\(id)\"}", createdAtMs: 0
-        )
+        views.removeAll { $0.viewId == id }
+        views.append(view)
+        return Receipt(command: "upsert_saved_view", resultJson: "{\"view_id\":\"\(id)\"}", createdAtMs: 0)
     }
 
     func deleteSavedView(idempotencyKey: String, viewId: String) async throws -> Receipt {
         views.removeAll { $0.viewId == viewId }
-        return Receipt(
-            command: "delete_saved_view", resultJson: "{\"view_id\":\"\(viewId)\"}", createdAtMs: 0
-        )
+        return Receipt(command: "delete_saved_view", resultJson: "{\"view_id\":\"\(viewId)\"}", createdAtMs: 0)
     }
 }
 
 private let savedView = SavedView(
-    viewId: "00000000-0000-4000-8000-000000000001",
-    name: "Saved search",
-    queryJson: #"{"v":1,"q":{"text":"hello"}}"#,
-    sort: .relevance,
-    revision: 1
+    viewId: "00000000-0000-4000-8000-000000000001", name: "Saved search",
+    queryJson: #"{"v":1,"q":{"text":"hello"}}"#, sort: .relevance, revision: 1
 )
 
 /// A parser stub that always answers the same query.
 private actor StubSearchParser: SearchParsing {
-    func parseSearch(text: String, context: ParseContext) async throws -> String {
-        #"{"v":1,"q":{"text":"hello"}}"#
-    }
+    func parseSearch(text: String, context: ParseContext) async throws -> String { savedView.queryJson }
 
     func formatSearch(queryJSON: String) async throws -> String { #""hello""# }
 }
@@ -76,6 +59,7 @@ private final class MutableReaderSource: ReaderSource, @unchecked Sendable {
     private var added: [String] = []
     private var removed: [String] = []
     private var notes: [String] = []
+    private var targets: [Int64] = []
     private var selections: [MessageSelection] = []
     var addError: (any Error)?
     var noteError: (any Error)?
@@ -83,6 +67,7 @@ private final class MutableReaderSource: ReaderSource, @unchecked Sendable {
     var addedCommands: [String] { lock.withLock { added } }
     var removedCommands: [String] { lock.withLock { removed } }
     var noteCommands: [String] { lock.withLock { notes } }
+    var noteTargets: [Int64] { lock.withLock { targets } }
     var recordedSelections: [MessageSelection] { lock.withLock { selections } }
 
     init(path: String) {
@@ -95,9 +80,13 @@ private final class MutableReaderSource: ReaderSource, @unchecked Sendable {
         )
     }
 
-    func messageForOccurrence(occurrenceId: Int64) async throws -> Int64 { message.messageId }
+    func messageForOccurrence(occurrenceId: Int64) async throws -> Int64 { occurrenceId == 43 ? 8 : 7 }
 
-    func getMessage(messageId: Int64) async throws -> ReaderMessage { message }
+    func getMessage(messageId: Int64) async throws -> ReaderMessage {
+        var other = lock.withLock { message }
+        if messageId != other.messageId { (other.messageId, other.tags, other.note) = (messageId, [], nil) }
+        return other
+    }
 
     func openBody(messageID: Int64, preferred: BodyKind) async throws -> BodyLease {
         BodyLease(
@@ -140,7 +129,8 @@ private final class MutableReaderSource: ReaderSource, @unchecked Sendable {
         let outcome: Result<Receipt, any Error> = lock.withLock {
             if let error = noteError { return .failure(error) }
             notes.append(text)
-            message.note = text.isEmpty ? nil : text
+            targets.append(messageId)
+            if messageId == message.messageId { message.note = text.isEmpty ? nil : text }
             return .success(Receipt(command: "set_note", resultJson: "{}", createdAtMs: 0))
         }
         return try outcome.get()
@@ -157,6 +147,13 @@ private func readerFile() throws -> URL {
 /// editing session.
 private final class FocusSink: NSView {
     override var acceptsFirstResponder: Bool { true }
+}
+
+@MainActor
+private func makeSidebar(_ model: SidebarModel) -> SidebarViewController {
+    let sidebar = SidebarViewController(model: model, appearance: AppearanceModel(source: SidebarAppearanceSource()))
+    _ = sidebar.view
+    return sidebar
 }
 
 @MainActor
@@ -187,10 +184,7 @@ struct SavedViewUITests {
         let source = ViewSidebarSource()
         let sidebarModel = SidebarModel(source: source)
         await sidebarModel.reload()
-        let sidebar = SidebarViewController(
-            model: sidebarModel, appearance: AppearanceModel(source: SidebarAppearanceSource())
-        )
-        _ = sidebar.view
+        let sidebar = makeSidebar(sidebarModel)
         var chosen: WindowSpec?
         sidebar.onChoose = { chosen = $0 }
 
@@ -227,10 +221,7 @@ struct SavedViewUITests {
         await source.setViews([savedView])
         let sidebarModel = SidebarModel(source: source)
         await sidebarModel.reload()
-        let sidebar = SidebarViewController(
-            model: sidebarModel, appearance: AppearanceModel(source: SidebarAppearanceSource())
-        )
-        _ = sidebar.view
+        let sidebar = makeSidebar(sidebarModel)
         sidebar.reloadSections()
         sidebar.promptName = { confirm in confirm("Renamed") }
         sidebar.confirmDelete = { _, confirm in confirm(true) }
@@ -326,5 +317,18 @@ struct SavedViewUITests {
         controller.select([43])
         #expect(await waitUntil { source.noteCommands.count >= 3 })
         #expect(source.noteCommands.last == "b note")
+
+        // Navigation mid-edit saves the edit to its message, then shows
+        // the next one's note.
+        await controller.show(selection: [42])
+        #expect(window.makeFirstResponder(editor.textView))
+        #expect(await waitUntil { editor.isEditing })
+        editor.textView.string = "c note"
+        controller.select([43])
+        #expect(await waitUntil { controller.model.currentMessage?.messageId == 8 })
+        #expect(await waitUntil { source.noteCommands.count >= 4 })
+        #expect(source.noteCommands.last == "c note" && editor.text.isEmpty)
+        #expect(window.makeFirstResponder(sink))
+        #expect(source.noteTargets == [7, 7, 7, 7])
     }
 }

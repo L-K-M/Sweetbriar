@@ -56,7 +56,6 @@ func readerHeaderChipAttachmentsAndSourceToggle() async throws {
     #expect(controller.header.stringValue.contains("From: Sender <sender@example.test>"))
     #expect(controller.header.stringValue.contains("To: to@example.test"))
     #expect(controller.header.stringValue.contains(Date(timeIntervalSince1970: 1_792_238_400).formatted(date: .abbreviated, time: .shortened)))
-    #expect(controller.header.stringValue.contains("From: Sender <sender@example.test>"))
     #expect(controller.noteEditor.text == "A read-only note")
     #expect(controller.tagPicker.tagNames == ["Keep"])
     #expect(!controller.header.isEditable)

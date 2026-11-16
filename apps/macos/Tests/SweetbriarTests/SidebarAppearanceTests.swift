@@ -215,12 +215,8 @@ private struct SidebarAccounts: SidebarSource {
         Mailboxes(generation: 0, mailboxes: [])
     }
     func savedViews() async throws -> [SavedView] { [] }
-    func upsertSavedView(idempotencyKey: String, params: SavedViewParams) async throws -> Receipt {
-        throw CoreFailure.unavailable(reason: "unused")
-    }
-    func deleteSavedView(idempotencyKey: String, viewId: String) async throws -> Receipt {
-        throw CoreFailure.unavailable(reason: "unused")
-    }
+    func upsertSavedView(idempotencyKey: String, params: SavedViewParams) async throws -> Receipt { throw CoreFailure.unavailable(reason: "unused") }
+    func deleteSavedView(idempotencyKey: String, viewId: String) async throws -> Receipt { throw CoreFailure.unavailable(reason: "unused") }
 }
 
 let sampleAccount = AccountAppearance(
