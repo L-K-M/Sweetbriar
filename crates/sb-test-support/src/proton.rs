@@ -1555,7 +1555,8 @@ fn handle_messages(
         ordered.reverse();
     }
     let total = u32::try_from(ordered.len()).unwrap_or(u32::MAX);
-    let start = page * page_size;
+    // A probe's huge `Page` is an empty page, not an overflow.
+    let start = page.saturating_mul(page_size);
     let messages: Vec<Value> = ordered
         .into_iter()
         .skip(start)

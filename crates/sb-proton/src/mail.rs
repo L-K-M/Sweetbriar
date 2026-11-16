@@ -7,7 +7,7 @@
 
 use std::fmt;
 
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 use serde_json::Value;
 
 use crate::auth::Session;
@@ -145,6 +145,20 @@ impl MessageMetadata {
     }
 }
 
+/// An event's optional `Message`, decoded like a listed one: with its
+/// raw object kept (spec/02's `proton_metadata`).
+fn metadata_with_raw<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<MessageMetadata>, D::Error> {
+    let Some(value) = Option::<Value>::deserialize(deserializer)? else {
+        return Ok(None);
+    };
+    let mut metadata: MessageMetadata =
+        serde_json::from_value(value.clone()).map_err(serde::de::Error::custom)?;
+    metadata.raw = value;
+    Ok(Some(metadata))
+}
+
 /// One page of message metadata, newest first (spec/04 "Sync loop"
 /// step 1.3).
 #[derive(Debug, Clone)]
@@ -242,7 +256,7 @@ pub struct MessageEvent {
     pub id: String,
     #[serde(rename = "Action")]
     pub action: EventAction,
-    #[serde(rename = "Message", default)]
+    #[serde(rename = "Message", default, deserialize_with = "metadata_with_raw")]
     pub message: Option<MessageMetadata>,
 }
 
@@ -344,8 +358,9 @@ impl Client {
         let response: MessagesResponse =
             self.get_json(&path, session, Priority::Background).await?;
         let mut messages = Vec::with_capacity(response.messages.len());
-        for value in response.messages {
-            messages.push(MessageMetadata::from_value(value, MESSAGES_PATH)?);
+        for (index, value) in response.messages.into_iter().enumerate() {
+            let at = format!("{MESSAGES_PATH} (message {index} of page {page})");
+            messages.push(MessageMetadata::from_value(value, &at)?);
         }
         Ok(MessagePage {
             messages,
@@ -382,16 +397,7 @@ impl Client {
     ) -> Result<EventBatch, ProtonError> {
         let path = format!("{EVENTS_PATH}/{}", cursor.as_str());
         let response: EventResponse = self.get_json(&path, session, Priority::Background).await?;
-        for event in &response.messages {
-            if event.message.is_none() && event.action != EventAction::Delete {
-                return Err(ProtonError::Malformed {
-                    message: format!(
-                        "the {path} response omitted the message of a {:?} event",
-                        event.action
-                    ),
-                });
-            }
-        }
+        require_payloads(&response, &path)?;
         Ok(EventBatch {
             event_id: EventId(response.event_id),
             more: response.more,
@@ -402,6 +408,32 @@ impl Client {
             user_changed: response.user.is_some(),
         })
     }
+}
+
+/// A create or update event must carry its object; only a delete may
+/// omit it.
+fn require_payloads(response: &EventResponse, path: &str) -> Result<(), ProtonError> {
+    for event in &response.messages {
+        if event.message.is_none() && event.action != EventAction::Delete {
+            return Err(ProtonError::Malformed {
+                message: format!(
+                    "the {path} response omitted the message of a {:?} event",
+                    event.action
+                ),
+            });
+        }
+    }
+    for event in &response.labels {
+        if event.label.is_none() && event.action != EventAction::Delete {
+            return Err(ProtonError::Malformed {
+                message: format!(
+                    "the {path} response omitted the label of a {:?} event",
+                    event.action
+                ),
+            });
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -502,5 +534,45 @@ mod tests {
             assert_eq!(probe.action, expected);
         }
         assert!(serde_json::from_value::<Probe>(json!({"Action": 4})).is_err());
+    }
+
+    #[test]
+    fn an_event_message_keeps_its_raw_object_and_must_decode() {
+        let event: MessageEvent =
+            serde_json::from_value(json!({"ID": "msg-1", "Action": 1, "Message": metadata_json()}))
+                .expect("it decodes");
+        let message = event.message.expect("a create carries its message");
+        assert_eq!(message.raw, metadata_json());
+
+        let delete: MessageEvent =
+            serde_json::from_value(json!({"ID": "msg-1", "Action": 0, "Message": null}))
+                .expect("a delete may carry none");
+        assert!(delete.message.is_none());
+
+        let mistyped = json!({"ID": "msg-1", "Action": 1, "Message": {"ID": 7}});
+        assert!(serde_json::from_value::<MessageEvent>(mistyped).is_err());
+    }
+
+    #[test]
+    fn create_and_update_events_must_carry_their_object() {
+        let response = |messages: Value, labels: Value| -> EventResponse {
+            serde_json::from_value(json!({
+                "EventID": "evt-1", "Messages": messages, "Labels": labels
+            }))
+            .expect("it decodes")
+        };
+        let deletes = response(
+            json!([{"ID": "msg-1", "Action": 0}]),
+            json!([{"ID": "label-1", "Action": 0}]),
+        );
+        assert!(require_payloads(&deletes, EVENTS_PATH).is_ok());
+
+        let bare_message = response(json!([{"ID": "msg-1", "Action": 2}]), json!([]));
+        let error = require_payloads(&bare_message, EVENTS_PATH).expect_err("an update needs it");
+        assert!(error.to_string().contains("omitted the message"));
+
+        let bare_label = response(json!([]), json!([{"ID": "label-1", "Action": 1}]));
+        let error = require_payloads(&bare_label, EVENTS_PATH).expect_err("a create needs it");
+        assert!(error.to_string().contains("omitted the label"));
     }
 }

@@ -1071,6 +1071,14 @@ async fn latest_then_events_since_returns_changes_in_order_and_follows_more() {
                 .iter()
                 .all(|e| e.message.is_some() == (e.action != EventAction::Delete))
         );
+        for event in &batch.messages {
+            if let Some(message) = &event.message {
+                assert_eq!(
+                    message.raw["ID"], event.id,
+                    "an event's metadata keeps its raw object (spec/02)"
+                );
+            }
+        }
         assert!(
             batch
                 .labels
@@ -1117,7 +1125,10 @@ async fn a_malformed_message_response_is_an_error_not_a_partial_batch() {
         .message_page(&session, 0, 150)
         .await
         .expect_err("a numeric ID must not decode");
-    assert!(matches!(error, ProtonError::Malformed { .. }));
+    assert!(
+        matches!(&error, ProtonError::Malformed { message } if message.contains("message 0 of page 0")),
+        "the error names the message that failed: {error:?}"
+    );
 
     server.set_undecodable_message(USER, false);
     let page = client
