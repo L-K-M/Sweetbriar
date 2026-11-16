@@ -75,7 +75,7 @@ final class PlainTextReaderView: NSTextView {
         isRichText = false
         isAutomaticLinkDetectionEnabled = false
         isAutomaticDataDetectionEnabled = false
-        font = Self.bodyFont
+        font = QuoteDepth.bodyFont
         setAccessibilityLabel("Message body")
     }
 
@@ -85,45 +85,17 @@ final class PlainTextReaderView: NSTextView {
 
     // MARK: display styling
 
-    /// The body font, and the base every quoted line italicizes.
-    static let bodyFont = NSFont.systemFont(ofSize: NSFont.systemFontSize)
-
     /// The "View source" font.
     static let sourceFont = NSFont.monospacedSystemFont(
         ofSize: NSFont.systemFontSize, weight: .regular
     )
 
-    /// Points of indentation per quote depth.
-    static let quoteIndent: CGFloat = 16
-
-    /// The colors quotes cycle through by depth: depth 1 takes the
-    /// first, deeper quotes wrap around.
-    static let quoteColors: [NSColor] = [
-        .systemBlue, .systemGreen, .systemPurple, .systemOrange, .systemBrown,
-    ]
-
     /// The attributes every character carries in the current mode,
     /// before quote styling lands on top in `.text`.
     private var baseAttributes: [NSAttributedString.Key: Any] {
         [
-            .font: mode == .text ? Self.bodyFont : Self.sourceFont,
+            .font: mode == .text ? QuoteDepth.bodyFont : Self.sourceFont,
             .foregroundColor: NSColor.textColor,
-        ]
-    }
-
-    /// The attributes a line at quote `depth` carries: the depth's
-    /// color, the italic body font and an indent growing with depth.
-    static func quoteAttributes(forDepth depth: Int) -> [NSAttributedString.Key: Any] {
-        let indent = quoteIndent * CGFloat(max(0, depth))
-        let paragraph = NSMutableParagraphStyle()
-        paragraph.firstLineHeadIndent = indent
-        paragraph.headIndent = indent
-        return [
-            .font: NSFontManager.shared.convert(
-                bodyFont, toHaveTrait: .italicFontMask
-            ),
-            .foregroundColor: quoteColors[max(0, depth - 1) % quoteColors.count],
-            .paragraphStyle: paragraph,
         ]
     }
 
@@ -159,7 +131,7 @@ final class PlainTextReaderView: NSTextView {
             }
             if line.depth > 0, lineRange.length > 0 {
                 storage.addAttributes(
-                    Self.quoteAttributes(forDepth: line.depth),
+                    QuoteDepth.attributes(forDepth: line.depth),
                     range: source.paragraphRange(for: lineRange)
                 )
             }

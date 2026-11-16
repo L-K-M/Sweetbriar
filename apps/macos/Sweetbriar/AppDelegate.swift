@@ -14,6 +14,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var session: CoreSession?
     private var settingsWindow: AppearanceSettingsWindow?
     private let appearance = SharedAppearance()
+    private let readingViewMemory = SharedReadingViewMemory()
     private var backups: SharedBackups?
     private var composeWindows: ComposeWindows?
     private var composeCues: SharedComposeCue?
@@ -83,6 +84,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             })
         if let composeWindows { ComposeRestorer.shared.attach(composeWindows) }
         let mainWindow = MainWindowController(session: session, appearance: appearance, backups: backups,
+                                              readingViewMemory: readingViewMemory,
                                               openBackups: { [weak self] in self?.showSettings(tab: .backups) },
                                               openDraft: { [weak self] in self?.composeWindows?.open(draftId: $0) })
         composeWindows?.onWindowsChanged = { [weak mainWindow] in mainWindow?.draftsChanged() }
