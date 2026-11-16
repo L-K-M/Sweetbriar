@@ -11,9 +11,10 @@
 // A wrong password ends the conversation (spec/07): the model returns
 // to credentials and every `begin` makes a fresh idempotency key. A
 // wrong code or mailbox password keeps its step. Secrets are taken
-// `inout` and the caller's buffer is zeroed once the step is sent; the
-// model keeps no copy. The copies the FFI makes on the way to the
-// core's zeroizing secret are out of its reach (spec/10).
+// `inout` and the caller's buffer is zeroed when the call returns,
+// sent or not (a busy model refuses without sending). The model
+// keeps no copy. The copies the FFI makes on the way to the core's
+// zeroizing secret are out of its reach (spec/10).
 //
 // One call runs at a time (`isBusy`). `cancel` bumps a generation, so
 // an answer that lands after it changes nothing, and a conversation a
@@ -70,7 +71,7 @@ public final class ProtonSignInModel {
     /// Start a new account, or sign the existing one in again. A fresh
     /// idempotency key is made for every `begin`, so a wrong password's
     /// next attempt is a new SRP handshake (spec/07). The password is
-    /// zeroed once the request is sent.
+    /// zeroed when `begin` returns, sent or not.
     public func begin(displayName: String, username: String, password: inout Data) async {
         defer { password.resetBytes(in: 0..<password.count) }
         guard let generation = start() else { return }
@@ -116,8 +117,8 @@ public final class ProtonSignInModel {
         await send(.secondFactor(code: code))
     }
 
-    /// Answer the mailbox password. The bytes are zeroed once the step
-    /// is sent.
+    /// Answer the mailbox password. The bytes are zeroed when this
+    /// returns, sent or not.
     public func submitMailboxPassword(_ password: inout Data) async {
         defer { password.resetBytes(in: 0..<password.count) }
         await send(.mailboxPassword(bytes: password))
