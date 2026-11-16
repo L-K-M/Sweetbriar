@@ -80,6 +80,10 @@ pub struct Engine {
     backup_copies: Arc<crate::backups::BackupCopies>,
     /// One sync worker per syncable IMAP account (spec/04).
     accounts: Arc<crate::account_sync::AccountJobs>,
+    /// The in-memory Proton sign-in conversations and their idempotency
+    /// keys (spec/07): at most ten minutes, nothing durable before
+    /// `Complete`.
+    pub(crate) proton_sign_ins: Arc<tokio::sync::Mutex<crate::proton::SignIns>>,
     leases: Arc<crate::bodies::Leases>,
     search_memo: Arc<crate::search::SearchMemo>,
     /// Fires each draft-write point inside a draft command's write,
@@ -513,6 +517,31 @@ impl Engine {
         Self::open_on(root, spawn_open_thread, open).await
     }
 
+    /// Test seam (the `test-seams` feature): open on an injected secret
+    /// store, clock and explicit Proton trust roots and modulus verifier,
+    /// the fake server's configuration (spec/11). Not part of the
+    /// public lifecycle.
+    #[cfg(any(test, feature = "test-seams"))]
+    #[doc(hidden)]
+    pub async fn open_with_proton(
+        data_root: &Path,
+        secrets: Arc<dyn sb_resources::SecretStore>,
+        base_url: String,
+        roots: Vec<sb_resources::CertificateDer<'static>>,
+        verifier: Arc<dyn sb_resources::ModulusSignatureVerifier + Send + Sync>,
+        clock: Arc<dyn sb_resources::Clock>,
+    ) -> Result<Self, EngineError> {
+        let transport = sb_resources::ProtonTransport::Explicit {
+            base_url,
+            trust: sb_resources::Trust::Roots(roots),
+            verifier,
+        };
+        let open = Box::new(move |root: &Path| {
+            sb_resources::Resources::open_with_proton(root, clock, secrets, transport)
+        });
+        Self::open_on(data_root, spawn_open_thread, open).await
+    }
+
     #[cfg(test)]
     pub(crate) async fn open_with_cache_fs(
         data_root: &Path,
@@ -547,6 +576,7 @@ impl Engine {
                         maintenance: Arc::default(),
                         backup_copies: Arc::default(),
                         accounts: Arc::default(),
+                        proton_sign_ins: Arc::default(),
                         leases: Arc::default(),
                         search_memo: Arc::default(),
                         #[cfg(test)]

@@ -3339,6 +3339,7 @@ dependencies = [
  "sb-imap",
  "sb-mime",
  "sb-platform",
+ "sb-proton",
  "sb-smtp",
  "sb-store",
  "sb-test-support",
@@ -3353,6 +3354,7 @@ version = "0.0.1"
 dependencies = [
  "sb-engine",
  "sb-test-support",
+ "tokio",
 ]
 
 [[package]]

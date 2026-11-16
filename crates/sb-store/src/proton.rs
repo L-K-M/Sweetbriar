@@ -8,6 +8,8 @@ use rusqlite::{OptionalExtension, Transaction, params};
 use sb_types::time::Timestamp;
 
 use crate::StoreError;
+use crate::accounts::{CredentialPause, NewIdentity, next_account_sort_order};
+use crate::appearance::initialize_account_appearance;
 use crate::schema::classify;
 
 /// `proton_accounts.password_mode` (spec/02): 1 is one login password,
@@ -139,6 +141,73 @@ pub fn insert_proton_account(
     let stored = proton_account(tx, &new.account_id)?
         .ok_or_else(|| StoreError::corrupt("the Proton account vanished after writing"))?;
     Ok(stored)
+}
+
+/// One completed sign-in's rows (spec/02, spec/07): account, Proton row,
+/// identities and appearance, in the caller's transaction beside the
+/// receipt.
+pub struct NewProtonSignIn {
+    pub account_id: String,
+    pub display_name: String,
+    pub api_base_url: String,
+    pub username: String,
+    pub proton_user_id: String,
+    pub credential_ref: String,
+    pub password_mode: ProtonPasswordMode,
+    /// Enabled addresses, in Proton's order; the first is the default.
+    pub identities: Vec<NewIdentity>,
+}
+
+/// Commit a new account's completed sign-in. It lands paused with
+/// `CredentialPause::NotStored` until the secret is stored (spec/10); a
+/// Proton user another account holds is `Conflict`, never merged
+/// (spec/02).
+pub fn commit_proton_sign_in(
+    tx: &Transaction,
+    new: &NewProtonSignIn,
+    now: Timestamp,
+) -> Result<(), StoreError> {
+    tx.execute(
+        "INSERT INTO accounts (account_id, kind, provider, display_name,
+          state, state_reason, sort_order, created_at)
+         VALUES (?1, 'proton', 'proton_api', ?2, 'needs_attention', ?5, ?3, ?4)",
+        params![
+            new.account_id,
+            new.display_name,
+            next_account_sort_order(tx)?,
+            now.as_millis(),
+            CredentialPause::NotStored.reason()
+        ],
+    )
+    .map_err(|e| classify(e, "create the account"))?;
+    insert_proton_account(
+        tx,
+        &NewProtonAccount {
+            account_id: new.account_id.clone(),
+            api_base_url: new.api_base_url.clone(),
+            username: new.username.clone(),
+            proton_user_id: new.proton_user_id.clone(),
+            credential_ref: new.credential_ref.clone(),
+            password_mode: new.password_mode,
+        },
+    )?;
+    initialize_account_appearance(tx, &new.account_id)?;
+    for (index, identity) in new.identities.iter().enumerate() {
+        tx.execute(
+            "INSERT INTO identities (identity_id, account_id, email, display_name, is_default, sendable)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                identity.identity_id,
+                new.account_id,
+                identity.email,
+                identity.display_name,
+                i64::from(index == 0 || identity.is_default),
+                identity.sendable.as_str(),
+            ],
+        )
+        .map_err(|e| classify(e, "write an identity"))?;
+    }
+    Ok(())
 }
 
 /// The account's Proton row, or `None`. `Corrupt` for a stored value

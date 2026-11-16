@@ -188,7 +188,7 @@ fn invalid(field: &'static str, message: &str) -> BridgeAccountError {
 
 /// The credential pause for a `SecretError` kind (spec/10: kinds only,
 /// never vendor status text).
-fn pause_for(error: SecretError) -> CredentialPause {
+pub(crate) fn pause_for(error: SecretError) -> CredentialPause {
     match error {
         SecretError::Unavailable => CredentialPause::StoreUnavailable,
         SecretError::Refused => CredentialPause::StoreRefused,
@@ -246,7 +246,7 @@ fn valid(params: &BridgeAccountParams) -> Result<(), BridgeAccountError> {
 
 /// The account a stored receipt names. Malformed JSON or a missing id
 /// is `Corrupt`, never an invented id.
-fn receipt_account_id(receipt: &Receipt) -> Result<String, StoreError> {
+pub(crate) fn receipt_account_id(receipt: &Receipt) -> Result<String, StoreError> {
     let parsed: serde_json::Value = serde_json::from_str(receipt.result_json())
         .map_err(|_| corrupt("a stored command receipt is not JSON"))?;
     match parsed[RECEIPT_ACCOUNT_ID].as_str() {

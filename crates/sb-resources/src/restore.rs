@@ -158,6 +158,7 @@ impl Resources {
             clock,
             random,
             secrets,
+            proton,
         } = self;
         let rebuild = |store| Resources {
             store,
@@ -166,6 +167,7 @@ impl Resources {
             clock,
             random,
             secrets,
+            proton,
         };
         match store.swap_restore(stage, cancelled) {
             Ok(store) => Ok(rebuild(store)),

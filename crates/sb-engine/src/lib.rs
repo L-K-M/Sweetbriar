@@ -40,6 +40,8 @@ mod messages;
 // slice) is their caller.
 #[cfg_attr(not(test), allow(dead_code))]
 mod policy;
+mod proton;
+pub use proton::{BeginProtonSignIn, ProtonSignInState, ProtonSignInStep};
 mod rebuild;
 mod received;
 #[cfg(test)]
@@ -56,9 +58,12 @@ mod windows;
 // The engine's API types and the platform defaults the layer above
 // needs, re-exported by item through this layer (spec/01 rule 3;
 // `sb-service` itself re-exports nothing).
+#[cfg(feature = "test-seams")]
+pub use sb_resources::Clock;
 pub use sb_resources::{
     ADD_BRIDGE_ACCOUNT, AddedAccount, AddressMode, BridgeAccountParams, BridgeIdentity,
-    CertificatePin, CredentialPause, EndpointSecurity, IdentitySendable, Secret,
+    CertificatePin, CredentialPause, EndpointSecurity, IdentitySendable, ProtonSignInParams,
+    Secret, SecretError, SecretStore,
 };
 pub use sb_resources::{
     AccountColor, AccountKind, AccountState, AppearanceAssignment, ExportSelection,

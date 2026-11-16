@@ -42,7 +42,7 @@ pub enum IdentitySendable {
 }
 
 impl IdentitySendable {
-    fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Validated => "validated",
             Self::Provisional => "provisional",
@@ -279,7 +279,7 @@ pub fn reactivate_after_credential(tx: &Transaction, account_id: &str) -> Result
 }
 
 /// The sidebar slot after every existing account (`accounts.sort_order`).
-fn next_account_sort_order(tx: &Transaction) -> Result<i64, StoreError> {
+pub(crate) fn next_account_sort_order(tx: &Transaction) -> Result<i64, StoreError> {
     tx.query_row(
         "SELECT COALESCE(MAX(sort_order), -1) + 1 FROM accounts",
         [],

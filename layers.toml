@@ -27,7 +27,7 @@ sb_cli = { layer = 1, deps = ["sb_service"] }
 # L2–L4 — the core, one crate per layer.
 sb_service   = { layer = 2, deps = ["sb_engine"] }
 sb_engine    = { layer = 3, deps = ["sb_resources"] }
-sb_resources = { layer = 4, deps = ["sb_store", "sb_mime", "sb_imap", "sb_smtp", "sb_platform"] }
+sb_resources = { layer = 4, deps = ["sb_store", "sb_mime", "sb_imap", "sb_smtp", "sb_platform", "sb_proton"] }
 
 # L5 — leaf crates; they never call each other (spec/01 rule 2).
 sb_store    = { layer = 5, deps = ["sb_types"] }

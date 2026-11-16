@@ -21,6 +21,16 @@ pub fn store_meta_value(state_db: &Path, key: &str) -> Option<String> {
     .unwrap_or_else(|e| panic!("cannot read store_meta.{key}: {e}"))
 }
 
+/// The single integer a read-only query returns, for tests above the
+/// store that count rows (`SELECT COUNT(*) FROM ...`). Panics like the
+/// other helpers when the query or the connection fails.
+pub fn count_rows(state_db: &Path, sql: &str) -> i64 {
+    let conn = Connection::open_with_flags(state_db, OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .unwrap_or_else(|e| panic!("cannot open {} read-only: {e}", state_db.display()));
+    conn.query_row(sql, [], |row| row.get(0))
+        .unwrap_or_else(|e| panic!("cannot count rows in {}: {e}", state_db.display()))
+}
+
 /// Run `sql` on a store's database outside the store, as damage, a
 /// crash or another tool would.
 pub fn execute_sql(state_db: &Path, sql: &str) {

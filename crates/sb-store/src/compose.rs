@@ -151,6 +151,7 @@ pub fn compose_catalog(
             account_kind: match kind.as_str() {
                 "local" => AccountKind::Local,
                 "imap" => AccountKind::Imap,
+                "proton" => AccountKind::Proton,
                 _ => return Err(StoreError::corrupt("unknown compose account kind")),
             },
             email: field(row, 4)?,

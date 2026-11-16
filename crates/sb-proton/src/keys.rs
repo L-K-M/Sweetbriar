@@ -269,6 +269,17 @@ impl<P: PGPProviderSync> KeySet<P> {
         user_keys: &UserKeys,
         addresses: &[Address],
     ) -> Result<Self, KeyUnlockError> {
+        Ok(Self::unlock_for_storage(provider, password, salts, user_keys, addresses)?.0)
+    }
+
+    /// [`KeySet::unlock`] plus the derived passphrase bytes (spec/10).
+    pub fn unlock_for_storage(
+        provider: P,
+        password: &[u8],
+        salts: &Salts,
+        user_keys: &UserKeys,
+        addresses: &[Address],
+    ) -> Result<(Self, Zeroizing<Vec<u8>>), KeyUnlockError> {
         let Some(primary) = primary_user_key(user_keys) else {
             return Err(KeyUnlockError::NoUserKey);
         };
@@ -276,7 +287,9 @@ impl<P: PGPProviderSync> KeySet<P> {
         let key_secret = salts
             .salt_for_key(&srp, &primary.id, password)
             .map_err(|_| KeyUnlockError::Salt)?;
-        Self::unlock_with_secret(provider, &key_secret, user_keys, addresses)
+        let passphrase = Zeroizing::new(key_secret.as_bytes().to_vec());
+        let keys = Self::unlock_with_secret(provider, &key_secret, user_keys, addresses)?;
+        Ok((keys, passphrase))
     }
 
     /// Unlocks with an already-derived key passphrase, as restored from
@@ -444,6 +457,23 @@ impl Client {
             },
         )?;
         Ok(Box::new(keys))
+    }
+
+    /// The unlocked keys plus the derived key passphrase (spec/10). A
+    /// key that fails is reported; only none unlocking is an error.
+    pub async fn unlock_keys_for_storage(
+        &self,
+        session: &Session,
+        password: &[u8],
+    ) -> Result<(Box<dyn KeyStore>, Zeroizing<Vec<u8>>), ProtonError> {
+        let provider = ProtonPGP::new_rust_sync();
+        let salts = self.key_salts(session).await?;
+        let user_keys = self.user_keys(session).await?;
+        let addresses = self.addresses(session).await?;
+        let (keys, passphrase) =
+            KeySet::unlock_for_storage(provider, password, &salts, &user_keys, &addresses)
+                .map_err(ProtonError::KeyUnlock)?;
+        Ok((Box::new(keys), passphrase))
     }
 
     /// Restores a session from the secret store's UID, refresh token and
