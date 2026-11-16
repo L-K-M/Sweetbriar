@@ -483,6 +483,10 @@ impl SignIn {
             .client
             .unlock_keys_for_storage(&complete.session, &password)
             .await?;
+        // The key passphrase exists, so the login password goes now,
+        // not with the conversation; a refused unlock above keeps it
+        // for another answer.
+        self.password = None;
         Ok(FinishedSignIn {
             session: complete.session,
             keys,

@@ -117,6 +117,9 @@ fn valid(params: &ProtonSignInParams) -> Result<(), ProtonRefusal> {
     if params.display_name.trim().is_empty() {
         return Err(invalid("display_name", "a display name is required"));
     }
+    if params.username.trim().is_empty() {
+        return Err(invalid("username", "a Proton username is required"));
+    }
     Ok(())
 }
 

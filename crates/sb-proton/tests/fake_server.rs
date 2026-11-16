@@ -646,6 +646,37 @@ async fn stored_key_passphrase(client: &Client, session: &sb_proton::Session) ->
 }
 
 #[tokio::test]
+async fn finishing_the_keys_drops_the_login_password() {
+    // spec/10: the login password lives only until the key passphrase
+    // exists. A second finish without a mailbox password then has no
+    // password left to unlock with.
+    let server = server_with(TestAccount::new(USER, PASSWORD)).await;
+    let client = client(&server);
+    let complete = |step| match step {
+        SignInStep::Complete(complete) => complete,
+        other => panic!("unexpected first step: {other:?}"),
+    };
+    let (mut sign_in, step) = client
+        .begin_sign_in(USER, SecretString::from(PASSWORD))
+        .await
+        .expect("sign-in");
+    sign_in
+        .finish_keys(complete(step))
+        .await
+        .expect("the keys unlock");
+
+    let (_other, step) = client
+        .begin_sign_in(USER, SecretString::from(PASSWORD))
+        .await
+        .expect("a second sign-in");
+    let second = sign_in.finish_keys(complete(step)).await;
+    assert!(
+        matches!(second, Err(ProtonError::Unavailable { .. })),
+        "the password is gone"
+    );
+}
+
+#[tokio::test]
 async fn salts_user_keys_and_addresses_are_served() {
     let server = server_with(TestAccount::new(USER, PASSWORD)).await;
     let client = client(&server);

@@ -138,6 +138,7 @@ fn invalid_field(error: &CoreError, field: &str) {
 
 /// No account row, no Proton row, no secret item.
 fn stores_nothing(h: &Harness) {
+    assert_eq!(proton_accounts(h), 0);
     assert_eq!(count(h, "proton_accounts"), 0);
     assert_eq!(h.secrets.calls(SecretOp::Set), 0);
 }
@@ -207,6 +208,19 @@ async fn refusals_store_nothing_and_keep_the_conversation_answerable() {
         .await
         .expect_err("Proton refuses this app version");
     assert!(matches!(error, CoreError::Unavailable { .. }), "{error:?}");
+    stores_nothing(&h);
+
+    // A blank username is refused on its field before contacting Proton.
+    let h = setup(vec![TestAccount::new(USER, PASSWORD)]).await;
+    let mut blank = params();
+    blank.username = " ".to_owned();
+    let error = h
+        .core
+        .begin_proton_sign_in("blank-username", blank)
+        .await
+        .expect_err("a blank username is refused");
+    invalid_field(&error, "username");
+    assert!(h.server.requests().is_empty());
     stores_nothing(&h);
 }
 
