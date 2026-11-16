@@ -2,15 +2,47 @@
 // step in order to done; a wrong password returns to credentials with a
 // new idempotency key; a wrong code or mailbox password stays on its
 // step; secrets are zeroed once sent; signing in again keeps the
-// username and passes the account id.
+// username and passes the account id; one call runs at a time, and an
+// answer that lands after a cancel changes nothing.
 
 import Foundation
 import Testing
 @testable import SweetbriarBridge
 
-/// A scripted `ProtonSignInSource` recording what the model asked.
+/// Holds a call until the test releases it.
+final class Hold: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<Void, Never>?
+    private var released = false
+
+    func wait() async {
+        await withCheckedContinuation { continuation in
+            let resumeNow = lock.withLock { () -> Bool in
+                if released { return true }
+                self.continuation = continuation
+                return false
+            }
+            if resumeNow { continuation.resume() }
+        }
+    }
+
+    func release() {
+        let waiting = lock.withLock { () -> CheckedContinuation<Void, Never>? in
+            released = true
+            defer { continuation = nil }
+            return continuation
+        }
+        waiting?.resume()
+    }
+}
+
+/// A scripted `ProtonSignInSource` recording what the model asked. A
+/// call past the script is a test failure, never an invented answer.
+/// A hold applies to the first such call only.
 final class FakeProtonSignInSource: ProtonSignInSource, @unchecked Sendable {
     private let lock = NSLock()
+    private var beginHold: Hold?
+    private var continueHold: Hold?
     private var _begins: [(key: String, params: ProtonSignInRequest)] = []
     private var _continues: [(signInId: String, step: ProtonSignInStep)] = []
     private var _cancels: [String] = []
@@ -19,10 +51,14 @@ final class FakeProtonSignInSource: ProtonSignInSource, @unchecked Sendable {
 
     init(
         beginAnswers: [Result<BeginProtonSignIn, CoreFailure>] = [],
-        continueAnswers: [Result<ProtonSignInState, CoreFailure>] = []
+        continueAnswers: [Result<ProtonSignInState, CoreFailure>] = [],
+        beginHold: Hold? = nil,
+        continueHold: Hold? = nil
     ) {
         self.beginAnswers = beginAnswers
         self.continueAnswers = continueAnswers
+        self.beginHold = beginHold
+        self.continueHold = continueHold
     }
 
     var begins: [(key: String, params: ProtonSignInRequest)] { lock.withLock { _begins } }
@@ -32,26 +68,36 @@ final class FakeProtonSignInSource: ProtonSignInSource, @unchecked Sendable {
     func beginProtonSignIn(
         idempotencyKey: String, params: ProtonSignInRequest
     ) async throws -> BeginProtonSignIn {
+        var hold: Hold?
         let answer: Result<BeginProtonSignIn, CoreFailure> = lock.withLock {
             _begins.append((idempotencyKey, params))
+            hold = beginHold
+            beginHold = nil
             if beginAnswers.isEmpty {
-                return .success(.open(signInId: "sign-in-1", state: .needsSecondFactor))
+                Issue.record("an unscripted begin")
+                return .failure(.unavailable(reason: "unscripted"))
             }
             return beginAnswers.removeFirst()
         }
+        await hold?.wait()
         return try answer.get()
     }
 
     func continueProtonSignIn(
         signInId: String, step: ProtonSignInStep
     ) async throws -> ProtonSignInState {
+        var hold: Hold?
         let answer: Result<ProtonSignInState, CoreFailure> = lock.withLock {
             _continues.append((signInId, step))
+            hold = continueHold
+            continueHold = nil
             if continueAnswers.isEmpty {
-                return .success(.complete(accountId: "account-1"))
+                Issue.record("an unscripted continue")
+                return .failure(.unavailable(reason: "unscripted"))
             }
             return continueAnswers.removeFirst()
         }
+        await hold?.wait()
         return try answer.get()
     }
 
@@ -243,6 +289,103 @@ final class FakeProtonSignInSource: ProtonSignInSource, @unchecked Sendable {
 }
 
 @MainActor
+@Test func anUnavailableRefusalMidConversationKeepsTheStep() async {
+    let source = FakeProtonSignInSource(
+        beginAnswers: [.success(.open(signInId: "sign-in-1", state: .needsSecondFactor))],
+        continueAnswers: [
+            .failure(.unavailable(reason: "Proton is unreachable")),
+            .success(.needsMailboxPassword),
+        ]
+    )
+    let model = ProtonSignInModel(source: source)
+    var password = Data("synthetic-proton-password".utf8)
+    await model.begin(displayName: "Owner", username: "owner@example.org", password: &password)
+
+    await model.submitCode("123456")
+    #expect(model.step == .secondFactor)
+    #expect(model.inlineError == .unavailable("Proton is unreachable"))
+
+    await model.submitCode("123456")
+    #expect(model.step == .mailboxPassword, "the conversation is still answerable")
+    #expect(model.inlineError == nil)
+}
+
+@MainActor
+@Test func aCancelDuringBeginDropsTheConversationItOpened() async {
+    let hold = Hold()
+    let source = FakeProtonSignInSource(
+        beginAnswers: [.success(.open(signInId: "sign-in-1", state: .needsSecondFactor))],
+        beginHold: hold
+    )
+    let model = ProtonSignInModel(source: source)
+    let begin = Task { @MainActor in
+        var password = Data("synthetic-proton-password".utf8)
+        await model.begin(displayName: "Owner", username: "owner@example.org", password: &password)
+    }
+    #expect(await eventually { source.begins.count == 1 })
+    #expect(model.isBusy)
+
+    await model.cancel()
+    #expect(!model.isBusy)
+    hold.release()
+    await begin.value
+
+    #expect(model.step == .credentials)
+    #expect(model.inlineError == nil)
+    #expect(source.cancels == ["sign-in-1"], "the conversation it opened anyway is dropped")
+    await model.submitCode("123456")
+    #expect(source.continues.isEmpty, "the cancelled conversation takes no answers")
+}
+
+@MainActor
+@Test func aCancelDuringAStepIgnoresItsLateAnswer() async {
+    let hold = Hold()
+    let source = FakeProtonSignInSource(
+        beginAnswers: [.success(.open(signInId: "sign-in-1", state: .needsSecondFactor))],
+        continueAnswers: [.success(.complete(accountId: "account-1"))],
+        continueHold: hold
+    )
+    let model = ProtonSignInModel(source: source)
+    var password = Data("synthetic-proton-password".utf8)
+    await model.begin(displayName: "Owner", username: "owner@example.org", password: &password)
+
+    let submit = Task { @MainActor in await model.submitCode("123456") }
+    #expect(await eventually { source.continues.count == 1 })
+    await model.cancel()
+    hold.release()
+    await submit.value
+
+    #expect(model.step == .credentials, "the late answer does not resurrect the conversation")
+    #expect(model.inlineError == nil)
+    #expect(source.cancels == ["sign-in-1"])
+}
+
+@MainActor
+@Test func aSecondCallWhileOneRunsIsIgnored() async {
+    let hold = Hold()
+    let source = FakeProtonSignInSource(
+        beginAnswers: [.success(.open(signInId: "sign-in-1", state: .needsSecondFactor))],
+        beginHold: hold
+    )
+    let model = ProtonSignInModel(source: source)
+    let first = Task { @MainActor in
+        var password = Data("synthetic-proton-password".utf8)
+        await model.begin(displayName: "Owner", username: "owner@example.org", password: &password)
+    }
+    #expect(await eventually { source.begins.count == 1 })
+
+    var again = Data("synthetic-proton-password".utf8)
+    await model.begin(displayName: "Owner", username: "owner@example.org", password: &again)
+    #expect(source.begins.count == 1, "a double submit starts no second conversation")
+    #expect(again.allSatisfy { $0 == 0 }, "an ignored submit still clears its password")
+
+    hold.release()
+    await first.value
+    #expect(model.step == .secondFactor)
+    #expect(!model.isBusy)
+}
+
+@MainActor
 @Test func cancelCallsTheSourceForAnOpenConversation() async {
     let source = FakeProtonSignInSource(
         beginAnswers: [.success(.open(signInId: "sign-in-1", state: .needsSecondFactor))]
@@ -297,6 +440,36 @@ final class FakeProtonSignInSource: ProtonSignInSource, @unchecked Sendable {
 
     #expect(model.step == .done(accountID: "account-9"))
     #expect(model.inlineError == nil)
+}
+
+@MainActor
+@Test func aReceiptNamingNoAccountIsAnError() async {
+    let source = FakeProtonSignInSource(beginAnswers: [
+        .success(.complete(receipt: Receipt(
+            command: "begin_proton_sign_in", resultJson: "{}", createdAtMs: 0
+        )))
+    ])
+    let model = ProtonSignInModel(source: source)
+    var password = Data("synthetic-proton-password".utf8)
+
+    await model.begin(displayName: "Owner", username: "owner@example.org", password: &password)
+
+    #expect(model.step == .credentials, "never done with an empty account id")
+    #expect(model.inlineError == .unavailable("The sign-in finished without naming its account."))
+}
+
+@Test func aStepNeverPrintsItsSecrets() {
+    let steps: [ProtonSignInStep] = [
+        .secondFactor(code: "synthetic-code"),
+        .mailboxPassword(bytes: Data("synthetic-mailbox".utf8)),
+        .humanVerification(token: "synthetic-token", tokenType: "captcha"),
+    ]
+    for step in steps {
+        for printed in [String(describing: step), String(reflecting: step)] {
+            #expect(!printed.contains("synthetic"), "\(printed)")
+            #expect(printed.contains("[redacted]"))
+        }
+    }
 }
 
 @Test func theRequestNeverPrintsThePassword() {

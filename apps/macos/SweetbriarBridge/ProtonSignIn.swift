@@ -35,8 +35,8 @@ extension ProtonSignInRequest: CustomStringConvertible, CustomDebugStringConvert
 }
 
 /// One step's answer to a Proton challenge (spec/07). The mailbox
-/// password crosses as bytes; the model zeroes its own copy once the
-/// step is sent.
+/// password crosses as bytes; the model zeroes the caller's buffer once
+/// the step is sent. Printing a step redacts its secrets (spec/10).
 public enum ProtonSignInStep: Sendable, Equatable {
     case secondFactor(code: String)
     case mailboxPassword(bytes: Data)
@@ -53,6 +53,22 @@ public enum ProtonSignInStep: Sendable, Equatable {
             return .humanVerification(token: token, tokenType: tokenType)
         }
     }
+}
+
+extension ProtonSignInStep: CustomStringConvertible, CustomDebugStringConvertible {
+    /// Never the code, password or token (spec/10).
+    public var description: String {
+        switch self {
+        case .secondFactor:
+            return "secondFactor([redacted])"
+        case .mailboxPassword:
+            return "mailboxPassword([redacted])"
+        case .humanVerification(_, let tokenType):
+            return "humanVerification([redacted], \(tokenType))"
+        }
+    }
+
+    public var debugDescription: String { description }
 }
 
 /// The next state of a Proton sign-in (spec/07).

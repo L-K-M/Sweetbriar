@@ -212,13 +212,17 @@ impl ProtonSignInState {
 }
 
 /// One step's answer to a Proton challenge (spec/07). No `Debug` or
-/// `Clone`: the mailbox password must neither print nor be copied.
+/// `Clone`, so this side never prints or duplicates the mailbox
+/// password. The copies the crossing itself makes (the shell's bytes,
+/// the lowered buffer) are freed without zeroing; the generated Swift
+/// type is `Equatable` and `Hashable` whatever this side derives.
 #[derive(uniffi::Enum)]
 pub enum ProtonSignInStep {
     SecondFactor {
         code: String,
     },
-    /// Moved into the core's zeroizing secret on submission.
+    /// Moved into the core's zeroizing secret once the command holds
+    /// the core.
     MailboxPassword {
         bytes: Vec<u8>,
     },
@@ -243,13 +247,14 @@ impl ProtonSignInStep {
 }
 
 /// `begin_proton_sign_in`'s parameters (spec/07). No `Debug` or
-/// `Clone`: the password must neither print nor be copied.
+/// `Clone`, so this side never prints or duplicates the password; the
+/// crossing's own copies are as for [`ProtonSignInStep`].
 #[derive(uniffi::Record)]
 pub struct ProtonSignInParams {
     pub display_name: String,
     pub username: String,
     /// The Proton password as UTF-8 bytes, moved into the core's
-    /// zeroizing secret.
+    /// zeroizing secret once the command holds the core.
     pub password: Vec<u8>,
     /// Signs an existing Proton account in again, keeping its UUID and
     /// data (spec/07); `None` starts a new account.

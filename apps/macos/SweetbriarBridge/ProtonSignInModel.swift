@@ -11,8 +11,13 @@
 // A wrong password ends the conversation (spec/07): the model returns
 // to credentials and every `begin` makes a fresh idempotency key. A
 // wrong code or mailbox password keeps its step. Secrets are taken
-// `inout` and zeroed once the step is sent; the model never stores
-// them (spec/10).
+// `inout` and the caller's buffer is zeroed once the step is sent; the
+// model keeps no copy. The copies the FFI makes on the way to the
+// core's zeroizing secret are out of its reach (spec/10).
+//
+// One call runs at a time (`isBusy`). `cancel` bumps a generation, so
+// an answer that lands after it changes nothing, and a conversation a
+// cancelled `begin` opened anyway is dropped at the core.
 
 import Foundation
 import Observation
@@ -41,6 +46,9 @@ public final class ProtonSignInModel {
     public private(set) var step: Step = .credentials
     public private(set) var inlineError: InlineError?
 
+    /// A call is in flight; the sheet disables its controls.
+    public private(set) var isBusy = false
+
     /// The username signing in again is fixed to (spec/08); empty for a
     /// new account, whose username the sheet passes to `begin`.
     public private(set) var username: String
@@ -48,6 +56,7 @@ public final class ProtonSignInModel {
     private let source: any ProtonSignInSource
     private let accountId: String?
     private var signInId: String?
+    private var generation = 0
 
     public init(source: any ProtonSignInSource, accountId: String? = nil, username: String = "") {
         self.source = source
@@ -63,32 +72,42 @@ public final class ProtonSignInModel {
     /// next attempt is a new SRP handshake (spec/07). The password is
     /// zeroed once the request is sent.
     public func begin(displayName: String, username: String, password: inout Data) async {
-        inlineError = nil
-        let request = ProtonSignInRequest(
-            displayName: displayName,
-            username: accountId == nil ? username : self.username,
-            password: password,
-            accountId: accountId
-        )
         defer { password.resetBytes(in: 0..<password.count) }
+        guard let generation = start() else { return }
+        defer { finish(generation) }
         do {
+            // Built in the call, not kept, so nothing here outlives it.
             let answer = try await source.beginProtonSignIn(
-                idempotencyKey: UUID().uuidString, params: request
+                idempotencyKey: UUID().uuidString,
+                params: ProtonSignInRequest(
+                    displayName: displayName,
+                    username: accountId == nil ? username : self.username,
+                    password: password,
+                    accountId: accountId
+                )
             )
+            guard generation == self.generation else {
+                // Cancelled while the request ran: drop what it opened.
+                if case .open(let signInId, _) = answer {
+                    try? await source.cancelProtonSignIn(signInId: signInId)
+                }
+                return
+            }
             switch answer {
             case .open(let signInId, let state):
                 self.signInId = signInId
                 apply(state)
             case .complete(let receipt):
-                self.signInId = nil
-                step = .done(accountID: Self.accountID(from: receipt) ?? accountId ?? "")
+                signInId = nil
+                guard let accountID = Self.accountID(from: receipt) ?? accountId else {
+                    inlineError = .unavailable("The sign-in finished without naming its account.")
+                    return
+                }
+                step = .done(accountID: accountID)
             }
-        } catch is CancellationError {
-            // The caller's task ended; the sheet keeps what it typed.
-        } catch let error as CoreFailure {
-            fail(error)
         } catch {
-            inlineError = .unavailable(error.localizedDescription)
+            guard generation == self.generation else { return }
+            fail(error)
         }
     }
 
@@ -100,9 +119,8 @@ public final class ProtonSignInModel {
     /// Answer the mailbox password. The bytes are zeroed once the step
     /// is sent.
     public func submitMailboxPassword(_ password: inout Data) async {
-        let challenge = ProtonSignInStep.mailboxPassword(bytes: password)
         defer { password.resetBytes(in: 0..<password.count) }
-        await send(challenge)
+        await send(.mailboxPassword(bytes: password))
     }
 
     /// Answer human verification with the token Proton handed back.
@@ -112,27 +130,42 @@ public final class ProtonSignInModel {
 
     /// Drop the conversation when one is open (spec/07). The sheet is
     /// closing, so a cancel that cannot reach the core is not fatal.
+    /// A call in flight is abandoned: its answer changes nothing.
     public func cancel() async {
-        guard let signInId else {
-            inlineError = nil
-            return
-        }
+        generation += 1
+        isBusy = false
+        inlineError = nil
+        guard let signInId else { return }
         self.signInId = nil
         step = .credentials
-        inlineError = nil
         try? await source.cancelProtonSignIn(signInId: signInId)
     }
 
     private func send(_ challenge: ProtonSignInStep) async {
-        guard let signInId else { return }
-        inlineError = nil
+        guard let signInId, let generation = start() else { return }
+        defer { finish(generation) }
         do {
-            apply(try await source.continueProtonSignIn(signInId: signInId, step: challenge))
-        } catch is CancellationError {
-        } catch let error as CoreFailure {
-            fail(error)
+            let state = try await source.continueProtonSignIn(signInId: signInId, step: challenge)
+            guard generation == self.generation else { return }
+            apply(state)
         } catch {
-            inlineError = .unavailable(error.localizedDescription)
+            guard generation == self.generation else { return }
+            fail(error)
+        }
+    }
+
+    /// Claims the model for one call; `nil` while another runs.
+    private func start() -> Int? {
+        guard !isBusy else { return nil }
+        isBusy = true
+        inlineError = nil
+        return generation
+    }
+
+    /// Releases the claim, unless a `cancel` already did.
+    private func finish(_ generation: Int) {
+        if generation == self.generation {
+            isBusy = false
         }
     }
 
@@ -153,7 +186,15 @@ public final class ProtonSignInModel {
     /// Show the refusal on the field it names. A wrong password ends
     /// the conversation and returns to credentials (spec/07); the next
     /// `begin` makes a new idempotency key.
-    private func fail(_ error: CoreFailure) {
+    private func fail(_ error: any Error) {
+        if error is CancellationError {
+            // The caller's task ended; the sheet keeps what it typed.
+            return
+        }
+        guard let error = error as? CoreFailure else {
+            inlineError = .unavailable(error.localizedDescription)
+            return
+        }
         switch error {
         case .invalidInput(let field, let message):
             switch field {
