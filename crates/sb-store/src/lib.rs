@@ -29,6 +29,7 @@ mod message_source;
 pub mod messages;
 mod objects;
 mod paths;
+pub mod proton;
 pub mod query;
 mod readers;
 mod receipts;
@@ -84,6 +85,12 @@ pub use objects::{
     read_error_as_store_error,
 };
 pub use paths::StorePaths;
+pub use proton::{
+    NewProtonAccount, ProtonAccount, ProtonBodyFailure, ProtonBodyFailureReason,
+    ProtonListingState, ProtonPasswordMode, begin_listing, body_failure, clear_body_failure,
+    complete_listing, insert_proton_account, proton_account, proton_account_by_user_id,
+    record_body_failure, set_diagnostics, set_event_cursor, update_listing_checkpoint,
+};
 pub use readers::{ReadStop, Scoped};
 pub use receipts::{
     Receipt, encode_job_receipt, receipt_generation_id, receipt_job_id, replay, run_once,

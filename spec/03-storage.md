@@ -21,6 +21,7 @@ Rests on research [04-data-safety](../research/04-data-safety.md),
   recovery/                       preserved evidence: quarantined objects, pre-migration snapshots
     import-source-<32 hex>         private import source snapshots (09)
     import-report-<job id>.json    import job reports (09)
+    pre-migration-<ms>-<8 hex>.sqlite  a rewriting migration's VACUUM INTO snapshot (02)
     integrity-<ms>-<8 hex>/        an integrity finding's copy of the database files (below)
 <cache root>/                     macOS: ~/Library/Caches/Sweetbriar/   Linux: $XDG_CACHE_HOME/sweetbriar/
   previews/, thumbnails/          disposable

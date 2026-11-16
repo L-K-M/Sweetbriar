@@ -8,15 +8,15 @@ use std::io;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use rusqlite::{Connection, ffi};
-use sb_test_support::{FixedClock, ScratchDir, SeededRandom, real_fs};
+use rusqlite::{Connection, ffi, types::Value};
+use sb_test_support::{FixedClock, ScratchDir, SeededRandom, block_on, real_fs};
 use sb_types::random::Random;
 use sb_types::time::Timestamp;
 
 use super::*;
 use crate::StorePaths;
 use crate::store::{PINNED_SQLITE, WRITER_PRAGMAS};
-use crate::testing::{FIXED_NOW_MS, extra_migration, reading, scratch_paths, test_seams};
+use crate::testing::{FIXED_NOW_MS, extra_migration, reading, scratch_paths, test_seams, writing};
 
 /// Seams with a different clock and seed, to prove a reopen rewrote
 /// nothing it shouldn't have.
@@ -919,6 +919,326 @@ fn a_store_the_runner_cannot_write_is_unavailable() {
             .unwrap();
     let err = run_migrations(&mut raw, &test_seams(real_fs()), MIGRATIONS).unwrap_err();
     assert!(matches!(err, StoreError::Unavailable { .. }), "{err:?}");
+}
+
+/// Every column of a table as comparable values, in `order`.
+fn table_rows(conn: &Connection, table: &str, columns: usize, order: &str) -> Vec<Vec<Value>> {
+    let mut stmt = conn
+        .prepare(&format!("SELECT * FROM {table} ORDER BY {order}"))
+        .unwrap();
+    stmt.query_map([], |row| {
+        let mut values = Vec::with_capacity(columns);
+        for index in 0..columns {
+            values.push(row.get::<_, Value>(index)?);
+        }
+        Ok(values)
+    })
+    .unwrap()
+    .collect::<Result<Vec<_>, _>>()
+    .unwrap()
+}
+
+/// The `pre-migration-*.sqlite` files in a store's `recovery/`.
+fn snapshots(paths: &StorePaths) -> Vec<std::path::PathBuf> {
+    let recovery = paths.data_root().join("recovery");
+    let mut found: Vec<_> = fs::read_dir(&recovery)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("pre-migration-") && name.ends_with(".sqlite"))
+        })
+        .collect();
+    found.sort();
+    found
+}
+
+/// The rows `store_at_27` adds: a Bridge account with an identity,
+/// two acquisition sources (one for the local archive, one for the
+/// Bridge account) and two intents, the second depending on the first.
+/// `{local}` is the seeded local archive's id.
+const ACCOUNT_ROWS: &str = "
+    INSERT INTO accounts
+     (account_id, kind, provider, display_name, state, sort_order, created_at)
+     VALUES ('bridge-1', 'imap', 'proton_bridge', 'Bridge', 'active', 1, 123);
+    INSERT INTO identities
+     (identity_id, account_id, email, display_name, is_default, sendable)
+     VALUES ('id-1', 'bridge-1', 'a@example.com', 'A', 1, 'validated');
+    INSERT INTO acquisitions
+     (content_sha256, byte_length, object_state, first_acquired_at)
+     VALUES ('aa', 10, 'published', 5);
+    INSERT INTO acquisition_sources
+     (acquisition_id, account_id, source_kind, source_ref, completeness, acquired_at)
+     VALUES (1, '{local}', 'imap_fetch', 'occ-1', 'complete', 6);
+    INSERT INTO acquisition_sources
+     (acquisition_id, account_id, source_kind, source_ref, completeness, acquired_at)
+     VALUES (1, 'bridge-1', 'imap_fetch', 'occ-2', 'complete', 7);
+    INSERT INTO intents
+     (intent_id, account_id, config_generation, op, target_json, args_json,
+      preconditions_json, state, idempotency_key, origin, created_at, updated_at)
+     VALUES ('intent-1', '{local}', 1, 'set_flags', '{}', '{}', '{}', 'pending',
+             'key-1', 'user', 8, 8);
+    INSERT INTO intents
+     (intent_id, account_id, config_generation, op, target_json, args_json,
+      preconditions_json, depends_on, state, idempotency_key, origin,
+      created_at, updated_at)
+     VALUES ('intent-2', 'bridge-1', 1, 'move', '{}', '{}', '{}', 'intent-1',
+             'pending', 'key-2', 'user', 9, 9);";
+
+/// A store at the previous version, with rows in all three rebuilt
+/// tables and rows that reference them.
+fn store_at_27(label: &str) -> (ScratchDir, StorePaths, Seams) {
+    let (scratch, paths) = scratch_paths(label);
+    let seams = test_seams(real_fs());
+    let store = crate::store::open_with(
+        &paths,
+        &seams,
+        WRITER_PRAGMAS,
+        crate::store::READER_PRAGMAS,
+        &PINNED_SQLITE,
+        &MIGRATIONS[..27],
+    )
+    .unwrap();
+    let local: String = reading(&store, |tx| {
+        Ok(tx
+            .query_row(
+                "SELECT account_id FROM accounts WHERE provider = 'local_archive'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap())
+    });
+    writing(&store, move |tx| {
+        tx.execute_batch(&ACCOUNT_ROWS.replace("{local}", &local))
+            .map_err(bug)?;
+        Ok(())
+    });
+    store.close().unwrap();
+    (scratch, paths, seams)
+}
+
+/// Migration 28 keeps every row and id of the three rebuilt tables,
+/// and `foreign_key_check` and `quick_check` are clean afterwards.
+#[test]
+fn migration_28_keeps_every_row_and_id_and_checks_clean() {
+    let (_scratch, paths, seams) = store_at_27("schema-proton-migration");
+    let before = {
+        let raw = Connection::open(paths.state_db()).unwrap();
+        assert_eq!(one_int(&raw, "PRAGMA user_version"), 27);
+        let rows = (
+            table_rows(&raw, "accounts", 10, "account_id"),
+            table_rows(&raw, "acquisition_sources", 7, "source_id"),
+            table_rows(&raw, "intents", 18, "intent_id"),
+        );
+        raw.close().unwrap();
+        rows
+    };
+
+    let store = crate::open(&paths, &seams).unwrap();
+    assert_eq!(
+        reading(&store, |tx| Ok(one_int(tx, "PRAGMA user_version"))),
+        i64::from(LATEST_SCHEMA_VERSION)
+    );
+    let after = reading(&store, |tx| {
+        Ok((
+            table_rows(tx, "accounts", 10, "account_id"),
+            table_rows(tx, "acquisition_sources", 7, "source_id"),
+            table_rows(tx, "intents", 18, "intent_id"),
+        ))
+    });
+    assert_eq!(before, after, "migration 28 changed a row or id");
+    reading(&store, |tx| {
+        let mut foreign_keys = tx.prepare("PRAGMA foreign_key_check").unwrap();
+        let mut rows = foreign_keys.query([]).unwrap();
+        assert!(
+            rows.next().unwrap().is_none(),
+            "foreign_key_check returned rows"
+        );
+        drop(rows);
+        drop(foreign_keys);
+        assert_eq!(
+            pragma_strings(tx, "PRAGMA quick_check").unwrap(),
+            ["ok".to_owned()]
+        );
+        Ok(())
+    });
+}
+
+/// The snapshot migration 28 takes is the pre-rewrite database: it is
+/// at the previous version and still holds the rows.
+#[test]
+fn migration_28_snapshot_is_taken_before_the_rewrite() {
+    let (_scratch, paths, seams) = store_at_27("schema-proton-snapshot");
+    let store = crate::open(&paths, &seams).unwrap();
+    assert_eq!(
+        reading(&store, |tx| Ok(one_int(tx, "PRAGMA user_version"))),
+        i64::from(LATEST_SCHEMA_VERSION)
+    );
+    store.close().unwrap();
+
+    let found = snapshots(&paths);
+    assert_eq!(found.len(), 1, "{found:?}");
+    let snapshot = Connection::open(&found[0]).unwrap();
+    assert_eq!(one_int(&snapshot, "PRAGMA user_version"), 27);
+    assert_eq!(
+        one_int(
+            &snapshot,
+            "SELECT count(*) FROM accounts WHERE account_id = 'bridge-1'"
+        ),
+        1
+    );
+    assert_eq!(
+        one_int(
+            &snapshot,
+            "SELECT count(*) FROM intents WHERE intent_id = 'intent-2'"
+        ),
+        1
+    );
+}
+
+/// A new store migrating from version 0 has nothing to preserve, so
+/// migration 28 takes no snapshot for it.
+#[test]
+fn a_new_store_takes_no_migration_snapshot() {
+    let (_scratch, paths) = scratch_paths("schema-proton-new-store");
+    let seams = test_seams(real_fs());
+    let store = crate::store::open_with(
+        &paths,
+        &seams,
+        WRITER_PRAGMAS,
+        crate::store::READER_PRAGMAS,
+        &PINNED_SQLITE,
+        MIGRATIONS,
+    )
+    .unwrap();
+    store.close().unwrap();
+    assert!(snapshots(&paths).is_empty());
+}
+
+/// Only the last two snapshots are kept, the oldest removed.
+#[test]
+fn migration_28_keeps_two_snapshots() {
+    let (_scratch, paths, _seams) = store_at_27("schema-proton-snapshots");
+    for offset in [0, 1, 2] {
+        let clock = Arc::new(FixedClock::new(Timestamp::from_millis(
+            FIXED_NOW_MS + offset,
+        )));
+        let seams = Seams::new(real_fs(), clock, Arc::new(SeededRandom::new(42)));
+        let conn = Connection::open(paths.state_db()).unwrap();
+        super::snapshot_before_migration(&conn, &seams, 28).unwrap();
+        conn.close().unwrap();
+    }
+    let found = snapshots(&paths);
+    assert_eq!(found.len(), 2, "{found:?}");
+    let names: Vec<String> = found
+        .iter()
+        .map(|path| path.file_name().unwrap().to_string_lossy().into_owned())
+        .collect();
+    assert!(
+        !names
+            .iter()
+            .any(|name| name.contains(&FIXED_NOW_MS.to_string())),
+        "the oldest snapshot is still there: {names:?}"
+    );
+    assert!(
+        names
+            .iter()
+            .any(|name| name.contains(&(FIXED_NOW_MS + 2).to_string()))
+    );
+}
+
+/// A snapshot that can't be taken aborts migration 28 with
+/// `Unavailable` and leaves the store at the previous version.
+#[test]
+fn a_failed_snapshot_leaves_the_store_at_the_previous_version() {
+    let (_scratch, paths, seams) = store_at_27("schema-proton-snapshot-fail");
+    match crate::open(&paths, &seams_with(FailingRandom)).unwrap_err() {
+        StoreError::Unavailable { .. } => {}
+        err => panic!("expected Unavailable, got {err:?}"),
+    }
+    let raw = Connection::open(paths.state_db()).unwrap();
+    assert_eq!(one_int(&raw, "PRAGMA user_version"), 27);
+    raw.close().unwrap();
+
+    let store = crate::open(&paths, &seams).unwrap();
+    assert_eq!(
+        reading(&store, |tx| Ok(one_int(tx, "PRAGMA user_version"))),
+        i64::from(LATEST_SCHEMA_VERSION)
+    );
+}
+
+/// The new CHECK values are accepted and unknown ones still rejected;
+/// `mailboxes.provider_key` is unique per account when present.
+#[test]
+fn migration_28_checks_accept_new_values_and_reject_unknown() {
+    let (_scratch, paths) = scratch_paths("schema-proton-checks");
+    let store = crate::open(&paths, &test_seams(real_fs())).unwrap();
+    writing(&store, |tx| {
+        tx.execute_batch(
+            "INSERT INTO accounts
+             (account_id, kind, provider, display_name, state, sort_order, created_at)
+             VALUES ('p', 'proton', 'proton_api', 'P', 'active', 1, 0);
+             INSERT INTO acquisitions
+             (content_sha256, byte_length, object_state, first_acquired_at)
+             VALUES ('bb', 1, 'published', 0);
+             INSERT INTO acquisition_sources
+             (acquisition_id, account_id, source_kind, source_ref, completeness, acquired_at)
+             VALUES (1, 'p', 'proton_fetch', 'm#r1', 'complete', 0);
+             INSERT INTO intents
+             (intent_id, account_id, config_generation, op, target_json, args_json,
+              preconditions_json, state, wait_reason, idempotency_key, origin,
+              created_at, updated_at)
+             VALUES ('i', 'p', 1, 'set_flags', '{}', '{}', '{}', 'pending', 'resync',
+                     'k', 'user', 0, 0);
+             INSERT INTO mailboxes
+             (account_id, remote_name, kind, selectable, sync_state, provider_key)
+             VALUES ('p', 'Inbox', 'folder', 1, 'synced', 'label-1');",
+        )
+        .map_err(bug)?;
+        Ok(())
+    });
+
+    let rejects = [
+        "INSERT INTO accounts
+         (account_id, kind, provider, display_name, state, sort_order, created_at)
+         VALUES ('x', 'nope', 'proton_api', 'X', 'active', 2, 0)",
+        "INSERT INTO accounts
+         (account_id, kind, provider, display_name, state, sort_order, created_at)
+         VALUES ('x', 'proton', 'nope', 'X', 'active', 2, 0)",
+        "INSERT INTO acquisition_sources
+         (acquisition_id, account_id, source_kind, source_ref, completeness, acquired_at)
+         VALUES (1, 'p', 'nope', 'r', 'complete', 0)",
+        "INSERT INTO intents
+         (intent_id, account_id, config_generation, op, target_json, args_json,
+          preconditions_json, state, wait_reason, idempotency_key, origin,
+          created_at, updated_at)
+         VALUES ('j', 'p', 1, 'set_flags', '{}', '{}', '{}', 'pending', 'nope',
+                 'k2', 'user', 0, 0)",
+        "INSERT INTO mailboxes
+         (account_id, remote_name, kind, selectable, sync_state, provider_key)
+         VALUES ('p', 'Other', 'folder', 1, 'synced', 'label-1')",
+    ];
+    for sql in rejects {
+        let result = block_on(store.write(crate::WritePriority::User, |tx| {
+            tx.execute(sql, []).map(|_| ()).map_err(bug)
+        }));
+        assert!(result.is_err(), "{sql}");
+    }
+
+    // A NULL provider_key repeats freely.
+    writing(&store, |tx| {
+        for name in ["One", "Two"] {
+            tx.execute(
+                "INSERT INTO mailboxes
+                 (account_id, remote_name, kind, selectable, sync_state)
+                 VALUES ('p', ?1, 'folder', 1, 'synced')",
+                rusqlite::params![name],
+            )
+            .map_err(bug)?;
+        }
+        Ok(())
+    });
 }
 
 /// Appending a migration must not reinterpret an existing store version.
