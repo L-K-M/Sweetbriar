@@ -69,6 +69,9 @@ pub enum KeyFault {
     OneAddressKey,
     /// Every address key is mislocked, so none unlocks.
     AllAddressKeys,
+    /// The legacy address key is mislocked and marked inactive, as
+    /// Proton marks a key it knows can't be decrypted.
+    RetiredAddressKey,
 }
 
 /// A synthetic test account. The password and TOTP are test values,
@@ -358,6 +361,9 @@ impl FakeProtonServer {
             let mut disabled = address_locked_key(&format!("{local}-disabled-key"), disabled_local);
             if spec.key_fault != KeyFault::None {
                 mislock_key(&provider, &mut legacy, &legacy_unlocked);
+            }
+            if spec.key_fault == KeyFault::RetiredAddressKey {
+                legacy.active = false;
             }
             if spec.key_fault == KeyFault::AllAddressKeys {
                 mislock_key(&provider, &mut primary, &primary_unlocked);
@@ -1161,8 +1167,6 @@ fn address_locked_key(id: &str, local: LocalAddressKey) -> LockedKey {
     }
 }
 
-/// Damages an armored private key in place, so unlocking it fails while
-/// the rest of the account stays valid.
 /// Re-locks a generated address key with a passphrase that matches
 /// neither its token nor the key secret, so unlocking it fails while
 /// the rest of the account stays valid.

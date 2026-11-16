@@ -287,16 +287,28 @@ impl<P: PGPProviderSync> KeySet<P> {
         user_keys: &UserKeys,
         addresses: &[Address],
     ) -> Result<Self, KeyUnlockError> {
+        // Only active keys are unlocked, as Bridge does
+        // (go-proton-api `Keys.Unlock`): Proton marks a key inactive
+        // when it knows the key can't be decrypted, so trying it would
+        // only report an expected failure.
+        let active_user_keys = UserKeys(
+            user_keys
+                .0
+                .iter()
+                .filter(|key| key.active)
+                .cloned()
+                .collect(),
+        );
         let UnlockResult {
             unlocked_keys,
             mut failed,
-        } = user_keys.unlock(&provider, key_secret);
+        } = active_user_keys.unlock(&provider, key_secret);
         let user_keys = UnlockedUserKeys::from(unlocked_keys);
         let user_key_refs: &[UnlockedUserKey<P>] = user_keys.as_ref();
         let all_address_keys = AddressKeys::new(
             addresses
                 .iter()
-                .flat_map(|address| address.keys.0.iter().cloned()),
+                .flat_map(|address| address.keys.0.iter().filter(|key| key.active).cloned()),
         );
         let UnlockResult {
             unlocked_keys: address_keys,
@@ -415,8 +427,8 @@ impl Client {
 
     /// Fetches the salts, user keys and addresses and unlocks them with
     /// the password that unlocks the keys (spec/04 "Keys"). A key that
-    /// fails is reported in `KeySet::failed`; only none unlocking is an
-    /// error.
+    /// fails is reported in `KeySet::failed`; inactive keys are skipped;
+    /// only none unlocking is an error.
     pub async fn unlock_keys(
         &self,
         session: &Session,

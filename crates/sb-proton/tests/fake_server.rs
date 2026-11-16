@@ -700,6 +700,30 @@ async fn a_key_that_fails_to_unlock_is_reported_without_failing_the_sign_in() {
 }
 
 #[tokio::test]
+async fn inactive_keys_are_skipped_rather_than_reported() {
+    let server =
+        server_with(TestAccount::new(USER, PASSWORD).with_key_fault(KeyFault::RetiredAddressKey))
+            .await;
+    let client = client(&server);
+    let session = sign_in(&client, USER, PASSWORD).await;
+    let keys = client
+        .unlock_keys(&session, PASSWORD.as_bytes())
+        .await
+        .expect("the active address keys unlock");
+    assert_eq!(
+        keys.failed(),
+        Vec::<String>::new(),
+        "a retired key isn't a failure"
+    );
+    let alias = keys
+        .identities()
+        .iter()
+        .find(|identity| identity.email == "owner-alias@example.test")
+        .expect("the alias identity");
+    assert!(!alias.unlocked_key);
+}
+
+#[tokio::test]
 async fn no_address_key_unlocking_is_a_typed_failure() {
     let server =
         server_with(TestAccount::new(USER, PASSWORD).with_key_fault(KeyFault::AllAddressKeys))
