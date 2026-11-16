@@ -282,8 +282,8 @@ final class ReaderViewController: NSViewController {
 
     /// Save the note on end-editing; empty text clears it (spec/07).
     /// The message is the one edited: ending the edit by clicking
-    /// another message selects it before this write runs. A failed
-    /// write restores the shown note.
+    /// another message selects it before this write runs. A failure
+    /// restores the shown note and shows even after navigation.
     private func saveNote(_ text: String) {
         guard let message = model.currentMessage else { return }
         let ticket = model.navigationTicket
@@ -301,8 +301,7 @@ final class ReaderViewController: NSViewController {
                 if self.noteSent?.messageID == message.messageId, self.noteSent?.text == text {
                     self.noteSent = (message.messageId, previous)
                 }
-                guard ticket == self.model.navigationTicket else { return }
-                self.noteEditor.text = previous
+                if ticket == self.model.navigationTicket { self.noteEditor.text = previous }
                 self.showError(error)
             }
         }

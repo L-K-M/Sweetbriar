@@ -177,9 +177,10 @@ public final class SidebarModel {
         try await reloadSavedViews()
     }
 
-    /// Re-read the saved views after a write and refresh the unified
-    /// section (spec/08).
+    /// Re-read the saved views after a write (spec/08); a reload in
+    /// flight runs again, as it may have listed before the write.
     private func reloadSavedViews() async throws {
+        if reloading { reloadAgain = true }
         updateSavedViews(try await source.savedViews())
     }
 

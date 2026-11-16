@@ -88,6 +88,7 @@ final class SidebarViewController: NSViewController, NSMenuDelegate {
         outlineView.delegate = self
         outlineView.setAccessibilityIdentifier(Self.accessibilityID)
         contextMenu.delegate = self
+        contextMenu.autoenablesItems = false
         renameItem.target = self
         deleteItem.target = self
         contextMenu.addItem(renameItem)

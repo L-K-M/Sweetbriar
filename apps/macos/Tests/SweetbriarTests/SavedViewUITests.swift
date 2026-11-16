@@ -235,7 +235,7 @@ struct SavedViewUITests {
         sidebar.promptName = { confirm in confirm("Renamed") }
         sidebar.confirmDelete = { _, confirm in confirm(true) }
         #expect(sidebar.contextMenu.items.map(\.title) == ["Rename…", "Delete"])
-        #expect(sidebar.contextMenu.items.allSatisfy { $0.target === sidebar })
+        #expect(sidebar.contextMenu.items.allSatisfy { $0.target === sidebar } && !sidebar.contextMenu.autoenablesItems)
 
         sidebar.renameSavedView(id: savedView.viewId)
         #expect(await waitUntil { await source.views.first?.name == "Renamed" })
@@ -256,6 +256,7 @@ struct SavedViewUITests {
         let controller = ReaderViewController(model: ReaderModel(source: source))
         await controller.show(selection: [42])
         #expect(controller.tagPicker.tagNames.isEmpty)
+        #expect((find(in: controller.tagPicker, id: "readerTag.field") as? NSTextField)?.isEditable == true)
 
         controller.tagPicker.text = "work"
         let add = try #require(find(in: controller.tagPicker, id: "readerTag.add") as? NSButton)

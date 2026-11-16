@@ -5,8 +5,7 @@
 import AppKit
 import SweetbriarBridge
 
-/// The message's tags as removable chips, plus a field that adds a new
-/// name (spec/08).
+/// The message's tags as removable chips and a field adding one (spec/08).
 @MainActor
 final class TagPickerView: NSView {
     /// Add the name in the field.
@@ -15,7 +14,7 @@ final class TagPickerView: NSView {
     var onRemove: (@MainActor (ReaderTag) -> Void)?
 
     private let chips = NSStackView()
-    private let field = NSTextField(labelWithString: "")
+    private let field = NSTextField(string: "")
     private let addButton = NSButton(title: "Add", target: nil, action: nil)
 
     override init(frame frameRect: NSRect) {
@@ -113,8 +112,7 @@ final class NoteEditorView: NSScrollView {
     var onEndEditing: (@MainActor (String) -> Void)?
 
     let textView = NoteTextView()
-    /// Whether the text view is being edited: the reader must not
-    /// rewrite the field under the caret.
+    /// Whether it is being edited: the reader leaves the text alone.
     var isEditing: Bool { textView.isEditingNote }
 
     override init(frame frameRect: NSRect) {
