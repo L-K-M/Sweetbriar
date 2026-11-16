@@ -184,6 +184,20 @@ jobs:
             CODE_SIGN_IDENTITY=- \
             test
 
+      # M1.9c2e: compose, autosave, blur, attach, quit, relaunch and
+      # reopen from Drafts (local) in fresh roots.
+      - name: XCUITest compose flow
+        timeout-minutes: 10
+        run: |
+          xcodebuild -project apps/macos/Sweetbriar.xcodeproj \
+            -scheme SweetbriarSmoke \
+            -destination 'platform=macOS,arch=arm64' \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+            -resultBundlePath "$RUNNER_TEMP/Sweetbriar-compose.xcresult" \
+            -only-testing:SweetbriarUITests/ComposeFlowTests \
+            CODE_SIGN_IDENTITY=- \
+            test
+
       - name: Upload the test result bundles on failure
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -193,6 +207,7 @@ jobs:
             ${{ runner.temp }}/Sweetbriar.xcresult
             ${{ runner.temp }}/Sweetbriar-import.xcresult
             ${{ runner.temp }}/Sweetbriar-search.xcresult
+            ${{ runner.temp }}/Sweetbriar-compose.xcresult
             ${{ runner.temp }}/Sweetbriar-index.xcresult
             ${{ runner.temp }}/Sweetbriar-reader.xcresult
           if-no-files-found: ignore

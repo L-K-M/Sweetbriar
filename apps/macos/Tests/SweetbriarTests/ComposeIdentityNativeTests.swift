@@ -1195,8 +1195,13 @@ struct ComposeIdentityNativeTests {
                 return false
             }
             try #require(failed)
-            #expect(c.statusLabel.stringValue.contains("Scripted catalog failure"))
-            #expect(!c.identityControls.popup.isEnabled)
+            // The window renders the read state on a later main-actor
+            // turn, so the label and popup are polled, not read once.
+            let shown = await identityEventually {
+                c.statusLabel.stringValue.contains("Scripted catalog failure")
+                    && !c.identityControls.popup.isEnabled
+            }
+            #expect(shown, "\(c.statusLabel.stringValue)")
             #expect(c.model.content?.identityId == "a")
             await source.failCatalog(nil)
             #expect(NSApp.sendAction(action, to: button.target, from: button))

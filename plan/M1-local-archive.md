@@ -2245,9 +2245,13 @@ local drafts. No network yet.
         and old-archive retirement tests.
       - **M1.9c2e Native compose acceptance (L):** isolated synthetic
         XCUITests covering the complete create/edit/autosave, blur,
-        quit/relaunch, attachment and two-window conflict workflows. The
-        owner's write-quit-relaunch, input-method and accessibility checks
-        remain separately pending until qualified on the owner's Mac.
+        quit/relaunch and attachment workflows (spec/11 "UI"). The
+        two-window conflict can't arise natively since M1.9c2d (one
+        window per draft, spec/08), so the app-hosted Keep Both tests,
+        which bring the second writer through the bridge, are its
+        acceptance (revised 2026-11-15). The owner's write-quit-relaunch,
+        input-method and accessibility checks are agent-run on the
+        owner's Mac in M1.Q.
       Re-size before coding if any artifact exceeds the limit.
 
 - **Goal:** compose and save drafts locally, durably, with revisions and
