@@ -641,6 +641,46 @@ async fn disconnecting_revokes_the_session_and_keeps_the_account() {
     assert_eq!(count_rows(&db, &revision), before, "no write");
 }
 
+/// The revoke runs once the disconnect is durable and outside the
+/// engine-wide session lock, so a stalled logout neither delays the
+/// disconnect nor every other account's session.
+#[tokio::test]
+async fn a_stalled_revoke_holds_up_neither_the_disconnect_nor_the_sessions() {
+    let h = setup(vec![TestAccount::new(USER, PASSWORD)]).await;
+    let (_id, state) = begin(&h, "first").await;
+    let id = account_id(&state);
+    h.core.shutdown().await;
+    let core = reopen(&h.scratch, &h.secrets, &h.server, &h.clock).await;
+    core.engine().proton_restore_settled().await;
+    let stall = Fault::Stall(std::time::Duration::from_secs(4));
+    h.server.set_fault(Some(Fault::Once(Box::new(stall))));
+
+    let observe = async {
+        let wait = std::time::Duration::from_secs(2);
+        let committed = tokio::time::timeout(wait, async {
+            while account(&core, &id).await.state != AccountState::Disconnected {
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        })
+        .await;
+        assert!(committed.is_ok(), "the disconnect waited for the revoke");
+        let lookup = tokio::time::timeout(wait, core.engine().proton_session("other")).await;
+        assert!(
+            lookup.is_ok(),
+            "the session lock was held across the revoke"
+        );
+    };
+    let (disconnected, ()) = tokio::join!(core.disconnect_account(&id), observe);
+    disconnected.expect("disconnect");
+    assert!(
+        h.server
+            .requests()
+            .iter()
+            .any(|request| request.method == "DELETE" && request.path == "/auth/v4"),
+        "the session was still revoked"
+    );
+}
+
 #[tokio::test]
 async fn disconnecting_a_non_proton_account_is_refused() {
     let h = setup(vec![TestAccount::new(USER, PASSWORD)]).await;

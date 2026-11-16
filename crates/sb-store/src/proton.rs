@@ -254,23 +254,29 @@ fn replace_proton_account(
     )
     .map_err(|e| classify(e, "update the Proton account"))?;
     // Every existing default clears first, so the upsert's first
-    // identity is the account's one default.
+    // identity is the account's one default. An address the new session
+    // no longer returns keeps its row, since removal never deletes
+    // (spec/02), but can't send; the upsert restores the ones returned.
     tx.execute(
-        "UPDATE identities SET is_default = 0 WHERE account_id = ?1",
+        "UPDATE identities
+         SET is_default = 0, sendable = 'unavailable', revision = revision + 1
+         WHERE account_id = ?1",
         params![new.account_id],
     )
-    .map_err(|e| classify(e, "clear the account's default identity"))?;
+    .map_err(|e| classify(e, "clear the account's identities"))?;
     for (index, identity) in new.identities.iter().enumerate() {
-        tx.execute(
+        // An id another account holds is never moved here: the guarded
+        // update changes nothing, which is refused below.
+        let changed = tx.execute(
             "INSERT INTO identities (identity_id, account_id, email, display_name, is_default, sendable)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)
              ON CONFLICT(identity_id) DO UPDATE SET
-               account_id = excluded.account_id,
                email = excluded.email,
                display_name = excluded.display_name,
                is_default = excluded.is_default,
                sendable = excluded.sendable,
-               revision = identities.revision + 1",
+               revision = identities.revision + 1
+             WHERE identities.account_id = excluded.account_id",
             params![
                 identity.identity_id,
                 new.account_id,
@@ -281,6 +287,12 @@ fn replace_proton_account(
             ],
         )
         .map_err(|e| classify(e, "upsert an identity"))?;
+        if changed == 0 {
+            return Err(StoreError::conflict(format!(
+                "identity {} belongs to another account than {}",
+                identity.identity_id, new.account_id
+            )));
+        }
     }
     Ok(())
 }

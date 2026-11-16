@@ -314,18 +314,11 @@ impl Engine {
                     });
                 }
             }
-            // Held to the end, so a restore finishing meanwhile can't
-            // store the secret again.
+            // Held through the secret's deletion and the disconnect
+            // write, so a restore finishing meanwhile can't store the
+            // secret again.
             let mut sessions = sessions.lock().await;
             let restored = sessions.remove(&id);
-            if let Some(restored) = restored {
-                // Best effort: a failed revoke never blocks the local
-                // disconnect (spec/04).
-                let _ = worker
-                    .resources()
-                    .logout_proton_session(&restored.session)
-                    .await;
-            }
             let reference = worker
                 .blocking({
                     let id = id.clone();
@@ -356,12 +349,24 @@ impl Engine {
                 }
                 Err(error) => return Err(error),
             }
-            worker
+            let disconnected = worker
                 .resources()
                 .write(WritePriority::User, move |tx| {
                     disconnect_proton_account(tx, &id)
                 })
-                .await?;
+                .await;
+            // Revoked only once the secret is gone: a disconnect that
+            // failed earlier keeps a session its stored token restores.
+            // Best effort (spec/04), and unlocked so a slow Proton call
+            // holds up no other account.
+            drop(sessions);
+            if let Some(restored) = restored {
+                let _ = worker
+                    .resources()
+                    .logout_proton_session(&restored.session)
+                    .await;
+            }
+            disconnected?;
             Ok(())
         })
         .await
@@ -494,6 +499,7 @@ async fn restore_proton_account(worker: &Worker, sessions: &Sessions, account_id
     // A sign-in or disconnect that ran meanwhile owns the secret item
     // now: this session is surplus, so it is revoked, never stored.
     if sessions.contains_key(account_id) || is_disconnected(worker, account_id).await {
+        drop(sessions);
         let _ = worker.resources().logout_proton_session(&session).await;
         return;
     }

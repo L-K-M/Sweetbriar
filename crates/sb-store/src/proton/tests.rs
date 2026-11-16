@@ -133,13 +133,23 @@ fn proton_account_insert_read_and_refuse_another_user() {
 
 /// Signing an existing account in again updates it in place: same
 /// UUID, generation and revision bumped, username and password mode
-/// replaced, identities upserted with exactly one default (spec/07).
+/// replaced, identities upserted with the first as the one default
+/// (spec/07). An address the new session no longer returns stays, since
+/// removal never deletes (spec/02), but it can no longer send.
 #[test]
 fn signing_in_again_updates_the_account_in_place() {
     let (_scratch, store) = proton_store("proton-again");
     block_on(store.write(crate::WritePriority::User, |tx| {
         insert_account(tx, "a1", 1);
-        insert_proton_account(tx, &new_account("a1", "user-1")).map(|_| ())
+        insert_proton_account(tx, &new_account("a1", "user-1")).map(|_| ())?;
+        tx.execute(
+            "INSERT INTO identities
+             (identity_id, account_id, email, display_name, is_default, sendable)
+             VALUES ('addr-gone', 'a1', 'gone@example.test', 'Gone', 1, 'validated')",
+            [],
+        )
+        .map(|_| ())
+        .map_err(|e| crate::schema::classify(e, "seed a removed address"))
     }))
     .unwrap();
 
@@ -187,29 +197,68 @@ fn signing_in_again_updates_the_account_in_place() {
         .map_err(|e| crate::schema::classify(e, "read the account row"))
     });
     assert_eq!(row, (2, 2, "Renamed".to_owned(), "active".to_owned()));
-    let defaults: i64 = reading(&store, |tx| {
-        tx.query_row(
-            "SELECT COUNT(*) FROM identities WHERE account_id = 'a1' AND is_default = 1",
-            [],
-            |row| row.get(0),
-        )
-        .map_err(|e| crate::schema::classify(e, "count the default identities"))
-    });
-    assert_eq!(defaults, 1);
-    let emails: Vec<String> = reading(&store, |tx| {
+    let identities: Vec<(String, i64, String)> = reading(&store, |tx| {
         let mut statement = tx
-            .prepare("SELECT email FROM identities WHERE account_id = 'a1' ORDER BY email")
+            .prepare(
+                "SELECT email, is_default, sendable FROM identities
+                 WHERE account_id = 'a1' ORDER BY email",
+            )
             .map_err(|e| crate::schema::classify(e, "read the identities"))?;
         let rows = statement
-            .query_map([], |row| row.get::<_, String>(0))
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
             .map_err(|e| crate::schema::classify(e, "read the identities"))?;
         rows.collect::<Result<Vec<_>, _>>()
             .map_err(|e| crate::schema::classify(e, "read the identities"))
     });
+    let identity = |email: &str, default: i64, sendable: &str| {
+        (email.to_owned(), default, sendable.to_owned())
+    };
     assert_eq!(
-        emails,
-        vec!["one@example.test".to_owned(), "two@example.test".to_owned()]
+        identities,
+        vec![
+            identity("gone@example.test", 0, "unavailable"),
+            identity("one@example.test", 1, "validated"),
+            identity("two@example.test", 0, "unavailable"),
+        ]
     );
+}
+
+/// An identity id another account holds is `Conflict`, never moved to
+/// the account signing in.
+#[test]
+fn signing_in_again_never_takes_another_accounts_identity() {
+    let (_scratch, store) = proton_store("proton-again-identity");
+    block_on(store.write(crate::WritePriority::User, |tx| {
+        insert_account(tx, "a1", 1);
+        insert_proton_account(tx, &new_account("a1", "user-1"))?;
+        insert_account(tx, "a2", 2);
+        insert_proton_account(tx, &new_account("a2", "user-2"))?;
+        tx.execute(
+            "INSERT INTO identities
+             (identity_id, account_id, email, display_name, is_default, sendable)
+             VALUES ('addr-1', 'a2', 'other@example.test', 'Other', 1, 'validated')",
+            [],
+        )
+        .map(|_| ())
+        .map_err(|e| crate::schema::classify(e, "seed another account's identity"))
+    }))
+    .unwrap();
+
+    let sign_in = sign_in_for("a1", "user-1");
+    let write = block_on(store.write(crate::WritePriority::User, move |tx| {
+        commit_proton_sign_in(tx, &sign_in, now())
+    }));
+    expect_conflict(write);
+
+    let owner: String = reading(&store, |tx| {
+        tx.query_row(
+            "SELECT account_id FROM identities WHERE identity_id = 'addr-1'",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|e| crate::schema::classify(e, "read the identity's account"))
+    });
+    assert_eq!(owner, "a2");
 }
 
 /// Another Proton user than the account's is `Conflict`, never merged

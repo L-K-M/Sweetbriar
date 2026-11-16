@@ -430,8 +430,9 @@ impl Resources {
         })
     }
 
-    /// Revokes a restored session (`DELETE /auth/v4`), best effort
-    /// (spec/04 "Disconnect").
+    /// Revokes a restored session (`DELETE /auth/v4`). An error means
+    /// the revoke is unconfirmed; the caller decides, and a disconnect
+    /// goes on regardless (spec/04 "Disconnect", best effort).
     pub async fn logout_proton_session(&self, session: &Session) -> Result<(), ProtonError> {
         let base_url = self.proton.base_url().to_owned();
         let client = self.proton.client(&base_url)?;
