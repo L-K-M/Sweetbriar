@@ -95,7 +95,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
                 let bridge = try await session.bridge()
                 try Task.checkCancellation()
                 guard backups.model(source: bridge) != nil else { return }
-                await install(bridge)
+                install(bridge)
             } catch is CancellationError {
             } catch {
                 statusLabel.stringValue = "Couldn't open the archive: \(error.localizedDescription)"
@@ -158,7 +158,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         do {
             let bridge = try await session.bridge()
             guard !backups.isStopping else { return }
-            await install(bridge)
+            install(bridge)
         } catch {
             showArchiveStatus("Couldn't reopen the restored archive: \(error.localizedDescription)")
         }
@@ -216,7 +216,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         writes.run(revision: writes.revision) { await imports.chooseAndImport() }
     }
 
-    private func install(_ bridge: CoreBridge) async {
+    private func install(_ bridge: CoreBridge) {
         guard let window, let backupsModel = backups.model(source: bridge) else { return }
         if contentTasks.isRetired { contentTasks = ArchiveViewTasks() }
         retirement = nil
@@ -230,7 +230,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
                                                      writes: writes, canWrite: { policy.canWrite })
         let reader = ReaderViewController(
             model: ReaderModel(source: bridge, preferred: .sanitizedHtml),
-            memory: await readingViewMemory.model(source: bridge)
+            memory: readingViewMemory.model(source: bridge)
         )
         self.reader = reader
         let drafts = DraftsListViewController(model: DraftListModel(source: bridge))

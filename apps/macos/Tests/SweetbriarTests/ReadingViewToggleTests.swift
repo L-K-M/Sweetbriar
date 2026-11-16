@@ -44,6 +44,7 @@ private final class ToggleSource: ReaderSource, @unchecked Sendable {
     var documentCalls = 0
     private let lock = NSLock()
     private var holdCount = 0
+    private var releasedLeases: [String] = []
     private var waiter: CheckedContinuation<ReadingDocument?, Never>?
 
     init() throws {
@@ -95,7 +96,9 @@ private final class ToggleSource: ReaderSource, @unchecked Sendable {
         throw URLError(.fileDoesNotExist)
     }
 
-    func releaseLease(_ leaseID: String) {}
+    func releaseLease(_ leaseID: String) { lock.withLock { releasedLeases.append(leaseID) } }
+
+    var released: [String] { lock.withLock { releasedLeases } }
 
     func readingDocument(messageId: Int64) async throws -> ReadingDocument? {
         documentCalls += 1
@@ -391,6 +394,8 @@ struct ReadingViewToggleTests {
         #expect(controller.header.stringValue.contains("second@example.test"))
         #expect(controller.readingView.string.contains("Second reading body"))
         #expect(!controller.readingView.string.contains("Stale reading body"))
+        // The stale selection's body lease is released, not leaked.
+        #expect(source.released.contains("lease-7"))
         controller.close()
     }
 }

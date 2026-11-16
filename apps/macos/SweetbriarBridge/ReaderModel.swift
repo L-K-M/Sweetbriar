@@ -255,7 +255,10 @@ public final class ReaderModel {
                 return
             }
             let document = await documentFetch.value
-            guard ticket == navigationTicket else { return }
+            guard ticket == navigationTicket else {
+                source.releaseLease(lease.leaseId)
+                return
+            }
             readingDocument = document
             showsReadingView =
                 readingViewOverride
