@@ -189,6 +189,179 @@ pub fn certificate_fingerprint_from_pem(pem: Vec<u8>) -> Result<String, CoreErro
     sb_service::certificate_fingerprint_from_pem(&pem).map_err(CoreError::from)
 }
 
+/// The next state of a Proton sign-in (spec/07).
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
+pub enum ProtonSignInState {
+    NeedsSecondFactor,
+    NeedsMailboxPassword,
+    NeedsHumanVerification { url: String, methods: Vec<String> },
+    Complete { account_id: String },
+}
+
+impl ProtonSignInState {
+    fn from_service(state: sb_service::SignInState) -> Self {
+        match state {
+            sb_service::SignInState::NeedsSecondFactor => Self::NeedsSecondFactor,
+            sb_service::SignInState::NeedsMailboxPassword => Self::NeedsMailboxPassword,
+            sb_service::SignInState::NeedsHumanVerification { url, methods } => {
+                Self::NeedsHumanVerification { url, methods }
+            }
+            sb_service::SignInState::Complete { account_id } => Self::Complete { account_id },
+        }
+    }
+}
+
+/// One step's answer to a Proton challenge (spec/07). No `Debug` or
+/// `Clone`: the mailbox password must neither print nor be copied.
+#[derive(uniffi::Enum)]
+pub enum ProtonSignInStep {
+    SecondFactor {
+        code: String,
+    },
+    /// Moved into the core's zeroizing secret on submission.
+    MailboxPassword {
+        bytes: Vec<u8>,
+    },
+    HumanVerification {
+        token: String,
+        token_type: String,
+    },
+}
+
+impl ProtonSignInStep {
+    fn into_service(self) -> sb_service::ProtonSignInStep {
+        match self {
+            Self::SecondFactor { code } => sb_service::ProtonSignInStep::SecondFactor { code },
+            Self::MailboxPassword { bytes } => {
+                sb_service::ProtonSignInStep::MailboxPassword { bytes }
+            }
+            Self::HumanVerification { token, token_type } => {
+                sb_service::ProtonSignInStep::HumanVerification { token, token_type }
+            }
+        }
+    }
+}
+
+/// `begin_proton_sign_in`'s parameters (spec/07). No `Debug` or
+/// `Clone`: the password must neither print nor be copied.
+#[derive(uniffi::Record)]
+pub struct ProtonSignInParams {
+    pub display_name: String,
+    pub username: String,
+    /// The Proton password as UTF-8 bytes, moved into the core's
+    /// zeroizing secret.
+    pub password: Vec<u8>,
+    /// Signs an existing Proton account in again, keeping its UUID and
+    /// data (spec/07); `None` starts a new account.
+    pub account_id: Option<String>,
+}
+
+impl ProtonSignInParams {
+    fn into_service(self) -> sb_service::ProtonSignInParams {
+        sb_service::ProtonSignInParams {
+            display_name: self.display_name,
+            username: self.username,
+            password: self.password,
+            account_id: self.account_id,
+        }
+    }
+}
+
+/// `begin_proton_sign_in`'s answer: the open conversation, or a
+/// replayed key's stored receipt after completion (spec/07).
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
+pub enum BeginProtonSignIn {
+    Open {
+        sign_in_id: String,
+        state: ProtonSignInState,
+    },
+    Complete {
+        receipt: Receipt,
+    },
+}
+
+impl BeginProtonSignIn {
+    fn from_service(answer: sb_service::BeginProtonSignIn) -> Self {
+        match answer {
+            sb_service::BeginProtonSignIn::Open { sign_in_id, state } => Self::Open {
+                sign_in_id,
+                state: ProtonSignInState::from_service(state),
+            },
+            sb_service::BeginProtonSignIn::Complete { receipt } => Self::Complete {
+                receipt: Receipt::from_service(&receipt),
+            },
+        }
+    }
+}
+
+#[uniffi::export]
+impl Core {
+    /// `begin_proton_sign_in(params)` (spec/07) under an idempotency
+    /// key the shell made. A command: the token counts only until it
+    /// holds the core; once begun it runs to completion. A repeated key
+    /// answers the open conversation, or its receipt, with no contact.
+    pub async fn begin_proton_sign_in(
+        &self,
+        token: Arc<CancelToken>,
+        idempotency_key: String,
+        params: ProtonSignInParams,
+    ) -> Result<BeginProtonSignIn, CoreError> {
+        let params = params.into_service();
+        let answer = self
+            .command(&token, async |core| {
+                core.begin_proton_sign_in(&idempotency_key, params).await
+            })
+            .await?;
+        Ok(BeginProtonSignIn::from_service(answer))
+    }
+
+    /// `continue_proton_sign_in(sign_in_id, step)` (spec/07): the next
+    /// state; a wrong code or mailbox password keeps the conversation
+    /// answerable. A command.
+    pub async fn continue_proton_sign_in(
+        &self,
+        token: Arc<CancelToken>,
+        sign_in_id: String,
+        step: ProtonSignInStep,
+    ) -> Result<ProtonSignInState, CoreError> {
+        let step = step.into_service();
+        let state = self
+            .command(&token, async |core| {
+                core.continue_proton_sign_in(&sign_in_id, step).await
+            })
+            .await?;
+        Ok(ProtonSignInState::from_service(state))
+    }
+
+    /// `cancel_proton_sign_in(sign_in_id)` (spec/07): drop the
+    /// conversation. A command: the token counts only until it holds
+    /// the core.
+    pub async fn cancel_proton_sign_in(
+        &self,
+        token: Arc<CancelToken>,
+        sign_in_id: String,
+    ) -> Result<(), CoreError> {
+        self.command(&token, async |core| {
+            core.cancel_proton_sign_in(&sign_in_id).await
+        })
+        .await
+    }
+
+    /// `disconnect_account(id)` (spec/07): revoke a Proton account's
+    /// session, delete its secret and mark it disconnected, keeping
+    /// every row and its data. A command.
+    pub async fn disconnect_account(
+        &self,
+        token: Arc<CancelToken>,
+        account_id: String,
+    ) -> Result<(), CoreError> {
+        self.command(&token, async |core| {
+            core.disconnect_account(&account_id).await
+        })
+        .await
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -275,5 +448,136 @@ mod tests {
                 sendable: sb_service::IdentitySendable::Validated,
             }]
         );
+    }
+
+    #[test]
+    fn sign_in_params_convert_field_by_field() {
+        let converted = ProtonSignInParams {
+            display_name: "Owner".to_owned(),
+            username: "owner@example.org".to_owned(),
+            password: b"synthetic-proton-password".to_vec(),
+            account_id: Some("account-1".to_owned()),
+        }
+        .into_service();
+
+        assert_eq!(converted.display_name, "Owner");
+        assert_eq!(converted.username, "owner@example.org");
+        assert_eq!(converted.password, b"synthetic-proton-password");
+        assert_eq!(converted.account_id.as_deref(), Some("account-1"));
+    }
+
+    #[test]
+    fn sign_in_states_map_variant_for_variant() {
+        let cases = [
+            (
+                sb_service::SignInState::NeedsSecondFactor,
+                ProtonSignInState::NeedsSecondFactor,
+            ),
+            (
+                sb_service::SignInState::NeedsMailboxPassword,
+                ProtonSignInState::NeedsMailboxPassword,
+            ),
+            (
+                sb_service::SignInState::NeedsHumanVerification {
+                    url: "https://proton.example/verify".to_owned(),
+                    methods: vec!["captcha".to_owned(), "email".to_owned()],
+                },
+                ProtonSignInState::NeedsHumanVerification {
+                    url: "https://proton.example/verify".to_owned(),
+                    methods: vec!["captcha".to_owned(), "email".to_owned()],
+                },
+            ),
+            (
+                sb_service::SignInState::Complete {
+                    account_id: "account-1".to_owned(),
+                },
+                ProtonSignInState::Complete {
+                    account_id: "account-1".to_owned(),
+                },
+            ),
+        ];
+        for (service, expected) in cases {
+            assert_eq!(ProtonSignInState::from_service(service), expected);
+        }
+    }
+
+    #[test]
+    fn sign_in_steps_convert_field_by_field() {
+        let second_factor = ProtonSignInStep::SecondFactor {
+            code: "123456".to_owned(),
+        };
+        match second_factor.into_service() {
+            sb_service::ProtonSignInStep::SecondFactor { code } => assert_eq!(code, "123456"),
+            _ => panic!("the second-factor step maps"),
+        }
+        let mailbox_password = ProtonSignInStep::MailboxPassword {
+            bytes: b"synthetic-mailbox-password".to_vec(),
+        };
+        match mailbox_password.into_service() {
+            sb_service::ProtonSignInStep::MailboxPassword { bytes } => {
+                assert_eq!(bytes, b"synthetic-mailbox-password");
+            }
+            _ => panic!("the mailbox-password step maps"),
+        }
+        let human_verification = ProtonSignInStep::HumanVerification {
+            token: "hv-token".to_owned(),
+            token_type: "captcha".to_owned(),
+        };
+        match human_verification.into_service() {
+            sb_service::ProtonSignInStep::HumanVerification { token, token_type } => {
+                assert_eq!(token, "hv-token");
+                assert_eq!(token_type, "captcha");
+            }
+            _ => panic!("the human-verification step maps"),
+        }
+    }
+
+    #[test]
+    fn begin_answers_map_open_and_complete() {
+        let open = BeginProtonSignIn::from_service(sb_service::BeginProtonSignIn::Open {
+            sign_in_id: "sign-in-1".to_owned(),
+            state: sb_service::SignInState::NeedsSecondFactor,
+        });
+        assert_eq!(
+            open,
+            BeginProtonSignIn::Open {
+                sign_in_id: "sign-in-1".to_owned(),
+                state: ProtonSignInState::NeedsSecondFactor,
+            }
+        );
+
+        let complete = BeginProtonSignIn::from_service(sb_service::BeginProtonSignIn::Complete {
+            receipt: sb_service::Receipt {
+                command: "begin_proton_sign_in".to_owned(),
+                result_json: "{\"account_id\":\"account-1\"}".to_owned(),
+                created_at_ms: 7,
+            },
+        });
+        assert_eq!(
+            complete,
+            BeginProtonSignIn::Complete {
+                receipt: Receipt {
+                    command: "begin_proton_sign_in".to_owned(),
+                    result_json: "{\"account_id\":\"account-1\"}".to_owned(),
+                    created_at_ms: 7,
+                },
+            }
+        );
+    }
+
+    /// The four refusal fields spec/07 names must survive the FFI
+    /// mapping unchanged: the sheet shows each on its own field.
+    #[test]
+    fn invalid_input_field_names_survive_the_boundary() {
+        for field in ["password", "second_factor", "mailbox_password", "account"] {
+            let mapped = CoreError::from(sb_service::CoreError::InvalidInput {
+                field: field.to_owned(),
+                message: "Proton refused".to_owned(),
+            });
+            assert!(
+                matches!(mapped, CoreError::InvalidInput { field: ref found, .. } if found == field),
+                "{field}"
+            );
+        }
     }
 }

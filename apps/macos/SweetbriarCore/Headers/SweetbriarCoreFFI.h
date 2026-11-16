@@ -258,9 +258,29 @@ void uniffi_sb_ffi_fn_free_core(uint64_t handle, RustCallStatus *_Nonnull out_st
 uint64_t uniffi_sb_ffi_fn_method_core_add_bridge_account(uint64_t ptr, uint64_t token, RustBuffer idempotency_key, RustBuffer params
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_BEGIN_PROTON_SIGN_IN
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_BEGIN_PROTON_SIGN_IN
+uint64_t uniffi_sb_ffi_fn_method_core_begin_proton_sign_in(uint64_t ptr, uint64_t token, RustBuffer idempotency_key, RustBuffer params
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_BRIDGE_CERTIFICATE
 #define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_BRIDGE_CERTIFICATE
 uint64_t uniffi_sb_ffi_fn_method_core_bridge_certificate(uint64_t ptr, uint64_t token, uint16_t port, RustBuffer security
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_CANCEL_PROTON_SIGN_IN
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_CANCEL_PROTON_SIGN_IN
+uint64_t uniffi_sb_ffi_fn_method_core_cancel_proton_sign_in(uint64_t ptr, uint64_t token, RustBuffer sign_in_id
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_CONTINUE_PROTON_SIGN_IN
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_CONTINUE_PROTON_SIGN_IN
+uint64_t uniffi_sb_ffi_fn_method_core_continue_proton_sign_in(uint64_t ptr, uint64_t token, RustBuffer sign_in_id, RustBuffer step
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_DISCONNECT_ACCOUNT
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_DISCONNECT_ACCOUNT
+uint64_t uniffi_sb_ffi_fn_method_core_disconnect_account(uint64_t ptr, uint64_t token, RustBuffer account_id
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_SET_SETTING
@@ -956,9 +976,33 @@ uint16_t uniffi_sb_ffi_checksum_method_core_add_bridge_account(void
     
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_BEGIN_PROTON_SIGN_IN
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_BEGIN_PROTON_SIGN_IN
+uint16_t uniffi_sb_ffi_checksum_method_core_begin_proton_sign_in(void
+    
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_BRIDGE_CERTIFICATE
 #define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_BRIDGE_CERTIFICATE
 uint16_t uniffi_sb_ffi_checksum_method_core_bridge_certificate(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_CANCEL_PROTON_SIGN_IN
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_CANCEL_PROTON_SIGN_IN
+uint16_t uniffi_sb_ffi_checksum_method_core_cancel_proton_sign_in(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_CONTINUE_PROTON_SIGN_IN
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_CONTINUE_PROTON_SIGN_IN
+uint16_t uniffi_sb_ffi_checksum_method_core_continue_proton_sign_in(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_DISCONNECT_ACCOUNT
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_DISCONNECT_ACCOUNT
+uint16_t uniffi_sb_ffi_checksum_method_core_disconnect_account(void
     
 );
 #endif
