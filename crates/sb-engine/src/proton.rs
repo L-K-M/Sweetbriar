@@ -66,6 +66,9 @@ pub(crate) struct RestoredSession {
     /// read them, and the test seam observes them.
     #[cfg_attr(not(any(test, feature = "test-seams")), allow(dead_code))]
     pub keys: Box<dyn sb_resources::KeyStore>,
+    /// Unlocks the keys again when an address, user or key event asks
+    /// (spec/04 "Sync loop" step 2). In memory only, like the keys.
+    pub key_passphrase: Arc<Secret>,
 }
 
 /// The restored sessions by account. Its lock also serializes every
@@ -478,6 +481,7 @@ pub(crate) async fn restore_proton_account(worker: &Worker, sessions: &Sessions,
         }
     };
     drop(secret);
+    let key_passphrase = Arc::new(Secret::new(decoded.key_passphrase().to_vec()));
     let restored = match worker
         .resources()
         .restore_proton_session(
@@ -517,7 +521,14 @@ pub(crate) async fn restore_proton_account(worker: &Worker, sessions: &Sessions,
         .await;
     match stored {
         Ok(Ok(())) => {
-            sessions.insert(account_id.to_owned(), RestoredSession { session, keys });
+            sessions.insert(
+                account_id.to_owned(),
+                RestoredSession {
+                    session,
+                    keys,
+                    key_passphrase,
+                },
+            );
         }
         Ok(Err(error)) => pause_for_secret_error(worker, account_id, error).await,
         // The blocking join failed (shutdown): leave the account as it
@@ -528,7 +539,7 @@ pub(crate) async fn restore_proton_account(worker: &Worker, sessions: &Sessions,
 
 /// Mark the account `needs_attention` ("Sign in again") without
 /// touching its data (spec/04).
-async fn mark_session_refused(worker: &Worker, account_id: &str) {
+pub(crate) async fn mark_session_refused(worker: &Worker, account_id: &str) {
     let id = account_id.to_owned();
     let _ = worker
         .resources()
@@ -634,8 +645,20 @@ async fn complete_conversation(
         .map_err(EngineError::from)?;
     // The new session replaces one restored at open, which signing in
     // again made stale.
-    let FinishedSignIn { session, keys, .. } = finished;
-    sessions.insert(completed.clone(), RestoredSession { session, keys });
+    let FinishedSignIn {
+        session,
+        keys,
+        key_passphrase,
+    } = finished;
+    let key_passphrase = Arc::new(Secret::new(key_passphrase.to_vec()));
+    sessions.insert(
+        completed.clone(),
+        RestoredSession {
+            session,
+            keys,
+            key_passphrase,
+        },
+    );
     Ok(completed)
 }
 

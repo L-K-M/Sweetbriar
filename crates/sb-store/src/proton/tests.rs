@@ -13,7 +13,8 @@ use crate::proton::{
     ProtonPasswordMode, SESSION_REFUSED_REASON, begin_listing, body_failure, clear_body_failure,
     commit_proton_sign_in, complete_listing, disconnect_proton_account, insert_proton_account,
     pause_for_proton_credential, pause_for_session, proton_account, proton_account_by_user_id,
-    record_body_failure, set_diagnostics, set_event_cursor, update_listing_checkpoint,
+    record_body_failure, refresh_proton_identities, set_diagnostics, set_event_cursor,
+    update_listing_checkpoint,
 };
 use crate::testing::{reading, scratch_paths, test_seams};
 
@@ -259,6 +260,99 @@ fn signing_in_again_never_takes_another_accounts_identity() {
         .map_err(|e| crate::schema::classify(e, "read the identity's account"))
     });
     assert_eq!(owner, "a2");
+}
+
+fn identity(id: &str, email: &str, sendable: IdentitySendable) -> NewIdentity {
+    NewIdentity {
+        identity_id: id.to_owned(),
+        email: email.to_owned(),
+        display_name: "Owner".to_owned(),
+        is_default: false,
+        sendable,
+    }
+}
+
+/// An address, user or key event's refresh writes, and bumps the
+/// account's generation, only when an identity changed; an address no
+/// longer returned keeps its row but can't send (spec/02, spec/04).
+#[test]
+fn refreshing_identities_writes_only_a_change() {
+    let (_scratch, store) = proton_store("proton-refresh-identities");
+    let sign_in = sign_in_for("a1", "user-1");
+    block_on(store.write(crate::WritePriority::User, move |tx| {
+        commit_proton_sign_in(tx, &sign_in, now())
+    }))
+    .unwrap();
+    let refresh = |identities: Vec<NewIdentity>| {
+        block_on(store.write(crate::WritePriority::User, move |tx| {
+            refresh_proton_identities(tx, "a1", &identities)
+        }))
+    };
+    let state = || {
+        reading(&store, |tx| {
+            let generation: i64 = tx
+                .query_row(
+                    "SELECT config_generation FROM accounts WHERE account_id = 'a1'",
+                    [],
+                    |row| row.get(0),
+                )
+                .map_err(|e| crate::schema::classify(e, "read the generation"))?;
+            let mut statement = tx
+                .prepare(
+                    "SELECT identity_id, is_default, sendable FROM identities
+                     ORDER BY identity_id",
+                )
+                .map_err(|e| crate::schema::classify(e, "read the identities"))?;
+            let rows: Vec<(String, bool, String)> = statement
+                .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+                .and_then(Iterator::collect)
+                .map_err(|e| crate::schema::classify(e, "read the identities"))?;
+            Ok((generation, rows))
+        })
+    };
+    let owner = || identity("addr-1", "owner@example.test", IdentitySendable::Validated);
+    let alias = || identity("addr-2", "alias@example.test", IdentitySendable::Validated);
+    let row =
+        |id: &str, default: bool, sendable: &str| (id.to_owned(), default, sendable.to_owned());
+    let (generation, _) = state();
+
+    assert!(!refresh(vec![owner()]).unwrap());
+    assert_eq!(
+        state(),
+        (generation, vec![row("addr-1", true, "validated")])
+    );
+
+    // A new address listed first becomes the default.
+    assert!(refresh(vec![alias(), owner()]).unwrap());
+    assert_eq!(
+        state(),
+        (
+            generation + 1,
+            vec![
+                row("addr-1", false, "validated"),
+                row("addr-2", true, "validated")
+            ]
+        )
+    );
+
+    // One no longer returned keeps its row but can't send.
+    assert!(refresh(vec![owner()]).unwrap());
+    assert!(!refresh(vec![owner()]).unwrap());
+    assert_eq!(
+        state(),
+        (
+            generation + 2,
+            vec![
+                row("addr-1", true, "validated"),
+                row("addr-2", false, "unavailable")
+            ]
+        )
+    );
+
+    let unknown = block_on(store.write(crate::WritePriority::User, |tx| {
+        refresh_proton_identities(tx, "nobody", &[])
+    }));
+    assert!(matches!(unknown, Err(StoreError::NotFound { .. })));
 }
 
 /// Another Proton user than the account's is `Conflict`, never merged

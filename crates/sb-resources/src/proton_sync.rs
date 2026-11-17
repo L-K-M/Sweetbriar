@@ -11,7 +11,8 @@ pub use sb_store::{
     AppliedEvents, BreakerResolution, Classified, EventChunk, ListedMessage, ListedPage,
     ListedPageStats, MailboxCoverage, ObservedLabel, ProtonChange, ProtonCoverage,
     ProtonListingState, apply_event_chunk, begin_listing, commit_listed_page, finish_listing,
-    proton_coverage, reconcile_proton_labels, resolve_breaker_event, withhold_unlisted,
+    proton_coverage, reconcile_proton_labels, refresh_proton_identities, resolve_breaker_event,
+    withhold_unlisted,
 };
 
 use crate::sync::{HeaderColumns, SyncedFlags};

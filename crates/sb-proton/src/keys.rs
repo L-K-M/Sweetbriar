@@ -492,15 +492,35 @@ impl Client {
         key_passphrase: &[u8],
     ) -> Result<(Session, Box<dyn KeyStore>), ProtonError> {
         let session = self.refresh(uid, refresh_token).await?;
+        let keys = self
+            .unlock_keys_with_secret(&session, key_passphrase)
+            .await
+            .map_err(|error| match error {
+                ProtonError::KeyUnlock(error) => ProtonError::Unavailable {
+                    message: error.to_string(),
+                },
+                other => other,
+            })?;
+        Ok((session, keys))
+    }
+
+    /// Fetches the user keys and addresses again and unlocks them with
+    /// the stored key passphrase, as address, user and key events ask
+    /// (spec/04 "Sync loop" step 2). Keys the passphrase no longer
+    /// unlocks, as after a password change, are
+    /// [`ProtonError::KeyUnlock`].
+    pub async fn unlock_keys_with_secret(
+        &self,
+        session: &Session,
+        key_passphrase: &[u8],
+    ) -> Result<Box<dyn KeyStore>, ProtonError> {
         let provider = ProtonPGP::new_rust_sync();
-        let user_keys = self.user_keys(&session).await?;
-        let addresses = self.addresses(&session).await?;
+        let user_keys = self.user_keys(session).await?;
+        let addresses = self.addresses(session).await?;
         let key_secret = KeySecret::new(key_passphrase.to_vec());
         let keys = KeySet::unlock_with_secret(provider, &key_secret, &user_keys, &addresses)
-            .map_err(|error| ProtonError::Unavailable {
-                message: error.to_string(),
-            })?;
-        Ok((session, Box::new(keys)))
+            .map_err(ProtonError::KeyUnlock)?;
+        Ok(Box::new(keys))
     }
 
     /// One authenticated `GET` that decodes a JSON body, or a typed

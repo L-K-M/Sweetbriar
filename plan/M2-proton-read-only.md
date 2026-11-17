@@ -607,7 +607,10 @@ the provider policies (`proton_bridge`, `generic_imap`) live in
   **M2.15c3** the rest of Refresh (`vanish_pending` after
   a complete listing, confirmed by a second one or a delete event, and
   `epoch_change`); **M2.15c4** address and user events refreshing
-  identities and keys, and the proptest model.
+  identities and keys, and the proptest model. M2.15c4 is split again
+  (the model is its own suite): **M2.15c4a** address and user events,
+  the keys unlocked again with the passphrase kept in memory and the
+  identities refreshed; **M2.15c4b** the proptest model.
 - **Acceptance:** a proptest model of server changes (new, label
   changes, deletes, refreshes, disconnects) converges to the model's
   state; crash cuts during listing and event batches resume without

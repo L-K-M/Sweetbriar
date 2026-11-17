@@ -169,8 +169,15 @@ its label id appended, as in "Travel (l1)" for the label with id
    - label events update mailboxes: the labels are listed again and
      reconciled as in step 1.2, since a mailbox name depends on every
      label (Mailbox mapping);
-   - address events refresh identities; user or key events re-run key
-     unlocking;
+   - address, user and key events unlock the keys again with the key
+     passphrase kept in memory and refresh the identities (as at
+     sign-in), before the response's cursor moves, so a failure
+     retries the response. An identity that changed bumps the
+     account's `config_generation` (02); a user event that changed
+     none writes nothing. Keys the passphrase no longer unlocks, as
+     after a password change elsewhere, put the account in
+     `needs_attention` ("Sign in again") with the response unapplied;
+     local data stays;
    - **`Refresh` with the mail bit** starts a bootstrap (below, Refresh).
 3. **Acquire bodies.** A queue fetches full messages for logical
    messages without an acquisition: messages the user opened first,

@@ -302,6 +302,14 @@ impl FakeEvent {
             ..Self::default()
         }
     }
+
+    /// An address event carries only the id and the action.
+    fn address(id: String, action: u8) -> Self {
+        Self {
+            addresses: vec![json!({"ID": id, "Action": action})],
+            ..Self::default()
+        }
+    }
 }
 
 /// One logged request. The log deliberately records only header
@@ -800,6 +808,34 @@ impl FakeProtonServer {
     pub fn touch_user(&self, username: &str) {
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         let account = account_mut(&mut state, username);
+        let user = json!({"ID": format!("user-{username}"), "Name": username});
+        account.record(FakeEvent::user(user));
+    }
+
+    /// Renames an address and appends an address update event.
+    pub fn rename_address(&self, username: &str, id: &str, display_name: &str) {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let account = account_mut(&mut state, username);
+        account
+            .addresses
+            .iter_mut()
+            .find(|address| address.id == id)
+            .expect("the address exists")
+            .display_name = display_name.to_owned();
+        account.record(FakeEvent::address(id.to_owned(), 2));
+    }
+
+    /// Marks every address key inactive, as a password change made
+    /// elsewhere leaves none the stored key passphrase unlocks, and
+    /// appends a user event.
+    pub fn retire_address_keys(&self, username: &str) {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let account = account_mut(&mut state, username);
+        for address in &mut account.addresses {
+            for key in &mut address.keys {
+                key.active = false;
+            }
+        }
         let user = json!({"ID": format!("user-{username}"), "Name": username});
         account.record(FakeEvent::user(user));
     }

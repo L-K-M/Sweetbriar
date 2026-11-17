@@ -67,7 +67,7 @@ pub use proton::{
     BEGIN_PROTON_SIGN_IN, PROTON_API_BASE_URL, ProtonAccount, ProtonRefusal, ProtonSessionError,
     ProtonSessionSecret, ProtonSignInParams, ProtonTransport, RestoredProtonSession,
     decode_proton_session, disconnect_proton_account, encode_proton_session, pause_for_session,
-    proton_account,
+    proton_account, proton_identities,
 };
 // The transport items an account's sign-in conversation drives
 // (spec/01 rule 3): the engine keeps them in memory and maps errors
