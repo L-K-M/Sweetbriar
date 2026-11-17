@@ -15,15 +15,17 @@
 use crate::account_sync::AccountJobs;
 use crate::engine::{Engine, Spawn, Worker};
 use crate::policy::proton_api;
-use crate::proton::{Sessions, restore_proton_account};
+use crate::proton::{Sessions, mark_session_refused, restore_proton_account};
 use sb_resources::proton_sync::{
     BreakerResolution, EventChunk, ListedPage, ProtonChange, ProtonListingState, anchor,
     apply_event_chunk, begin_listing, checkpoint, commit_listed_page, finish_listing,
-    listed_message, reconcile_proton_labels, resolve_breaker_event, withhold_unlisted,
+    listed_message, reconcile_proton_labels, refresh_proton_identities, resolve_breaker_event,
+    withhold_unlisted,
 };
 use sb_resources::{
     EventAction, EventBatch, EventId, ListingAnchor, PROTON_MAX_PAGE_SIZE, ProtonClient,
-    ProtonError, Session, StoreError, Transaction, WritePriority, proton_account,
+    ProtonError, Secret, Session, StoreError, Transaction, WritePriority, proton_account,
+    proton_identities,
 };
 
 use std::future::Future;
@@ -423,6 +425,9 @@ impl Attempt<'_> {
                 async move { client.events_since(&session, &from).await }
             })
             .await?;
+        if !batch.addresses.is_empty() || batch.user_changed {
+            self.refresh_keys().await?;
+        }
         if batch.refresh_mail {
             // spec/04 "Refresh": list again from this response's cursor;
             // the listing brings what it changed.
@@ -489,6 +494,62 @@ impl Attempt<'_> {
         Ok(())
     }
 
+    /// An address, user or key event (spec/04-sync-proton "Sync loop"
+    /// step 2): unlock the keys again with the passphrase kept in
+    /// memory and refresh the identities. It runs before the response's
+    /// cursor moves, so a failure retries the response. Keys the
+    /// passphrase no longer unlocks, as after a password change, leave
+    /// the account needing the owner to sign in again.
+    async fn refresh_keys(&self) -> Result<(), Halt> {
+        let passphrase = {
+            let sessions = self.sessions.lock().await;
+            let restored = sessions.get(self.account_id).ok_or(Halt::Ended)?;
+            Arc::clone(&restored.key_passphrase)
+        };
+        let unlocked = self
+            .call(|client, session| {
+                let passphrase = Arc::clone(&passphrase);
+                async move {
+                    match client
+                        .unlock_keys_with_secret(&session, passphrase.expose())
+                        .await
+                    {
+                        Ok(keys) => Ok(Ok((session, keys))),
+                        Err(ProtonError::KeyUnlock(_)) => Ok(Err(session)),
+                        Err(error) => Err(error),
+                    }
+                }
+            })
+            .await?;
+        // The session map's lock is held through each write below, as a
+        // sign-in again holds it through its own: a sign-in or restore
+        // meanwhile brought its own session, keys and identities, so
+        // what this unlock saw is stale and nothing is written.
+        let mut sessions = self.sessions.lock().await;
+        let (used, keys) = match unlocked {
+            Ok(unlocked) => unlocked,
+            Err(used) => {
+                if !still_holds(&sessions, self.account_id, &used, &passphrase) {
+                    return Err(Halt::Retry);
+                }
+                sessions.remove(self.account_id);
+                mark_session_refused(self.worker, self.account_id).await;
+                return Err(Halt::Ended);
+            }
+        };
+        if !still_holds(&sessions, self.account_id, &used, &passphrase) {
+            return Ok(());
+        }
+        let identities = proton_identities(keys.as_ref());
+        let id = self.account_id.to_owned();
+        self.write(move |tx| refresh_proton_identities(tx, &id, &identities).map(drop))
+            .await?;
+        if let Some(restored) = sessions.get_mut(self.account_id) {
+            restored.keys = keys;
+        }
+        Ok(())
+    }
+
     /// One Proton request with the account's current session. A 401
     /// refreshes the session once through restore, which stores the
     /// rotated refresh token before the new session is used, and
@@ -523,10 +584,7 @@ impl Attempt<'_> {
     async fn refresh(&self, refused: &Session) {
         {
             let mut sessions = self.sessions.lock().await;
-            let current = sessions.get(self.account_id);
-            if current.is_none_or(|restored| {
-                restored.session.expose_access_token() != refused.expose_access_token()
-            }) {
+            if !is_current(&sessions, self.account_id, refused) {
                 return;
             }
             sessions.remove(self.account_id);
@@ -545,6 +603,31 @@ impl Attempt<'_> {
             .write(WritePriority::Sync, closure)
             .await?)
     }
+}
+
+/// Whether the account's session is still the one a request used.
+fn is_current(
+    sessions: &std::collections::HashMap<String, crate::proton::RestoredSession>,
+    account_id: &str,
+    used: &Session,
+) -> bool {
+    sessions.get(account_id).is_some_and(|restored| {
+        restored.session.expose_access_token() == used.expose_access_token()
+    })
+}
+
+/// Whether the account still holds the session and key passphrase a
+/// key unlock used.
+fn still_holds(
+    sessions: &std::collections::HashMap<String, crate::proton::RestoredSession>,
+    account_id: &str,
+    used: &Session,
+    passphrase: &Secret,
+) -> bool {
+    is_current(sessions, account_id, used)
+        && sessions
+            .get(account_id)
+            .is_some_and(|restored| restored.key_passphrase.expose() == passphrase.expose())
 }
 
 /// A response's message changes in its order. A change without the

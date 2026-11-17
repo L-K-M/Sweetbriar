@@ -29,7 +29,10 @@ and D24, D29.
   with Proton's key salt: it can't sign in, but it unlocks the keys,
   so it is guarded like a password. The secret store holds one item per
   account: the session UID, the refresh token and the key passphrase.
-  Access tokens stay in memory.
+  Access tokens stay in memory. So does the key passphrase, in a
+  zeroizing buffer, for as long as the account's session lasts, so
+  address, user and key events can unlock the keys again
+  (04-sync-proton).
 - **Proton private keys** are unlocked in memory from the key passphrase
   and are never written anywhere, decrypted or not; Proton's encrypted
   key blobs are fetched again on each start. Decrypted key material is

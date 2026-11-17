@@ -4,11 +4,13 @@
 //! transaction only; the credential itself stays in the secret store,
 //! named by `credential_ref` (spec/10).
 
+use std::collections::BTreeMap;
+
 use rusqlite::{OptionalExtension, Transaction, params};
 use sb_types::time::Timestamp;
 
 use crate::StoreError;
-use crate::accounts::{CredentialPause, NewIdentity, next_account_sort_order};
+use crate::accounts::{CredentialPause, IdentitySendable, NewIdentity, next_account_sort_order};
 use crate::appearance::initialize_account_appearance;
 use crate::schema::classify;
 
@@ -253,18 +255,100 @@ fn replace_proton_account(
         ],
     )
     .map_err(|e| classify(e, "update the Proton account"))?;
+    upsert_identities(tx, &new.account_id, &new.identities)
+}
+
+/// Refresh a Proton account's identities from its addresses, as an
+/// address, user or key event asks (spec/04 "Sync loop" step 2): the
+/// first is the account's default, and an address no longer returned
+/// keeps its row (spec/02) but can't send. Writes, and bumps the
+/// account's `config_generation`, only when an identity changed, since
+/// Proton sends user events for unrelated changes; returns whether one
+/// did. Only a Proton account; an unknown one is `NotFound`.
+pub fn refresh_proton_identities(
+    tx: &Transaction,
+    account_id: &str,
+    identities: &[NewIdentity],
+) -> Result<bool, StoreError> {
+    require_account(tx, account_id)?;
+    let before = stored_identities(tx, account_id)?;
+    let mut after: BTreeMap<String, StoredIdentity> = before
+        .iter()
+        .map(|(id, (email, name, _, _))| {
+            let unavailable = IdentitySendable::Unavailable.as_str().to_owned();
+            (
+                id.clone(),
+                (email.clone(), name.clone(), false, unavailable),
+            )
+        })
+        .collect();
+    for (index, identity) in identities.iter().enumerate() {
+        after.insert(
+            identity.identity_id.clone(),
+            (
+                identity.email.clone(),
+                identity.display_name.clone(),
+                index == 0,
+                identity.sendable.as_str().to_owned(),
+            ),
+        );
+    }
+    if after == before {
+        return Ok(false);
+    }
+    upsert_identities(tx, account_id, identities)?;
+    tx.execute(
+        "UPDATE accounts
+         SET config_generation = config_generation + 1, revision = revision + 1
+         WHERE account_id = ?1",
+        params![account_id],
+    )
+    .map_err(|e| classify(e, "update the account"))?;
+    Ok(true)
+}
+
+/// An identity's email, display name, default flag and sendable state.
+type StoredIdentity = (String, String, bool, String);
+
+fn stored_identities(
+    tx: &Transaction,
+    account_id: &str,
+) -> Result<BTreeMap<String, StoredIdentity>, StoreError> {
+    let read = |e| classify(e, "read the account's identities");
+    let mut statement = tx
+        .prepare(
+            "SELECT identity_id, email, display_name, is_default, sendable
+             FROM identities WHERE account_id = ?1",
+        )
+        .map_err(read)?;
+    let rows = statement
+        .query_map(params![account_id], |row| {
+            Ok((
+                row.get(0)?,
+                (row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?),
+            ))
+        })
+        .map_err(read)?;
+    rows.collect::<Result<_, _>>().map_err(read)
+}
+
+fn upsert_identities(
+    tx: &Transaction,
+    account_id: &str,
+    identities: &[NewIdentity],
+) -> Result<(), StoreError> {
     // Every existing default clears first, so the upsert's first
     // identity is the account's one default. An address the new session
     // no longer returns keeps its row, since removal never deletes
     // (spec/02), but can't send; the upsert restores the ones returned.
     tx.execute(
         "UPDATE identities
-         SET is_default = 0, sendable = 'unavailable', revision = revision + 1
+         SET is_default = 0, sendable = ?2, revision = revision + 1
          WHERE account_id = ?1",
-        params![new.account_id],
+        params![account_id, IdentitySendable::Unavailable.as_str()],
     )
     .map_err(|e| classify(e, "clear the account's identities"))?;
-    for (index, identity) in new.identities.iter().enumerate() {
+    for (index, identity) in identities.iter().enumerate() {
         // An id another account holds is never moved here: the guarded
         // update changes nothing, which is refused below.
         let changed = tx.execute(
@@ -279,7 +363,7 @@ fn replace_proton_account(
              WHERE identities.account_id = excluded.account_id",
             params![
                 identity.identity_id,
-                new.account_id,
+                account_id,
                 identity.email,
                 identity.display_name,
                 i64::from(index == 0),
@@ -290,7 +374,7 @@ fn replace_proton_account(
         if changed == 0 {
             return Err(StoreError::conflict(format!(
                 "identity {} belongs to another account than {}",
-                identity.identity_id, new.account_id
+                identity.identity_id, account_id
             )));
         }
     }

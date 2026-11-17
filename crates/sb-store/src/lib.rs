@@ -92,8 +92,8 @@ pub use proton::{
     ProtonPasswordMode, apply_event_chunk, begin_listing, body_failure, clear_body_failure,
     commit_listed_page, complete_listing, finish_listing, insert_proton_account, proton_account,
     proton_account_by_user_id, proton_coverage, reconcile_proton_labels, record_body_failure,
-    resolve_breaker_event, set_diagnostics, set_event_cursor, update_listing_checkpoint,
-    withhold_unlisted,
+    refresh_proton_identities, resolve_breaker_event, set_diagnostics, set_event_cursor,
+    update_listing_checkpoint, withhold_unlisted,
 };
 pub use readers::{ReadStop, Scoped};
 pub use receipts::{

@@ -177,23 +177,7 @@ impl Resources {
         S: FnOnce(String, Secret) -> F,
         F: Future<Output = Result<(), SecretError>>,
     {
-        let mut ordered: Vec<&sb_proton::Identity> = finished.keys.identities().iter().collect();
-        ordered.sort_by_key(|identity| identity.order);
-        let identities: Vec<NewIdentity> = ordered
-            .iter()
-            .enumerate()
-            .map(|(index, identity)| NewIdentity {
-                identity_id: identity.id.clone(),
-                email: identity.email.clone(),
-                display_name: identity.display_name.clone(),
-                is_default: index == 0,
-                sendable: match identity.sendable {
-                    sb_proton::Sendable::Validated => IdentitySendable::Validated,
-                    sb_proton::Sendable::Provisional => IdentitySendable::Provisional,
-                    sb_proton::Sendable::Unavailable => IdentitySendable::Unavailable,
-                },
-            })
-            .collect();
+        let identities = proton_identities(finished.keys.as_ref());
         // The Proton user identifies the account (spec/02); a session
         // without one can't be told apart from another user's.
         if finished.session.user_id.is_empty() {
@@ -402,6 +386,28 @@ fn hex_digit(byte: u8) -> Option<u8> {
         b'A'..=b'F' => Some(byte - b'A' + 10),
         _ => None,
     }
+}
+
+/// The account's identities from its unlocked keys, in Proton's
+/// address order, the first the default (spec/04 "Identities").
+pub fn proton_identities(keys: &dyn KeyStore) -> Vec<NewIdentity> {
+    let mut ordered: Vec<&sb_proton::Identity> = keys.identities().iter().collect();
+    ordered.sort_by_key(|identity| identity.order);
+    ordered
+        .iter()
+        .enumerate()
+        .map(|(index, identity)| NewIdentity {
+            identity_id: identity.id.clone(),
+            email: identity.email.clone(),
+            display_name: identity.display_name.clone(),
+            is_default: index == 0,
+            sendable: match identity.sendable {
+                sb_proton::Sendable::Validated => IdentitySendable::Validated,
+                sb_proton::Sendable::Provisional => IdentitySendable::Provisional,
+                sb_proton::Sendable::Unavailable => IdentitySendable::Unavailable,
+            },
+        })
+        .collect()
 }
 
 impl Resources {
