@@ -11,7 +11,7 @@ Rests on research [04-data-safety](../research/04-data-safety.md)
 |---|---|---|
 | **Unit** | Pure functions: parsers, query AST, color tokens, state transitions | Linux CI, every PR |
 | **Store** | Schema, migrations, publication protocol, GC, backup and restore, against a temp directory | Linux CI, every PR |
-| **Model** | `proptest` state machines: intent planning and reconciliation against an in-memory IMAP model; outbox transitions | Linux CI, every PR (bounded cases); nightly (more cases) |
+| **Model** | `proptest` state machines: intent planning and reconciliation against an in-memory IMAP model; Proton listing, events and the breaker against an in-memory Proton server, cut after any write; outbox transitions | Linux CI, every PR (bounded cases); nightly (more cases) |
 | **Protocol** | The IMAP and SMTP engine against a scripted fake server (below) and against Dovecot in Docker | Linux CI, every PR |
 | **Fault injection** | Crash cuts and I/O faults at every durable transition (below) | Linux CI, every PR (sampled); nightly (full) |
 | **Fuzz** | MIME parser, mbox splitter, query parser (`cargo-fuzz`) | Nightly, Linux |

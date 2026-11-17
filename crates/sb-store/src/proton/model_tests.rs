@@ -1,0 +1,875 @@
+//! The proptest model of Proton sync (plan M2.15c4b; spec/04-sync-proton
+//! "Sync loop", "Refresh" and "The breaker"). A server in memory adds,
+//! moves and deletes messages, keeps an event log and asks for
+//! refreshes. A driver calls the store as the engine's worker does
+//! (cursor first, labels, pages with checkpoints, withholding what a
+//! listing missed, then events in chunks), and is cut after any write,
+//! as a crash or a dropped connection would cut the worker; the next
+//! sync resumes from what the store holds. Server changes land between
+//! syncs, so also in the middle of a listing.
+//!
+//! Whatever the history, the store converges to the server once the
+//! user accepts the breaker's events, and every message has at most one
+//! current occurrence per mailbox.
+
+use std::collections::{BTreeMap, BTreeSet};
+
+use proptest::prelude::*;
+use proptest::sample::Index;
+use rusqlite::params;
+use sb_test_support::{ScratchDir, block_on, real_fs};
+use sb_types::time::Timestamp;
+
+use super::breaker::{MAX_DISAPPEARANCES_PER_MAILBOX, MIN_MAILBOX_FOR_SHARE};
+use super::*;
+use crate::lists::MailboxRole;
+use crate::sidebar::MailboxKind;
+use crate::sync::{HeaderColumns, SyncedFlags};
+use crate::testing::{reading, scratch_paths, test_seams};
+use crate::{Store, StorePaths, WritePriority, open};
+
+const ACCOUNT: &str = "00000000-0000-4000-8000-0000000000e4";
+const INBOX: &str = "0";
+const ARCHIVE: &str = "6";
+const TRASH: &str = "3";
+const SPAM: &str = "4";
+const ALL_MAIL: &str = "5";
+const TRAVEL: &str = "l1";
+const LOCATIONS: [&str; 4] = [INBOX, ARCHIVE, TRASH, SPAM];
+/// Messages per listed page: small, so listings take several writes.
+const PAGE: usize = 2;
+/// Changes per write, as the worker's `CHANGES_PER_WRITE` but small.
+const CHUNK: usize = 2;
+
+fn now() -> Timestamp {
+    Timestamp::from_millis(1_735_689_600_000)
+}
+
+fn label(key: &str, name: &str, kind: MailboxKind, role: Option<MailboxRole>) -> ObservedLabel {
+    ObservedLabel {
+        provider_key: key.to_owned(),
+        remote_name: name.to_owned(),
+        delimiter: None,
+        kind,
+        role,
+        selectable: true,
+    }
+}
+
+fn labels() -> Vec<ObservedLabel> {
+    use MailboxKind::{Folder, Label, Virtual};
+    vec![
+        label(INBOX, "Inbox", Folder, Some(MailboxRole::Inbox)),
+        label(ARCHIVE, "Archive", Folder, Some(MailboxRole::Archive)),
+        label(TRASH, "Trash", Folder, Some(MailboxRole::Trash)),
+        label(SPAM, "Spam", Folder, Some(MailboxRole::Junk)),
+        label(ALL_MAIL, "All Mail", Virtual, Some(MailboxRole::All)),
+        label(TRAVEL, "Travel", Label, None),
+    ]
+}
+
+/// One message as the server holds it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Held {
+    time: i64,
+    location: &'static str,
+    travel: bool,
+    seen: bool,
+}
+
+impl Held {
+    fn label_ids(&self) -> Vec<String> {
+        let mut ids = vec![self.location.to_owned(), ALL_MAIL.to_owned()];
+        if self.travel {
+            ids.push(TRAVEL.to_owned());
+        }
+        ids
+    }
+
+    fn listed(&self, id: &str) -> ListedMessage {
+        ListedMessage {
+            provider_key: id.to_owned(),
+            label_ids: self.label_ids(),
+            raw_metadata: format!(
+                r#"{{"v":1,"proton_metadata":{{"ID":"{id}","Time":{}}}}}"#,
+                self.time
+            )
+            .into_bytes(),
+            columns: HeaderColumns::default(),
+            internal_date: Some(Timestamp::from_millis(self.time * 1000)),
+            size: Some(100),
+            flags: SyncedFlags {
+                seen: self.seen,
+                ..SyncedFlags::default()
+            },
+        }
+    }
+}
+
+/// One entry of the server's event log. An upsert carries the message
+/// as it was then, as Proton's events do.
+#[derive(Debug, Clone)]
+enum Logged {
+    Upsert(String, Held),
+    Delete(String),
+    /// Proton's `Refresh`: the response asks for a listing again.
+    Refresh,
+}
+
+/// The server: its messages, newest first by (time, id), and its log,
+/// whose cursor is a position in it.
+struct Server {
+    messages: BTreeMap<String, Held>,
+    log: Vec<Logged>,
+    next_id: usize,
+    responses: Responses,
+}
+
+/// How many events one response carries.
+#[derive(Clone, Copy)]
+enum Responses {
+    /// One to four, by where the response starts, so response and
+    /// chunk boundaries fall on refreshes and deletes in different
+    /// arrangements.
+    Varying,
+    /// Everything pending, so one pass sees every delete at once.
+    All,
+}
+
+/// One events response.
+struct Response {
+    changes: Vec<ProtonChange>,
+    refresh: bool,
+    next: usize,
+    more: bool,
+}
+
+fn cursor(position: usize) -> String {
+    format!("e{position}")
+}
+
+fn position(cursor: &str) -> usize {
+    cursor[1..].parse().expect("the driver's cursors")
+}
+
+impl Server {
+    fn new(responses: Responses) -> Self {
+        Self {
+            messages: BTreeMap::new(),
+            log: Vec::new(),
+            next_id: 0,
+            responses,
+        }
+    }
+
+    fn put(&mut self, id: String, held: Held) {
+        self.log.push(Logged::Upsert(id.clone(), held.clone()));
+        self.messages.insert(id, held);
+    }
+
+    fn add(&mut self, held: Held) -> String {
+        self.next_id += 1;
+        let id = format!("m{:03}", self.next_id);
+        self.put(id.clone(), held);
+        id
+    }
+
+    fn delete(&mut self, id: &str) {
+        if self.messages.remove(id).is_some() {
+            self.log.push(Logged::Delete(id.to_owned()));
+        }
+    }
+
+    fn pick(&self, index: &Index) -> Option<String> {
+        if self.messages.is_empty() {
+            return None;
+        }
+        self.messages
+            .keys()
+            .nth(index.index(self.messages.len()))
+            .cloned()
+    }
+
+    /// A page of up to `PAGE` messages older than `after`, newest
+    /// first, as `/mail/v4/messages` with `End` and `EndID`.
+    fn page(&self, after: Option<&(i64, String)>) -> Vec<(String, Held)> {
+        let mut older: Vec<_> = self
+            .messages
+            .iter()
+            .filter(|(id, held)| {
+                after.is_none_or(|(time, last)| (held.time, id.as_str()) < (*time, last.as_str()))
+            })
+            .collect();
+        older.sort_by(|(a, x), (b, y)| (y.time, b.as_str()).cmp(&(x.time, a.as_str())));
+        older
+            .into_iter()
+            .take(PAGE)
+            .map(|(id, held)| (id.clone(), held.clone()))
+            .collect()
+    }
+
+    fn events_since(&self, from: usize) -> Response {
+        let next = match self.responses {
+            Responses::Varying => (from + 1 + from % 4).min(self.log.len()),
+            Responses::All => self.log.len(),
+        };
+        let mut response = Response {
+            changes: Vec::new(),
+            refresh: false,
+            next,
+            more: next < self.log.len(),
+        };
+        for logged in &self.log[from..next] {
+            match logged {
+                Logged::Upsert(id, held) => response
+                    .changes
+                    .push(ProtonChange::Upsert(Box::new(held.listed(id)))),
+                Logged::Delete(id) => response.changes.push(ProtonChange::Delete(id.clone())),
+                Logged::Refresh => response.refresh = true,
+            }
+        }
+        response
+    }
+}
+
+/// The driver ran out of writes: the worker stopped there.
+struct Cut;
+
+/// The engine's worker (sb-engine `proton_sync`), over the store and
+/// the model server, with a budget of writes.
+struct Driver<'a> {
+    store: &'a Store,
+    server: &'a Server,
+    writes_left: Option<usize>,
+}
+
+impl Driver<'_> {
+    fn write<T: Send + 'static>(
+        &mut self,
+        f: impl FnOnce(&Transaction) -> Result<T, StoreError> + Send + 'static,
+    ) -> Result<T, Cut> {
+        if let Some(left) = self.writes_left.as_mut() {
+            let Some(rest) = left.checked_sub(1) else {
+                return Err(Cut);
+            };
+            *left = rest;
+        }
+        // A refused write is a failure of the model, never a cut.
+        Ok(block_on(self.store.write(WritePriority::Sync, f)).expect("the worker's write"))
+    }
+
+    fn account(&self) -> ProtonAccount {
+        reading(self.store, |tx| proton_account(tx, ACCOUNT)).expect("the account")
+    }
+
+    /// List when the store says a listing is due, then follow the
+    /// events until nothing more is pending.
+    fn sync(&mut self) -> Result<(), Cut> {
+        // Each pass but the last starts over for a refresh in the log,
+        // so the log's length bounds a sync that works; a broken one
+        // fails here instead of hanging.
+        for _ in 0..=self.server.log.len() + 1 {
+            self.bootstrap()?;
+            if self.follow()? {
+                return Ok(());
+            }
+        }
+        panic!("the sync never settled");
+    }
+
+    /// "Sync loop" step 1, resumed from where the store says the
+    /// listing stands.
+    fn bootstrap(&mut self) -> Result<(), Cut> {
+        let account = self.account();
+        if account.listing_state == ProtonListingState::Complete {
+            return Ok(());
+        }
+        let mut revision = account.revision;
+        let mut after = None;
+        if let (ProtonListingState::Listing, Some(_)) =
+            (account.listing_state, &account.pending_cursor)
+        {
+            after = account.listing_checkpoint.as_deref().map(|checkpoint| {
+                let (time, id) = checkpoint
+                    .split_once(':')
+                    .expect("the driver's checkpoints");
+                (time.parse().expect("a time"), id.to_owned())
+            });
+        } else {
+            // 1.1: the cursor before the first page.
+            let cursor = cursor(self.server.log.len());
+            revision = self.write(move |tx| {
+                begin_listing(tx, ACCOUNT, &cursor, revision).map(|account| account.revision)
+            })?;
+        }
+        self.write(|tx| reconcile_proton_labels(tx, ACCOUNT, &labels()).map(drop))?;
+
+        loop {
+            let page = self.server.page(after.as_ref());
+            let Some((last_id, last)) = page.last() else {
+                break;
+            };
+            let next = (last.time, last_id.clone());
+            let checkpoint = format!("{}:{}", next.0, next.1);
+            let messages: Vec<_> = page.iter().map(|(id, held)| held.listed(id)).collect();
+            revision = self.write(move |tx| {
+                commit_listed_page(
+                    tx,
+                    &ListedPage {
+                        account_id: ACCOUNT,
+                        messages: &messages,
+                        checkpoint: &checkpoint,
+                        expected_revision: revision,
+                    },
+                    now(),
+                )?;
+                Ok(proton_account(tx, ACCOUNT)?.expect("the account").revision)
+            })?;
+            after = Some(next);
+            if page.len() < PAGE {
+                break;
+            }
+        }
+
+        while self.write(move |tx| withhold_unlisted(tx, ACCOUNT, revision))? > 0 {}
+        self.write(move |tx| finish_listing(tx, ACCOUNT, &[], revision, now()).map(drop))
+    }
+
+    /// "Sync loop" step 2 until a response leaves nothing more: true,
+    /// or false when a response asks for a listing again.
+    fn follow(&mut self) -> Result<bool, Cut> {
+        loop {
+            let account = self.account();
+            let (ProtonListingState::Complete, Some(from)) =
+                (account.listing_state, account.event_cursor)
+            else {
+                return Ok(false);
+            };
+            let response = self.server.events_since(position(&from));
+            let next = cursor(response.next);
+            let revision = account.revision;
+            if response.refresh {
+                self.write(move |tx| begin_listing(tx, ACCOUNT, &next, revision).map(drop))?;
+                return Ok(false);
+            }
+            if response.changes.is_empty() && next == from {
+                return Ok(true);
+            }
+            let mut chunks: Vec<Vec<ProtonChange>> =
+                response.changes.chunks(CHUNK).map(<[_]>::to_vec).collect();
+            if chunks.is_empty() {
+                chunks.push(Vec::new());
+            }
+            let last = chunks.len() - 1;
+            for (index, changes) in chunks.into_iter().enumerate() {
+                let from = from.clone();
+                let next = (index == last).then(|| next.clone());
+                self.write(move |tx| {
+                    apply_event_chunk(
+                        tx,
+                        &EventChunk {
+                            account_id: ACCOUNT,
+                            from_cursor: &from,
+                            labels: None,
+                            changes: &changes,
+                            next_cursor: next.as_deref(),
+                            expected_revision: revision,
+                        },
+                        now(),
+                    )
+                    .map(drop)
+                })?;
+            }
+            if !response.more {
+                return Ok(true);
+            }
+        }
+    }
+}
+
+fn open_store(paths: &StorePaths) -> Store {
+    open(paths, &test_seams(real_fs())).expect("the store opens")
+}
+
+/// A store with a Proton account that hasn't listed yet.
+fn signed_in(label: &str) -> (ScratchDir, StorePaths, Store) {
+    let (scratch, paths) = scratch_paths(label);
+    let store = open_store(&paths);
+    block_on(store.write(WritePriority::User, |tx| {
+        tx.execute(
+            "INSERT INTO accounts (account_id, kind, provider, display_name, state, sort_order, created_at)
+             VALUES (?1, 'proton', 'proton_api', 'Proton', 'active', 1, 0)",
+            params![ACCOUNT],
+        )
+        .map_err(|e| crate::schema::classify(e, "insert the test account"))?;
+        insert_proton_account(
+            tx,
+            &NewProtonAccount {
+                account_id: ACCOUNT.to_owned(),
+                api_base_url: "https://mail.proton.me/api".to_owned(),
+                username: "owner".to_owned(),
+                proton_user_id: "user-4".to_owned(),
+                credential_ref: "proton-e4".to_owned(),
+                password_mode: ProtonPasswordMode::Login,
+            },
+        )
+        .map(drop)
+    }))
+    .expect("the account");
+    (scratch, paths, store)
+}
+
+/// Sync without a cut.
+fn sync(store: &Store, server: &Server) {
+    let mut driver = Driver {
+        store,
+        server,
+        writes_left: None,
+    };
+    assert!(driver.sync().is_ok(), "an uncut sync ends");
+}
+
+/// The user accepts every open or kept breaker event, until none is
+/// left: classifying what a pause held back can open another.
+fn accept_all(store: &Store) {
+    while resolve(store, BreakerResolution::Accept) > 0 {}
+}
+
+/// Resolve the events `choice` applies to now (Accept: open and kept;
+/// Keep: open); how many.
+fn resolve(store: &Store, choice: BreakerResolution) -> usize {
+    let states = match choice {
+        BreakerResolution::Accept => "'open', 'kept'",
+        BreakerResolution::Keep => "'open'",
+    };
+    let sql =
+        format!("SELECT event_id FROM breaker_events WHERE state IN ({states}) ORDER BY event_id");
+    let events: Vec<String> = reading(store, move |tx| {
+        let read = |e| crate::schema::classify(e, "read breaker events");
+        let mut statement = tx.prepare(&sql).map_err(read)?;
+        let rows = statement.query_map([], |row| row.get(0)).map_err(read)?;
+        rows.collect::<Result<_, _>>().map_err(read)
+    });
+    let resolved = events.len();
+    for event_id in events {
+        block_on(store.write(WritePriority::User, move |tx| {
+            resolve_breaker_event(tx, &event_id, choice, now()).map(drop)
+        }))
+        .expect("the user's choice");
+    }
+    resolved
+}
+
+fn count(store: &Store, sql: &str) -> i64 {
+    let sql = sql.to_owned();
+    reading(store, move |tx| {
+        tx.query_row(&sql, [], |row| row.get(0))
+            .map_err(|e| crate::schema::classify(e, "count"))
+    })
+}
+
+/// What holds after every step: no message twice, at most one current
+/// occurrence per message and mailbox, and no breaker event over
+/// retention (Trash and Spam).
+fn assert_invariants(store: &Store) {
+    assert_eq!(
+        count(
+            store,
+            "SELECT COUNT(*) - COUNT(DISTINCT provider_key) FROM logical_messages"
+        ),
+        0,
+        "a Proton message stored twice"
+    );
+    assert_eq!(
+        count(
+            store,
+            "SELECT COUNT(*) FROM (SELECT 1 FROM occurrences
+             WHERE state IN ('present', 'vanish_pending')
+             GROUP BY message_id, mailbox_id HAVING COUNT(*) > 1)"
+        ),
+        0,
+        "two current occurrences of a message in one mailbox"
+    );
+    assert_eq!(
+        count(
+            store,
+            "SELECT COUNT(*) FROM breaker_events b JOIN mailboxes m USING (mailbox_id)
+             WHERE m.role IN ('trash', 'junk')"
+        ),
+        0,
+        "a retention delete opened the breaker"
+    );
+}
+
+/// Each message's current occurrences, as (label, state, seen).
+fn stored(store: &Store) -> BTreeMap<String, BTreeSet<(String, String, bool)>> {
+    let rows: Vec<(String, String, String, bool)> = reading(store, |tx| {
+        let read = |e| crate::schema::classify(e, "read the stored occurrences");
+        let mut statement = tx
+            .prepare(
+                "SELECT l.provider_key, m.provider_key, o.state, o.f_seen FROM occurrences o
+                 JOIN logical_messages l ON l.message_id = o.message_id
+                 JOIN mailboxes m ON m.mailbox_id = o.mailbox_id
+                 WHERE o.state IN ('present', 'vanish_pending')",
+            )
+            .map_err(read)?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+            })
+            .map_err(read)?;
+        rows.collect::<Result<_, _>>().map_err(read)
+    });
+    let mut stored: BTreeMap<_, BTreeSet<_>> = BTreeMap::new();
+    for (message, label, state, seen) in rows {
+        stored
+            .entry(message)
+            .or_default()
+            .insert((label, state, seen));
+    }
+    stored
+}
+
+/// The server's messages as the store holds them once converged.
+fn expected(server: &Server) -> BTreeMap<String, BTreeSet<(String, String, bool)>> {
+    server
+        .messages
+        .iter()
+        .map(|(id, held)| {
+            let occurrences = held
+                .label_ids()
+                .into_iter()
+                .map(|label| (label, "present".to_owned(), held.seen))
+                .collect();
+            (id.clone(), occurrences)
+        })
+        .collect()
+}
+
+/// The messages only a listing missed so far: withheld, unconfirmed,
+/// waiting for a second listing or a delete event.
+fn waiting(store: &Store) -> BTreeSet<String> {
+    reading(store, |tx| {
+        let read = |e| crate::schema::classify(e, "read what a listing missed");
+        let mut statement = tx
+            .prepare(
+                "SELECT l.provider_key FROM proton_disappearances d
+                 JOIN logical_messages l ON l.message_id = d.message_id
+                 WHERE d.confirmed = 0",
+            )
+            .map_err(read)?;
+        let rows = statement.query_map([], |row| row.get(0)).map_err(read)?;
+        rows.collect::<Result<_, _>>().map_err(read)
+    })
+}
+
+/// Listed, at the server's last cursor, and nothing paused.
+fn assert_settled(store: &Store, server: &Server) {
+    let account = reading(store, |tx| proton_account(tx, ACCOUNT)).expect("the account");
+    assert_eq!(account.listing_state, ProtonListingState::Complete);
+    assert_eq!(account.event_cursor, Some(cursor(server.log.len())));
+    assert_eq!(account.pending_cursor, None);
+    assert_eq!(account.listing_checkpoint, None);
+    assert_eq!(
+        count(
+            store,
+            "SELECT COUNT(*) FROM breaker_events WHERE state = 'open'"
+        ),
+        0
+    );
+}
+
+/// Bring the store to the server: sync and accept what the breaker
+/// holds. The store then holds exactly the server's messages, except
+/// one deleted where only a listing saw it go, which waits withheld for
+/// a second listing; one refresh settles that.
+fn converge(store: &Store, server: &mut Server) {
+    sync(store, server);
+    accept_all(store);
+    assert_invariants(store);
+    assert_settled(store, server);
+    let waiting = waiting(store);
+    let mut held = stored(store);
+    for id in &waiting {
+        assert!(
+            !server.messages.contains_key(id),
+            "{id} is on the server but waits as a listing's miss"
+        );
+        let occurrences = held
+            .remove(id)
+            .expect("a withheld message keeps its occurrences");
+        assert!(
+            occurrences
+                .iter()
+                .all(|(_, state, _)| state == "vanish_pending"),
+            "{id}: {occurrences:?}"
+        );
+    }
+    assert_eq!(
+        held,
+        expected(server),
+        "the store holds the server's messages"
+    );
+    if waiting.is_empty() {
+        return;
+    }
+
+    server.log.push(Logged::Refresh);
+    sync(store, server);
+    accept_all(store);
+    assert_invariants(store);
+    assert_settled(store, server);
+    assert_eq!(
+        stored(store),
+        expected(server),
+        "a second listing confirms what the first missed"
+    );
+}
+
+fn small(n: usize) -> i64 {
+    i64::try_from(n).expect("a small count")
+}
+
+#[derive(Debug, Clone)]
+enum Op {
+    Add {
+        time: i64,
+        location: usize,
+        travel: bool,
+    },
+    Change {
+        pick: Index,
+        location: usize,
+        travel: bool,
+        seen: bool,
+    },
+    Delete(Index),
+    /// Delete everything in one location: a mass delete or an emptied
+    /// folder, or retention in Trash and Spam.
+    Empty(usize),
+    Refresh,
+    /// Sync with a budget of writes, or until nothing is pending; a
+    /// cut sync may also reopen the store, as a relaunch would.
+    Sync {
+        writes: Option<usize>,
+        reopen: bool,
+    },
+    Accept,
+    /// The user keeps what the open events hold, for now.
+    Keep,
+}
+
+fn op() -> impl Strategy<Value = Op> {
+    let location = 0..LOCATIONS.len();
+    prop_oneof![
+        4 => (0..30i64, location.clone(), any::<bool>())
+            .prop_map(|(time, location, travel)| Op::Add { time, location, travel }),
+        2 => (any::<Index>(), location.clone(), any::<bool>(), any::<bool>())
+            .prop_map(|(pick, location, travel, seen)| Op::Change { pick, location, travel, seen }),
+        2 => any::<Index>().prop_map(Op::Delete),
+        1 => location.prop_map(Op::Empty),
+        1 => Just(Op::Refresh),
+        4 => (proptest::option::of(1..12usize), any::<bool>())
+            .prop_map(|(writes, reopen)| Op::Sync { writes, reopen }),
+        1 => Just(Op::Accept),
+        1 => Just(Op::Keep),
+    ]
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(24))]
+
+    /// Acceptance: server changes, refreshes and cuts converge, with
+    /// no message lost or stored twice.
+    #[test]
+    fn sync_converges_to_the_server_whatever_the_cuts(
+        ops in proptest::collection::vec(op(), 1..48)
+    ) {
+        let (_scratch, paths, mut store) = signed_in("proton-model");
+        let mut server = Server::new(Responses::Varying);
+        for op in ops {
+            match op {
+                Op::Add { time, location, travel } => {
+                    let location = LOCATIONS[location];
+                    server.add(Held { time, location, travel, seen: false });
+                }
+                Op::Change { pick, location, travel, seen } => {
+                    if let Some(id) = server.pick(&pick) {
+                        let time = server.messages[&id].time;
+                        let location = LOCATIONS[location];
+                        server.put(id, Held { time, location, travel, seen });
+                    }
+                }
+                Op::Delete(pick) => {
+                    if let Some(id) = server.pick(&pick) {
+                        server.delete(&id);
+                    }
+                }
+                Op::Empty(location) => {
+                    let ids: Vec<String> = server
+                        .messages
+                        .iter()
+                        .filter(|(_, held)| held.location == LOCATIONS[location])
+                        .map(|(id, _)| id.clone())
+                        .collect();
+                    for id in ids {
+                        server.delete(&id);
+                    }
+                }
+                Op::Refresh => server.log.push(Logged::Refresh),
+                Op::Sync { writes, reopen } => {
+                    let mut driver = Driver { store: &store, server: &server, writes_left: writes };
+                    let cut = driver.sync().is_err();
+                    if cut && reopen {
+                        drop(store);
+                        store = open_store(&paths);
+                    }
+                }
+                Op::Accept => accept_all(&store),
+                Op::Keep => drop(resolve(&store, BreakerResolution::Keep)),
+            }
+            assert_invariants(&store);
+        }
+        converge(&store, &mut server);
+    }
+}
+
+/// One breaker case: `deleted` of `location`'s `held` messages go, by
+/// events or, with `by_listing`, as one listing's misses.
+fn breaker_case(
+    location: &'static str,
+    held: usize,
+    deleted: usize,
+    elsewhere: usize,
+    by_listing: bool,
+) -> Result<(), TestCaseError> {
+    let (_scratch, _paths, store) = signed_in("proton-breaker-model");
+    let mut server = Server::new(Responses::All);
+    let other = if location == INBOX { ARCHIVE } else { INBOX };
+    let ids: Vec<String> = (0..held)
+        .map(|time| {
+            server.add(Held {
+                time: small(time),
+                location,
+                travel: false,
+                seen: false,
+            })
+        })
+        .collect();
+    for time in 0..elsewhere {
+        server.add(Held {
+            time: small(time),
+            location: other,
+            travel: false,
+            seen: false,
+        });
+    }
+    sync(&store, &server);
+    if by_listing {
+        // The response asks for a listing before its deletes: the
+        // listing, not the events, finds them gone.
+        server.log.push(Logged::Refresh);
+    }
+    for id in &ids[..deleted] {
+        server.delete(id);
+    }
+    sync(&store, &server);
+
+    let retention = location == TRASH || location == SPAM;
+    // spec/04's rule, with the thresholds the breaker names.
+    let opens = !retention
+        && (deleted == held
+            || deleted > MAX_DISAPPEARANCES_PER_MAILBOX
+            || (held >= MIN_MAILBOX_FOR_SHARE && deleted * 2 > held));
+    let kind = match (by_listing, deleted == held) {
+        (true, _) => "epoch_change",
+        (false, true) => "folder_emptied",
+        (false, false) => "bulk_disappearance",
+    };
+    prop_assert_eq!(
+        count(
+            &store,
+            "SELECT COUNT(*) FROM breaker_events WHERE state = 'open'"
+        ),
+        i64::from(opens)
+    );
+    prop_assert_eq!(
+        count(
+            &store,
+            &format!("SELECT COUNT(*) FROM breaker_events WHERE kind = '{kind}'")
+        ),
+        i64::from(opens)
+    );
+    prop_assert_eq!(
+        count(&store, "SELECT COUNT(*) FROM breaker_events"),
+        i64::from(opens)
+    );
+    // Each deleted message was in its location and All Mail; a
+    // listing's misses wait withheld even when nothing opens.
+    let pending = count(
+        &store,
+        "SELECT COUNT(*) FROM occurrences WHERE state = 'vanish_pending'",
+    );
+    let withheld = opens || by_listing;
+    prop_assert_eq!(pending, if withheld { 2 * small(deleted) } else { 0 });
+    assert_invariants(&store);
+    accept_all(&store);
+    if by_listing && !opens {
+        // A second listing confirms what the first missed.
+        server.log.push(Logged::Refresh);
+        sync(&store, &server);
+        prop_assert_eq!(
+            count(
+                &store,
+                "SELECT COUNT(*) FROM breaker_events WHERE state = 'open'"
+            ),
+            0
+        );
+        prop_assert_eq!(
+            count(
+                &store,
+                "SELECT COUNT(*) FROM occurrences WHERE state = 'vanish_pending'"
+            ),
+            0
+        );
+    }
+    assert_invariants(&store);
+    prop_assert_eq!(stored(&store), expected(&server));
+    Ok(())
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(12))]
+
+    /// Acceptance: `deleted` of a location's `held` messages gone in
+    /// one events response, or missed by one listing, open the breaker
+    /// exactly when they empty the folder, are more than 25, or more
+    /// than half of at least 8, and never in Trash or Spam. Deletes
+    /// open their own kind of event; a listing's misses open one
+    /// `epoch_change`. Each case runs a folder and a retention location,
+    /// by events and by a listing.
+    #[test]
+    fn a_mass_delete_opens_the_breaker_and_retention_never_does(
+        folder in prop_oneof![Just(INBOX), Just(ARCHIVE)],
+        retention in prop_oneof![Just(TRASH), Just(SPAM)],
+        (held, deleted) in (1..40usize).prop_flat_map(|held| (Just(held), 1..=held)),
+        elsewhere in 0..4usize,
+    ) {
+        for location in [folder, retention] {
+            for by_listing in [false, true] {
+                breaker_case(location, held, deleted, elsewhere, by_listing)?;
+            }
+        }
+    }
+}
+
+/// Either side of each threshold, which random sizes rarely hit: half of
+/// a mailbox of 8, and 25 of a mailbox too large for the share rule.
+#[test]
+fn the_breaker_opens_just_past_each_threshold() {
+    for (held, deleted) in [(7, 4), (8, 4), (8, 5), (60, 25), (60, 26)] {
+        for by_listing in [false, true] {
+            breaker_case(INBOX, held, deleted, 1, by_listing).expect("the breaker's rule holds");
+        }
+    }
+}
