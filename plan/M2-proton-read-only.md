@@ -592,7 +592,19 @@ the provider policies (`proton_bridge`, `generic_imap`) live in
   their checkpoint, finishing with Proton's per-label totals (migration
   29) and the coverage read; **M2.15b2** keyset listing in the
   transport and the fake server, the metadata mapping, the `proton_api`
-  policy and the account worker's bootstrap.
+  policy and the account worker's bootstrap. M2.15c is split again
+  (the breaker exists only as its table, so it is new code):
+  **M2.15c1** event polling and application: message changes, labels
+  and deletes applied with the cursor (long responses in chunks), the
+  `Refresh` bit running the bootstrap again, and the worker following
+  the events after it. Until M2.15c2 a delete only withholds the
+  message's occurrences as `vanish_pending`, and until M2.7 reports the
+  app's activity the worker polls at the 2-minute cadence;
+  **M2.15c2** the breaker: Proton's classes for deletes, the
+  thresholds and `breaker_events`, the pause, Accept, Keep and
+  `cleared`; **M2.15c3** the rest of Refresh (`vanish_pending` after
+  a complete listing, `epoch_change`), address and user events
+  refreshing identities and keys, and the proptest model.
 - **Acceptance:** a proptest model of server changes (new, label
   changes, deletes, refreshes, disconnects) converges to the model's
   state; crash cuts during listing and event batches resume without

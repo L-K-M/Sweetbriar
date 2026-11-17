@@ -1,11 +1,12 @@
-//! Proton accounts' sync workers (spec/04-sync-proton "Sync loop" step
-//! 1). An account with a session in memory gets one worker: it reads
-//! the event cursor before listing, reconciles the labels through the
-//! `proton_api` policy, commits the metadata listing page by page with
-//! its checkpoint, and finishes with Proton's per-label totals. A
-//! crash or restart resumes from the last committed page. Events
-//! (step 2) follow in M2.15c; until then a finished account's worker
-//! ends.
+//! Proton accounts' sync workers (spec/04-sync-proton "Sync loop"
+//! steps 1 and 2). An account with a session in memory gets one
+//! worker: it reads the event cursor before listing, reconciles the
+//! labels through the `proton_api` policy, commits the metadata listing
+//! page by page with its checkpoint, and finishes with Proton's
+//! per-label totals. A crash or restart resumes from the last committed
+//! page. Then it follows the events from that cursor, each response
+//! applied with its new cursor, until a refresh asks for the bootstrap
+//! again.
 //!
 //! The worker takes the account's session from the engine's map before
 //! every request, so signing in again hands it the new session and a
@@ -16,16 +17,18 @@ use crate::engine::{Engine, Spawn, Worker};
 use crate::policy::proton_api;
 use crate::proton::{Sessions, restore_proton_account};
 use sb_resources::proton_sync::{
-    ListedPage, ProtonListingState, anchor, begin_listing, checkpoint, commit_listed_page,
-    finish_listing, listed_message, reconcile_proton_labels,
+    EventChunk, ListedPage, ProtonChange, ProtonListingState, anchor, apply_event_chunk,
+    begin_listing, checkpoint, commit_listed_page, finish_listing, listed_message,
+    reconcile_proton_labels,
 };
 use sb_resources::{
-    ListingAnchor, PROTON_MAX_PAGE_SIZE, ProtonClient, ProtonError, Session, StoreError,
-    Transaction, WritePriority, proton_account,
+    EventAction, EventBatch, EventId, ListingAnchor, PROTON_MAX_PAGE_SIZE, ProtonClient,
+    ProtonError, Session, StoreError, Transaction, WritePriority, proton_account,
 };
 
 use std::future::Future;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tokio::sync::watch;
 
@@ -37,12 +40,23 @@ const PAGE_SIZE: u32 = PROTON_MAX_PAGE_SIZE;
 /// [`MAX_RETRY_DELAY`] (spec/04 "Backoff": 1 s to 5 min).
 const FIRST_RETRY_DELAY: Duration = Duration::from_secs(1);
 const MAX_RETRY_DELAY: Duration = Duration::from_secs(5 * 60);
+/// The wait between event polls. spec/04 polls every 30 s while the
+/// app is active and every 2 min otherwise; the app reports neither yet
+/// (M2.7), so this is the slower one.
+const POLL_INTERVAL: Duration = Duration::from_secs(2 * 60);
+/// Message changes per write: a listed page's worth, which fits the
+/// store's write budget. A longer response is applied in chunks, its
+/// cursor moving with the last; each change carries the message's full
+/// state, so replaying a chunk after a crash is harmless.
+const CHANGES_PER_WRITE: usize = PAGE_SIZE as usize;
 
 /// Why an attempt stopped short of finishing the listing.
 #[derive(Debug)]
 enum Halt {
     /// The worker was told to stop (shutdown or a restore's quiesce).
     Stopped,
+    /// Proton asked for the listing again (spec/04 "Refresh").
+    Refresh,
     /// The account has no session any more: disconnected, or its
     /// refresh was refused and it needs attention.
     Ended,
@@ -85,6 +99,15 @@ impl Engine {
         })
         .await
     }
+
+    /// Test seam: make every account worker poll its events now rather
+    /// than at its next poll (spec/04 polls after a local mutation too,
+    /// M3).
+    #[cfg(any(test, feature = "test-seams"))]
+    #[doc(hidden)]
+    pub fn poll_proton_events(&self) {
+        self.account_jobs().poll_now();
+    }
 }
 
 /// Start a worker for every account whose session is in memory.
@@ -112,8 +135,9 @@ pub(crate) fn start(
     let owner = Arc::clone(jobs);
     let sessions = Arc::clone(sessions);
     let id = account_id.clone();
+    let poll = jobs.poll_signal();
     let spawned = spawner.spawn_worker(move |worker| async move {
-        run(&worker, &sessions, &id, stop).await;
+        run(&worker, &sessions, &id, stop, poll).await;
         owner.release(&id);
     });
     if spawned.is_err() {
@@ -121,7 +145,13 @@ pub(crate) fn start(
     }
 }
 
-async fn run(worker: &Worker, sessions: &Sessions, account_id: &str, stop: watch::Receiver<bool>) {
+async fn run(
+    worker: &Worker,
+    sessions: &Sessions,
+    account_id: &str,
+    stop: watch::Receiver<bool>,
+    poll: watch::Receiver<()>,
+) {
     let Ok(client) = worker.resources().proton_client() else {
         return;
     };
@@ -133,18 +163,24 @@ async fn run(worker: &Worker, sessions: &Sessions, account_id: &str, stop: watch
             client: &client,
             account_id,
             stop: &stop,
+            poll: poll.clone(),
+            advanced: AtomicBool::new(false),
         };
         // A stop doesn't wait for a request in flight: a write already
         // submitted commits or not as a whole, and the next attempt
         // starts from what the store says.
         let mut wait = stop.clone();
         let outcome = tokio::select! {
-            outcome = attempt.bootstrap() => outcome,
+            outcome = attempt.sync() => outcome,
             () = stopped(&mut wait) => return,
         };
         match outcome {
-            Ok(()) | Err(Halt::Stopped | Halt::Ended) => return,
-            Err(Halt::Retry) => {}
+            Halt::Stopped | Halt::Ended => return,
+            Halt::Retry | Halt::Refresh => {}
+        }
+        // Events applied since the last failure: this one is new.
+        if attempt.advanced.load(Ordering::Relaxed) {
+            delay = FIRST_RETRY_DELAY;
         }
         tokio::select! {
             () = tokio::time::sleep(delay) => {}
@@ -169,9 +205,25 @@ struct Attempt<'a> {
     client: &'a ProtonClient,
     account_id: &'a str,
     stop: &'a watch::Receiver<bool>,
+    poll: watch::Receiver<()>,
+    /// Set once an events response is applied.
+    advanced: AtomicBool,
 }
 
 impl Attempt<'_> {
+    /// Bootstrap, then follow the events, until something halts it.
+    async fn sync(&self) -> Halt {
+        loop {
+            let halt = match self.bootstrap().await {
+                Ok(()) => self.follow().await,
+                Err(halt) => halt,
+            };
+            if !matches!(halt, Halt::Refresh) {
+                return halt;
+            }
+        }
+    }
+
     /// spec/04-sync-proton "Sync loop" step 1, from where the store
     /// says the listing stands.
     async fn bootstrap(&self) -> Result<(), Halt> {
@@ -289,6 +341,116 @@ impl Attempt<'_> {
             .await
     }
 
+    /// spec/04-sync-proton "Sync loop" step 2: poll the cursor, apply
+    /// each response with its new cursor, fetch again while `More`,
+    /// then wait for the next poll. Returns only to halt.
+    async fn follow(&self) -> Halt {
+        let mut poll = self.poll.clone();
+        poll.mark_unchanged();
+        loop {
+            match self.poll_once().await {
+                Ok(true) => continue,
+                Ok(false) => {}
+                Err(halt) => return halt,
+            }
+            tokio::select! {
+                () = tokio::time::sleep(POLL_INTERVAL) => {}
+                changed = poll.changed() => {
+                    if changed.is_err() {
+                        return Halt::Stopped;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Fetch and apply one events response; whether more follow.
+    async fn poll_once(&self) -> Result<bool, Halt> {
+        let id = self.account_id.to_owned();
+        let account = self
+            .worker
+            .blocking(move |resources| resources.read(|tx| proton_account(tx, &id)))
+            .await
+            .map_err(|_| Halt::Stopped)??
+            .ok_or(Halt::Ended)?;
+        let (ProtonListingState::Complete, Some(cursor)) =
+            (account.listing_state, account.event_cursor)
+        else {
+            return Err(Halt::Refresh);
+        };
+        let from = EventId::new(cursor);
+        let batch = self
+            .call(|client, session| {
+                let from = from.clone();
+                async move { client.events_since(&session, &from).await }
+            })
+            .await?;
+        if batch.refresh_mail {
+            // spec/04 "Refresh": list again from this response's cursor;
+            // the listing brings what it changed.
+            let id = self.account_id.to_owned();
+            let next = batch.event_id.as_str().to_owned();
+            let revision = account.revision;
+            self.write(move |tx| begin_listing(tx, &id, &next, revision).map(drop))
+                .await?;
+            return Err(Halt::Refresh);
+        }
+        self.apply(&batch, from.as_str(), account.revision).await?;
+        self.advanced.store(true, Ordering::Relaxed);
+        Ok(batch.more)
+    }
+
+    /// Apply one response in budget-sized chunks; the labels, re-listed
+    /// when it changed one, reconcile with the first and the cursor
+    /// moves with the last.
+    async fn apply(&self, batch: &EventBatch, from: &str, revision: i64) -> Result<(), Halt> {
+        let changes = changes(batch)?;
+        if changes.is_empty() && batch.labels.is_empty() && batch.event_id.as_str() == from {
+            return Ok(());
+        }
+        let mut labels = if batch.labels.is_empty() {
+            None
+        } else {
+            let listed = self
+                .call(|client, session| async move { client.labels(&session).await })
+                .await?;
+            Some(proton_api::observed_labels(&listed))
+        };
+        let chunks: Vec<Vec<ProtonChange>> = if changes.is_empty() {
+            vec![Vec::new()]
+        } else {
+            changes
+                .chunks(CHANGES_PER_WRITE)
+                .map(<[ProtonChange]>::to_vec)
+                .collect()
+        };
+        let last = chunks.len() - 1;
+        for (index, chunk) in chunks.into_iter().enumerate() {
+            let id = self.account_id.to_owned();
+            let from = from.to_owned();
+            let next = (index == last).then(|| batch.event_id.as_str().to_owned());
+            let labels = labels.take();
+            let now = self.worker.resources().now();
+            self.write(move |tx| {
+                apply_event_chunk(
+                    tx,
+                    &EventChunk {
+                        account_id: &id,
+                        from_cursor: &from,
+                        labels: labels.as_deref(),
+                        changes: &chunk,
+                        next_cursor: next.as_deref(),
+                        expected_revision: revision,
+                    },
+                    now,
+                )
+                .map(drop)
+            })
+            .await?;
+        }
+        Ok(())
+    }
+
     /// One Proton request with the account's current session. A 401
     /// refreshes the session once through restore, which stores the
     /// rotated refresh token before the new session is used, and
@@ -345,4 +507,20 @@ impl Attempt<'_> {
             .write(WritePriority::Sync, closure)
             .await?)
     }
+}
+
+/// A response's message changes in its order. A change without the
+/// message's metadata can't be applied, so the response is retried.
+fn changes(batch: &EventBatch) -> Result<Vec<ProtonChange>, Halt> {
+    batch
+        .messages
+        .iter()
+        .map(|event| match (event.action, &event.message) {
+            (EventAction::Delete, _) => Ok(ProtonChange::Delete(event.id.clone())),
+            (_, Some(metadata)) if metadata.id == event.id => {
+                Ok(ProtonChange::Upsert(Box::new(listed_message(metadata))))
+            }
+            _ => Err(Halt::Retry),
+        })
+        .collect()
 }

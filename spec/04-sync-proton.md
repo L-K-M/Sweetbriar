@@ -156,14 +156,19 @@ its label id appended, as in "Travel (l1)" for the label with id
 2. **Events:** poll the cursor every 30 s while the app is active and
    every 2 min otherwise, and immediately after a local mutation. Fetch
    until `More` is 0, applying each response in one transaction with
-   its new cursor:
+   its new cursor. A response past the write budget (03) is applied in
+   chunks, the cursor moving with the last; each change carries the
+   message's full state, so a chunk replayed after a crash changes
+   nothing:
    - message create, update and flag updates replace the message's
      metadata: occurrences are added for labels it gained, and those for
      labels it lost become `vanished` (a label removal is
      authoritative, not an inference); flags update on every
      occurrence;
    - a message delete is a disappearance and goes through the breaker;
-   - label events update mailboxes;
+   - label events update mailboxes: the labels are listed again and
+     reconciled as in step 1.2, since a mailbox name depends on every
+     label (Mailbox mapping);
    - address events refresh identities; user or key events re-run key
      unlocking;
    - **`Refresh` with the mail bit** starts a bootstrap (below, Refresh).

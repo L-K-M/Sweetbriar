@@ -85,6 +85,9 @@ impl SessionBackoff {
 #[derive(Default)]
 pub(crate) struct AccountJobs {
     state: Mutex<Jobs>,
+    /// Raised to make every waiting worker sync now rather than at its
+    /// next poll (spec/04-sync-proton "Sync loop" step 2).
+    poll: watch::Sender<()>,
 }
 
 #[derive(Default)]
@@ -117,6 +120,17 @@ impl AccountJobs {
         let mut jobs = self.lock();
         debug_assert!(jobs.live.is_empty(), "the quiesce waited for every worker");
         jobs.stopping = false;
+    }
+
+    /// Wake every worker that waits for its next poll.
+    #[cfg(any(test, feature = "test-seams"))]
+    pub(crate) fn poll_now(&self) {
+        self.poll.send_replace(());
+    }
+
+    /// What a worker waits on between polls, besides its timer.
+    pub(crate) fn poll_signal(&self) -> watch::Receiver<()> {
+        self.poll.subscribe()
     }
 
     /// Whether a worker runs for the account.

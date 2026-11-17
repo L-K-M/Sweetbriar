@@ -1,5 +1,5 @@
-//! Proton sync's composition (spec/04-sync-proton "Sync loop" step 1):
-//! the store's bootstrap writes re-exported for the engine (spec/01
+//! Proton sync's composition (spec/04-sync-proton "Sync loop" steps 1
+//! and 2): the store's bootstrap and event writes re-exported for the engine (spec/01
 //! rule 3), and the mapping of Proton's listed metadata onto a
 //! `ListedMessage`: the canonical metadata JSON `message_headers` keeps
 //! until a body arrives, its columns, and the message's flags.
@@ -8,9 +8,9 @@ use sb_proton::{ListingAnchor, MailAddress, MessageMetadata};
 use sb_store::Timestamp;
 
 pub use sb_store::{
-    ListedMessage, ListedPage, ListedPageStats, MailboxCoverage, ObservedLabel, ProtonCoverage,
-    ProtonListingState, begin_listing, commit_listed_page, finish_listing, proton_coverage,
-    reconcile_proton_labels,
+    AppliedEvents, EventChunk, ListedMessage, ListedPage, ListedPageStats, MailboxCoverage,
+    ObservedLabel, ProtonChange, ProtonCoverage, ProtonListingState, apply_event_chunk,
+    begin_listing, commit_listed_page, finish_listing, proton_coverage, reconcile_proton_labels,
 };
 
 use crate::sync::{HeaderColumns, SyncedFlags};

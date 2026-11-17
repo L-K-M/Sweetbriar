@@ -429,7 +429,10 @@ fn insert_label(
 }
 
 /// Label id → mailbox for the account's live mailboxes.
-fn live_mailboxes(tx: &Transaction, account_id: &str) -> Result<HashMap<String, i64>, StoreError> {
+pub(super) fn live_mailboxes(
+    tx: &Transaction,
+    account_id: &str,
+) -> Result<HashMap<String, i64>, StoreError> {
     let read = |e| classify(e, "read the account's live Proton mailboxes");
     let mut statement = tx
         .prepare(
@@ -443,7 +446,7 @@ fn live_mailboxes(tx: &Transaction, account_id: &str) -> Result<HashMap<String, 
     rows.collect::<Result<HashMap<_, _>, _>>().map_err(read)
 }
 
-fn store_message(
+pub(super) fn store_message(
     tx: &Transaction,
     account_id: &str,
     message: &ListedMessage,
@@ -580,7 +583,10 @@ fn find_or_create_message(
 
 /// The message's current occurrences, oldest first, so a duplicate the
 /// invariant forbids is the later one.
-fn current_occurrences(tx: &Transaction, message_id: i64) -> Result<Vec<(i64, i64)>, StoreError> {
+pub(super) fn current_occurrences(
+    tx: &Transaction,
+    message_id: i64,
+) -> Result<Vec<(i64, i64)>, StoreError> {
     let read = |e| classify(e, "read a Proton message's occurrences");
     let mut statement = tx
         .prepare(
@@ -672,7 +678,7 @@ fn count(value: i64) -> u64 {
     u64::try_from(value).unwrap_or(0)
 }
 
-fn invalid(message: &str) -> StoreError {
+pub(super) fn invalid(message: &str) -> StoreError {
     StoreError::InvalidInput {
         message: message.to_owned(),
     }

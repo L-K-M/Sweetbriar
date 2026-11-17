@@ -795,7 +795,9 @@ fn stored_failure(
     })
 }
 
+mod events;
 mod listing;
+pub use events::{AppliedEvents, EventChunk, ProtonChange, apply_event_chunk};
 pub use listing::{
     ListedMessage, ListedPage, ListedPageStats, MailboxCoverage, ObservedLabel, ProtonCoverage,
     commit_listed_page, finish_listing, proton_coverage, reconcile_proton_labels,
