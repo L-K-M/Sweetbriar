@@ -36,6 +36,13 @@ ignore = [
     # (>=0.1.0-rc.3) needs a pgp release. Revisit with the next
     # proton-rpgp.
     { id = "RUSTSEC-2025-0144", reason = "ml-dsa via pgp's pqc feature; no ML-DSA keys in the pilot and no fixed pgp release" },
+    # RUSTSEC-2026-0543 (chrono unmaintained; no vulnerability named):
+    # imap-types, under io-imap and imap-codec, depends on chrono
+    # unconditionally for IMAP's date-time type. No Sweetbriar crate
+    # uses chrono directly. The newest imap-types (2.0.0-alpha.8) still
+    # requires it, so no update leaves it. Revisit when imap-types moves
+    # off chrono or an advisory names a defect.
+    { id = "RUSTSEC-2026-0543", reason = "chrono via imap-types' date-time; no release without it" },
 ]
 maximum-db-staleness = "P1D"
 unused-ignored-advisory = "warn"
