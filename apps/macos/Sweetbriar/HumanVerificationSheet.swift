@@ -123,12 +123,18 @@ final class HumanVerificationSheet: NSObject, WKNavigationDelegate, WKUIDelegate
     }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: any Error) {
-        status.stringValue = "The verification page didn't load: \(error.localizedDescription)"
+        showFailure(error, over: webView)
     }
 
     func webView(
         _ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: any Error
     ) {
+        showFailure(error, over: webView)
+    }
+
+    /// The web view covers the status line; hide it so the reason shows.
+    private func showFailure(_ error: any Error, over webView: WKWebView) {
+        webView.isHidden = true
         status.stringValue = "The verification page didn't load: \(error.localizedDescription)"
     }
 
@@ -157,14 +163,14 @@ final class HumanVerificationSheet: NSObject, WKNavigationDelegate, WKUIDelegate
     }
 }
 
-/// Compiled once per launch, like the reader's rules.
+/// Compiled once per launch, like the reader's rules. A failed
+/// compilation isn't kept, so the next sheet tries again.
 @MainActor
 enum HumanVerificationRules {
     private static var compilation: Task<WKContentRuleList, any Error>?
 
     static func compiled() async throws -> WKContentRuleList {
-        if let compilation { return try await compilation.value }
-        let task = Task { @MainActor in
+        let task = compilation ?? Task { @MainActor in
             guard let rules = try await WKContentRuleListStore.default().compileContentRuleList(
                 forIdentifier: "SweetbriarHumanVerification-v1",
                 encodedContentRuleList: HumanVerificationPolicy.contentRules
@@ -172,7 +178,12 @@ enum HumanVerificationRules {
             return rules
         }
         compilation = task
-        return try await task.value
+        do {
+            return try await task.value
+        } catch {
+            compilation = nil
+            throw error
+        }
     }
 }
 

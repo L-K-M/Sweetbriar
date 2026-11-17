@@ -39,6 +39,11 @@ final class ProtonSignInSheet {
                 sheet.makeKeyAndOrderFront(nil)
                 return
             }
+            // Ended from outside: its conversation must not finish into
+            // the new sheet.
+            closeVerification()
+            if let stale = form { Task { await stale.cancel() } }
+            form = nil
             self.sheet = nil
         }
         guard let window else { return }
