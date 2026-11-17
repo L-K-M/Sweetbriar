@@ -55,7 +55,8 @@ const FOREIGN_KEYS_OFF_MIGRATIONS: &[u32] = &[28];
 /// version 15 indexes representatives by date for Search walks; version 16
 /// indexes accounts' and mailboxes' rows by occurrence for them; version 28
 /// adds the Proton account schema and rebuilds the three tables whose CHECK
-/// values it extends.
+/// values it extends; version 29 keeps Proton's label totals; version 30
+/// records Proton deletes for the breaker.
 pub(crate) const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 1,
@@ -172,6 +173,10 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 29,
         run: migration_29,
+    },
+    Migration {
+        version: 30,
+        run: migration_30,
     },
 ];
 
@@ -1005,6 +1010,24 @@ fn migration_28(tx: &Transaction, _seams: &Seams) -> Result<(), StoreError> {
 fn migration_29(tx: &Transaction, _seams: &Seams) -> Result<(), StoreError> {
     tx.execute_batch(
         "ALTER TABLE mailboxes ADD COLUMN remote_total INTEGER CHECK (remote_total >= 0);",
+    )
+    .map_err(bug)
+}
+
+/// Version 30 (spec/02 "Proton accounts"): Proton deletes awaiting or
+/// held by the breaker (spec/04-sync-proton "The breaker").
+fn migration_30(tx: &Transaction, _seams: &Seams) -> Result<(), StoreError> {
+    tx.execute_batch(
+        "CREATE TABLE proton_disappearances (
+           message_id INTEGER PRIMARY KEY,
+           account_id TEXT NOT NULL REFERENCES accounts(account_id),
+           pass_cursor TEXT NOT NULL,
+           mailbox_id INTEGER,
+           event_id   TEXT REFERENCES breaker_events(event_id),
+           FOREIGN KEY (message_id, account_id) REFERENCES logical_messages(message_id, account_id),
+           FOREIGN KEY (mailbox_id, account_id) REFERENCES mailboxes(mailbox_id, account_id)
+         ) STRICT;
+         CREATE INDEX proton_disappearances_account ON proton_disappearances(account_id, event_id);",
     )
     .map_err(bug)
 }

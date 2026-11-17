@@ -943,4 +943,5 @@ async fn a_refused_access_token_refreshes_once_and_the_listing_goes_on() {
     assert_eq!(account(&h.core, &id).await.state, AccountState::Active);
 }
 
+mod breaker;
 mod events;

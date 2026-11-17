@@ -8,9 +8,10 @@ use sb_proton::{ListingAnchor, MailAddress, MessageMetadata};
 use sb_store::Timestamp;
 
 pub use sb_store::{
-    AppliedEvents, EventChunk, ListedMessage, ListedPage, ListedPageStats, MailboxCoverage,
-    ObservedLabel, ProtonChange, ProtonCoverage, ProtonListingState, apply_event_chunk,
-    begin_listing, commit_listed_page, finish_listing, proton_coverage, reconcile_proton_labels,
+    AppliedEvents, BreakerResolution, Classified, EventChunk, ListedMessage, ListedPage,
+    ListedPageStats, MailboxCoverage, ObservedLabel, ProtonChange, ProtonCoverage,
+    ProtonListingState, apply_event_chunk, begin_listing, commit_listed_page, finish_listing,
+    proton_coverage, reconcile_proton_labels, resolve_breaker_event,
 };
 
 use crate::sync::{HeaderColumns, SyncedFlags};

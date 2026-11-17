@@ -7,7 +7,7 @@ use super::*;
 use sb_test_support::{FakeLabel, FakeMessage};
 
 /// Wait until `sql` counts `expected`, asking the workers to poll.
-async fn until(h: &Harness, sql: &str, expected: i64) {
+pub(super) async fn until(h: &Harness, sql: &str, expected: i64) {
     h.core.engine().poll_proton_events();
     let db = h.scratch.path().join("store/state.sqlite");
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
@@ -26,7 +26,7 @@ async fn until(h: &Harness, sql: &str, expected: i64) {
 
 /// Assert a message's occurrences, as (mailbox, state), are exactly
 /// `expected`.
-fn assert_occurrences(h: &Harness, provider_key: &str, expected: &[(&str, &str)]) {
+pub(super) fn assert_occurrences(h: &Harness, provider_key: &str, expected: &[(&str, &str)]) {
     let of_message = format!(
         "occurrences o JOIN logical_messages l ON l.message_id = o.message_id
          JOIN mailboxes m ON m.mailbox_id = o.mailbox_id
@@ -58,7 +58,7 @@ fn event_requests(server: &FakeProtonServer) -> Vec<String> {
 }
 
 #[tokio::test]
-async fn events_after_the_listing_add_change_and_withhold_messages() {
+async fn events_after_the_listing_add_change_and_delete_messages() {
     let h = setup(vec![TestAccount::new(USER, PASSWORD)]).await;
     for (id, time) in [("m1", 100), ("m2", 200)] {
         h.server.add_message(
@@ -107,12 +107,8 @@ async fn events_after_the_listing_add_change_and_withhold_messages() {
         3,
         "the read state is on every occurrence"
     );
-    // The delete is withheld for the breaker (M2.15c2), not applied.
-    assert_occurrences(
-        &h,
-        "m2",
-        &[("All Mail", "vanish_pending"), ("Inbox", "vanish_pending")],
-    );
+    // One of two Inbox messages: under the breaker's thresholds.
+    assert_occurrences(&h, "m2", &[("All Mail", "vanished"), ("Inbox", "vanished")]);
     assert_occurrences(&h, "m3", &[("All Mail", "present"), ("Inbox", "present")]);
     // The cursor read before the listing was m2's add; the four events
     // since moved it to m3's.

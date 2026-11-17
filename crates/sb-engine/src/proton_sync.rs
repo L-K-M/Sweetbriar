@@ -17,9 +17,9 @@ use crate::engine::{Engine, Spawn, Worker};
 use crate::policy::proton_api;
 use crate::proton::{Sessions, restore_proton_account};
 use sb_resources::proton_sync::{
-    EventChunk, ListedPage, ProtonChange, ProtonListingState, anchor, apply_event_chunk,
-    begin_listing, checkpoint, commit_listed_page, finish_listing, listed_message,
-    reconcile_proton_labels,
+    BreakerResolution, EventChunk, ListedPage, ProtonChange, ProtonListingState, anchor,
+    apply_event_chunk, begin_listing, checkpoint, commit_listed_page, finish_listing,
+    listed_message, reconcile_proton_labels, resolve_breaker_event,
 };
 use sb_resources::{
     EventAction, EventBatch, EventId, ListingAnchor, PROTON_MAX_PAGE_SIZE, ProtonClient,
@@ -107,6 +107,29 @@ impl Engine {
     #[doc(hidden)]
     pub fn poll_proton_events(&self) {
         self.account_jobs().poll_now();
+    }
+
+    /// `resolve_breaker_event(id, resolution)` (spec/07 "Safety",
+    /// spec/04-sync-proton "The breaker"): Accept applies a Proton
+    /// event's withheld deletes and Keep leaves them withheld. Either
+    /// lifts the account's pause, classifying the deletes it held.
+    pub async fn resolve_breaker_event(
+        &self,
+        event_id: &str,
+        resolution: BreakerResolution,
+    ) -> Result<(), crate::EngineError> {
+        let id = event_id.to_owned();
+        self.command(move |worker| async move {
+            let now = worker.resources().now();
+            worker
+                .resources()
+                .write(WritePriority::User, move |tx| {
+                    resolve_breaker_event(tx, &id, resolution, now)
+                })
+                .await?;
+            Ok(())
+        })
+        .await
     }
 }
 

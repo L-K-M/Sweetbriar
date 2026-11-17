@@ -602,7 +602,9 @@ the provider policies (`proton_bridge`, `generic_imap`) live in
   app's activity the worker polls at the 2-minute cadence;
   **M2.15c2** the breaker: Proton's classes for deletes, the
   thresholds and `breaker_events`, the pause, Accept, Keep and
-  `cleared`; **M2.15c3** the rest of Refresh (`vanish_pending` after
+  `cleared`, and `resolve_breaker_event` (the Activity window shows
+  events in M2.7; the Explained class waits for M3's Proton intents);
+  **M2.15c3** the rest of Refresh (`vanish_pending` after
   a complete listing, `epoch_change`), address and user events
   refreshing identities and keys, and the proptest model.
 - **Acceptance:** a proptest model of server changes (new, label
