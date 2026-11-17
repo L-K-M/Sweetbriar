@@ -121,7 +121,18 @@ struct Server {
     messages: BTreeMap<String, Held>,
     log: Vec<Logged>,
     next_id: usize,
-    events_per_response: usize,
+    responses: Responses,
+}
+
+/// How many events one response carries.
+#[derive(Clone, Copy)]
+enum Responses {
+    /// One to four, by where the response starts, so response and
+    /// chunk boundaries fall on refreshes and deletes in different
+    /// arrangements.
+    Varying,
+    /// Everything pending, so one pass sees every delete at once.
+    All,
 }
 
 /// One events response.
@@ -141,12 +152,12 @@ fn position(cursor: &str) -> usize {
 }
 
 impl Server {
-    fn new(events_per_response: usize) -> Self {
+    fn new(responses: Responses) -> Self {
         Self {
             messages: BTreeMap::new(),
             log: Vec::new(),
             next_id: 0,
-            events_per_response,
+            responses,
         }
     }
 
@@ -197,7 +208,10 @@ impl Server {
     }
 
     fn events_since(&self, from: usize) -> Response {
-        let next = (from + self.events_per_response).min(self.log.len());
+        let next = match self.responses {
+            Responses::Varying => (from + 1 + from % 4).min(self.log.len()),
+            Responses::All => self.log.len(),
+        };
         let mut response = Response {
             changes: Vec::new(),
             refresh: false,
@@ -250,12 +264,16 @@ impl Driver<'_> {
     /// List when the store says a listing is due, then follow the
     /// events until nothing more is pending.
     fn sync(&mut self) -> Result<(), Cut> {
-        loop {
+        // Each pass but the last starts over for a refresh in the log,
+        // so the log's length bounds a sync that works; a broken one
+        // fails here instead of hanging.
+        for _ in 0..=self.server.log.len() + 1 {
             self.bootstrap()?;
             if self.follow()? {
                 return Ok(());
             }
         }
+        panic!("the sync never settled");
     }
 
     /// "Sync loop" step 1, resumed from where the store says the
@@ -576,7 +594,9 @@ fn converge(store: &Store, server: &mut Server) {
             !server.messages.contains_key(id),
             "{id} is on the server but waits as a listing's miss"
         );
-        let occurrences = held.remove(id).unwrap_or_default();
+        let occurrences = held
+            .remove(id)
+            .expect("a withheld message keeps its occurrences");
         assert!(
             occurrences
                 .iter()
@@ -665,7 +685,7 @@ proptest! {
         ops in proptest::collection::vec(op(), 1..48)
     ) {
         let (_scratch, paths, mut store) = signed_in("proton-model");
-        let mut server = Server::new(3);
+        let mut server = Server::new(Responses::Varying);
         for op in ops {
             match op {
                 Op::Add { time, location, travel } => {
@@ -723,7 +743,7 @@ fn breaker_case(
     by_listing: bool,
 ) -> Result<(), TestCaseError> {
     let (_scratch, _paths, store) = signed_in("proton-breaker-model");
-    let mut server = Server::new(100);
+    let mut server = Server::new(Responses::All);
     let other = if location == INBOX { ARCHIVE } else { INBOX };
     let ids: Vec<String> = (0..held)
         .map(|time| {
@@ -790,8 +810,15 @@ fn breaker_case(
         // A second listing confirms what the first missed.
         server.log.push(Logged::Refresh);
         sync(&store, &server);
-        accept_all(&store);
+        prop_assert_eq!(
+            count(
+                &store,
+                "SELECT COUNT(*) FROM breaker_events WHERE state = 'open'"
+            ),
+            0
+        );
     }
+    assert_invariants(&store);
     prop_assert_eq!(stored(&store), expected(&server));
     Ok(())
 }
