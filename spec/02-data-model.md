@@ -227,7 +227,10 @@ schema drift test (Migrations) compares the result.
 **New column:** `mailboxes.provider_key TEXT` (the Proton label id, NULL
 elsewhere), with `CREATE UNIQUE INDEX mailboxes_provider_key ON
 mailboxes(account_id, provider_key) WHERE provider_key IS NOT NULL`.
-`remote_name` is the display path for Proton mailboxes.
+`remote_name` is the display path for Proton mailboxes. Migration 29
+adds `mailboxes.remote_total`: Proton's total for the label when the
+last bootstrap listing finished, which coverage compares with the local
+count (04-sync-proton "Coverage"); NULL elsewhere and before.
 
 **New tables:**
 
@@ -428,6 +431,7 @@ CREATE TABLE mailboxes (
   sync_state     TEXT NOT NULL CHECK (sync_state IN ('new','backfilling','synced','epoch_changed','gone')),
   revision       INTEGER NOT NULL DEFAULT 1,
   provider_key TEXT,                                -- Proton label id, NULL elsewhere
+  remote_total INTEGER CHECK (remote_total >= 0),   -- Proton's total at the last finished listing (migration 29)
   UNIQUE (account_id, remote_name),
   UNIQUE (mailbox_id, account_id)
 ) STRICT;

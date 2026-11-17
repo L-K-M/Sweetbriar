@@ -169,6 +169,10 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         version: 28,
         run: migration_28,
     },
+    Migration {
+        version: 29,
+        run: migration_29,
+    },
 ];
 
 /// The `store_meta` keys every migrated store holds (spec/02): a
@@ -994,6 +998,15 @@ fn migration_27(tx: &Transaction, _seams: &Seams) -> Result<(), StoreError> {
 fn migration_28(tx: &Transaction, _seams: &Seams) -> Result<(), StoreError> {
     tx.execute_batch(include_str!("schema/v28.sql"))
         .map_err(bug)
+}
+
+/// Version 29 (spec/02 "Proton accounts"): Proton's per-label total at
+/// the last finished listing, for coverage (spec/04-sync-proton).
+fn migration_29(tx: &Transaction, _seams: &Seams) -> Result<(), StoreError> {
+    tx.execute_batch(
+        "ALTER TABLE mailboxes ADD COLUMN remote_total INTEGER CHECK (remote_total >= 0);",
+    )
+    .map_err(bug)
 }
 
 /// One version-4 UUID from the randomness seam. A seam that can't
