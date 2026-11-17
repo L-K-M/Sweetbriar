@@ -430,9 +430,10 @@ impl Resources {
         })
     }
 
-    /// The client one Proton account's sync worker keeps for its
-    /// calls, so pacing and in-flight slots hold across them (spec/04
-    /// "Connections and pacing").
+    /// A new client for one Proton account's sync worker, which keeps
+    /// it for all its calls so pacing and in-flight slots hold across
+    /// them (spec/04 "Connections and pacing"); a client per request
+    /// would reset both.
     pub fn proton_client(&self) -> Result<Client, ProtonError> {
         self.proton.client(self.proton.base_url())
     }

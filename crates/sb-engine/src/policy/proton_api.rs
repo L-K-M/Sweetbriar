@@ -50,8 +50,9 @@ const SYSTEM_MAILBOXES: [(&str, &str, MailboxKind, Option<MailboxRole>); 9] = [
 /// locations, then folders by path and labels by name, in listing
 /// order. Proton keeps folders and labels in separate namespaces, but
 /// `mailboxes.remote_name` is unique per account, so a name already
-/// taken gets the label id appended, as the store does for a gone
-/// mailbox it moves aside.
+/// taken gets the label id appended, again while the result is taken
+/// (a label may be named like another's fallback), as the store does
+/// for a gone mailbox it moves aside.
 pub(crate) fn observed_labels(labels: &[Label]) -> Vec<ObservedLabel> {
     let mut taken = BTreeSet::new();
     let mut observed = Vec::with_capacity(SYSTEM_MAILBOXES.len() + labels.len());
@@ -72,10 +73,10 @@ pub(crate) fn observed_labels(labels: &[Label]) -> Vec<ObservedLabel> {
             LabelKind::Folder => (&label.path, MailboxKind::Folder, Some(FOLDER_DELIMITER)),
             LabelKind::Label => (&label.name, MailboxKind::Label, None),
         };
+        // Each pass makes the name longer, so this ends.
         let mut remote_name = name.clone();
-        if !taken.insert(remote_name.clone()) {
-            remote_name = format!("{name} ({})", label.id);
-            taken.insert(remote_name.clone());
+        while !taken.insert(remote_name.clone()) {
+            remote_name = format!("{remote_name} ({})", label.id);
         }
         observed.push(ObservedLabel {
             provider_key: label.id.clone(),
@@ -168,5 +169,19 @@ mod tests {
                 .iter()
                 .all(|o| o.role.is_none())
         );
+    }
+
+    #[test]
+    fn a_name_like_another_labels_fallback_still_gets_a_unique_name() {
+        let listed = [
+            label("l1", LabelKind::Label, "Inbox (l2)", "Inbox (l2)"),
+            label("l2", LabelKind::Label, "Inbox", "Inbox"),
+        ];
+        let observed = observed_labels(&listed);
+        let names: Vec<_> = observed[SYSTEM_MAILBOXES.len()..]
+            .iter()
+            .map(|o| o.remote_name.as_str())
+            .collect();
+        assert_eq!(names, ["Inbox (l2)", "Inbox (l2) (l2)"]);
     }
 }

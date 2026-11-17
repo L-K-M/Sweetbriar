@@ -133,7 +133,8 @@ holds the label id; `remote_name` the display path, which may change
 without changing the mailbox. Folders and labels are separate
 namespaces in Proton, but `remote_name` is unique per account: a name
 already taken (by a system mailbox, or a folder before a label) gets
-its label id appended, as in "Travel (label id)".
+its label id appended, as in "Travel (l1)" for the label with id
+`l1`, and again while the result is taken too.
 
 ## Sync loop
 

@@ -20,8 +20,8 @@ use sb_resources::proton_sync::{
     finish_listing, listed_message, reconcile_proton_labels,
 };
 use sb_resources::{
-    ListingAnchor, ProtonClient, ProtonError, Session, StoreError, Transaction, WritePriority,
-    proton_account,
+    ListingAnchor, PROTON_MAX_PAGE_SIZE, ProtonClient, ProtonError, Session, StoreError,
+    Transaction, WritePriority, proton_account,
 };
 
 use std::future::Future;
@@ -29,8 +29,10 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::watch;
 
-/// Messages per listed page: the most the transport asks for.
-const PAGE_SIZE: u32 = 150;
+/// Messages per listed page: the most the transport asks for. A page
+/// shorter than this ends the listing, so it must not exceed the
+/// transport's limit.
+const PAGE_SIZE: u32 = PROTON_MAX_PAGE_SIZE;
 /// The first wait after a failed attempt; it doubles up to
 /// [`MAX_RETRY_DELAY`] (spec/04 "Backoff": 1 s to 5 min).
 const FIRST_RETRY_DELAY: Duration = Duration::from_secs(1);

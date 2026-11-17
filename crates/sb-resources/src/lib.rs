@@ -74,8 +74,8 @@ pub use proton::{
 // without depending on a leaf.
 pub use sb_proton::{
     CertificateDer, Challenge, Client as ProtonClient, FinishedSignIn, Identity, KeyStore, Label,
-    LabelKind, ListingAnchor, ModulusSignatureVerifier, ProtonError, SecretString, Session, SignIn,
-    SignInStep, Trust,
+    LabelKind, ListingAnchor, MAX_PAGE_SIZE as PROTON_MAX_PAGE_SIZE, ModulusSignatureVerifier,
+    ProtonError, SecretString, Session, SignIn, SignInStep, Trust,
 };
 mod renditions;
 mod repair;

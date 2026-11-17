@@ -98,7 +98,7 @@ fn addresses(list: &[MailAddress]) -> Option<String> {
     })
 }
 
-/// Proton's seconds as milliseconds; `None` outside the store's range.
+/// Proton's seconds as milliseconds; `None` if that overflows.
 fn millis(seconds: i64) -> Option<i64> {
     seconds.checked_mul(1000)
 }
