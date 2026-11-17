@@ -8,7 +8,9 @@
 //! or keeps it, or they reappear.
 //!
 //! While an account has an `open` event its deletes are recorded but
-//! not classified: destructive reconciliation is paused. Explained
+//! not classified: destructive reconciliation is paused. A message only
+//! a listing missed waits, unconfirmed, for a second listing or a
+//! delete event (`refresh`). Explained
 //! deletes (a matching `done` intent) arrive with M3's intents.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -38,9 +40,10 @@ pub struct Classified {
 
 /// Withhold a deleted message's current occurrences and record the
 /// delete for the breaker, with the cursor of the response reporting
-/// it. An unknown id, or a message with no current
-/// occurrence, changes nothing; a delete already recorded keeps its
-/// first location. Returns the occurrences withheld.
+/// it. An unknown id, or a message with no current occurrence, changes
+/// nothing; a delete already recorded keeps its first location, and
+/// confirms a disappearance only a listing saw. Returns the
+/// occurrences withheld.
 pub(super) fn record_delete(
     tx: &Transaction,
     account_id: &str,
@@ -59,6 +62,39 @@ pub(super) fn record_delete(
     let Some(message_id) = message_id else {
         return Ok(0);
     };
+    withhold(
+        tx,
+        account_id,
+        message_id,
+        from_cursor,
+        Evidence::Delete,
+        changed,
+    )
+}
+
+/// What says a message disappeared (spec/04-sync-proton "Refresh").
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Evidence {
+    /// A delete event, or a second complete listing without it: the
+    /// breaker classifies it.
+    Delete,
+    /// One complete listing without it: held until a second listing or
+    /// a delete event confirms it.
+    Listing,
+}
+
+/// Withhold a message's current occurrences as `vanish_pending` and
+/// record its disappearance at `pass_cursor`. A message with no
+/// current occurrence changes nothing. Returns the occurrences
+/// withheld.
+pub(super) fn withhold(
+    tx: &Transaction,
+    account_id: &str,
+    message_id: i64,
+    pass_cursor: &str,
+    evidence: Evidence,
+    changed: &mut BTreeSet<i64>,
+) -> Result<usize, StoreError> {
     let current = current_occurrences(tx, message_id)?;
     if current.is_empty() {
         return Ok(0);
@@ -66,15 +102,22 @@ pub(super) fn record_delete(
     // A Proton message's location is its one folder; All Mail, Starred
     // and labels are views of it.
     tx.execute(
-        "INSERT OR IGNORE INTO proton_disappearances (message_id, account_id, pass_cursor, mailbox_id)
+        "INSERT INTO proton_disappearances (message_id, account_id, pass_cursor, mailbox_id, confirmed)
          VALUES (?1, ?2, ?3, (SELECT o.mailbox_id FROM occurrences o
                           JOIN mailboxes m ON m.mailbox_id = o.mailbox_id
                           WHERE o.message_id = ?1 AND o.state IN ('present', 'vanish_pending')
                             AND m.kind = 'folder'
-                          ORDER BY o.occurrence_id LIMIT 1))",
-        params![message_id, account_id, from_cursor],
+                          ORDER BY o.occurrence_id LIMIT 1), ?4)
+         ON CONFLICT (message_id) DO UPDATE SET confirmed = 1, pass_cursor = excluded.pass_cursor
+           WHERE excluded.confirmed = 1 AND confirmed = 0 AND event_id IS NULL",
+        params![
+            message_id,
+            account_id,
+            pass_cursor,
+            evidence == Evidence::Delete
+        ],
     )
-    .map_err(|e| classify(e, "record a deleted Proton message"))?;
+    .map_err(|e| classify(e, "record a disappeared Proton message"))?;
 
     let mut withheld = 0;
     for (occurrence_id, _) in current {
@@ -84,7 +127,7 @@ pub(super) fn record_delete(
                  WHERE occurrence_id = ?1 AND state = 'present'",
                 params![occurrence_id],
             )
-            .map_err(|e| classify(e, "withhold a deleted Proton occurrence"))?;
+            .map_err(|e| classify(e, "withhold a disappeared Proton occurrence"))?;
         if updated > 0 {
             changed.insert(occurrence_id);
             withheld += 1;
@@ -164,7 +207,7 @@ pub(super) fn classify_deletes(
             .prepare(
                 "SELECT d.message_id, d.mailbox_id, m.role FROM proton_disappearances d
                  LEFT JOIN mailboxes m ON m.mailbox_id = d.mailbox_id
-                 WHERE d.account_id = ?1 AND d.event_id IS NULL
+                 WHERE d.account_id = ?1 AND d.event_id IS NULL AND d.confirmed = 1
                    AND (?2 OR d.pass_cursor IS NOT (SELECT event_cursor FROM proton_accounts
                                                     WHERE account_id = ?1))
                  ORDER BY d.message_id",
@@ -214,7 +257,7 @@ pub(super) fn classify_deletes(
 /// `disappeared` unexplained deletes from the mailbox breach a
 /// threshold (04-sync-imap "Pause, conservative defaults"). A delete
 /// with no location counts only against the per-mailbox count.
-fn breach(
+pub(super) fn breach(
     tx: &Transaction,
     mailbox_id: Option<i64>,
     disappeared: usize,
@@ -258,7 +301,7 @@ fn vanish(tx: &Transaction, message_id: i64) -> Result<(), StoreError> {
     Ok(())
 }
 
-fn open_event(
+pub(super) fn open_event(
     tx: &Transaction,
     account_id: &str,
     mailbox_id: Option<i64>,

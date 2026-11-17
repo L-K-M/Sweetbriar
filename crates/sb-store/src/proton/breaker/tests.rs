@@ -106,7 +106,7 @@ fn listed(label_name: &str, messages: Vec<(String, &'static str)>) -> (ScratchDi
             },
             now(),
         )?;
-        finish_listing(tx, ACCOUNT, &[], 3).map(drop)
+        finish_listing(tx, ACCOUNT, &[], 3, now()).map(drop)
     })
     .unwrap();
     (scratch, store)
@@ -387,3 +387,5 @@ fn resolving_between_a_responses_chunks_leaves_its_pass_whole() {
         r#"{"disappeared":26,"mailbox_messages":100}"#
     );
 }
+
+mod refresh;

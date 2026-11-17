@@ -422,7 +422,10 @@ fn listed_metadata_never_replaces_a_bodys_headers() {
 #[test]
 fn a_page_outside_a_listing_is_refused() {
     let (_scratch, store) = listing_store("proton-not-listing");
-    write(&store, |tx| finish_listing(tx, ACCOUNT, &[], 2).map(|_| ())).unwrap();
+    write(&store, |tx| {
+        finish_listing(tx, ACCOUNT, &[], 2, now()).map(|_| ())
+    })
+    .unwrap();
     let refused = commit(&store, vec![], "a1", 3);
     assert!(
         matches!(refused, Err(StoreError::Conflict { .. })),
@@ -454,7 +457,10 @@ fn finishing_records_totals_moves_the_cursor_and_shows_coverage() {
         ("5".to_owned(), 3),
         ("2".to_owned(), 9),
     ];
-    let account = write(&store, move |tx| finish_listing(tx, ACCOUNT, &totals, 3)).unwrap();
+    let account = write(&store, move |tx| {
+        finish_listing(tx, ACCOUNT, &totals, 3, now())
+    })
+    .unwrap();
     assert_eq!(account.listing_state, ProtonListingState::Complete);
     assert_eq!(account.event_cursor.as_deref(), Some("event-0"));
     assert!(account.pending_cursor.is_none() && account.listing_checkpoint.is_none());

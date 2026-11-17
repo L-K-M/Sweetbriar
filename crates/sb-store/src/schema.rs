@@ -56,7 +56,8 @@ const FOREIGN_KEYS_OFF_MIGRATIONS: &[u32] = &[28];
 /// indexes accounts' and mailboxes' rows by occurrence for them; version 28
 /// adds the Proton account schema and rebuilds the three tables whose CHECK
 /// values it extends; version 29 keeps Proton's label totals; version 30
-/// records Proton deletes for the breaker.
+/// records Proton deletes for the breaker; version 31 records what a
+/// Proton listing listed and the disappearances a listing alone saw.
 pub(crate) const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 1,
@@ -177,6 +178,10 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 30,
         run: migration_30,
+    },
+    Migration {
+        version: 31,
+        run: migration_31,
     },
 ];
 
@@ -1028,6 +1033,23 @@ fn migration_30(tx: &Transaction, _seams: &Seams) -> Result<(), StoreError> {
            FOREIGN KEY (mailbox_id, account_id) REFERENCES mailboxes(mailbox_id, account_id)
          ) STRICT;
          CREATE INDEX proton_disappearances_account ON proton_disappearances(account_id, event_id);",
+    )
+    .map_err(bug)
+}
+
+/// Version 31 (spec/02 "Proton accounts"): the messages the current
+/// Proton listing listed, and whether a disappearance is confirmed or
+/// only a listing missed it (spec/04-sync-proton "Refresh").
+fn migration_31(tx: &Transaction, _seams: &Seams) -> Result<(), StoreError> {
+    tx.execute_batch(
+        "ALTER TABLE proton_disappearances
+           ADD COLUMN confirmed INTEGER NOT NULL DEFAULT 1 CHECK (confirmed IN (0,1));
+         CREATE TABLE proton_listed (
+           message_id INTEGER PRIMARY KEY,
+           account_id TEXT NOT NULL REFERENCES accounts(account_id),
+           FOREIGN KEY (message_id, account_id) REFERENCES logical_messages(message_id, account_id)
+         ) STRICT;
+         CREATE INDEX proton_listed_account ON proton_listed(account_id);",
     )
     .map_err(bug)
 }

@@ -557,6 +557,7 @@ pub fn begin_listing(
         params![account_id, pending_cursor],
     )
     .map_err(|e| classify(e, "begin the Proton listing"))?;
+    refresh::forget_listed(tx, account_id)?;
     require_account(tx, account_id)
 }
 
@@ -798,12 +799,14 @@ fn stored_failure(
 mod breaker;
 mod events;
 mod listing;
+mod refresh;
 pub use breaker::{BreakerResolution, Classified, resolve_breaker_event};
 pub use events::{AppliedEvents, EventChunk, ProtonChange, apply_event_chunk};
 pub use listing::{
     ListedMessage, ListedPage, ListedPageStats, MailboxCoverage, ObservedLabel, ProtonCoverage,
     commit_listed_page, finish_listing, proton_coverage, reconcile_proton_labels,
 };
+pub use refresh::withhold_unlisted;
 
 #[cfg(test)]
 mod tests;

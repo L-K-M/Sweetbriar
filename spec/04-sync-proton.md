@@ -228,10 +228,24 @@ A `Refresh` with the mail bit invalidates what the client knows:
 3. When the listing completes, messages stored as present but absent
    from it become `vanish_pending`. They become `vanished` only after a
    second complete listing or a delete event, through the breaker.
+   - Each listed page notes its messages (`proton_listed`, 02), so a
+     listing resumed after a crash misses nothing it listed.
+   - The missed messages are withheld in budget-sized writes before the
+     listing completes, and recorded in `proton_disappearances` as
+     unconfirmed at the listing's cursor.
+   - An unconfirmed disappearance isn't classified. A delete event
+     confirms it into that response's pass; a later complete listing
+     that misses it again confirms it, and the breaker classifies it as
+     that listing completes. A message listed again is present again.
 4. A refresh that would make more messages disappear than the
    breaker's thresholds allow records one `breaker_event` of kind
    `epoch_change` (a Proton refresh is that account's epoch change, 02);
    otherwise none.
+   - The thresholds apply per mailbox of the missed messages'
+     locations; Trash and Spam don't count (retention).
+   - The event holds every message that listing missed, and pauses the
+     account like any other: Accept applies them, Keep keeps them
+     withheld through later listings.
 
 ## The breaker
 

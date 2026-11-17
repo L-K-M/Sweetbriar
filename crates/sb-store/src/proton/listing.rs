@@ -247,7 +247,7 @@ pub fn commit_listed_page(
         remaining = remaining
             .checked_sub(message.raw_metadata.len() + 1024)
             .ok_or_else(|| invalid("a listed page exceeds the write budget"))?;
-        store_message(
+        let message_id = store_message(
             tx,
             page.account_id,
             message,
@@ -256,6 +256,7 @@ pub fn commit_listed_page(
             &mut stats,
             &mut changed,
         )?;
+        super::refresh::note_listed(tx, page.account_id, message_id)?;
     }
 
     if list_rows::refresh_priced(tx, &changed, &mut |bytes| {
@@ -276,13 +277,16 @@ pub fn commit_listed_page(
 
 /// Finish the listing (spec/04-sync-proton "Sync loop" step 1.4):
 /// Proton's per-label totals are recorded for coverage, the live
-/// mailboxes are `synced`, and the pending cursor becomes the event
-/// cursor, all in the caller's transaction.
+/// mailboxes are `synced`, what the listing missed goes to the breaker
+/// ("Refresh" steps 3 and 4) once `withhold_unlisted` withheld it all,
+/// and the pending cursor becomes the event cursor, all in the
+/// caller's transaction.
 pub fn finish_listing(
     tx: &Transaction,
     account_id: &str,
     totals: &[(String, u64)],
     expected_revision: i64,
+    now: Timestamp,
 ) -> Result<ProtonAccount, StoreError> {
     let account = require_account(tx, account_id)?;
     require_revision(&account, expected_revision)?;
@@ -305,6 +309,7 @@ pub fn finish_listing(
         )
         .map_err(|e| classify(e, "record a Proton total"))?;
     }
+    super::refresh::conclude(tx, account_id, &cursor, now)?;
     complete_listing(tx, account_id, &cursor, expected_revision)
 }
 
@@ -454,7 +459,7 @@ pub(super) fn store_message(
     now: Timestamp,
     stats: &mut ListedPageStats,
     changed: &mut BTreeSet<i64>,
-) -> Result<(), StoreError> {
+) -> Result<i64, StoreError> {
     if !message.raw_metadata.starts_with(METADATA_PREFIX) {
         return Err(invalid(
             "listed metadata must be the canonical proton_metadata JSON",
@@ -500,7 +505,7 @@ pub(super) fn store_message(
         )?);
         stats.inserted += 1;
     }
-    Ok(())
+    Ok(message_id)
 }
 
 /// The logical message the Proton id names, or a new one. Listed
