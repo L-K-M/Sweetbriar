@@ -605,8 +605,9 @@ the provider policies (`proton_bridge`, `generic_imap`) live in
   `cleared`, and `resolve_breaker_event` (the Activity window shows
   events in M2.7; the Explained class waits for M3's Proton intents);
   **M2.15c3** the rest of Refresh (`vanish_pending` after
-  a complete listing, `epoch_change`), address and user events
-  refreshing identities and keys, and the proptest model.
+  a complete listing, confirmed by a second one or a delete event, and
+  `epoch_change`); **M2.15c4** address and user events refreshing
+  identities and keys, and the proptest model.
 - **Acceptance:** a proptest model of server changes (new, label
   changes, deletes, refreshes, disconnects) converges to the model's
   state; crash cuts during listing and event batches resume without

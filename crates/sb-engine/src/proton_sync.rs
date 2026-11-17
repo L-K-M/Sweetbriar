@@ -19,7 +19,7 @@ use crate::proton::{Sessions, restore_proton_account};
 use sb_resources::proton_sync::{
     BreakerResolution, EventChunk, ListedPage, ProtonChange, ProtonListingState, anchor,
     apply_event_chunk, begin_listing, checkpoint, commit_listed_page, finish_listing,
-    listed_message, reconcile_proton_labels, resolve_breaker_event,
+    listed_message, reconcile_proton_labels, resolve_breaker_event, withhold_unlisted,
 };
 use sb_resources::{
     EventAction, EventBatch, EventId, ListingAnchor, PROTON_MAX_PAGE_SIZE, ProtonClient,
@@ -351,7 +351,21 @@ impl Attempt<'_> {
             }
         }
 
-        // 1.4: totals, and the pending cursor becomes the event cursor.
+        // "Refresh" step 3: what the listing missed is withheld, a
+        // budget-sized write at a time.
+        loop {
+            let id = self.account_id.to_owned();
+            if self
+                .write(move |tx| withhold_unlisted(tx, &id, revision))
+                .await?
+                == 0
+            {
+                break;
+            }
+        }
+
+        // 1.4: totals, the breaker's view of what the listing missed,
+        // and the pending cursor becomes the event cursor.
         let counts = self
             .call(|client, session| async move { client.message_counts(&session).await })
             .await?;
@@ -360,7 +374,8 @@ impl Attempt<'_> {
             .map(|count| (count.label_id, u64::from(count.total)))
             .collect();
         let id = self.account_id.to_owned();
-        self.write(move |tx| finish_listing(tx, &id, &totals, revision).map(drop))
+        let now = self.worker.resources().now();
+        self.write(move |tx| finish_listing(tx, &id, &totals, revision, now).map(drop))
             .await
     }
 

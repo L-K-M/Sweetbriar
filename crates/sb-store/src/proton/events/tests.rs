@@ -107,7 +107,7 @@ fn complete_store(label_name: &str) -> (ScratchDir, Store) {
             },
             now(),
         )?;
-        finish_listing(tx, ACCOUNT, &[], 3).map(drop)
+        finish_listing(tx, ACCOUNT, &[], 3, now()).map(drop)
     })
     .unwrap();
     (scratch, store)

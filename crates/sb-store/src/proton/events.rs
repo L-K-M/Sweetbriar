@@ -104,15 +104,17 @@ pub fn apply_event_chunk(
             .checked_sub(cost)
             .ok_or_else(|| invalid("an events chunk exceeds the write budget"))?;
         match change {
-            ProtonChange::Upsert(message) => store_message(
-                tx,
-                chunk.account_id,
-                message,
-                &mailboxes,
-                now,
-                &mut applied.messages,
-                &mut changed,
-            )?,
+            ProtonChange::Upsert(message) => {
+                store_message(
+                    tx,
+                    chunk.account_id,
+                    message,
+                    &mailboxes,
+                    now,
+                    &mut applied.messages,
+                    &mut changed,
+                )?;
+            }
             ProtonChange::Delete(id) => {
                 applied.withheld += breaker::record_delete(
                     tx,

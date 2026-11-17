@@ -236,6 +236,11 @@ message's occurrences as `vanish_pending` and records it there until
 the breaker applies it or a `breaker_event` holds it (04-sync-proton
 "The breaker"). The row goes when the delete is applied or the message
 reappears.
+Migration 31 adds `proton_disappearances.confirmed` and
+`proton_listed`: a Proton listing notes each message it lists, and when
+it completes, the stored messages it missed are recorded unconfirmed
+until a second listing or a delete event confirms them (04-sync-proton
+"Refresh").
 
 **New tables:**
 
@@ -274,10 +279,18 @@ CREATE TABLE proton_disappearances (                  -- delete events the break
   pass_cursor TEXT NOT NULL,                          -- the event cursor of the response that reported it
   mailbox_id INTEGER,                                 -- the message's location (its folder) when deleted; NULL if none
   event_id   TEXT REFERENCES breaker_events(event_id), -- the event holding it; NULL until classified
+  confirmed  INTEGER NOT NULL DEFAULT 1 CHECK (confirmed IN (0,1)), -- 0: only one listing missed it (migration 31)
   FOREIGN KEY (message_id, account_id) REFERENCES logical_messages(message_id, account_id),
   FOREIGN KEY (mailbox_id, account_id) REFERENCES mailboxes(mailbox_id, account_id)
 ) STRICT;
 CREATE INDEX proton_disappearances_account ON proton_disappearances(account_id, event_id);
+
+CREATE TABLE proton_listed (                          -- what the current listing listed (04-sync-proton "Refresh")
+  message_id INTEGER PRIMARY KEY,
+  account_id TEXT NOT NULL REFERENCES accounts(account_id),
+  FOREIGN KEY (message_id, account_id) REFERENCES logical_messages(message_id, account_id)
+) STRICT;
+CREATE INDEX proton_listed_account ON proton_listed(account_id);
 ```
 
 **Rules:**
