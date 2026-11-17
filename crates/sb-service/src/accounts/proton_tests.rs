@@ -870,7 +870,7 @@ async fn a_listing_cut_short_resumes_below_its_checkpoint_with_its_cursor() {
         ),
     );
     // One message below the checkpoint, which the rest of the listing
-    // finds, and one above it, which events (M2.15c) bring.
+    // finds, and one above it, which only the events bring.
     h.server
         .add_message(USER, sb_test_support::FakeMessage::new("m0").with_time(50));
     h.server
@@ -878,12 +878,13 @@ async fn a_listing_cut_short_resumes_below_its_checkpoint_with_its_cursor() {
     let before = h.server.requests().len();
 
     let core = reopen(&h.scratch, &h.secrets, &h.server, &h.clock).await;
-    let coverage = listed(&core, &id).await;
-    assert_eq!(coverage.messages, 4, "m0 is added, m9 isn't: {coverage:?}");
-    assert_eq!(
-        count(&h.scratch, "logical_messages WHERE provider_key = 'm9'"),
-        0
-    );
+    listed(&core, &id).await;
+    let db = h.scratch.path().join("store/state.sqlite");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while count(&h.scratch, "logical_messages") < 5 {
+        assert!(std::time::Instant::now() < deadline, "m0 and m9 arrive");
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
 
     let requests = &h.server.requests()[before..];
     assert!(
@@ -892,17 +893,22 @@ async fn a_listing_cut_short_resumes_below_its_checkpoint_with_its_cursor() {
             .all(|request| request.path != "/core/v4/events/latest"),
         "the pending cursor is kept: {requests:?}"
     );
-    assert!(
-        message_requests(requests)[0].contains("End=200&EndID=m2"),
-        "{requests:?}"
-    );
+    let pages = message_requests(requests);
+    assert!(pages[0].contains("End=200&EndID=m2"), "{requests:?}");
+    assert_eq!(pages.len(), 1, "the listing resumed and ended: {pages:?}");
+    // The cursor read before the listing became the event cursor: the
+    // first events request starts there, and it brings m9.
+    let first_poll = requests
+        .iter()
+        .find(|request| request.path.starts_with("/core/v4/events/"))
+        .expect("an events request");
+    assert_eq!(first_poll.path, "/core/v4/events/pending-cursor");
     assert_eq!(
-        count(
-            &h.scratch,
-            "proton_accounts WHERE event_cursor = 'pending-cursor'"
+        count_rows(
+            &db,
+            "SELECT COUNT(*) FROM logical_messages WHERE provider_key = 'm9'"
         ),
-        1,
-        "the cursor read before the listing becomes the event cursor"
+        1
     );
 }
 
@@ -936,3 +942,5 @@ async fn a_refused_access_token_refreshes_once_and_the_listing_goes_on() {
     );
     assert_eq!(account(&h.core, &id).await.state, AccountState::Active);
 }
+
+mod events;

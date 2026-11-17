@@ -73,9 +73,10 @@ pub use proton::{
 // (spec/01 rule 3): the engine keeps them in memory and maps errors
 // without depending on a leaf.
 pub use sb_proton::{
-    CertificateDer, Challenge, Client as ProtonClient, FinishedSignIn, Identity, KeyStore, Label,
-    LabelKind, ListingAnchor, MAX_PAGE_SIZE as PROTON_MAX_PAGE_SIZE, ModulusSignatureVerifier,
-    ProtonError, SecretString, Session, SignIn, SignInStep, Trust,
+    CertificateDer, Challenge, Client as ProtonClient, EventAction, EventBatch, EventId,
+    FinishedSignIn, Identity, KeyStore, Label, LabelKind, ListingAnchor,
+    MAX_PAGE_SIZE as PROTON_MAX_PAGE_SIZE, ModulusSignatureVerifier, ProtonError, SecretString,
+    Session, SignIn, SignInStep, Trust,
 };
 mod renditions;
 mod repair;
