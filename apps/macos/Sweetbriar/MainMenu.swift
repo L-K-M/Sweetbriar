@@ -69,7 +69,7 @@ final class MainMenuBuilder: NSObject {
     private let onImport: @MainActor () -> Void
     private let onNewMessage: @MainActor () -> Void
     private let isComposeEnabled: @MainActor () -> Bool
-    private let onAddBridgeAccount: @MainActor () -> Void
+    private let onAddProtonAccount: @MainActor () -> Void
     private let onSettings: @MainActor () -> Void
     private let isWriteEnabled: @MainActor () -> Bool
 
@@ -102,8 +102,8 @@ final class MainMenuBuilder: NSObject {
     ///   - onShowComposerProbe: open the Composer Probe window or
     ///     bring it forward (plan M0.11).
     ///   - onImport: File → Import… (spec/09 "In the app").
-    ///   - onAddBridgeAccount: File → Add Proton Bridge Account… (plan
-    ///     M2.3).
+    ///   - onAddProtonAccount: File → Add Proton Account… (plan
+    ///     M2.14b; the Bridge sheet is no longer offered, spec/08).
     init(
         onFillSynthetic: @escaping @MainActor () -> Void,
         onShowPrototype: @escaping @MainActor () -> Void,
@@ -114,7 +114,7 @@ final class MainMenuBuilder: NSObject {
         isBenchmarkEnabled: @escaping @MainActor () -> Bool,
         onShowComposerProbe: @escaping @MainActor () -> Void,
         onImport: @escaping @MainActor () -> Void,
-        onAddBridgeAccount: @escaping @MainActor () -> Void = {},
+        onAddProtonAccount: @escaping @MainActor () -> Void = {},
         onSettings: @escaping @MainActor () -> Void = {},
         isWriteEnabled: @escaping @MainActor () -> Bool = { true },
         onNewMessage: @escaping @MainActor () -> Void = {},
@@ -131,7 +131,7 @@ final class MainMenuBuilder: NSObject {
         self.onImport = onImport
         self.onNewMessage = onNewMessage
         self.isComposeEnabled = isComposeEnabled
-        self.onAddBridgeAccount = onAddBridgeAccount
+        self.onAddProtonAccount = onAddProtonAccount
         self.onSettings = onSettings
         self.isWriteEnabled = isWriteEnabled
         super.init()
@@ -197,8 +197,8 @@ final class MainMenuBuilder: NSObject {
         menu.addItem(Self.item("New Message", action: #selector(newMessage(_:)), key: "n", target: self))
         menu.addItem(.separator())
         menu.addItem(Self.item(
-            "Add Proton Bridge Account…",
-            action: #selector(addBridgeAccount(_:)),
+            "Add Proton Account…",
+            action: #selector(addProtonAccount(_:)),
             key: "",
             target: self
         ))
@@ -374,8 +374,8 @@ final class MainMenuBuilder: NSObject {
     }
 
     @objc
-    private func addBridgeAccount(_ sender: NSMenuItem) {
-        onAddBridgeAccount()
+    private func addProtonAccount(_ sender: NSMenuItem) {
+        onAddProtonAccount()
     }
 
     @objc private func newMessage(_ sender: NSMenuItem) { onNewMessage() }
@@ -433,7 +433,7 @@ extension MainMenuBuilder: NSMenuItemValidation {
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         if menuItem.action == #selector(newMessage(_:)) { return isWriteEnabled() && isComposeEnabled() }
         if let action = menuItem.action,
-           [#selector(importMail(_:)), #selector(addBridgeAccount(_:)), #selector(fillSyntheticRows(_:))]
+           [#selector(importMail(_:)), #selector(addProtonAccount(_:)), #selector(fillSyntheticRows(_:))]
             .contains(action) {
             return isWriteEnabled()
         }

@@ -225,7 +225,7 @@ struct SavedViewUITests {
         sidebar.reloadSections()
         sidebar.promptName = { confirm in confirm("Renamed") }
         sidebar.confirmDelete = { _, confirm in confirm(true) }
-        #expect(sidebar.contextMenu.items.map(\.title) == ["Rename…", "Delete"])
+        #expect(sidebar.contextMenu.items.map(\.title) == ["Rename…", "Delete", "Sign In Again…"])
         #expect(sidebar.contextMenu.items.allSatisfy { $0.target === sidebar } && !sidebar.contextMenu.autoenablesItems)
 
         sidebar.renameSavedView(id: savedView.viewId)

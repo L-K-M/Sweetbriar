@@ -320,9 +320,11 @@ async fn Core::shutdown(self);   // flush writer, release the lease
     continues. A wrong password is `InvalidInput` on `password` and ends
     the conversation, since each password attempt is a new SRP
     handshake: the sheet begins again with a new idempotency key. An
-    account whose only second factor is a security key, another Proton
-    user than the account's, or a Proton user another account already
-    holds is `InvalidInput` on `account` with the explanation. Proton
+    account whose only second factor is a security key is
+    `InvalidInput` on `security_key`, so the sheet can link to Proton's
+    2FA settings (08). Another Proton user than the account's, or a
+    Proton user another account already holds, is `InvalidInput` on
+    `account` with the explanation. Proton
     refusing the app's identity, offline and 5xx are `Unavailable` with
     Proton's message; no account exists yet to carry a state (during
     sync the same refusals set the account's health, 04-sync-proton).
@@ -531,8 +533,10 @@ a receipt or file-export command; Service/FFI exposure remains M1.7e/f.
 - **Other queries:**
   - `get_message(message_id)` → headers, occurrences, `thread_id`, tags, note and
     body availability;
-  - `accounts()` → every account's id, kind, display name, state and
-    reason, and sort order, ordered by sort order then id;
+  - `accounts()` → every account's id, kind (`Local`, `Imap` or
+    `Proton`), display name, state and reason, sort order and, for a
+    Proton account, its sign-in username (08 "Signing in again"),
+    ordered by sort order then id;
   - `identities(account_id)`;
   - `compose_catalog(preferred_account_id?)` (M1.9c2b1) → every retained
     identity in account-sort/account-id/identity-id order, with account

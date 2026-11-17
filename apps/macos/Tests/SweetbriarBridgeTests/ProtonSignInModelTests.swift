@@ -261,7 +261,7 @@ final class FakeProtonSignInSource: ProtonSignInSource, @unchecked Sendable {
     let source = FakeProtonSignInSource(
         beginAnswers: [.success(.open(signInId: "sign-in-1", state: .needsSecondFactor))],
         continueAnswers: [.failure(.invalidInput(
-            field: "account", message: "this account needs a security key"
+            field: "account", message: "another account already holds this Proton user"
         ))]
     )
     let model = ProtonSignInModel(source: source)
@@ -270,7 +270,21 @@ final class FakeProtonSignInSource: ProtonSignInSource, @unchecked Sendable {
 
     await model.submitCode("123456")
     #expect(model.step == .secondFactor)
-    #expect(model.inlineError == .account("this account needs a security key"))
+    #expect(model.inlineError == .account("another account already holds this Proton user"))
+}
+
+@MainActor
+@Test func aSecurityKeyOnlyAccountIsItsOwnRefusal() async {
+    let source = FakeProtonSignInSource(beginAnswers: [
+        .failure(.invalidInput(field: "security_key", message: "only a security key"))
+    ])
+    let model = ProtonSignInModel(source: source)
+    var password = Data("synthetic-proton-password".utf8)
+
+    await model.begin(displayName: "Owner", username: "owner@example.org", password: &password)
+
+    #expect(model.step == .credentials)
+    #expect(model.inlineError == .securityKey("only a security key"))
 }
 
 @MainActor

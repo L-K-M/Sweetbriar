@@ -9,6 +9,8 @@ use crate::{Core, CoreError, MailboxRole};
 pub enum AccountKind {
     Local,
     Imap,
+    /// Sweetbriar's own Proton API account (spec/02).
+    Proton,
 }
 
 /// Whether an account syncs.
@@ -29,6 +31,9 @@ pub struct Account {
     pub state: AccountState,
     pub state_reason: Option<String>,
     pub sort_order: i64,
+    /// A Proton account's sign-in username (spec/08 "Signing in
+    /// again"); `None` for other kinds.
+    pub username: Option<String>,
 }
 
 /// What a mailbox is.
@@ -70,11 +75,8 @@ impl Core {
                 account_id: account.account_id,
                 kind: match account.kind {
                     sb_engine::AccountKind::Local => AccountKind::Local,
-                    // A Proton account shows as IMAP until M2.14 gives it
-                    // its own case.
-                    sb_engine::AccountKind::Imap | sb_engine::AccountKind::Proton => {
-                        AccountKind::Imap
-                    }
+                    sb_engine::AccountKind::Imap => AccountKind::Imap,
+                    sb_engine::AccountKind::Proton => AccountKind::Proton,
                 },
                 display_name: account.display_name,
                 state: match account.state {
@@ -85,6 +87,7 @@ impl Core {
                 },
                 state_reason: account.state_reason,
                 sort_order: account.sort_order,
+                username: account.username,
             })
             .collect())
     }

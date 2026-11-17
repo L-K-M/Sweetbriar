@@ -38,6 +38,7 @@ public struct ComposeIdentity: Sendable, Equatable {
             switch value.accountKind {
             case .local: .local
             case .imap: .imap
+            case .proton: .proton
             }
         let availability: IdentitySendable =
             switch value.sendable {

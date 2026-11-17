@@ -25,7 +25,7 @@ struct BackupsMenuTests {
             menu.items.flatMap { [$0] + ($0.submenu.map(descendants) ?? []) }
         }
         let items = descendants(builder.makeMainMenu())
-        let names = ["Import…", "Add Proton Bridge Account…", "Fill 500,000 Synthetic Rows", "New Message"]
+        let names = ["Import…", "Add Proton Account…", "Fill 500,000 Synthetic Rows", "New Message"]
         let writes = items.filter { names.contains($0.title) }
         #expect(writes.count == names.count)
         for item in writes { #expect(!builder.validateMenuItem(item)) }

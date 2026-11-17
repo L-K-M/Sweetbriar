@@ -268,6 +268,8 @@ public struct ImportReport: Sendable, Equatable {
 public enum AccountKind: Sendable, Equatable {
     case local
     case imap
+    /// Sweetbriar's own Proton API account (spec/02).
+    case proton
 }
 
 /// Whether an account syncs.
@@ -286,6 +288,9 @@ public struct Account: Sendable, Equatable {
     public var state: AccountState
     public var stateReason: String?
     public var sortOrder: Int64
+    /// A Proton account's sign-in username, which "Sign in again"
+    /// fixes (spec/08); `nil` for other kinds.
+    public var username: String?
 
     public init(
         accountId: String,
@@ -293,7 +298,8 @@ public struct Account: Sendable, Equatable {
         displayName: String,
         state: AccountState,
         stateReason: String?,
-        sortOrder: Int64
+        sortOrder: Int64,
+        username: String? = nil
     ) {
         self.accountId = accountId
         self.kind = kind
@@ -301,6 +307,7 @@ public struct Account: Sendable, Equatable {
         self.state = state
         self.stateReason = stateReason
         self.sortOrder = sortOrder
+        self.username = username
     }
 }
 

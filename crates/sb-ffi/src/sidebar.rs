@@ -15,6 +15,8 @@ use crate::windows::MailboxRole;
 pub enum AccountKind {
     Local,
     Imap,
+    /// Sweetbriar's own Proton API account (spec/02).
+    Proton,
 }
 
 /// Whether an account syncs.
@@ -35,6 +37,9 @@ pub struct Account {
     pub state: AccountState,
     pub state_reason: Option<String>,
     pub sort_order: i64,
+    /// A Proton account's sign-in username (spec/08 "Signing in
+    /// again"); `None` for other kinds.
+    pub username: Option<String>,
 }
 
 impl Account {
@@ -45,6 +50,7 @@ impl Account {
             kind: match account.kind {
                 sb_service::AccountKind::Local => AccountKind::Local,
                 sb_service::AccountKind::Imap => AccountKind::Imap,
+                sb_service::AccountKind::Proton => AccountKind::Proton,
             },
             display_name: account.display_name,
             state: match account.state {
@@ -55,6 +61,7 @@ impl Account {
             },
             state_reason: account.state_reason,
             sort_order: account.sort_order,
+            username: account.username,
         }
     }
 }
@@ -225,6 +232,7 @@ mod tests {
                     state: AccountState::Active,
                     state_reason: None,
                     sort_order: 0,
+                    username: None,
                 },
                 Account {
                     account_id: WORK.to_owned(),
@@ -233,6 +241,7 @@ mod tests {
                     state: AccountState::NeedsAttention,
                     state_reason: Some("Bridge is not running".to_owned()),
                     sort_order: 5,
+                    username: None,
                 },
             ]
         );

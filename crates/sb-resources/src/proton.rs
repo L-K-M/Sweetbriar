@@ -88,8 +88,10 @@ impl ProtonRefusal {
                 field: field.as_str(),
                 message: error.to_string(),
             },
+            // Its own field: the sheet links to Proton's 2FA settings
+            // for this refusal alone (spec/08).
             ProtonError::Fido2Only => Self::InvalidInput {
-                field: "account",
+                field: "security_key",
                 message: error.to_string(),
             },
             ProtonError::KeyUnlock(error) if mailbox_password => Self::InvalidInput {

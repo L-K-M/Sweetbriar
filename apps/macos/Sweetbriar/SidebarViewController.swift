@@ -25,6 +25,13 @@ final class SidebarViewController: NSViewController, NSMenuDelegate {
     private let deleteItem = NSMenuItem(
         title: "Delete", action: #selector(deleteSavedViewItem(_:)), keyEquivalent: ""
     )
+    let signInAgainItem = NSMenuItem(
+        title: "Sign In Again…", action: #selector(signInAgainItemChosen(_:)), keyEquivalent: ""
+    )
+
+    /// Opens the Proton sign-in sheet for an account (spec/08 "Signing
+    /// in again"); the health row offers it too once M2.7 lands.
+    var onSignInAgain: (@MainActor (Account) -> Void)?
 
     /// Asks for a new name; tests substitute a direct answer.
     var promptName: (@MainActor (@escaping (String?) -> Void) -> Void)?
@@ -91,8 +98,10 @@ final class SidebarViewController: NSViewController, NSMenuDelegate {
         contextMenu.autoenablesItems = false
         renameItem.target = self
         deleteItem.target = self
+        signInAgainItem.target = self
         contextMenu.addItem(renameItem)
         contextMenu.addItem(deleteItem)
+        contextMenu.addItem(signInAgainItem)
         outlineView.menu = contextMenu
 
         let scrollView = NSScrollView()
@@ -329,20 +338,35 @@ extension SidebarViewController: NSOutlineViewDataSource, NSOutlineViewDelegate 
         return cell
     }
 
-    /// Only a saved view's row offers Rename and Delete (spec/08).
+    /// Only a saved view's row offers Rename and Delete (spec/08); only
+    /// a Proton account's heading and mailboxes offer Sign In Again.
     func menuNeedsUpdate(_ menu: NSMenu) {
         guard menu === contextMenu else { return }
         let row = outlineView.clickedRow >= 0 ? outlineView.clickedRow : outlineView.selectedRow
         var viewId: String?
+        var rowId: String?
         if row >= 0, let node = outlineView.item(atRow: row) as? EntryNode {
+            rowId = node.entry.id
             if case .window(.view(let id)) = node.entry.target {
                 viewId = id
             }
+        } else if row >= 0, let node = outlineView.item(atRow: row) as? SectionNode {
+            rowId = node.section.id
         }
+        updateMenu(viewId: viewId, rowId: rowId)
+    }
+
+    /// Fit the context menu to a row: its saved view, if any, and the
+    /// Proton account it belongs to.
+    func updateMenu(viewId: String?, rowId: String?) {
         renameItem.isEnabled = viewId != nil
         deleteItem.isEnabled = viewId != nil
         renameItem.representedObject = viewId
         deleteItem.representedObject = viewId
+        let proton = rowId.flatMap(model.protonAccount(forRow:))
+        signInAgainItem.isHidden = proton == nil
+        signInAgainItem.isEnabled = proton != nil && onSignInAgain != nil
+        signInAgainItem.representedObject = proton?.accountId
     }
 
     @objc private func renameSavedViewItem(_ sender: NSMenuItem) {
@@ -353,6 +377,13 @@ extension SidebarViewController: NSOutlineViewDataSource, NSOutlineViewDelegate 
     @objc private func deleteSavedViewItem(_ sender: NSMenuItem) {
         guard let id = sender.representedObject as? String else { return }
         deleteSavedView(id: id)
+    }
+
+    @objc private func signInAgainItemChosen(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? String,
+              let account = model.protonAccount(forRow: id)
+        else { return }
+        onSignInAgain?(account)
     }
 
     func outlineViewSelectionDidChange(_ notification: Notification) {

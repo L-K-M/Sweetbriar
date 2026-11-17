@@ -41,6 +41,9 @@ public final class ProtonSignInModel {
         case secondFactor(String)
         case mailboxPassword(String)
         case account(String)
+        /// The account's only second factor is a security key; the
+        /// sheet links to Proton's 2FA settings (spec/08).
+        case securityKey(String)
         case unavailable(String)
     }
 
@@ -209,6 +212,8 @@ public final class ProtonSignInModel {
                 inlineError = .mailboxPassword(message)
             case "account":
                 inlineError = .account(message)
+            case "security_key":
+                inlineError = .securityKey(message)
             default:
                 inlineError = .unavailable(message)
             }

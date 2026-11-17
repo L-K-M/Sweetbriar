@@ -91,6 +91,7 @@ fn accounts_list_in_sort_order() {
                 state: AccountState::Paused,
                 state_reason: None,
                 sort_order: -1,
+                username: None,
             },
             StoredAccount {
                 account_id: "00000000-0000-4000-8000-0000000000b0".to_owned(),
@@ -99,6 +100,7 @@ fn accounts_list_in_sort_order() {
                 state: AccountState::NeedsAttention,
                 state_reason: Some("Bridge is not running".to_owned()),
                 sort_order: -1,
+                username: None,
             },
             StoredAccount {
                 account_id: archive,
@@ -107,6 +109,7 @@ fn accounts_list_in_sort_order() {
                 state: AccountState::Active,
                 state_reason: None,
                 sort_order: 0,
+                username: None,
             },
         ]
     );
