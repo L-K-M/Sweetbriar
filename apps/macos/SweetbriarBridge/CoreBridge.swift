@@ -1094,6 +1094,8 @@ extension Account {
             kind = .local
         case .imap:
             kind = .imap
+        case .proton:
+            kind = .proton
         }
         let state: AccountState
         switch generated.state {
@@ -1112,7 +1114,8 @@ extension Account {
             displayName: generated.displayName,
             state: state,
             stateReason: generated.stateReason,
-            sortOrder: generated.sortOrder
+            sortOrder: generated.sortOrder,
+            username: generated.username
         )
     }
 }

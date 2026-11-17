@@ -173,6 +173,15 @@ struct ComposeIdentityModelTests {
             })
     }
 
+    @Test func aProtonIdentityIsNotOfferedUntilProtonCanSend() async throws {
+        let catalog = ComposeCatalog(
+            identities: [identity("a"), identity("proton", kind: .proton)], defaultIdentityId: "proton")
+        try await withIdentityFixture(catalog: catalog) { draft, model, _ in
+            await model.reload()
+            #expect(model.choices.map(\.identityId) == ["a"] && draft.content?.identityId == nil)
+        }
+    }
+
     @Test func missingDefaultNeverChoosesAnArbitrarySender() async throws {
         try await withIdentityFixture(catalog: identityCatalog(defaultId: nil)) { draft, model, _ in
             await model.reload()

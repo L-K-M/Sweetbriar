@@ -139,9 +139,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.mainWindow?.showWindow(nil)
                 self?.mainWindow?.beginImport()
             },
-            onAddBridgeAccount: { [weak self] in
+            onAddProtonAccount: { [weak self] in
                 self?.mainWindow?.showWindow(nil)
-                self?.mainWindow?.beginBridgeAccountSetup()
+                self?.mainWindow?.beginProtonSignIn()
             },
             onSettings: { [weak self] in self?.showSettings() },
             isWriteEnabled: { [weak self] in self?.backups?.canWrite == true },

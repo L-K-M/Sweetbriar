@@ -26,6 +26,7 @@ impl From<sb_service::ComposeIdentity> for ComposeIdentity {
             account_kind: match value.account_kind {
                 sb_service::AccountKind::Local => AccountKind::Local,
                 sb_service::AccountKind::Imap => AccountKind::Imap,
+                sb_service::AccountKind::Proton => AccountKind::Proton,
             },
             email: value.email,
             display_name: value.display_name,

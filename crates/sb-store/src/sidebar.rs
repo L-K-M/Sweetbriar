@@ -56,6 +56,9 @@ pub struct StoredAccount {
     pub state: AccountState,
     pub state_reason: Option<String>,
     pub sort_order: i64,
+    /// A Proton account's sign-in username, which "Sign in again"
+    /// fixes (spec/08); `None` for other kinds.
+    pub username: Option<String>,
 }
 
 /// One mailbox, with its present occurrences and the unread ones.
@@ -83,8 +86,10 @@ pub struct MailboxList {
 pub fn accounts(tx: &Transaction) -> Result<Vec<StoredAccount>, StoreError> {
     let mut statement = tx
         .prepare_cached(
-            "SELECT account_id, kind, display_name, state, state_reason, sort_order
-             FROM accounts ORDER BY sort_order, account_id",
+            "SELECT a.account_id, a.kind, a.display_name, a.state, a.state_reason,
+                    a.sort_order, p.username
+             FROM accounts a LEFT JOIN proton_accounts p ON p.account_id = a.account_id
+             ORDER BY a.sort_order, a.account_id",
         )
         .map_err(sql_error)?;
     let rows = statement
@@ -96,12 +101,13 @@ pub fn accounts(tx: &Transaction) -> Result<Vec<StoredAccount>, StoreError> {
                 row.get::<_, String>(3)?,
                 row.get::<_, Option<String>>(4)?,
                 row.get::<_, i64>(5)?,
+                row.get::<_, Option<String>>(6)?,
             ))
         })
         .map_err(sql_error)?;
     let mut accounts = Vec::new();
     for row in rows {
-        let (account_id, kind, display_name, state, state_reason, sort_order) =
+        let (account_id, kind, display_name, state, state_reason, sort_order, username) =
             row.map_err(sql_error)?;
         accounts.push(StoredAccount {
             kind: match kind.as_str() {
@@ -121,6 +127,7 @@ pub fn accounts(tx: &Transaction) -> Result<Vec<StoredAccount>, StoreError> {
             display_name,
             state_reason,
             sort_order,
+            username,
         });
     }
     Ok(accounts)
