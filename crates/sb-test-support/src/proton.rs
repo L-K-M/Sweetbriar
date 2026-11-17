@@ -260,6 +260,9 @@ impl FakeMessage {
     }
 }
 
+/// Proton's event action for an updated item (0 deletes, 1 creates).
+const ADDRESS_UPDATED: u8 = 2;
+
 /// One entry of the account's event log. `number` is assigned when it
 /// is recorded; the wire id is `evt-<number>`. The item arrays hold
 /// the JSON objects the events response will carry.
@@ -303,7 +306,8 @@ impl FakeEvent {
         }
     }
 
-    /// An address event carries only the id and the action.
+    /// An address event carries only the id and the action
+    /// ([`ADDRESS_UPDATED`] for a change).
     fn address(id: String, action: u8) -> Self {
         Self {
             addresses: vec![json!({"ID": id, "Action": action})],
@@ -822,12 +826,14 @@ impl FakeProtonServer {
             .find(|address| address.id == id)
             .expect("the address exists")
             .display_name = display_name.to_owned();
-        account.record(FakeEvent::address(id.to_owned(), 2));
+        account.record(FakeEvent::address(id.to_owned(), ADDRESS_UPDATED));
     }
 
-    /// Marks every address key inactive, as a password change made
-    /// elsewhere leaves none the stored key passphrase unlocks, and
-    /// appends a user event.
+    /// Marks every address key inactive and appends a user event. A
+    /// password change made elsewhere leaves the keys active but
+    /// encrypted under another passphrase; either way no address key
+    /// unlocks, and `KeySet::unlock_with_secret` fails the same way
+    /// (`NoAddressKey`).
     pub fn retire_address_keys(&self, username: &str) {
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         let account = account_mut(&mut state, username);

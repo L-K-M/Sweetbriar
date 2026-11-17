@@ -173,7 +173,7 @@ its label id appended, as in "Travel (l1)" for the label with id
      passphrase kept in memory and refresh the identities (as at
      sign-in), before the response's cursor moves, so a failure
      retries the response. An identity that changed bumps the
-     account's `config_generation` (02); a user event that changed
+     account's `config_generation` (02); an event that changed
      none writes nothing. Keys the passphrase no longer unlocks, as
      after a password change elsewhere, put the account in
      `needs_attention` ("Sign in again") with the response unapplied;

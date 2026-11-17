@@ -349,6 +349,24 @@ fn refreshing_identities_writes_only_a_change() {
         )
     );
 
+    // A kept address whose email changed writes too.
+    let renamed = identity(
+        "addr-1",
+        "renamed@example.test",
+        IdentitySendable::Validated,
+    );
+    assert!(refresh(vec![renamed]).unwrap());
+    let email = reading(&store, |tx| {
+        tx.query_row(
+            "SELECT email FROM identities WHERE identity_id = 'addr-1'",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .map_err(|e| crate::schema::classify(e, "read the email"))
+    });
+    assert_eq!(email, "renamed@example.test");
+    assert_eq!(state().0, generation + 3);
+
     let unknown = block_on(store.write(crate::WritePriority::User, |tx| {
         refresh_proton_identities(tx, "nobody", &[])
     }));

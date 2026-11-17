@@ -343,9 +343,9 @@ fn upsert_identities(
     // (spec/02), but can't send; the upsert restores the ones returned.
     tx.execute(
         "UPDATE identities
-         SET is_default = 0, sendable = 'unavailable', revision = revision + 1
+         SET is_default = 0, sendable = ?2, revision = revision + 1
          WHERE account_id = ?1",
-        params![account_id],
+        params![account_id, IdentitySendable::Unavailable.as_str()],
     )
     .map_err(|e| classify(e, "clear the account's identities"))?;
     for (index, identity) in identities.iter().enumerate() {
