@@ -20,6 +20,7 @@ use rusqlite::params;
 use sb_test_support::{ScratchDir, block_on, real_fs};
 use sb_types::time::Timestamp;
 
+use super::breaker::{MAX_DISAPPEARANCES_PER_MAILBOX, MIN_MAILBOX_FOR_SHARE};
 use super::*;
 use crate::lists::MailboxRole;
 use crate::sidebar::MailboxKind;
@@ -775,8 +776,11 @@ fn breaker_case(
     sync(&store, &server);
 
     let retention = location == TRASH || location == SPAM;
-    let opens =
-        !retention && (deleted == held || deleted > 25 || (held >= 8 && deleted * 2 > held));
+    // spec/04's rule, with the thresholds the breaker names.
+    let opens = !retention
+        && (deleted == held
+            || deleted > MAX_DISAPPEARANCES_PER_MAILBOX
+            || (held >= MIN_MAILBOX_FOR_SHARE && deleted * 2 > held));
     let kind = match (by_listing, deleted == held) {
         (true, _) => "epoch_change",
         (false, true) => "folder_emptied",
@@ -794,6 +798,10 @@ fn breaker_case(
             &store,
             &format!("SELECT COUNT(*) FROM breaker_events WHERE kind = '{kind}'")
         ),
+        i64::from(opens)
+    );
+    prop_assert_eq!(
+        count(&store, "SELECT COUNT(*) FROM breaker_events"),
         i64::from(opens)
     );
     // Each deleted message was in its location and All Mail; a
@@ -814,6 +822,13 @@ fn breaker_case(
             count(
                 &store,
                 "SELECT COUNT(*) FROM breaker_events WHERE state = 'open'"
+            ),
+            0
+        );
+        prop_assert_eq!(
+            count(
+                &store,
+                "SELECT COUNT(*) FROM occurrences WHERE state = 'vanish_pending'"
             ),
             0
         );
@@ -844,6 +859,17 @@ proptest! {
             for by_listing in [false, true] {
                 breaker_case(location, held, deleted, elsewhere, by_listing)?;
             }
+        }
+    }
+}
+
+/// Either side of each threshold, which random sizes rarely hit: half of
+/// a mailbox of 8, and 25 of a mailbox too large for the share rule.
+#[test]
+fn the_breaker_opens_just_past_each_threshold() {
+    for (held, deleted) in [(7, 4), (8, 4), (8, 5), (60, 25), (60, 26)] {
+        for by_listing in [false, true] {
+            breaker_case(INBOX, held, deleted, 1, by_listing).expect("the breaker's rule holds");
         }
     }
 }
