@@ -46,9 +46,11 @@ pub(super) fn forget_listed(tx: &Transaction, account_id: &str) -> Result<(), St
 
 /// Withhold up to [`MAX_HEADER_BATCH`] stored messages the listing
 /// missed, once its last page is committed (spec/04-sync-proton
-/// "Refresh" step 3). Only while listing, under the revision the
-/// listing holds. Returns how many it withheld: call again until none
-/// remain, then finish the listing.
+/// "Refresh" step 3), and as many of them as the write budget allows:
+/// a message whose list rows would overrun it waits for the next call.
+/// Only while listing, under the revision the listing holds. Returns
+/// how many it withheld: call again until none remain, then finish the
+/// listing.
 pub fn withhold_unlisted(
     tx: &Transaction,
     account_id: &str,
@@ -62,28 +64,55 @@ pub fn withhold_unlisted(
         return Err(StoreError::conflict("the Proton account is not listing"));
     };
 
-    let missed = unlisted(tx, account_id, MAX_HEADER_BATCH)?;
-    let mut changed = BTreeSet::new();
-    for message_id in &missed {
+    let mut remaining = MAX_HEADER_BATCH_BYTES;
+    let mut withheld = 0;
+    let mut rows_changed = false;
+    for message_id in unlisted(tx, account_id, MAX_HEADER_BATCH)? {
+        // One message at a time under a savepoint, so the one that
+        // overruns the budget is undone whole.
+        savepoint(tx, "SAVEPOINT withhold_unlisted")?;
+        let mut changed = BTreeSet::new();
         breaker::withhold(
             tx,
             account_id,
-            *message_id,
+            message_id,
             &cursor,
             Evidence::Listing,
             &mut changed,
         )?;
+        let mut spent = 0usize;
+        let priced = list_rows::refresh_priced(tx, &changed, &mut |bytes| {
+            spent = spent.saturating_add(bytes);
+            if spent > remaining {
+                return Err(invalid("withheld Proton list rows exceed the write budget"));
+            }
+            Ok(())
+        });
+        match priced {
+            Ok(changed) => {
+                savepoint(tx, "RELEASE withhold_unlisted")?;
+                remaining -= spent;
+                withheld += 1;
+                rows_changed |= changed;
+            }
+            // The next call starts with this message and a whole budget.
+            Err(_) if spent > remaining && withheld > 0 => {
+                savepoint(tx, "ROLLBACK TO withhold_unlisted")?;
+                savepoint(tx, "RELEASE withhold_unlisted")?;
+                break;
+            }
+            Err(error) => return Err(error),
+        }
     }
-    let mut remaining = MAX_HEADER_BATCH_BYTES;
-    if list_rows::refresh_priced(tx, &changed, &mut |bytes| {
-        remaining = remaining
-            .checked_sub(bytes)
-            .ok_or_else(|| invalid("withheld Proton list rows exceed the write budget"))?;
-        Ok(())
-    })? {
+    if rows_changed {
         list_rows::advance_generation(tx)?;
     }
-    Ok(missed.len())
+    Ok(withheld)
+}
+
+fn savepoint(tx: &Transaction, sql: &str) -> Result<(), StoreError> {
+    tx.execute_batch(sql)
+        .map_err(|e| classify(e, "withhold a Proton message under a savepoint"))
 }
 
 /// Up to `limit` of the account's messages with a present occurrence

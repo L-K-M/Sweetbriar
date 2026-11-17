@@ -225,3 +225,60 @@ fn a_listing_resumed_page_by_page_misses_nothing_it_listed() {
     assert_eq!(recorded(&store), 0);
     assert_eq!(states(&store, "m10"), vec!["present"; 2]);
 }
+
+#[test]
+fn misses_past_the_write_budget_are_withheld_over_several_writes() {
+    let (_scratch, store) = listed("proton-refresh-budget", ids("m", 250, "0"));
+    // Long list rows: a full batch of misses doesn't fit one write.
+    write(&store, |tx| {
+        tx.execute(
+            "UPDATE d_list_rows SET subject = ?1 WHERE message_id IN
+             (SELECT message_id FROM logical_messages
+              WHERE CAST(substr(provider_key, 2) AS INTEGER) <= 200)",
+            params!["s".repeat(8 * 1024)],
+        )
+        .unwrap();
+        Ok(())
+    })
+    .unwrap();
+
+    let revision = write(&store, |tx| {
+        let revision = proton_account(tx, ACCOUNT)?.unwrap().revision;
+        let account = begin_listing(tx, ACCOUNT, "r1", revision)?;
+        reconcile_proton_labels(tx, ACCOUNT, &labels())?;
+        let page: Vec<ListedMessage> = ids("m", 250, "0")[200..]
+            .iter()
+            .map(|(id, at)| message(id, at))
+            .collect();
+        commit_listed_page(
+            tx,
+            &ListedPage {
+                account_id: ACCOUNT,
+                messages: &page,
+                checkpoint: "p0",
+                expected_revision: account.revision,
+            },
+            now(),
+        )?;
+        Ok(proton_account(tx, ACCOUNT)?.unwrap().revision)
+    })
+    .unwrap();
+    let first = write(&store, move |tx| withhold_unlisted(tx, ACCOUNT, revision)).unwrap();
+    assert!(0 < first && first < 200, "withheld {first}");
+    let mut withheld = first;
+    loop {
+        let more = write(&store, move |tx| withhold_unlisted(tx, ACCOUNT, revision)).unwrap();
+        if more == 0 {
+            break;
+        }
+        withheld += more;
+    }
+    assert_eq!(withheld, 200);
+    write(&store, move |tx| {
+        finish_listing(tx, ACCOUNT, &[], revision, now()).map(drop)
+    })
+    .unwrap();
+    assert_eq!(states(&store, "m1"), pending());
+    assert_eq!(states(&store, "m200"), pending());
+    assert_eq!(states(&store, "m201"), vec!["present"; 2]);
+}
