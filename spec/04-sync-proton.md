@@ -248,6 +248,23 @@ As in 04-sync-imap, with Proton's evidence:
 The thresholds, the pause, Accept, Keep and `cleared` are those of
 04-sync-imap, counted per mailbox of the message's last location.
 
+- **A pass** is one events response. A delete withholds the message's
+  current occurrences as `vanish_pending` and records it in
+  `proton_disappearances` (02); the response's last chunk classifies
+  the recorded deletes no event holds, so a response in chunks is one
+  pass.
+- **The location** is the message's one folder when it was deleted;
+  All Mail, Starred and labels are views of it. A delete with no
+  folder counts only against the per-mailbox count.
+- **While an event is `open`,** deletes are recorded but not classified.
+  Accept or Keep classifies them, except those of a response still being
+  applied in chunks, which its last chunk classifies.
+- **`cleared`:** a held message that reappears, in a later response or
+  listing, is present again and no longer held; an event left holding
+  none becomes `cleared`.
+- **Explained** deletes need Proton intents (M3); until then none are
+  explained.
+
 ## Intents and the mutation matrix
 
 Execution follows 04-sync-imap's intent rules, with Proton's evidence:

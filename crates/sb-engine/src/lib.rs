@@ -43,6 +43,7 @@ mod policy;
 mod proton;
 mod proton_sync;
 pub use proton::{BeginProtonSignIn, ProtonSignInState, ProtonSignInStep};
+pub use sb_resources::proton_sync::BreakerResolution;
 #[cfg(any(test, feature = "test-seams"))]
 #[doc(hidden)]
 pub use sb_resources::proton_sync::{ProtonCoverage, ProtonListingState};

@@ -335,6 +335,15 @@ impl ProtonSignInParams {
     }
 }
 
+/// The user's choice on a breaker event (spec/07 "Safety").
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BreakerResolution {
+    /// Apply the disappearances.
+    Accept,
+    /// Leave the messages withheld and keep watching.
+    Keep,
+}
+
 /// `begin_proton_sign_in`'s answer: the open conversation, or a
 /// replayed key's stored receipt after completion (spec/07).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -398,6 +407,27 @@ impl Core {
     /// kind is `InvalidInput` on `account`.
     pub async fn disconnect_account(&self, account_id: &str) -> Result<(), CoreError> {
         self.engine().disconnect_account(account_id).await?;
+        Ok(())
+    }
+
+    /// `resolve_breaker_event(id, resolution)` (spec/07 "Safety",
+    /// 04-sync-proton "The breaker"): Accept applies the event's
+    /// disappearances and leaves it `accepted`; Keep leaves its messages
+    /// withheld and the event `kept`. Either lifts the account's pause.
+    /// Keep needs an `open` event and Accept an `open` or `kept` one,
+    /// else `Conflict`; an unknown id is `NotFound`.
+    pub async fn resolve_breaker_event(
+        &self,
+        event_id: &str,
+        resolution: BreakerResolution,
+    ) -> Result<(), CoreError> {
+        let resolution = match resolution {
+            BreakerResolution::Accept => sb_engine::BreakerResolution::Accept,
+            BreakerResolution::Keep => sb_engine::BreakerResolution::Keep,
+        };
+        self.engine()
+            .resolve_breaker_event(event_id, resolution)
+            .await?;
         Ok(())
     }
 }

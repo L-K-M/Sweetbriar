@@ -795,8 +795,10 @@ fn stored_failure(
     })
 }
 
+mod breaker;
 mod events;
 mod listing;
+pub use breaker::{BreakerResolution, Classified, resolve_breaker_event};
 pub use events::{AppliedEvents, EventChunk, ProtonChange, apply_event_chunk};
 pub use listing::{
     ListedMessage, ListedPage, ListedPageStats, MailboxCoverage, ObservedLabel, ProtonCoverage,

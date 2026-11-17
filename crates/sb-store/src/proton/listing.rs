@@ -461,6 +461,7 @@ pub(super) fn store_message(
         ));
     }
     let message_id = find_or_create_message(tx, account_id, message, now, stats)?;
+    super::breaker::reappeared(tx, message_id, now)?;
     let wanted: BTreeSet<i64> = message
         .label_ids
         .iter()

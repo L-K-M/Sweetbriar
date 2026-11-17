@@ -231,6 +231,11 @@ mailboxes(account_id, provider_key) WHERE provider_key IS NOT NULL`.
 adds `mailboxes.remote_total`: Proton's total for the label when the
 last bootstrap listing finished, which coverage compares with the local
 count (04-sync-proton "Coverage"); NULL elsewhere and before.
+Migration 30 adds `proton_disappearances`: a delete event withholds the
+message's occurrences as `vanish_pending` and records it there until
+the breaker applies it or a `breaker_event` holds it (04-sync-proton
+"The breaker"). The row goes when the delete is applied or the message
+reappears.
 
 **New tables:**
 
@@ -262,6 +267,17 @@ CREATE TABLE proton_body_failures (                   -- bodies that couldn't be
   key_generation INTEGER NOT NULL,                    -- retried once the account's key_generation moves past it
   last_at        INTEGER NOT NULL
 ) STRICT;
+
+CREATE TABLE proton_disappearances (                  -- delete events the breaker classifies (04-sync-proton)
+  message_id INTEGER PRIMARY KEY,
+  account_id TEXT NOT NULL REFERENCES accounts(account_id),
+  pass_cursor TEXT NOT NULL,                          -- the event cursor of the response that reported it
+  mailbox_id INTEGER,                                 -- the message's location (its folder) when deleted; NULL if none
+  event_id   TEXT REFERENCES breaker_events(event_id), -- the event holding it; NULL until classified
+  FOREIGN KEY (message_id, account_id) REFERENCES logical_messages(message_id, account_id),
+  FOREIGN KEY (mailbox_id, account_id) REFERENCES mailboxes(mailbox_id, account_id)
+) STRICT;
+CREATE INDEX proton_disappearances_account ON proton_disappearances(account_id, event_id);
 ```
 
 **Rules:**
