@@ -893,4 +893,6 @@ pub use listing::{
 pub use refresh::withhold_unlisted;
 
 #[cfg(test)]
+mod model_tests;
+#[cfg(test)]
 mod tests;
