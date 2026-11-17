@@ -85,6 +85,7 @@ impl Engine {
         let key = idempotency_key.to_owned();
         let conversations = Arc::clone(&self.proton_sign_ins);
         let sessions = Arc::clone(&self.proton_sessions);
+        let jobs = Arc::clone(self.account_jobs());
         self.command(move |worker| async move {
             let now = worker.resources().now().as_millis();
             let mut table = conversations.lock().await;
@@ -146,6 +147,9 @@ impl Engine {
                         finished,
                     )
                     .await?;
+                    // Its listing starts, or a running worker takes the
+                    // new session.
+                    crate::proton_sync::start(&worker, &jobs, &sessions, completed.clone());
                     Ok(BeginProtonSignIn::Open {
                         sign_in_id,
                         state: ProtonSignInState::Complete {
@@ -187,6 +191,7 @@ impl Engine {
         let id = sign_in_id.to_owned();
         let conversations = Arc::clone(&self.proton_sign_ins);
         let sessions = Arc::clone(&self.proton_sessions);
+        let jobs = Arc::clone(self.account_jobs());
         self.command(move |worker| async move {
             let now = worker.resources().now().as_millis();
             let mut table = conversations.lock().await;
@@ -234,6 +239,7 @@ impl Engine {
                         finished,
                     )
                     .await?;
+                    crate::proton_sync::start(&worker, &jobs, &sessions, completed.clone());
                     Ok(ProtonSignInState::Complete {
                         account_id: completed,
                     })
@@ -276,6 +282,7 @@ impl Engine {
     pub(crate) fn schedule_proton_restore(&self) {
         let sessions = Arc::clone(&self.proton_sessions);
         let done = Arc::clone(&self.proton_restore_done);
+        let jobs = Arc::clone(self.account_jobs());
         let _ = self.spawn_worker(move |worker| async move {
             let accounts = worker.blocking(|resources| resources.read(accounts)).await;
             if let Ok(Ok(accounts)) = accounts {
@@ -288,6 +295,7 @@ impl Engine {
                     restore_proton_account(&worker, &sessions, &account.account_id).await;
                 }
             }
+            crate::proton_sync::start_all(&worker, &jobs, &sessions).await;
             done.notify_one();
         });
     }
@@ -434,7 +442,7 @@ fn credential_pause(error: SecretError) -> CredentialPause {
 }
 
 /// Restore one account's session (spec/04 "Restore on start").
-async fn restore_proton_account(worker: &Worker, sessions: &Sessions, account_id: &str) {
+pub(crate) async fn restore_proton_account(worker: &Worker, sessions: &Sessions, account_id: &str) {
     let id = account_id.to_owned();
     let reference = match worker
         .blocking({

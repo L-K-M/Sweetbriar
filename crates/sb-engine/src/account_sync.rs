@@ -133,7 +133,7 @@ impl AccountJobs {
 
     /// Reserve the account's one worker, unless stopping or already
     /// running.
-    fn claim(&self, account_id: &str) -> Option<watch::Receiver<bool>> {
+    pub(crate) fn claim(&self, account_id: &str) -> Option<watch::Receiver<bool>> {
         let mut jobs = self.lock();
         if jobs.stopping || jobs.live.contains_key(account_id) {
             return None;
@@ -147,7 +147,7 @@ impl AccountJobs {
         Some(stopped)
     }
 
-    fn release(&self, account_id: &str) {
+    pub(crate) fn release(&self, account_id: &str) {
         self.lock().live.remove(account_id);
     }
 }

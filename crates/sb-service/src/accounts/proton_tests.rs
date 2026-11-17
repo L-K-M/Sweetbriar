@@ -182,6 +182,17 @@ fn invalid_field(error: &CoreError, field: &str) {
     );
 }
 
+/// Requests other than the listing's (labels, message pages, counts
+/// and events).
+fn sign_in_requests(h: &Harness) -> usize {
+    let sync = ["/core/v4/labels", "/core/v4/events", "/mail/v4/messages"];
+    h.server
+        .requests()
+        .iter()
+        .filter(|request| !sync.iter().any(|path| request.path.starts_with(path)))
+        .count()
+}
+
 /// No account row, no Proton row, no secret item.
 fn stores_nothing(h: &Harness) {
     assert_eq!(proton_accounts(h), 0);
@@ -302,7 +313,9 @@ async fn completing_a_sign_in_commits_and_replays_its_key_without_contacting_pro
         .await
         .expect("the sign-in completes");
     let id = account_id(&state);
-    let before = h.server.requests().len();
+    // The account's listing starts now and talks to Proton; the
+    // replay must not.
+    let before = sign_in_requests(&h);
     let receipt = match h
         .core
         .begin_proton_sign_in("replay", params())
@@ -314,7 +327,7 @@ async fn completing_a_sign_in_commits_and_replays_its_key_without_contacting_pro
     };
     assert_eq!(receipt.command, "begin_proton_sign_in");
     assert_eq!(receipt.result_json, format!("{{\"account_id\":\"{id}\"}}"));
-    assert_eq!(h.server.requests().len(), before, "no contact");
+    assert_eq!(sign_in_requests(&h), before, "no contact");
     assert_eq!(h.secrets.calls(SecretOp::Set), 1);
 
     // The completion committed the account, identities and secret.
@@ -699,4 +712,192 @@ async fn disconnecting_a_non_proton_account_is_refused() {
         .await
         .expect_err("only a Proton account can be disconnected here");
     invalid_field(&error, "account");
+}
+
+/// Wait for the account's bootstrap listing to complete.
+async fn listed(core: &Core, id: &str) -> sb_engine::ProtonCoverage {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
+        let coverage = core.engine().proton_coverage(id).await.expect("coverage");
+        if coverage.listing == sb_engine::ProtonListingState::Complete {
+            return coverage;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the listing didn't complete: {coverage:?}"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+}
+
+fn message_requests(requests: &[sb_test_support::RecordedRequest]) -> Vec<String> {
+    requests
+        .iter()
+        .filter(|request| request.path == "/mail/v4/messages")
+        .map(|request| request.query.clone().unwrap_or_default())
+        .collect()
+}
+
+#[tokio::test]
+async fn signing_in_lists_every_message_by_page_with_its_labels_and_totals() {
+    let h = setup(vec![TestAccount::new(USER, PASSWORD)]).await;
+    h.server.add_label(
+        USER,
+        sb_test_support::FakeLabel::new("f1", 3, "Receipts").with_path("Work/Receipts"),
+    );
+    h.server
+        .add_label(USER, sb_test_support::FakeLabel::new("l1", 1, "Travel"));
+    // 160 messages: one full page of 150 and a short one.
+    for i in 0..160 {
+        let message =
+            sb_test_support::FakeMessage::new(&format!("m{i:03}")).with_time(1_700_000_000 + i);
+        let message = match i {
+            0..=9 => message.with_labels(&["0", "5", "f1"]),
+            10..=19 => message.with_labels(&["0", "5", "l1", "10"]).read(),
+            _ => message.with_labels(&["0", "5"]),
+        };
+        h.server.add_message(USER, message);
+    }
+    let before = h.server.requests().len();
+    let (_id, state) = begin(&h, "list").await;
+    let id = account_id(&state);
+
+    let coverage = listed(&h.core, &id).await;
+    assert_eq!(coverage.messages, 160);
+    let local = |name: &str| {
+        let mailbox = coverage
+            .mailboxes
+            .iter()
+            .find(|mailbox| mailbox.remote_name == name)
+            .unwrap_or_else(|| panic!("{name} in {coverage:?}"));
+        (mailbox.local, mailbox.remote_total)
+    };
+    assert_eq!(local("Inbox"), (160, Some(160)));
+    assert_eq!(local("Work/Receipts"), (10, Some(10)));
+    assert_eq!(local("Travel"), (10, Some(10)));
+    assert_eq!(local("Starred").0, 10);
+    assert_eq!(
+        count(&h.scratch, "occurrences WHERE f_seen = 1 AND f_flagged = 1"),
+        10 * 4,
+        "flags are equal on every occurrence"
+    );
+
+    // The cursor was read before the first page, and it became the
+    // event cursor; the second page started below the first's last.
+    let requests = &h.server.requests()[before..];
+    let first_page = requests
+        .iter()
+        .position(|request| request.path == "/mail/v4/messages")
+        .expect("a page");
+    let cursor_read = requests
+        .iter()
+        .position(|request| request.path == "/core/v4/events/latest")
+        .expect("the cursor read");
+    assert!(cursor_read < first_page, "{requests:?}");
+    let pages = message_requests(requests);
+    assert_eq!(pages.len(), 2, "{pages:?}");
+    assert!(
+        pages[1].contains(&format!("End={}&EndID=m010", 1_700_000_010)),
+        "{pages:?}"
+    );
+    assert_eq!(
+        count(
+            &h.scratch,
+            "proton_accounts WHERE event_cursor IS NOT NULL AND pending_cursor IS NULL"
+        ),
+        1
+    );
+}
+
+#[tokio::test]
+async fn a_listing_cut_short_resumes_below_its_checkpoint_with_its_cursor() {
+    let h = setup(vec![TestAccount::new(USER, PASSWORD)]).await;
+    for (name, time) in [("m1", 100), ("m2", 200), ("m3", 300)] {
+        h.server.add_message(
+            USER,
+            sb_test_support::FakeMessage::new(name).with_time(time),
+        );
+    }
+    let (_id, state) = begin(&h, "cut").await;
+    let id = account_id(&state);
+    listed(&h.core, &id).await;
+    h.core.shutdown().await;
+
+    // As if the app had stopped after committing the page that ended
+    // at m2: listing, the cursor read before it pending.
+    let db = h.scratch.path().join("store/state.sqlite");
+    sb_test_support::execute_sql(
+        &db,
+        &format!(
+            "UPDATE proton_accounts SET listing_state = 'listing',
+                 pending_cursor = 'pending-cursor', listing_checkpoint = '200:m2'
+             WHERE account_id = '{id}'"
+        ),
+    );
+    // One message below the checkpoint, which the rest of the listing
+    // finds, and one above it, which events (M2.15c) bring.
+    h.server
+        .add_message(USER, sb_test_support::FakeMessage::new("m0").with_time(50));
+    h.server
+        .add_message(USER, sb_test_support::FakeMessage::new("m9").with_time(250));
+    let before = h.server.requests().len();
+
+    let core = reopen(&h.scratch, &h.secrets, &h.server, &h.clock).await;
+    let coverage = listed(&core, &id).await;
+    assert_eq!(coverage.messages, 4, "m0 is added, m9 isn't: {coverage:?}");
+    assert_eq!(
+        count(&h.scratch, "logical_messages WHERE provider_key = 'm9'"),
+        0
+    );
+
+    let requests = &h.server.requests()[before..];
+    assert!(
+        requests
+            .iter()
+            .all(|request| request.path != "/core/v4/events/latest"),
+        "the pending cursor is kept: {requests:?}"
+    );
+    assert!(
+        message_requests(requests)[0].contains("End=200&EndID=m2"),
+        "{requests:?}"
+    );
+    assert_eq!(
+        count(
+            &h.scratch,
+            "proton_accounts WHERE event_cursor = 'pending-cursor'"
+        ),
+        1,
+        "the cursor read before the listing becomes the event cursor"
+    );
+}
+
+#[tokio::test]
+async fn a_refused_access_token_refreshes_once_and_the_listing_goes_on() {
+    let h = setup(vec![TestAccount::new(USER, PASSWORD)]).await;
+    h.server
+        .add_message(USER, sb_test_support::FakeMessage::new("m1").with_time(100));
+    let (_id, state) = begin(&h, "refresh").await;
+    let id = account_id(&state);
+    let secret_before = secret_field(&h.secrets, &id, "refresh_token_hex");
+    // The worker's next request is refused as an expired token.
+    h.server.set_fault(Some(Fault::Once(Box::new(Fault::Code {
+        status: 401,
+        code: 401,
+    }))));
+
+    let coverage = listed(&h.core, &id).await;
+    assert_eq!(coverage.messages, 1);
+    let refreshes = h
+        .server
+        .requests()
+        .iter()
+        .filter(|request| request.method == "POST" && request.path == "/auth/v4/refresh")
+        .count();
+    assert_eq!(refreshes, 1);
+    assert_ne!(
+        secret_field(&h.secrets, &id, "refresh_token_hex"),
+        secret_before,
+        "the rotated refresh token is stored"
+    );
+    assert_eq!(account(&h.core, &id).await.state, AccountState::Active);
 }
