@@ -1544,6 +1544,8 @@ fn handle_messages(
     let desc = query_value(query, "Desc")
         .map(|value| value != "0")
         .unwrap_or(true);
+    let end: Option<i64> = query_value(query, "End").and_then(|value| value.parse().ok());
+    let end_id: Option<String> = query_value(query, "EndID");
     let stale = state.stale;
     let account = state
         .accounts
@@ -1553,6 +1555,16 @@ fn handle_messages(
     ordered.sort_by(|a, b| b.time.cmp(&a.time).then_with(|| b.id.cmp(&a.id)));
     if !desc {
         ordered.reverse();
+    }
+    // Keyset paging (the web indexer's `End`/`EndID`): drop everything
+    // at or below the anchor before `Page` skips, and count what
+    // remains as Proton's `Total` for the remaining range.
+    if let Some(end) = end {
+        let end_id = end_id.as_deref();
+        ordered.retain(|message| {
+            message.time < end
+                || (message.time == end && end_id.is_none_or(|end_id| message.id.as_str() < end_id))
+        });
     }
     let total = u32::try_from(ordered.len()).unwrap_or(u32::MAX);
     // A probe's huge `Page` is an empty page, not an overflow.

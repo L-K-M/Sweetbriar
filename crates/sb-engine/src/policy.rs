@@ -2,11 +2,12 @@
 //! provider's dialect, what each listed mailbox means and which
 //! evidence groups occurrences into one logical message, so the
 //! engine can plan sync while `sb-imap` stays dialect-free. The pilot
-//! ships `proton_bridge` and `generic_imap` (Dovecot in CI); the
-//! account worker adds their caller and later steps their mutation
-//! rules.
+//! ships `proton_bridge` and `generic_imap` (Dovecot in CI) for IMAP
+//! and `proton_api`, which maps Proton's labels, for Proton accounts;
+//! later steps add their mutation rules.
 
 mod generic_imap;
+pub(crate) mod proton_api;
 mod proton_bridge;
 
 use crate::{MailboxKind, MailboxRole};

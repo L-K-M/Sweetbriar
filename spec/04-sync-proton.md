@@ -127,9 +127,14 @@ where Proton differs.
 | Folder (type 3) | its path | `folder` | none |
 | Label (type 1) | its name | `label` | none |
 
-AllDrafts, AllSent and Outbox aren't mapped. `mailboxes.provider_key`
+AllDrafts, AllSent and Outbox aren't mapped. The system mailboxes
+exist for every account, listed or not. `mailboxes.provider_key`
 holds the label id; `remote_name` the display path, which may change
-without changing the mailbox.
+without changing the mailbox. Folders and labels are separate
+namespaces in Proton, but `remote_name` is unique per account: a name
+already taken (by a system mailbox, or a folder before a label) gets
+its label id appended, as in "Travel (l1)" for the label with id
+`l1`, and again while the result is taken too.
 
 ## Sync loop
 

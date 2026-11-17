@@ -41,7 +41,11 @@ mod messages;
 #[cfg_attr(not(test), allow(dead_code))]
 mod policy;
 mod proton;
+mod proton_sync;
 pub use proton::{BeginProtonSignIn, ProtonSignInState, ProtonSignInStep};
+#[cfg(any(test, feature = "test-seams"))]
+#[doc(hidden)]
+pub use sb_resources::proton_sync::{ProtonCoverage, ProtonListingState};
 mod rebuild;
 mod received;
 #[cfg(test)]

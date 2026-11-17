@@ -159,8 +159,25 @@ fn metadata_with_raw<'de, D: Deserializer<'de>>(
     Ok(Some(metadata))
 }
 
-/// One page of message metadata, newest first (spec/04 "Sync loop"
-/// step 1.3).
+/// Where a listing stands: the last listed message's time and id
+/// (spec/04 "Sync loop" step 1.3); the next page starts below it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ListingAnchor {
+    pub time: i64,
+    pub id: String,
+}
+
+impl ListingAnchor {
+    pub fn of(message: &MessageMetadata) -> Self {
+        Self {
+            time: message.time,
+            id: message.id.clone(),
+        }
+    }
+}
+
+/// One page of message metadata, newest first by time, then id
+/// (spec/04 "Sync loop" step 1.3).
 #[derive(Debug, Clone)]
 pub struct MessagePage {
     pub messages: Vec<MessageMetadata>,
@@ -344,23 +361,50 @@ impl Client {
         Ok(response.labels)
     }
 
-    /// One page of message metadata, newest first by time (spec/04
-    /// "Sync loop" step 1.3). A page size above 150 is clamped to 150
-    /// (research `mail-sync.md` §3).
+    /// One page of message metadata, newest first by time, then id
+    /// (spec/04 "Sync loop" step 1.3). When `after` is given, the
+    /// page starts strictly below that anchor (the web indexer's
+    /// keyset paging), so a message deleted mid-listing skips nothing;
+    /// the client also drops the anchor and anything newer if the
+    /// server repeats them, so the call is correct whether Proton's
+    /// `End` is inclusive or exclusive. A page size above 150 is clamped to 150 (research
+    /// `mail-sync.md` §3).
     pub async fn message_page(
         &self,
         session: &Session,
-        page: u32,
+        after: Option<&ListingAnchor>,
         page_size: u32,
     ) -> Result<MessagePage, ProtonError> {
         let page_size = page_size.min(MAX_PAGE_SIZE);
-        let path = format!("{MESSAGES_PATH}?Page={page}&PageSize={page_size}&Sort=Time&Desc=1");
+        let mut path = format!("{MESSAGES_PATH}?Page=0&PageSize={page_size}&Sort=Time&Desc=1");
+        if let Some(anchor) = after {
+            // Proton ids are base64url, whose alphabet needs no query
+            // encoding; anything else is refused before the request.
+            if !anchor
+                .id
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'='))
+            {
+                return Err(ProtonError::Malformed {
+                    message: format!(
+                        "an anchor message id must be base64url, not {:?}",
+                        anchor.id
+                    ),
+                });
+            }
+            path.push_str(&format!("&End={}&EndID={}", anchor.time, anchor.id));
+        }
         let response: MessagesResponse =
             self.get_json(&path, session, Priority::Background).await?;
+        let after_label = after.map_or_else(|| "the newest".to_owned(), |anchor| anchor.id.clone());
         let mut messages = Vec::with_capacity(response.messages.len());
         for (index, value) in response.messages.into_iter().enumerate() {
-            let at = format!("{MESSAGES_PATH} (message {index} of page {page})");
-            messages.push(MessageMetadata::from_value(value, &at)?);
+            let at = format!("{MESSAGES_PATH} (message {index} of the page after {after_label})");
+            let message = MessageMetadata::from_value(value, &at)?;
+            if after.is_some_and(|anchor| !is_below_anchor(&message, anchor)) {
+                continue;
+            }
+            messages.push(message);
         }
         Ok(MessagePage {
             messages,
@@ -408,6 +452,14 @@ impl Client {
             user_changed: response.user.is_some(),
         })
     }
+}
+
+/// Whether `message` may follow `anchor`: anything but the anchor
+/// itself or a newer message. Proton's order among messages of the
+/// same second is unknown, so those all pass: listing one again is
+/// harmless (the store finds it by id), skipping one is a gap.
+fn is_below_anchor(message: &MessageMetadata, anchor: &ListingAnchor) -> bool {
+    message.time < anchor.time || (message.time == anchor.time && message.id != anchor.id)
 }
 
 /// A create or update event must carry its object; only a delete may

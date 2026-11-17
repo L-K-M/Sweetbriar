@@ -432,6 +432,14 @@ impl Resources {
         })
     }
 
+    /// A new client for one Proton account's sync worker, which keeps
+    /// it for all its calls so pacing and in-flight slots hold across
+    /// them (spec/04 "Connections and pacing"); a client per request
+    /// would reset both.
+    pub fn proton_client(&self) -> Result<Client, ProtonError> {
+        self.proton.client(self.proton.base_url())
+    }
+
     /// Revokes a restored session (`DELETE /auth/v4`). An error means
     /// the revoke is unconfirmed; the caller decides, and a disconnect
     /// goes on regardless (spec/04 "Disconnect", best effort).

@@ -5,8 +5,8 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use sb_proton::{
-    ApiCode, Challenge, Client, Config, EventAction, InvalidField, LabelKind, PasswordMode,
-    ProtonError, SignInStep, Trust,
+    ApiCode, Challenge, Client, Config, EventAction, InvalidField, LabelKind, ListingAnchor,
+    PasswordMode, ProtonError, SignInStep, Trust,
 };
 use sb_test_support::{
     ATTACHMENT_PLAINTEXT, FakeLabel, FakeMessage, FakeProtonServer, Fault, KeyFault,
@@ -956,23 +956,34 @@ async fn paging_covers_every_message_exactly_once_newest_first() {
 
     let mut seen = Vec::new();
     let mut first = None;
-    for (page, expected) in [
-        (0, vec!["msg-3", "msg-4"]),
-        (1, vec!["msg-1", "msg-2"]),
-        (2, vec!["msg-0"]),
+    let mut totals = Vec::new();
+    let mut anchor: Option<ListingAnchor> = None;
+    for expected in [
+        vec!["msg-3", "msg-4"],
+        vec!["msg-1", "msg-2"],
+        vec!["msg-0"],
+        Vec::new(),
     ] {
         let batch = client
-            .message_page(&session, page, 2)
+            .message_page(&session, anchor.as_ref(), 2)
             .await
             .expect("the page");
-        assert_eq!(batch.total, 5);
+        totals.push(batch.total);
         let ids: Vec<&str> = batch.messages.iter().map(|m| m.id.as_str()).collect();
         assert_eq!(ids, expected);
-        seen.extend(ids.into_iter().map(str::to_owned));
-        if page == 0 {
-            first = Some(batch);
+        if first.is_none() {
+            first = Some(batch.clone());
         }
+        if let Some(last) = batch.messages.last() {
+            anchor = Some(ListingAnchor::of(last));
+        }
+        seen.extend(ids.into_iter().map(str::to_owned));
     }
+    assert_eq!(
+        totals,
+        [5, 3, 1, 0],
+        "the anchor narrows the remaining range"
+    );
     assert_eq!(seen, ["msg-3", "msg-4", "msg-1", "msg-2", "msg-0"]);
 
     let first = first.expect("the first page");
@@ -987,14 +998,14 @@ async fn paging_covers_every_message_exactly_once_newest_first() {
     assert!(!first.stale);
     server.set_stale_pages(true);
     let stale = client
-        .message_page(&session, 0, 2)
+        .message_page(&session, None, 2)
         .await
         .expect("the stale page");
     assert!(stale.stale);
 
     // A page size above 150 is clamped before it reaches the wire.
     let clamped = client
-        .message_page(&session, 0, 500)
+        .message_page(&session, None, 500)
         .await
         .expect("the clamped page");
     assert_eq!(clamped.messages.len(), 5);
@@ -1007,6 +1018,72 @@ async fn paging_covers_every_message_exactly_once_newest_first() {
         request.query.as_deref(),
         Some("Page=0&PageSize=150&Sort=Time&Desc=1")
     );
+}
+
+#[tokio::test]
+async fn a_message_deleted_mid_listing_skips_nothing() {
+    let server = server_with(TestAccount::new(USER, PASSWORD)).await;
+    let client = client(&server);
+    let session = sign_in(&client, USER, PASSWORD).await;
+    for (index, time) in [100, 300, 200, 500, 400].iter().enumerate() {
+        server.add_message(
+            USER,
+            FakeMessage::new(&format!("msg-{index}")).with_time(*time),
+        );
+    }
+
+    let first = client
+        .message_page(&session, None, 2)
+        .await
+        .expect("the first page");
+    let ids: Vec<&str> = first.messages.iter().map(|m| m.id.as_str()).collect();
+    assert_eq!(ids, ["msg-3", "msg-4"]);
+
+    // Page-index paging would now skip msg-1; keyset paging doesn't.
+    server.delete_message(USER, "msg-3");
+
+    let mut anchor = ListingAnchor::of(&first.messages[1]);
+    let mut rest = Vec::new();
+    loop {
+        let page = client
+            .message_page(&session, Some(&anchor), 2)
+            .await
+            .expect("the next page");
+        if page.messages.is_empty() {
+            break;
+        }
+        let ids: Vec<String> = page.messages.iter().map(|m| m.id.clone()).collect();
+        anchor = ListingAnchor::of(page.messages.last().expect("a non-empty page"));
+        rest.extend(ids);
+        assert!(rest.len() <= 4, "the listing terminates");
+    }
+    assert_eq!(rest, ["msg-1", "msg-2", "msg-0"]);
+}
+
+#[tokio::test]
+async fn an_anchor_repeated_by_the_server_is_dropped() {
+    let server = server_with(TestAccount::new(USER, PASSWORD)).await;
+    let client = client(&server);
+    let session = sign_in(&client, USER, PASSWORD).await;
+    for (index, time) in [100, 300, 200, 500, 400].iter().enumerate() {
+        server.add_message(
+            USER,
+            FakeMessage::new(&format!("msg-{index}")).with_time(*time),
+        );
+    }
+
+    let anchor = ListingAnchor {
+        time: 400,
+        id: "msg-4".to_owned(),
+    };
+    let page = client
+        .message_page(&session, Some(&anchor), 2)
+        .await
+        .expect("the page after the anchor");
+    let ids: Vec<&str> = page.messages.iter().map(|m| m.id.as_str()).collect();
+    assert_eq!(ids.first(), Some(&"msg-1"), "the anchor never comes back");
+    assert!(!ids.contains(&"msg-4"));
+    assert_eq!(page.total, 3);
 }
 
 #[tokio::test]
@@ -1122,17 +1199,18 @@ async fn a_malformed_message_response_is_an_error_not_a_partial_batch() {
     server.set_undecodable_message(USER, true);
 
     let error = client
-        .message_page(&session, 0, 150)
+        .message_page(&session, None, 150)
         .await
         .expect_err("a numeric ID must not decode");
     assert!(
-        matches!(&error, ProtonError::Malformed { message } if message.contains("message 0 of page 0")),
+        matches!(&error, ProtonError::Malformed { message } if message
+            .contains("message 0 of the page after the newest")),
         "the error names the message that failed: {error:?}"
     );
 
     server.set_undecodable_message(USER, false);
     let page = client
-        .message_page(&session, 0, 150)
+        .message_page(&session, None, 150)
         .await
         .expect("the knob off decodes");
     assert_eq!(page.messages.len(), 2);

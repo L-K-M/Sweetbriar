@@ -42,6 +42,7 @@ mod acquire;
 mod activation;
 mod catchup;
 mod drafts;
+pub mod proton_sync;
 pub mod sync;
 pub use activation::{
     ActivationCommit, ActivationPreparation, ActivationPrepared, ActivationStatus, ActivationWork,
@@ -72,7 +73,8 @@ pub use proton::{
 // (spec/01 rule 3): the engine keeps them in memory and maps errors
 // without depending on a leaf.
 pub use sb_proton::{
-    CertificateDer, Challenge, FinishedSignIn, Identity, KeyStore, ModulusSignatureVerifier,
+    CertificateDer, Challenge, Client as ProtonClient, FinishedSignIn, Identity, KeyStore, Label,
+    LabelKind, ListingAnchor, MAX_PAGE_SIZE as PROTON_MAX_PAGE_SIZE, ModulusSignatureVerifier,
     ProtonError, SecretString, Session, SignIn, SignInStep, Trust,
 };
 mod renditions;

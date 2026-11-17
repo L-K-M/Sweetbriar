@@ -243,6 +243,7 @@ impl Engine {
         self.schedule_index();
         self.schedule_received();
         self.schedule_accounts();
+        self.schedule_proton_sync();
         // The restored store's records decide its cadence.
         if self.maintenance.armed() {
             self.schedule_maintenance();
