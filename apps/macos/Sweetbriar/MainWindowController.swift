@@ -43,7 +43,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     private(set) var drafts: DraftsListViewController?
     private var listPane: ListPaneController?
     private var imports: ImportCoordinator?
-    private var accountSetup: BridgeAccountSheet?
+    private var signIn: ProtonSignInSheet?
     private var reader: ReaderViewController?
     private var closed = false
 
@@ -138,7 +138,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         listPane = nil
         self.reader = nil
         imports = nil
-        accountSetup = nil
+        signIn = nil
         showArchiveStatus("Updating the archive…")
         let tasks = contentTasks
         let writes = self.writes
@@ -193,19 +193,20 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         writes.retire()
         imports?.retire()
         imports = nil
-        accountSetup?.retire()
-        accountSetup = nil
+        signIn?.retire()
+        signIn = nil
         if let sheet = window?.attachedSheet {
             window?.endSheet(sheet)
             sheet.close()
         }
     }
 
-    /// File → Add Proton Bridge Account…, once the core is up.
-    func beginBridgeAccountSetup() {
+    /// File → Add Proton Account…, or the sidebar's Sign In Again…
+    /// for `account`, once the core is up (spec/08).
+    func beginProtonSignIn(signingInAgain account: Account? = nil) {
         guard backups.canWrite else { return }
         configureWriters()
-        accountSetup?.begin()
+        signIn?.begin(signingInAgain: account)
     }
 
     /// File → Import…, once the core is up.
@@ -225,6 +226,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         let sidebarModel = SidebarModel(source: bridge)
         let appearanceModel = appearance.model(source: bridge)
         let sidebar = SidebarViewController(model: sidebarModel, appearance: appearanceModel)
+        sidebar.onSignInAgain = { [weak self] account in self?.beginProtonSignIn(signingInAgain: account) }
         let policy = backups
         let messageList = MessageListViewController(bridge: bridge, sidebar: sidebarModel, appearance: appearanceModel,
                                                      writes: writes, canWrite: { policy.canWrite })
@@ -326,15 +328,15 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
             }
             imports = owner
         }
-        if accountSetup == nil {
+        if signIn == nil {
             let policy = backups
-            let owner = BridgeAccountSheet(window: window, source: bridge, writes: writes,
-                                           canWrite: { policy.canWrite })
+            let owner = ProtonSignInSheet(window: window, source: bridge, writes: writes,
+                                          canWrite: { policy.canWrite })
             owner.onAdded = { [weak self] in
                 guard let self, contentSerial == serial else { return }
                 reloadSidebar()
             }
-            accountSetup = owner
+            signIn = owner
         }
     }
 

@@ -271,6 +271,41 @@ async fn refusals_store_nothing_and_keep_the_conversation_answerable() {
 }
 
 #[tokio::test]
+async fn a_security_key_only_account_is_refused_on_its_own_field() {
+    // The sheet links to Proton's 2FA settings for this refusal alone
+    // (spec/08), so it has its own field rather than `account`.
+    let h = setup(vec![TestAccount::new(USER, PASSWORD).fido2_only()]).await;
+    let error = h
+        .core
+        .begin_proton_sign_in("security-key", params())
+        .await
+        .expect_err("a security-key-only account is refused");
+    invalid_field(&error, "security_key");
+    stores_nothing(&h);
+}
+
+#[tokio::test]
+async fn accounts_name_a_proton_account_and_its_username() {
+    // "Sign in again" fixes the username (spec/08), so `accounts()`
+    // carries it for Proton accounts and only for them.
+    let h = setup(vec![TestAccount::new(USER, PASSWORD)]).await;
+    let (_id, state) = begin(&h, "listed").await;
+    let id = account_id(&state);
+    let proton = account(&h.core, &id).await;
+    assert_eq!(proton.kind, AccountKind::Proton);
+    assert_eq!(proton.username.as_deref(), Some(USER));
+    let local = h
+        .core
+        .accounts()
+        .await
+        .expect("accounts")
+        .into_iter()
+        .find(|account| account.kind == AccountKind::Local)
+        .expect("the local archive");
+    assert_eq!(local.username, None);
+}
+
+#[tokio::test]
 async fn completing_a_sign_in_commits_and_replays_its_key_without_contacting_proton() {
     let h = setup(vec![TestAccount::new(USER, PASSWORD).with_totp(TOTP)]).await;
     let (id, state) = begin(&h, "replay").await;

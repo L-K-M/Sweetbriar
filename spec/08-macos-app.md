@@ -151,8 +151,9 @@ conversation; the Bridge account sheet is no longer offered.
   the token, and the conversation continues.
 - **A security-key-only account** gets the refusal's explanation and a
   link to Proton's 2FA settings page in the default browser.
-- **Signing in again** (from the account's health row, "Sign in again")
-  opens the same sheet for that account, with the username fixed.
+- **Signing in again** (from the account's health row, "Sign in again",
+  and the account's sidebar context menu, "Sign In Again…") opens the
+  same sheet for that account, with the username fixed.
 - Password fields are `NSSecureTextField`s; their contents go to the
   Swift bridge (`SweetbriarBridge`, not Proton Bridge) as bytes and are
   cleared when the step is sent.

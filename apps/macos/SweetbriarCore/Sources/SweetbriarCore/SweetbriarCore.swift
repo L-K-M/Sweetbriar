@@ -3424,16 +3424,26 @@ public struct Account: Equatable, Hashable {
     public var state: AccountState
     public var stateReason: String?
     public var sortOrder: Int64
+    /**
+     * A Proton account's sign-in username (spec/08 "Signing in
+     * again"); `None` for other kinds.
+     */
+    public var username: String?
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(accountId: String, kind: AccountKind, displayName: String, state: AccountState, stateReason: String?, sortOrder: Int64) {
+    public init(accountId: String, kind: AccountKind, displayName: String, state: AccountState, stateReason: String?, sortOrder: Int64, 
+        /**
+         * A Proton account's sign-in username (spec/08 "Signing in
+         * again"); `None` for other kinds.
+         */username: String?) {
         self.accountId = accountId
         self.kind = kind
         self.displayName = displayName
         self.state = state
         self.stateReason = stateReason
         self.sortOrder = sortOrder
+        self.username = username
     }
 
     
@@ -3457,7 +3467,8 @@ public struct FfiConverterTypeAccount: FfiConverterRustBuffer {
                 displayName: FfiConverterString.read(from: &buf), 
                 state: FfiConverterTypeAccountState.read(from: &buf), 
                 stateReason: FfiConverterOptionString.read(from: &buf), 
-                sortOrder: FfiConverterInt64.read(from: &buf)
+                sortOrder: FfiConverterInt64.read(from: &buf), 
+                username: FfiConverterOptionString.read(from: &buf)
         )
     }
 
@@ -3468,6 +3479,7 @@ public struct FfiConverterTypeAccount: FfiConverterRustBuffer {
         FfiConverterTypeAccountState.write(value.state, into: &buf)
         FfiConverterOptionString.write(value.stateReason, into: &buf)
         FfiConverterInt64.write(value.sortOrder, into: &buf)
+        FfiConverterOptionString.write(value.username, into: &buf)
     }
 }
 
@@ -8668,6 +8680,10 @@ public enum AccountKind: Equatable, Hashable {
     
     case local
     case imap
+    /**
+     * Sweetbriar's own Proton API account (spec/02).
+     */
+    case proton
 
 
 
@@ -8693,6 +8709,8 @@ public struct FfiConverterTypeAccountKind: FfiConverterRustBuffer {
         
         case 2: return .imap
         
+        case 3: return .proton
+        
         default: throw UniffiInternalError.unexpectedEnumCase
         }
     }
@@ -8707,6 +8725,10 @@ public struct FfiConverterTypeAccountKind: FfiConverterRustBuffer {
         
         case .imap:
             writeInt(&buf, Int32(2))
+        
+        
+        case .proton:
+            writeInt(&buf, Int32(3))
         
         }
     }

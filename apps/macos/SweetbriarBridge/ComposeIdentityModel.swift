@@ -274,6 +274,8 @@ public final class ComposeIdentityModel {
         problem = message
         return .refused
     }
+    /// IMAP identities only: a Proton account can't send until M4 adds
+    /// Proton send (spec/05), and a local one never does.
     private static func isSelectable(_ identity: ComposeIdentity) -> Bool {
         identity.accountKind == .imap && identity.sendable != .unavailable
     }

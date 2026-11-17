@@ -40,11 +40,14 @@ public final class SidebarModel {
         public var id: String
         public var title: String
         public var entries: [Entry]
+        /// The account an account section lists; `nil` for unified.
+        public var account: Account?
 
-        public init(id: String, title: String, entries: [Entry]) {
+        public init(id: String, title: String, entries: [Entry], account: Account? = nil) {
             self.id = id
             self.title = title
             self.entries = entries
+            self.account = account
         }
     }
 
@@ -93,6 +96,17 @@ public final class SidebarModel {
         sections.first {
             $0.id != Self.unifiedSectionID && $0.entries.contains { $0.id == entryId }
         }?.id
+    }
+
+    /// The Proton account a section heading or entry belongs to, which
+    /// "Sign in again" opens the sign-in sheet for (spec/08); `nil` for
+    /// every other row.
+    public func protonAccount(forRow rowId: String) -> Account? {
+        let section = sections.first { section in
+            section.id == rowId || section.entries.contains { $0.id == rowId }
+        }
+        guard let account = section?.account, account.kind == .proton else { return nil }
+        return account
     }
 
     /// The oldest list generation the account sections show; 0 before
@@ -293,7 +307,8 @@ public final class SidebarModel {
                         ? .window(.mailbox(mailbox.mailboxId))
                         : .unavailable(note: notSelectableNote)
                 )
-            }
+            },
+            account: account
         )
     }
 }

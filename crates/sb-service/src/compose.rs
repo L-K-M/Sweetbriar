@@ -42,11 +42,8 @@ impl Core {
                     account_name: i.account_name().to_owned(),
                     account_kind: match i.account_kind() {
                         sb_engine::AccountKind::Local => AccountKind::Local,
-                        // A Proton account shows as IMAP until M2.14 gives it
-                        // its own case.
-                        sb_engine::AccountKind::Imap | sb_engine::AccountKind::Proton => {
-                            AccountKind::Imap
-                        }
+                        sb_engine::AccountKind::Imap => AccountKind::Imap,
+                        sb_engine::AccountKind::Proton => AccountKind::Proton,
                     },
                     email: i.email().to_owned(),
                     display_name: i.display_name().to_owned(),
