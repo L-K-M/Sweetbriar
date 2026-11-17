@@ -585,7 +585,14 @@ the provider policies (`proton_bridge`, `generic_imap`) live in
   server's support; **M2.15b** the `proton_api` policy, label mapping,
   the account worker's bootstrap listing with page checkpoints and
   coverage; **M2.15c** events application, Refresh, the breaker classes
-  and the proptest model.
+  and the proptest model. M2.15b is split again (1,596 lines measured
+  for the store writes, keyset listing and metadata mapping alone,
+  before the policy and the worker): **M2.15b1** the store's bootstrap
+  writes, that is label reconciliation by label id, page commits with
+  their checkpoint, finishing with Proton's per-label totals (migration
+  29) and the coverage read; **M2.15b2** keyset listing in the
+  transport and the fake server, the metadata mapping, the `proton_api`
+  policy and the account worker's bootstrap.
 - **Acceptance:** a proptest model of server changes (new, label
   changes, deletes, refreshes, disconnects) converges to the model's
   state; crash cuts during listing and event batches resume without
