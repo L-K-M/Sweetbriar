@@ -356,8 +356,10 @@ test, except where the spec says "manual qualification".
   verification, sessions and refresh, keys and salts (test keys
   generated with `proton-crypto`), addresses, labels and folders,
   message metadata, full messages with encrypted bodies and attachments,
-  the events stream with `More` and `Refresh`, counts, and the mutation
-  calls 04-sync-proton uses.
+  the events stream with `More` and `Refresh`, counts, the mutation
+  calls 04-sync-proton uses, and the key lookup, draft, attachment
+  upload and send calls 05 uses (recording what each recipient's
+  package carries).
 - **Fault knobs:** drop or stall a request; answer 429 or 503 with
   `Retry-After`, 401, 9001, 10013, 2064 or 5003; return stale pages;
   change messages behind the client's back; emit a refresh; damage a
