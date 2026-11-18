@@ -19,7 +19,9 @@ const LANE_ENV: &str = "SB_GPA_LANE";
 const SUMMARY_ENV: &str = "SB_GPA_LANE_SUMMARY";
 
 /// Production's SRP salt length (`proton-srp`'s `SALT_LEN_BYTES`,
-/// research `auth-session.md` §3). The development server sends 16.
+/// research `auth-session.md` §3). The lane builds the pinned server
+/// with `ci/go-proton-api/patches/srp-salt-10.patch` so its SRP salt is
+/// production's 10 bytes, not the upstream 16.
 const PRODUCTION_SRP_SALT_BYTES: i64 = 10;
 
 #[derive(Debug, Deserialize)]
@@ -58,26 +60,12 @@ async fn the_development_server_lists_the_seeded_account_read_only() {
     };
     let lane = read_lane(&path);
 
-    // Sweetbriar's SRP client accepts only production's 10-byte salt.
-    // The development server sends 16, so the lane stops here rather
-    // than weaken that check; the README records the difference.
-    if lane.srp_salt_bytes != PRODUCTION_SRP_SALT_BYTES {
-        let reason = format!(
-            "the development server's SRP salt is {} bytes, not production's \
-             {PRODUCTION_SRP_SALT_BYTES}; Sweetbriar's client refuses it",
-            lane.srp_salt_bytes
-        );
-        println!("skipped: {reason}");
-        write_summary(
-            SUMMARY_ENV,
-            serde_json::json!({
-                "result": "skipped",
-                "base_url": lane.base_url,
-                "reason": reason,
-            }),
-        );
-        return;
-    }
+    // A driver built without the SRP salt patch reports the upstream
+    // 16 bytes; signing in would fail anyway, so say so directly.
+    assert_eq!(
+        lane.srp_salt_bytes, PRODUCTION_SRP_SALT_BYTES,
+        "the lane driver was not built against the patched server"
+    );
 
     let scratch = ScratchDir::new("service-go-proton-api-lane");
     let root = scratch.path().join("store");
@@ -124,6 +112,9 @@ async fn the_development_server_lists_the_seeded_account_read_only() {
         "every seeded message is listed: {coverage:?}"
     );
 
+    // All Mail is deliberately not asserted: the driver's seeded counts
+    // don't include the label the server lists on every message, so
+    // there is no server total here to compare the local count with.
     let mut labels = BTreeMap::new();
     for (name, expected) in &lane.label_counts {
         let mailbox = coverage
@@ -157,7 +148,8 @@ async fn the_development_server_lists_the_seeded_account_read_only() {
         .expect("a multi-label message was seeded");
     let db = scratch.path().join("store/state.sqlite");
     let of_message = format!(
-        "occurrences o JOIN logical_messages l ON l.message_id = o.message_id
+        "SELECT COUNT(*) FROM occurrences o
+         JOIN logical_messages l ON l.message_id = o.message_id
          JOIN mailboxes m ON m.mailbox_id = o.mailbox_id
          WHERE l.provider_key = '{}'",
         multi.provider_key
@@ -185,10 +177,14 @@ async fn the_development_server_lists_the_seeded_account_read_only() {
             multi.subject
         );
     }
+    // The development server puts every listed message in All Mail
+    // (`"5"`), so the message has one more occurrence than its
+    // asserted labels. All Mail itself is not compared against the
+    // driver's counts: they are seeded without it.
     assert_eq!(
         count_rows(&db, &of_message),
-        multi.labels.len() as i64,
-        "{} has one occurrence per label",
+        multi.labels.len() as i64 + 1,
+        "{} has one occurrence per label plus the server's All Mail",
         multi.subject
     );
 
@@ -209,7 +205,9 @@ async fn the_development_server_lists_the_seeded_account_read_only() {
             "messages": coverage.messages,
             "labels": labels,
             "multi_label": multi.subject,
-            "occurrences": multi.labels.len(),
+            // The asserted labels plus the All Mail occurrence the
+            // server adds to every listed message.
+            "occurrences": multi.labels.len() + 1,
             "mutations": mutations,
         }),
     );
