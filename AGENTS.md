@@ -153,9 +153,11 @@ push commit-pinned requests to `bench/requests` and reports to
 
 M0.12 adds `nightly.yml` (daily/manual): Swift unit tests, the
 `SweetbriarSmoke` XCUITest launch and an ad-hoc signed DMG. `xcode-27`
-is advisory; fault/proptest placeholders stay skipped until their
-suites exist. M1.1 enables the 60-second Linux MIME fuzz run; reproduction
-and its isolated nightly toolchain are documented in `fuzz/README.md`.
+is advisory; the fault-injection placeholder stays skipped until its
+suite exists. The `proptest` job runs the Proton sync model with
+`SB_PROPTEST_SCALE=20` times the cases a pull request runs. M1.1
+enables the 60-second Linux MIME fuzz run; reproduction and its
+isolated nightly toolchain are documented in `fuzz/README.md`.
 Tags `v*` run the Rust CI gate and the same macOS package
 checks before publishing the DMG. The tag must match the workspace
 version; keep the README and XcodeGen marketing version in step.

@@ -20,6 +20,8 @@ use crate::testing::{reading, scratch_paths, test_seams};
 use crate::{ListedPage, Store, WritePriority, open};
 
 const ACCOUNT: &str = "00000000-0000-4000-8000-0000000000e2";
+/// A user label: a message only in it and All Mail is in no folder.
+const WORK: &str = "label-work";
 
 fn now() -> Timestamp {
     Timestamp::from_millis(1_735_689_600_000)
@@ -52,6 +54,14 @@ fn labels() -> Vec<ObservedLabel> {
         folder("3", "Trash", MailboxRole::Trash),
         folder("4", "Spam", MailboxRole::Junk),
         all_mail,
+        ObservedLabel {
+            provider_key: WORK.to_owned(),
+            remote_name: "Work".to_owned(),
+            delimiter: None,
+            kind: MailboxKind::Label,
+            role: None,
+            selectable: true,
+        },
     ]
 }
 
@@ -386,6 +396,52 @@ fn resolving_between_a_responses_chunks_leaves_its_pass_whole() {
         events(&store)[1].3,
         r#"{"disappeared":26,"mailbox_messages":100}"#
     );
+}
+
+#[test]
+fn deletes_in_no_folder_count_only_against_the_cap() {
+    // 25 of 40 and then the last 15: in a folder, the share and the
+    // emptied rules would open; with no folder neither has a size.
+    let (_scratch, store) = listed("proton-breaker-no-folder", ids("n", 40, WORK));
+    let all: Vec<String> = (1..=40).map(|n| format!("n{n}")).collect();
+    let all: Vec<&str> = all.iter().map(String::as_str).collect();
+    for pass in [&all[..25], &all[25..]] {
+        let applied = apply(&store, deletes(pass), true);
+        assert_eq!(
+            applied.breaker,
+            Classified {
+                applied: pass.len(),
+                opened: 0
+            }
+        );
+    }
+    assert_eq!(states(&store, "n40"), vanished());
+    assert!(events(&store).is_empty());
+
+    // Past the cap, an event opens with no mailbox and no size.
+    let (_scratch, store) = listed("proton-breaker-no-folder-cap", ids("n", 26, WORK));
+    let applied = apply(&store, deletes(&all[..26]), true);
+    assert_eq!(applied.breaker.opened, 1);
+    assert_eq!(
+        events(&store),
+        [(
+            format!("proton-{ACCOUNT}-1"),
+            "bulk_disappearance".to_owned(),
+            "open".to_owned(),
+            r#"{"disappeared":26,"mailbox_messages":null}"#.to_owned()
+        )]
+    );
+    let no_mailbox: i64 = reading(&store, |tx| {
+        Ok(tx
+            .query_row(
+                "SELECT COUNT(*) FROM breaker_events WHERE mailbox_id IS NULL",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap())
+    });
+    assert_eq!(no_mailbox, 1);
+    assert_eq!(states(&store, "n1"), pending());
 }
 
 mod refresh;

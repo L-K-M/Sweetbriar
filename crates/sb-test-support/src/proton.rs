@@ -260,7 +260,9 @@ impl FakeMessage {
     }
 }
 
-/// Proton's event action for an updated item (0 deletes, 1 creates).
+/// Proton's event actions for an item.
+const ADDRESS_DELETED: u8 = 0;
+const ADDRESS_CREATED: u8 = 1;
 const ADDRESS_UPDATED: u8 = 2;
 
 /// One entry of the account's event log. `number` is assigned when it
@@ -353,6 +355,12 @@ pub enum Fault {
     BadServerProof,
     /// Applies to the next request only, then clears itself.
     Once(Box<Fault>),
+    /// Applies to the next request for `path` only, then clears itself;
+    /// other requests pass meanwhile.
+    OnceAt {
+        path: String,
+        fault: Box<Fault>,
+    },
 }
 
 struct Account {
@@ -365,6 +373,8 @@ struct Account {
     key_salts: Vec<Salt>,
     user_keys: UserKeys,
     addresses: Vec<FakeAddress>,
+    /// Addresses `delete_address` took away, for `restore_address`.
+    deleted_addresses: Vec<FakeAddress>,
     message_body: String,
     damaged_body: String,
     attachment_key_packets: Vec<u8>,
@@ -643,6 +653,7 @@ impl FakeProtonServer {
                     }],
                     user_keys,
                     addresses,
+                    deleted_addresses: Vec::new(),
                     message_body,
                     damaged_body,
                     attachment_key_packets,
@@ -829,6 +840,36 @@ impl FakeProtonServer {
         account.record(FakeEvent::address(id.to_owned(), ADDRESS_UPDATED));
     }
 
+    /// Removes an address and appends an address delete event.
+    pub fn delete_address(&self, username: &str, id: &str) {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let account = account_mut(&mut state, username);
+        let index = account
+            .addresses
+            .iter()
+            .position(|address| address.id == id)
+            .expect("the address exists");
+        let address = account.addresses.remove(index);
+        account.deleted_addresses.push(address);
+        account.record(FakeEvent::address(id.to_owned(), ADDRESS_DELETED));
+    }
+
+    /// Brings back an address `delete_address` removed, in its place by
+    /// `order`, and appends an address create event.
+    pub fn restore_address(&self, username: &str, id: &str) {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let account = account_mut(&mut state, username);
+        let index = account
+            .deleted_addresses
+            .iter()
+            .position(|address| address.id == id)
+            .expect("the address was deleted");
+        let address = account.deleted_addresses.remove(index);
+        account.addresses.push(address);
+        account.addresses.sort_by_key(|address| address.order);
+        account.record(FakeEvent::address(id.to_owned(), ADDRESS_CREATED));
+    }
+
     /// Marks every address key inactive and appends a user event. A
     /// password change made elsewhere leaves the keys active but
     /// encrypted under another passphrase; either way no address key
@@ -844,6 +885,18 @@ impl FakeProtonServer {
         }
         let user = json!({"ID": format!("user-{username}"), "Name": username});
         account.record(FakeEvent::user(user));
+    }
+
+    /// Makes every address key active again, as the keys a sign-in
+    /// again unlocks; records no event.
+    pub fn reactivate_address_keys(&self, username: &str) {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let account = account_mut(&mut state, username);
+        for address in &mut account.addresses {
+            for key in &mut address.keys {
+                key.active = true;
+            }
+        }
     }
 
     /// The next recorded event carries the mail `Refresh` bit.
@@ -978,6 +1031,11 @@ async fn dispatch(
         let mut slot = faults.lock().unwrap_or_else(|e| e.into_inner());
         match slot.take() {
             Some(Fault::Once(inner)) => Some(*inner),
+            Some(Fault::OnceAt { path: at, fault }) if at == path => Some(*fault),
+            Some(waiting @ Fault::OnceAt { .. }) => {
+                *slot = Some(waiting);
+                None
+            }
             other => {
                 slot.clone_from(&other);
                 other
@@ -1010,8 +1068,9 @@ async fn dispatch(
                 ));
             }
             Fault::BadServerProof => {}
-            // `Once` is unwrapped into its inner fault before the match.
-            Fault::Once(_) => {}
+            // One-shot faults are unwrapped into their inner fault
+            // before the match.
+            Fault::Once(_) | Fault::OnceAt { .. } => {}
         }
     }
 

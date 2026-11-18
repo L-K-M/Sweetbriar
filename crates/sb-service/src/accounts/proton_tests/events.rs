@@ -46,7 +46,7 @@ pub(super) fn assert_occurrences(h: &Harness, provider_key: &str, expected: &[(&
     assert_eq!(count(&h.scratch, &of_message), total, "{provider_key}");
 }
 
-fn event_requests(server: &FakeProtonServer) -> Vec<String> {
+pub(super) fn event_requests(server: &FakeProtonServer) -> Vec<String> {
     server
         .requests()
         .iter()
