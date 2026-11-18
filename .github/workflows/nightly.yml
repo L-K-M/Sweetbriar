@@ -93,7 +93,7 @@ jobs:
           echo "Runner image: ${ImageOS:-unknown} ${ImageVersion:-unknown}"
       - name: Build the driver
         working-directory: ci/go-proton-api
-        run: go build -o "$RUNNER_TEMP/gpa-driver" .
+        run: bash build.sh -o "$RUNNER_TEMP/gpa-driver"
       - name: Date the artifact
         id: date
         run: echo "date=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"

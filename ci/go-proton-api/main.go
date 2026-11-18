@@ -22,12 +22,16 @@ import (
 	"io"
 	"log"
 	"math/big"
+	"mime"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"net/http/httputil"
 	"net/url"
 	"os"
 	"os/signal"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -450,11 +454,153 @@ func startFrontend(upstream string, cert tls.Certificate) (net.Listener, error) 
 		Certificates: []tls.Certificate{cert},
 		NextProtos:   []string{"http/1.1"},
 	})
-	server := &http.Server{Handler: proxy}
+	server := &http.Server{Handler: laneProxy(proxy)}
 	go func() {
 		_ = server.Serve(tlsListener)
 	}()
 	return listener, nil
+}
+
+// laneProxy papers over the response differences that block
+// Sweetbriar's client without touching the pinned server: production
+// puts `Code` on every success, `Version` on key objects and empty
+// address arrays where the server sends nulls. Only 2xx JSON object
+// responses are rewritten; raw bodies such as attachment packets pass
+// through untouched.
+func laneProxy(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		recorder := httptest.NewRecorder()
+		next.ServeHTTP(recorder, r)
+
+		header := recorder.Header()
+		body := recorder.Body.Bytes()
+		if recorder.Code >= 200 && recorder.Code < 300 &&
+			isJSON(header.Get("Content-Type")) &&
+			header.Get("Content-Encoding") == "" && len(body) > 0 {
+			if patched, ok := rewriteLaneResponse(r.URL.Path, body); ok {
+				body = patched
+				header.Set("Content-Length", strconv.Itoa(len(body)))
+			}
+		}
+
+		for name, values := range header {
+			for _, value := range values {
+				w.Header().Add(name, value)
+			}
+		}
+		w.WriteHeader(recorder.Code)
+		_, _ = w.Write(body)
+	})
+}
+
+func isJSON(contentType string) bool {
+	mediaType, _, err := mime.ParseMediaType(contentType)
+	return err == nil && mediaType == "application/json"
+}
+
+func rewriteLaneResponse(path string, body []byte) ([]byte, bool) {
+	var response map[string]any
+	if err := json.Unmarshal(body, &response); err != nil || response == nil {
+		return body, false
+	}
+
+	changed := false
+	if _, ok := response["Code"]; !ok {
+		response["Code"] = float64(proton.SuccessCode)
+		changed = true
+	}
+
+	if isKeyPath(path) && addKeyVersions(response) {
+		changed = true
+	}
+	if path == "/mail/v4/messages" && replaceNullLists(response) {
+		changed = true
+	}
+
+	if !changed {
+		return body, false
+	}
+	patched, err := json.Marshal(response)
+	if err != nil {
+		return body, false
+	}
+	return patched, true
+}
+
+// Key objects live under User.Keys, Address.Keys and Addresses[].Keys.
+func isKeyPath(path string) bool {
+	return path == "/core/v4/users" ||
+		path == "/core/v4/addresses" ||
+		strings.HasPrefix(path, "/core/v4/addresses/")
+}
+
+// replaceNullLists turns the `null` address lists the development
+// server emits for absent CC, BCC or Reply-To into production's empty
+// arrays: go-proton-api marshals nil slices as null, while Sweetbriar's
+// metadata deserializer expects a sequence (spec/02 stores the raw
+// object, and the in-process fake sends `[]`).
+func replaceNullLists(response map[string]any) bool {
+	changed := false
+	fix := func(message map[string]any) {
+		for _, field := range []string{"ToList", "CCList", "BCCList", "ReplyTos"} {
+			if message[field] == nil {
+				message[field] = []any{}
+				changed = true
+			}
+		}
+	}
+	messages, ok := response["Messages"].([]any)
+	if !ok {
+		return false
+	}
+	for _, item := range messages {
+		if message, ok := item.(map[string]any); ok {
+			fix(message)
+		}
+	}
+	return changed
+}
+
+// addKeyVersions adds production's key `Version` to every key object
+// that lacks one. The development server's `proton.Key` model has no
+// Version field at all, while proton-crypto-account's `LockedKey`
+// requires one (it never reads it; the crypto checks the private key's
+// own version). Production's captured key objects report 3, which is
+// what this lane reports too.
+func addKeyVersions(response map[string]any) bool {
+	changed := false
+	fix := func(object map[string]any) {
+		keys, ok := object["Keys"].([]any)
+		if !ok {
+			return
+		}
+		for _, item := range keys {
+			key, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			if _, present := key["Version"]; present {
+				continue
+			}
+			key["Version"] = float64(3)
+			changed = true
+		}
+	}
+
+	if user, ok := response["User"].(map[string]any); ok {
+		fix(user)
+	}
+	if address, ok := response["Address"].(map[string]any); ok {
+		fix(address)
+	}
+	if addresses, ok := response["Addresses"].([]any); ok {
+		for _, item := range addresses {
+			if address, ok := item.(map[string]any); ok {
+				fix(address)
+			}
+		}
+	}
+	return changed
 }
 
 // Blocks until the process is killed or stdin closes.
