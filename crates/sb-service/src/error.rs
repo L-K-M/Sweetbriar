@@ -89,6 +89,11 @@ impl From<EngineError> for CoreError {
             EngineError::InvalidInput { field, message } => Self::InvalidInput { field, message },
             EngineError::Conflict { detail } => Self::Conflict { detail },
             EngineError::ResetRequired { generation } => Self::ResetRequired { generation },
+            // No new CoreError variant (that would reach the FFI and
+            // Swift); the reason names the condition for the reader.
+            EngineError::BodyUndecryptable => Self::Unavailable {
+                reason: "Couldn't decrypt this message".to_owned(),
+            },
             EngineError::Internal { detail } => Self::Internal { detail },
             EngineError::SearchParse { start, end, code } => Self::SearchParse {
                 start,

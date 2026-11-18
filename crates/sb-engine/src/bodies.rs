@@ -5,6 +5,11 @@ use std::sync::{Arc, Mutex};
 use crate::engine::Detached;
 use crate::{Engine, EngineError};
 use sb_resources::RenditionFiles;
+use sb_resources::proton_bodies::proton_open_state;
+
+/// The reason `publish_body` gives a message with no acquisition
+/// (spec/04 "Sync loop" step 3).
+const NOT_ACQUIRED: &str = "body is not acquired";
 
 pub use sb_resources::{AttachmentLease, BodyKind, BodyLease, RenderWarning, RenderWarningCode};
 
@@ -99,7 +104,7 @@ impl Engine {
     ) -> Result<BodyLease, EngineError> {
         let registry = self.leases().clone();
         let cleanup = self.detached();
-        let mut pending = self
+        let published = self
             .read_through(move |resources| {
                 let body = resources.publish_body(message_id, preferred)?;
                 registry.insert(&body.lease.lease_id, body.files);
@@ -110,9 +115,40 @@ impl Engine {
                     cleanup,
                 })
             })
-            .await?;
+            .await;
+        let mut pending = match published {
+            Ok(pending) => pending,
+            // An unacquired Proton message the user opened joins the
+            // queue and wakes the worker; one whose body couldn't be
+            // decrypted is distinguished from one not fetched yet.
+            Err(EngineError::Unavailable { reason }) if reason == NOT_ACQUIRED => {
+                return self.proton_open(message_id).await;
+            }
+            Err(error) => return Err(error),
+        };
         // No await between transferring authority and returning to the caller.
         Ok(pending.lease.take().expect("pending body owns its lease"))
+    }
+
+    /// Note an opened Proton message and answer its open (spec/04
+    /// "Acquire bodies"). A current body failure is the readable
+    /// "couldn't decrypt" condition; otherwise the message is queued
+    /// and the not-acquired answer is unchanged.
+    async fn proton_open(&self, message_id: i64) -> Result<BodyLease, EngineError> {
+        let state = self
+            .read_through(move |resources| resources.read(|tx| proton_open_state(tx, message_id)))
+            .await?;
+        let Some(state) = state else {
+            return Err(EngineError::unavailable(NOT_ACQUIRED));
+        };
+        if state.current_failure {
+            return Err(EngineError::BodyUndecryptable);
+        }
+        if let Some(provider_key) = state.provider_key {
+            self.proton_opened().note(&state.account_id, provider_key);
+            self.account_jobs().wake();
+        }
+        Err(EngineError::unavailable(NOT_ACQUIRED))
     }
 
     pub async fn open_attachment(

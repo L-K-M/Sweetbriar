@@ -92,6 +92,9 @@ pub struct Engine {
     /// Fires once the open-time Proton restore pass has finished, so a
     /// test can await it without polling.
     pub(crate) proton_restore_done: Arc<tokio::sync::Notify>,
+    /// The provider keys the user opened, per Proton account, most
+    /// recent first (spec/04 "Acquire bodies"). In memory only.
+    pub(crate) proton_opened: Arc<crate::proton_sync::ProtonOpened>,
     leases: Arc<crate::bodies::Leases>,
     search_memo: Arc<crate::search::SearchMemo>,
     /// Fires each draft-write point inside a draft command's write,
@@ -550,6 +553,33 @@ impl Engine {
         Self::open_on(data_root, spawn_open_thread, open).await
     }
 
+    /// Test seam: the fake Proton transport with the disposable
+    /// rendition cache body leases need (spec/11).
+    #[cfg(any(test, feature = "test-seams"))]
+    #[doc(hidden)]
+    pub async fn open_with_proton_and_cache(
+        data_root: &Path,
+        cache_root: &Path,
+        secrets: Arc<dyn sb_resources::SecretStore>,
+        base_url: String,
+        roots: Vec<sb_resources::CertificateDer<'static>>,
+        verifier: Arc<dyn sb_resources::ModulusSignatureVerifier + Send + Sync>,
+        clock: Arc<dyn sb_resources::Clock>,
+    ) -> Result<Self, EngineError> {
+        let transport = sb_resources::ProtonTransport::Explicit {
+            base_url,
+            trust: sb_resources::Trust::Roots(roots),
+            verifier,
+        };
+        let cache = cache_root.to_owned();
+        let open = Box::new(move |root: &Path| {
+            sb_resources::Resources::open_with_proton_and_cache(
+                root, &cache, clock, secrets, transport,
+            )
+        });
+        Self::open_on(data_root, spawn_open_thread, open).await
+    }
+
     #[cfg(test)]
     pub(crate) async fn open_with_cache_fs(
         data_root: &Path,
@@ -587,6 +617,7 @@ impl Engine {
                         proton_sign_ins: Arc::default(),
                         proton_sessions: Arc::default(),
                         proton_restore_done: Arc::new(tokio::sync::Notify::new()),
+                        proton_opened: Arc::default(),
                         leases: Arc::default(),
                         search_memo: Arc::default(),
                         #[cfg(test)]
@@ -644,6 +675,12 @@ impl Engine {
     /// The account worker registry; crate-visible for `account_sync`.
     pub(crate) fn account_jobs(&self) -> &Arc<crate::account_sync::AccountJobs> {
         &self.accounts
+    }
+
+    /// The per-account opened Proton message keys; crate-visible for
+    /// the body queue and the reader's open.
+    pub(crate) fn proton_opened(&self) -> &Arc<crate::proton_sync::ProtonOpened> {
+        &self.proton_opened
     }
 
     /// The import job registry; crate-visible for the `import` module.

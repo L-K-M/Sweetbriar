@@ -42,6 +42,7 @@ mod acquire;
 mod activation;
 mod catchup;
 mod drafts;
+pub mod proton_bodies;
 pub mod proton_sync;
 pub mod sync;
 pub use activation::{
@@ -73,10 +74,10 @@ pub use proton::{
 // (spec/01 rule 3): the engine keeps them in memory and maps errors
 // without depending on a leaf.
 pub use sb_proton::{
-    CertificateDer, Challenge, Client as ProtonClient, EventAction, EventBatch, EventId,
-    FinishedSignIn, Identity, KeyStore, Label, LabelKind, ListingAnchor,
-    MAX_PAGE_SIZE as PROTON_MAX_PAGE_SIZE, ModulusSignatureVerifier, ProtonError, SecretString,
-    Session, SignIn, SignInStep, Trust,
+    AttachmentMetadata, CertificateDer, Challenge, Client as ProtonClient, DecryptError,
+    EventAction, EventBatch, EventId, FinishedSignIn, FullMessage, Identity, KeyStore, Label,
+    LabelKind, ListingAnchor, MAX_PAGE_SIZE as PROTON_MAX_PAGE_SIZE, ModulusSignatureVerifier,
+    ProtonError, SecretBuffer, SecretString, Session, SignIn, SignInStep, Trust,
 };
 mod renditions;
 mod repair;
@@ -304,6 +305,37 @@ impl Resources {
         proton: ProtonTransport,
     ) -> Result<Self, StoreError> {
         Self::open_on_with_secrets(data_root, Arc::new(RealFs), clock, secrets, proton)
+    }
+
+    /// [`Resources::open_with_proton`] with the disposable rendition
+    /// cache body leases need (test seam; spec/11). The cache root is
+    /// validated like [`Resources::open_with_cache`]'s.
+    #[cfg(feature = "test-seams")]
+    pub fn open_with_proton_and_cache(
+        data_root: &Path,
+        cache_root: &Path,
+        clock: Arc<dyn Clock>,
+        secrets: Arc<dyn SecretStore>,
+        proton: ProtonTransport,
+    ) -> Result<Self, StoreError> {
+        let data =
+            bodies::resolved(&RealFs, data_root).map_err(|e| bodies::unavailable(e.to_string()))?;
+        let cache = bodies::resolved(&RealFs, cache_root)
+            .map_err(|e| bodies::unavailable(e.to_string()))?;
+        if cache.starts_with(&data) || data.starts_with(cache.join("renditions")) {
+            return Err(StoreError::InvalidInput {
+                message: "cache root must be outside the data root, and renditions must not contain the data root".into(),
+            });
+        }
+        let mut resources = Self::open_with_proton(data_root, clock, secrets, proton)?;
+        let fs = Arc::clone(&resources.fs);
+        let random = Arc::clone(&resources.random);
+        resources.renditions = match RenditionCache::open_on(cache_root, fs, random) {
+            Ok(cache) => Some(cache),
+            Err(RenditionError::Locked) => None,
+            Err(e) => return Err(bodies::cache_error(e)),
+        };
+        Ok(resources)
     }
 
     fn open_on(

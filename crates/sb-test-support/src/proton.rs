@@ -501,6 +501,9 @@ struct Account {
     next_refresh: bool,
     malformed_messages: bool,
     wrong_message_id: bool,
+    /// Message ids whose full-message request answers with the
+    /// account's damaged body fixture (plan M2.16c).
+    damaged_bodies: HashSet<String>,
 }
 
 impl Account {
@@ -808,6 +811,7 @@ impl FakeProtonServer {
                     next_refresh: false,
                     malformed_messages: false,
                     wrong_message_id: false,
+                    damaged_bodies: HashSet::new(),
                 },
             );
         }
@@ -1086,6 +1090,19 @@ impl FakeProtonServer {
     pub fn set_wrong_message_id(&self, username: &str, on: bool) {
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         account_mut(&mut state, username).wrong_message_id = on;
+    }
+
+    /// Makes `id`'s full-message request answer with the account's
+    /// damaged body fixture, or serve its real body again (plan
+    /// M2.16c). The fixture matches the default message body.
+    pub fn set_damaged_body(&self, username: &str, id: &str, on: bool) {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let account = account_mut(&mut state, username);
+        if on {
+            account.damaged_bodies.insert(id.to_owned());
+        } else {
+            account.damaged_bodies.remove(id);
+        }
     }
 
     /// The encrypted message body fixture and a damaged copy. Taken
@@ -1920,12 +1937,15 @@ fn handle_message(
     };
     let mut value = stored.to_json();
     value["Header"] = json!(&stored.header);
-    value["Body"] = json!(
+    let body = if account.damaged_bodies.contains(id) {
+        &account.damaged_body
+    } else {
         stored
             .encrypted_body
             .as_ref()
             .expect("the body is encrypted")
-    );
+    };
+    value["Body"] = json!(body);
     value["MIMEType"] = json!(&stored.mime_type);
     value["Attachments"] = Value::Array(
         stored

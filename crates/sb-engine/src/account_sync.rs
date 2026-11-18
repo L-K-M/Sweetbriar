@@ -122,10 +122,16 @@ impl AccountJobs {
         jobs.stopping = false;
     }
 
-    /// Wake every worker that waits for its next poll.
+    /// Wake every worker that waits for its next poll (a local mutation
+    /// or a body the user opened, spec/04 "Sync loop" step 2).
+    pub(crate) fn wake(&self) {
+        self.poll.send_replace(());
+    }
+
+    /// Wake every account worker between polls (test seam).
     #[cfg(any(test, feature = "test-seams"))]
     pub(crate) fn poll_now(&self) {
-        self.poll.send_replace(());
+        self.wake();
     }
 
     /// What a worker waits on between polls, besides its timer.

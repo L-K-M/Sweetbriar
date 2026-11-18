@@ -927,7 +927,7 @@ impl<R: Read> Read for Tee<R> {
 }
 
 /// Map a parse outcome onto the `d_message_summary` row (spec/02).
-pub(super) fn summary(outcome: &ParseOutcome) -> ImportSummary {
+pub(crate) fn summary(outcome: &ParseOutcome) -> ImportSummary {
     let parse_state = match outcome {
         ParseOutcome::Parsed(_) => ImportParseState::Parsed,
         ParseOutcome::Partial { .. } => ImportParseState::Partial,

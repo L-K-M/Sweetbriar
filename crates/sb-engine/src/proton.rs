@@ -63,9 +63,10 @@ pub(crate) struct SignIns {
 pub(crate) struct RestoredSession {
     pub session: Session,
     /// Unlocked for the account's lifetime; the sync steps (M2.15+)
-    /// read them, and the test seam observes them.
+    /// read them, and the test seam observes them. An `Arc`, so a body
+    /// fetch can copy the keys under the lock and decrypt off it.
     #[cfg_attr(not(any(test, feature = "test-seams")), allow(dead_code))]
-    pub keys: Box<dyn sb_resources::KeyStore>,
+    pub keys: Arc<dyn sb_resources::KeyStore>,
     /// Unlocks the keys again when an address, user or key event asks
     /// (spec/04 "Sync loop" step 2). In memory only, like the keys.
     pub key_passphrase: Arc<Secret>,
@@ -89,6 +90,7 @@ impl Engine {
         let conversations = Arc::clone(&self.proton_sign_ins);
         let sessions = Arc::clone(&self.proton_sessions);
         let jobs = Arc::clone(self.account_jobs());
+        let opened = Arc::clone(&self.proton_opened);
         self.command(move |worker| async move {
             let now = worker.resources().now().as_millis();
             let mut table = conversations.lock().await;
@@ -152,7 +154,13 @@ impl Engine {
                     .await?;
                     // Its listing starts, or a running worker takes the
                     // new session.
-                    crate::proton_sync::start(&worker, &jobs, &sessions, completed.clone());
+                    crate::proton_sync::start(
+                        &worker,
+                        &jobs,
+                        &sessions,
+                        &opened,
+                        completed.clone(),
+                    );
                     Ok(BeginProtonSignIn::Open {
                         sign_in_id,
                         state: ProtonSignInState::Complete {
@@ -195,6 +203,7 @@ impl Engine {
         let conversations = Arc::clone(&self.proton_sign_ins);
         let sessions = Arc::clone(&self.proton_sessions);
         let jobs = Arc::clone(self.account_jobs());
+        let opened = Arc::clone(&self.proton_opened);
         self.command(move |worker| async move {
             let now = worker.resources().now().as_millis();
             let mut table = conversations.lock().await;
@@ -242,7 +251,13 @@ impl Engine {
                         finished,
                     )
                     .await?;
-                    crate::proton_sync::start(&worker, &jobs, &sessions, completed.clone());
+                    crate::proton_sync::start(
+                        &worker,
+                        &jobs,
+                        &sessions,
+                        &opened,
+                        completed.clone(),
+                    );
                     Ok(ProtonSignInState::Complete {
                         account_id: completed,
                     })
@@ -286,6 +301,7 @@ impl Engine {
         let sessions = Arc::clone(&self.proton_sessions);
         let done = Arc::clone(&self.proton_restore_done);
         let jobs = Arc::clone(self.account_jobs());
+        let opened = Arc::clone(&self.proton_opened);
         let _ = self.spawn_worker(move |worker| async move {
             let accounts = worker.blocking(|resources| resources.read(accounts)).await;
             if let Ok(Ok(accounts)) = accounts {
@@ -298,7 +314,7 @@ impl Engine {
                     restore_proton_account(&worker, &sessions, &account.account_id).await;
                 }
             }
-            crate::proton_sync::start_all(&worker, &jobs, &sessions).await;
+            crate::proton_sync::start_all(&worker, &jobs, &sessions, &opened).await;
             done.notify_one();
         });
     }
@@ -525,7 +541,7 @@ pub(crate) async fn restore_proton_account(worker: &Worker, sessions: &Sessions,
                 account_id.to_owned(),
                 RestoredSession {
                     session,
-                    keys,
+                    keys: Arc::from(keys),
                     key_passphrase,
                 },
             );
@@ -655,7 +671,7 @@ async fn complete_conversation(
         completed.clone(),
         RestoredSession {
             session,
-            keys,
+            keys: Arc::from(keys),
             key_passphrase,
         },
     );

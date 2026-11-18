@@ -244,7 +244,8 @@ fn replace_proton_account(
     tx.execute(
         "UPDATE proton_accounts
          SET api_base_url = ?2, username = ?3, credential_ref = ?4,
-             password_mode = ?5, revision = revision + 1
+             password_mode = ?5, key_generation = key_generation + 1,
+             revision = revision + 1
          WHERE account_id = ?1",
         params![
             new.account_id,
@@ -904,8 +905,8 @@ mod events;
 mod listing;
 mod refresh;
 pub use bodies::{
-    MAX_PENDING_BODIES, PendingBody, ProtonBody, ProtonBodyCommit, commit_proton_body,
-    pending_proton_bodies,
+    MAX_PENDING_BODIES, PendingBody, ProtonBody, ProtonBodyCommit, ProtonOpenState,
+    commit_proton_body, pending_proton_bodies, proton_open_state,
 };
 pub use breaker::{BreakerResolution, Classified, resolve_breaker_event};
 pub use events::{AppliedEvents, EventChunk, ProtonChange, apply_event_chunk};
