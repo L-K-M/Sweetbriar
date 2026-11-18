@@ -322,3 +322,86 @@ fn a_chunk_off_the_cursor_or_before_a_complete_listing_is_refused() {
         Err(StoreError::InvalidInput { .. })
     ));
 }
+
+/// Whether the account still stands at `cursor`.
+fn at_cursor(store: &Store, cursor: &str) -> bool {
+    let cursor = cursor.to_owned();
+    reading(store, move |tx| {
+        Ok(proton_account(tx, ACCOUNT)?
+            .unwrap()
+            .event_cursor
+            .as_deref()
+            == Some(&cursor))
+    })
+}
+
+#[test]
+fn a_chunk_over_the_byte_budget_is_refused_whole() {
+    use crate::sync::MAX_HEADER_BATCH_BYTES;
+
+    let (_scratch, store) = complete_store("proton-events-bytes");
+    // Each change is charged its metadata: two of half the budget
+    // don't fit one write, and the first isn't kept either.
+    let padded = |id: &str| {
+        let mut listed = message(id, &["0", "5"], true);
+        let pad = "x".repeat(MAX_HEADER_BATCH_BYTES / 2);
+        listed.raw_metadata =
+            format!(r#"{{"v":1,"proton_metadata":{{"ID":"{id}"}},"pad":"{pad}"}}"#).into_bytes();
+        ProtonChange::Upsert(Box::new(listed))
+    };
+    let refused = apply(
+        &store,
+        "event-0",
+        None,
+        vec![padded("m2"), padded("m3")],
+        Some("event-1"),
+        4,
+    );
+    assert!(
+        matches!(refused, Err(StoreError::InvalidInput { .. })),
+        "{refused:?}"
+    );
+    assert!(occurrences(&store, "m2").is_empty());
+    assert!(at_cursor(&store, "event-0"));
+
+    // List rows are charged too: a delete of a message whose rows are
+    // past the budget is refused, and the message stays.
+    write(&store, |tx| {
+        tx.execute(
+            "UPDATE d_list_rows SET subject = ?1",
+            params!["s".repeat(MAX_HEADER_BATCH_BYTES)],
+        )
+        .unwrap();
+        Ok(())
+    })
+    .unwrap();
+    let refused = apply(
+        &store,
+        "event-0",
+        None,
+        vec![ProtonChange::Delete("m1".to_owned())],
+        Some("event-1"),
+        4,
+    );
+    assert!(
+        matches!(refused, Err(StoreError::InvalidInput { .. })),
+        "{refused:?}"
+    );
+    assert_eq!(
+        occurrences(&store, "m1"),
+        owned(&[("0", "present"), ("5", "present")])
+    );
+    assert!(at_cursor(&store, "event-0"));
+
+    // One change that fits applies, and the cursor moves.
+    apply(
+        &store,
+        "event-0",
+        None,
+        vec![padded("m2")],
+        Some("event-1"),
+        4,
+    )
+    .unwrap();
+    assert!(at_cursor(&store, "event-1"));
+}

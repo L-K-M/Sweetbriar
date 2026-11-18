@@ -115,6 +115,48 @@ fn accounts_list_in_sort_order() {
     );
 }
 
+/// A Proton account carries its sign-in username from its Proton row;
+/// other accounts carry none.
+#[test]
+fn a_proton_account_lists_its_username() {
+    use crate::proton::{NewProtonAccount, ProtonPasswordMode, insert_proton_account};
+
+    let (mut conn, _archive) = store();
+    let proton = "00000000-0000-4000-8000-0000000000c0";
+    let tx = conn.transaction().unwrap();
+    tx.execute(
+        "INSERT INTO accounts (account_id, kind, provider, display_name, state, sort_order,
+         created_at)
+         VALUES (?1, 'proton', 'proton_api', 'Proton', 'active', -1, 0)",
+        params![proton],
+    )
+    .unwrap();
+    insert_proton_account(
+        &tx,
+        &NewProtonAccount {
+            account_id: proton.to_owned(),
+            api_base_url: "https://mail.proton.me/api".to_owned(),
+            username: "owner".to_owned(),
+            proton_user_id: "user-c0".to_owned(),
+            credential_ref: "proton-c0".to_owned(),
+            password_mode: ProtonPasswordMode::Login,
+        },
+    )
+    .unwrap();
+    let listed = accounts(&tx).unwrap();
+    let usernames: Vec<(AccountKind, Option<&str>)> = listed
+        .iter()
+        .map(|account| (account.kind, account.username.as_deref()))
+        .collect();
+    assert_eq!(
+        usernames,
+        [
+            (AccountKind::Proton, Some("owner")),
+            (AccountKind::Local, None)
+        ]
+    );
+}
+
 /// Mailboxes list folders, then labels, then virtual ones, each by
 /// name, with their present and unread occurrences; an empty mailbox is
 /// listed with zeros, and the list names its generation (spec/07).

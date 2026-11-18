@@ -1,7 +1,7 @@
 //! The proptest model of Proton sync (plan M2.15c4b; spec/04-sync-proton
 //! "Sync loop", "Refresh" and "The breaker"). A server in memory adds,
-//! moves and deletes messages, keeps an event log and asks for
-//! refreshes. A driver calls the store as the engine's worker does
+//! moves and deletes messages, renames a label, keeps an event log and
+//! asks for refreshes. A driver calls the store as the engine's worker does
 //! (cursor first, labels, pages with checkpoints, withholding what a
 //! listing missed, then events in chunks), and is cut after any write,
 //! as a crash or a dropped connection would cut the worker; the next
@@ -56,7 +56,8 @@ fn label(key: &str, name: &str, kind: MailboxKind, role: Option<MailboxRole>) ->
     }
 }
 
-fn labels() -> Vec<ObservedLabel> {
+/// The account's labels, with the Travel label's current name.
+fn labels(travel: &str) -> Vec<ObservedLabel> {
     use MailboxKind::{Folder, Label, Virtual};
     vec![
         label(INBOX, "Inbox", Folder, Some(MailboxRole::Inbox)),
@@ -64,7 +65,7 @@ fn labels() -> Vec<ObservedLabel> {
         label(TRASH, "Trash", Folder, Some(MailboxRole::Trash)),
         label(SPAM, "Spam", Folder, Some(MailboxRole::Junk)),
         label(ALL_MAIL, "All Mail", Virtual, Some(MailboxRole::All)),
-        label(TRAVEL, "Travel", Label, None),
+        label(TRAVEL, travel, Label, None),
     ]
 }
 
@@ -112,6 +113,8 @@ impl Held {
 enum Logged {
     Upsert(String, Held),
     Delete(String),
+    /// A label changed: the worker lists the labels again.
+    Labels,
     /// Proton's `Refresh`: the response asks for a listing again.
     Refresh,
 }
@@ -120,6 +123,8 @@ enum Logged {
 /// whose cursor is a position in it.
 struct Server {
     messages: BTreeMap<String, Held>,
+    /// The Travel label's name.
+    travel: String,
     log: Vec<Logged>,
     next_id: usize,
     responses: Responses,
@@ -139,6 +144,7 @@ enum Responses {
 /// One events response.
 struct Response {
     changes: Vec<ProtonChange>,
+    labels: bool,
     refresh: bool,
     next: usize,
     more: bool,
@@ -156,6 +162,7 @@ impl Server {
     fn new(responses: Responses) -> Self {
         Self {
             messages: BTreeMap::new(),
+            travel: "Travel".to_owned(),
             log: Vec::new(),
             next_id: 0,
             responses,
@@ -172,6 +179,11 @@ impl Server {
         let id = format!("m{:03}", self.next_id);
         self.put(id.clone(), held);
         id
+    }
+
+    fn rename_travel(&mut self, name: String) {
+        self.travel = name;
+        self.log.push(Logged::Labels);
     }
 
     fn delete(&mut self, id: &str) {
@@ -215,6 +227,7 @@ impl Server {
         };
         let mut response = Response {
             changes: Vec::new(),
+            labels: false,
             refresh: false,
             next,
             more: next < self.log.len(),
@@ -225,6 +238,7 @@ impl Server {
                     .changes
                     .push(ProtonChange::Upsert(Box::new(held.listed(id)))),
                 Logged::Delete(id) => response.changes.push(ProtonChange::Delete(id.clone())),
+                Logged::Labels => response.labels = true,
                 Logged::Refresh => response.refresh = true,
             }
         }
@@ -302,7 +316,8 @@ impl Driver<'_> {
                 begin_listing(tx, ACCOUNT, &cursor, revision).map(|account| account.revision)
             })?;
         }
-        self.write(|tx| reconcile_proton_labels(tx, ACCOUNT, &labels()).map(drop))?;
+        let observed = labels(&self.server.travel);
+        self.write(move |tx| reconcile_proton_labels(tx, ACCOUNT, &observed).map(drop))?;
 
         loop {
             let page = self.server.page(after.as_ref());
@@ -347,6 +362,9 @@ impl Driver<'_> {
             };
             let response = self.server.events_since(position(&from));
             let next = cursor(response.next);
+            // Only a response's last chunk moves the cursor and the
+            // revision (`apply_event_chunk`), so every chunk is written
+            // under the revision read here, as the worker does.
             let revision = account.revision;
             if response.refresh {
                 self.write(move |tx| begin_listing(tx, ACCOUNT, &next, revision).map(drop))?;
@@ -357,20 +375,25 @@ impl Driver<'_> {
             }
             let mut chunks: Vec<Vec<ProtonChange>> =
                 response.changes.chunks(CHUNK).map(<[_]>::to_vec).collect();
+            // A response that only renamed a label still moves the
+            // cursor, in one empty chunk.
             if chunks.is_empty() {
                 chunks.push(Vec::new());
             }
+            // The labels, listed again, go with the first chunk.
+            let mut observed = response.labels.then(|| labels(&self.server.travel));
             let last = chunks.len() - 1;
             for (index, changes) in chunks.into_iter().enumerate() {
                 let from = from.clone();
                 let next = (index == last).then(|| next.clone());
+                let observed = observed.take();
                 self.write(move |tx| {
                     apply_event_chunk(
                         tx,
                         &EventChunk {
                             account_id: ACCOUNT,
                             from_cursor: &from,
-                            labels: None,
+                            labels: observed.as_deref(),
                             changes: &changes,
                             next_cursor: next.as_deref(),
                             expected_revision: revision,
@@ -430,9 +453,17 @@ fn sync(store: &Store, server: &Server) {
 }
 
 /// The user accepts every open or kept breaker event, until none is
-/// left: classifying what a pause held back can open another.
+/// left: classifying what a pause held back can open another. Each
+/// round applies at least one recorded delete, so the deletes recorded
+/// now bound the rounds; a broken store fails here instead of hanging.
 fn accept_all(store: &Store) {
-    while resolve(store, BreakerResolution::Accept) > 0 {}
+    let recorded = count(store, "SELECT COUNT(*) FROM proton_disappearances");
+    for _ in 0..=recorded {
+        if resolve(store, BreakerResolution::Accept) == 0 {
+            return;
+        }
+    }
+    panic!("accepting the breaker's events never settled");
 }
 
 /// Resolve the events `choice` applies to now (Accept: open and kept;
@@ -563,13 +594,26 @@ fn waiting(store: &Store) -> BTreeSet<String> {
     })
 }
 
-/// Listed, at the server's last cursor, and nothing paused.
+/// Listed, at the server's last cursor, with the server's labels, and
+/// nothing paused.
 fn assert_settled(store: &Store, server: &Server) {
     let account = reading(store, |tx| proton_account(tx, ACCOUNT)).expect("the account");
     assert_eq!(account.listing_state, ProtonListingState::Complete);
     assert_eq!(account.event_cursor, Some(cursor(server.log.len())));
     assert_eq!(account.pending_cursor, None);
     assert_eq!(account.listing_checkpoint, None);
+    let travel = reading(store, |tx| {
+        tx.query_row(
+            "SELECT group_concat(remote_name) FROM mailboxes WHERE provider_key = ?1",
+            params![TRAVEL],
+            |row| row.get::<_, String>(0),
+        )
+        .map_err(|e| crate::schema::classify(e, "read the label's name"))
+    });
+    assert_eq!(
+        travel, server.travel,
+        "one Travel mailbox, as the server names it"
+    );
     assert_eq!(
         count(
             store,
@@ -626,6 +670,17 @@ fn converge(store: &Store, server: &mut Server) {
     );
 }
 
+/// Cases for one property: `per_pr` in every pull request's run, times
+/// `SB_PROPTEST_SCALE` in the nightly run (spec/11 "Model").
+fn cases(per_pr: u32) -> u32 {
+    let scale = std::env::var("SB_PROPTEST_SCALE").map_or(1, |scale| {
+        scale
+            .parse::<u32>()
+            .expect("SB_PROPTEST_SCALE is a whole number")
+    });
+    per_pr * scale
+}
+
 fn small(n: usize) -> i64 {
     i64::try_from(n).expect("a small count")
 }
@@ -644,6 +699,8 @@ enum Op {
         seen: bool,
     },
     Delete(Index),
+    /// Rename the Travel label to one of a few names.
+    Rename(u8),
     /// Delete everything in one location: a mass delete or an emptied
     /// folder, or retention in Trash and Spam.
     Empty(usize),
@@ -667,6 +724,7 @@ fn op() -> impl Strategy<Value = Op> {
         2 => (any::<Index>(), location.clone(), any::<bool>(), any::<bool>())
             .prop_map(|(pick, location, travel, seen)| Op::Change { pick, location, travel, seen }),
         2 => any::<Index>().prop_map(Op::Delete),
+        1 => (0..3u8).prop_map(Op::Rename),
         1 => location.prop_map(Op::Empty),
         1 => Just(Op::Refresh),
         4 => (proptest::option::of(1..12usize), any::<bool>())
@@ -677,7 +735,7 @@ fn op() -> impl Strategy<Value = Op> {
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(24))]
+    #![proptest_config(ProptestConfig::with_cases(cases(24)))]
 
     /// Acceptance: server changes, refreshes and cuts converge, with
     /// no message lost or stored twice.
@@ -705,6 +763,7 @@ proptest! {
                         server.delete(&id);
                     }
                 }
+                Op::Rename(name) => server.rename_travel(format!("Travel {name}")),
                 Op::Empty(location) => {
                     let ids: Vec<String> = server
                         .messages
@@ -839,12 +898,13 @@ fn breaker_case(
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(12))]
+    #![proptest_config(ProptestConfig::with_cases(cases(12)))]
 
     /// Acceptance: `deleted` of a location's `held` messages gone in
     /// one events response, or missed by one listing, open the breaker
-    /// exactly when they empty the folder, are more than 25, or more
-    /// than half of at least 8, and never in Trash or Spam. Deletes
+    /// exactly when they empty the folder, are more than
+    /// `MAX_DISAPPEARANCES_PER_MAILBOX`, or more than half of at least
+    /// `MIN_MAILBOX_FOR_SHARE`, and never in Trash or Spam. Deletes
     /// open their own kind of event; a listing's misses open one
     /// `epoch_change`. Each case runs a folder and a retention location,
     /// by events and by a listing.
@@ -863,13 +923,31 @@ proptest! {
     }
 }
 
-/// Either side of each threshold, which random sizes rarely hit: half of
-/// a mailbox of 8, and 25 of a mailbox too large for the share rule.
+/// Either side of each threshold, which random sizes rarely hit: half
+/// of a mailbox of `MIN_MAILBOX_FOR_SHARE`, and
+/// `MAX_DISAPPEARANCES_PER_MAILBOX` of a mailbox too large for the
+/// share rule; folders emptied, also past the cap; and Trash, which
+/// never opens.
 #[test]
 fn the_breaker_opens_just_past_each_threshold() {
-    for (held, deleted) in [(7, 4), (8, 4), (8, 5), (60, 25), (60, 26)] {
+    let share = MIN_MAILBOX_FOR_SHARE;
+    let cap = MAX_DISAPPEARANCES_PER_MAILBOX;
+    let large = 2 * cap + 10;
+    let cases = [
+        (INBOX, share - 1, share / 2),
+        (INBOX, share, share / 2),
+        (INBOX, share, share / 2 + 1),
+        (INBOX, large, cap),
+        (INBOX, large, cap + 1),
+        (INBOX, 1, 1),
+        (INBOX, cap + 15, cap + 15),
+        (TRASH, 1, 1),
+        (TRASH, share, share / 2 + 1),
+        (TRASH, large, cap + 1),
+    ];
+    for (location, held, deleted) in cases {
         for by_listing in [false, true] {
-            breaker_case(INBOX, held, deleted, 1, by_listing).expect("the breaker's rule holds");
+            breaker_case(location, held, deleted, 1, by_listing).expect("the breaker's rule holds");
         }
     }
 }
