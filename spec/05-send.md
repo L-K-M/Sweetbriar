@@ -174,7 +174,9 @@ Otherwise the draft keeps its state.
       recorded on the attempt isn't repeated. A retry first reads the
       draft: an attachment it carries that the attempt didn't record
       (its reply was lost) is recorded when its name, type and size
-      match the next pending one; any other mismatch makes the attempt
+      (as the draft reports it, the measure the fake and the lane pin,
+      11) match the next pending one; a draft attachment with no
+      pending counterpart, and any other mismatch, makes the attempt
       `failed` before the send request, naming the draft.
    4. **Send.** Build one package per MIME type the recipients need
       (`text/html` for a Markdown draft, with the frozen `text/plain`
@@ -197,6 +199,10 @@ Otherwise the draft keeps its state.
       - **Any other reply,** and any connection loss or timeout once
         `send_requested_at` is committed, whether or not the request
         was fully written → `outcome_unknown`, recipients `unknown`.
+        Only a connection that was never established (refused, an
+        unresolved host, a failed TLS handshake) proves nothing was
+        sent: `send_requested_at` is cleared and the attempt stays
+        `queued`.
       - Proton sends a message as a whole, so there is no partial
         acceptance: `retry_rejected_recipients` (07) applies to generic
         accounts only.

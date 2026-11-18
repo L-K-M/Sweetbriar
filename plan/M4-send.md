@@ -111,6 +111,11 @@ inspectable Out Box. Unknown outcomes are never retried automatically.
     fake), and recorded uploads aren't repeated; an upload whose reply
     the fake dropped is recorded from the draft on retry, so the sent
     message carries each attachment once;
+  - a draft creation whose reply the fake dropped isn't reused: the
+    retry creates a second draft and sends with it, and the first stays
+    in Proton's Drafts (05 "Drafts on the server");
+  - a send whose connection was refused before it was established
+    stays `queued` with `send_requested_at` cleared, and is retried;
   - an account reconfiguration between queueing and submission keeps the
     attempt `queued` until `confirm_send_route`, and `cancel_send` works
     while it waits;
