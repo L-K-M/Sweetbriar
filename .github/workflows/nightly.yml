@@ -91,12 +91,13 @@ jobs:
           rustup show
           rustc -Vv
           echo "Runner image: ${ImageOS:-unknown} ${ImageVersion:-unknown}"
-      - name: Build the driver
-        working-directory: ci/go-proton-api
-        run: bash build.sh -o "$RUNNER_TEMP/gpa-driver"
+      # First, so a failed build still names its artifact.
       - name: Date the artifact
         id: date
         run: echo "date=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
+      - name: Build the driver
+        working-directory: ci/go-proton-api
+        run: bash build.sh -o "$RUNNER_TEMP/gpa-driver"
       - name: Start the driver and run the lane
         run: |
           set -euo pipefail
@@ -114,7 +115,11 @@ jobs:
             [ -s "$RUNNER_TEMP/gpa/line.json" ] && break
             sleep 1
           done
-          test -s "$RUNNER_TEMP/gpa/line.json"
+          test -s "$RUNNER_TEMP/gpa/line.json" || {
+            echo "the driver printed no line; its log:"
+            cat "$RUNNER_TEMP/gpa/driver.log"
+            exit 1
+          }
           SB_GPA_LANE="$RUNNER_TEMP/gpa/line.json" \
           SB_GPA_LANE_SUMMARY="$RUNNER_TEMP/gpa/summary.json" \
             cargo test -p sb-service --lib lane -- --nocapture \

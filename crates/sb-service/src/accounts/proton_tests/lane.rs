@@ -38,7 +38,7 @@ struct LaneLine {
     srp_salt_bytes: i64,
     label_counts: BTreeMap<String, i64>,
     messages: Vec<LaneMessage>,
-    request_log: Option<String>,
+    request_log: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -146,20 +146,20 @@ async fn the_development_server_lists_the_seeded_account_read_only() {
         .iter()
         .find(|message| message.labels.len() > 2)
         .expect("a multi-label message was seeded");
-    let db = scratch.path().join("store/state.sqlite");
+    let db = root.join("state.sqlite");
     let of_message = format!(
         "SELECT COUNT(*) FROM occurrences o
          JOIN logical_messages l ON l.message_id = o.message_id
          JOIN mailboxes m ON m.mailbox_id = o.mailbox_id
-         WHERE l.provider_key = '{}'",
-        multi.provider_key
+         WHERE l.provider_key = {}",
+        quoted(&multi.provider_key)
     );
     assert_eq!(
         count_rows(
             &db,
             &format!(
-                "SELECT COUNT(*) FROM logical_messages WHERE provider_key = '{}'",
-                multi.provider_key
+                "SELECT COUNT(*) FROM logical_messages WHERE provider_key = {}",
+                quoted(&multi.provider_key)
             )
         ),
         1,
@@ -170,7 +170,10 @@ async fn the_development_server_lists_the_seeded_account_read_only() {
         assert_eq!(
             count_rows(
                 &db,
-                &format!("{of_message} AND m.remote_name = '{name}' AND o.state = 'present'")
+                &format!(
+                    "{of_message} AND m.remote_name = {} AND o.state = 'present'",
+                    quoted(name)
+                )
             ),
             1,
             "{} has one present occurrence in {name}",
@@ -190,7 +193,7 @@ async fn the_development_server_lists_the_seeded_account_read_only() {
 
     // The driver logged every call after it printed the line: the
     // read-only suite sent no mutation.
-    let mutations = audit_requests(lane.request_log.as_deref());
+    let mutations = audit_requests(&lane.request_log);
     assert!(
         mutations.is_empty(),
         "the read-only suite mutated the server: {mutations:?}"
@@ -239,14 +242,14 @@ fn read_lane(path: impl AsRef<std::path::Path>) -> LaneLine {
 }
 
 /// Every call in the log that is not a read or a sign-in: the driver
-/// logs `METHOD<TAB>path` for each lane-phase request.
-fn audit_requests(path: Option<&str>) -> Vec<String> {
-    let Some(path) = path else {
-        return Vec::new();
-    };
-    let Ok(log) = fs::read_to_string(path) else {
-        return Vec::new();
-    };
+/// logs `METHOD<TAB>path` for each lane-phase request. A missing log,
+/// or one without reads, fails: an unaudited run must not pass.
+fn audit_requests(path: &str) -> Vec<String> {
+    let log = fs::read_to_string(path).expect("the driver's request log is readable");
+    assert!(
+        log.lines().any(|line| line.starts_with("GET\t")),
+        "the request log at {path} holds no reads, so it audited nothing"
+    );
     log.lines()
         .filter(|line| {
             let Some((method, path)) = line.split_once('\t') else {
@@ -258,4 +261,9 @@ fn audit_requests(path: Option<&str>) -> Vec<String> {
         })
         .map(str::to_owned)
         .collect()
+}
+
+/// `value` as an SQL string literal: label names are free text.
+fn quoted(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "''"))
 }
