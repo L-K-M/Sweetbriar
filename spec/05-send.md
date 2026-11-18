@@ -175,9 +175,10 @@ Otherwise the draft keeps its state.
       draft: an attachment it carries that the attempt didn't record
       (its reply was lost) is recorded when its name, type and size
       (as the draft reports it, the measure the fake and the lane pin,
-      11) match the next pending one; a draft attachment with no
-      pending counterpart, and any other mismatch, makes the attempt
-      `failed` before the send request, naming the draft.
+      11) match the next pending one; an unrecorded draft attachment
+      with no pending counterpart, and any other mismatch, makes the
+      attempt `failed` before the send request, naming the draft.
+      Attachments the attempt recorded are expected and pass.
    4. **Send.** Build one package per MIME type the recipients need
       (`text/html` for a Markdown draft, with the frozen `text/plain`
       for recipients who prefer it; `text/plain` for a plain draft):
@@ -200,7 +201,8 @@ Otherwise the draft keeps its state.
         `send_requested_at` is committed, whether or not the request
         was fully written → `outcome_unknown`, recipients `unknown`.
         Only a connection that was never established (refused, an
-        unresolved host, a failed TLS handshake) proves nothing was
+        unresolved host, a connect timeout, a failed TLS handshake)
+        proves nothing was
         sent: `send_requested_at` is cleared and the attempt stays
         `queued`.
       - Proton sends a message as a whole, so there is no partial
