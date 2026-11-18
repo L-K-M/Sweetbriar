@@ -241,6 +241,11 @@ Migration 31 adds `proton_disappearances.confirmed` and
 it completes, the stored messages it missed are recorded unconfirmed
 until a second listing or a delete event confirms them (04-sync-proton
 "Refresh").
+Migration 32 adds `acquisition_proton_fetch_identity`: a fetched
+body's `proton_fetch` source (`<message ID>#r<reconstruction version>`)
+is recorded once per account, so a replay finds it without a scan and a
+second row for the same reconstruction is refused (04-sync-proton
+"Reconstruction").
 
 **New tables:**
 
@@ -341,6 +346,9 @@ CREATE TABLE acquisition_sources (                    -- provenance, one row per
 CREATE UNIQUE INDEX acquisition_import_identity
   ON acquisition_sources(account_id, source_kind, source_ref)
   WHERE source_kind IN ('import_mbox','import_eml');
+CREATE UNIQUE INDEX acquisition_proton_fetch_identity -- migration 32: one source row per reconstruction
+  ON acquisition_sources(account_id, source_ref)
+  WHERE source_kind = 'proton_fetch';
 ```
 
 - An acquisition row is inserted **only after** its object is published
