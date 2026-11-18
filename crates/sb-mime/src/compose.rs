@@ -759,23 +759,23 @@ fn render_html(source: &str) -> Result<String, ComposeError> {
     let styled = rewrite_str(
         &html,
         RewriteStrSettings::new().append_element_content_handler(element!("*", |el| {
-            let Some(declarations) = stylesheet().get(&el.tag_name()) else {
+            let Some(declarations) = style_for(&el.tag_name()) else {
                 return Ok(());
             };
             let mut merged = el.get_attribute("style").unwrap_or_default();
             if !merged.is_empty() && !merged.ends_with(';') {
                 merged.push(';');
             }
-            merged.push_str(&declarations);
+            merged.push_str(declarations);
             el.set_attribute("style", &merged)?;
             Ok(())
         })),
     )
     .map_err(|_| ComposeError::InvalidInput("generated HTML style inlining failed"))?;
-    let body = stylesheet().get("body").unwrap_or_default();
+    let body = style_for("body").unwrap_or_default();
     Ok(format!(
         "<div style=\"{}\">{}</div>",
-        escape_attr(&body),
+        escape_attr(body),
         styled
     ))
 }
@@ -794,102 +794,36 @@ fn escape_attr(value: &str) -> String {
     out
 }
 
-// ---------------------------------------------------------------------------
-// Built-in stylesheet
-// ---------------------------------------------------------------------------
+/// The built-in stylesheet (spec/05 "Composing"), per tag, applied as
+/// inline `style=` attributes. Every property is one the reader's CSS
+/// policy keeps (spec/10 "Rendering"); the sanitizer checks again.
+/// One `tag|declarations` line per tag.
+const STYLES: &str = "\
+body|font-family:-apple-system, BlinkMacSystemFont, \"Segoe UI\", Helvetica, Arial, sans-serif;font-size:16px;line-height:1.5;color:#1f2328;\n\
+p|margin:0 0 1em 0;\n\
+h1|font-weight:600;line-height:1.3;margin:1.2em 0 0.5em 0;font-size:1.5em;\n\
+h2|font-weight:600;line-height:1.3;margin:1.2em 0 0.5em 0;font-size:1.3em;\n\
+h3|font-weight:600;line-height:1.3;margin:1.2em 0 0.5em 0;font-size:1.15em;\n\
+h4|font-weight:600;line-height:1.3;margin:1.2em 0 0.5em 0;font-size:1em;\n\
+h5|font-weight:600;line-height:1.3;margin:1.2em 0 0.5em 0;font-size:1em;\n\
+h6|font-weight:600;line-height:1.3;margin:1.2em 0 0.5em 0;font-size:1em;\n\
+blockquote|margin:0 0 1em 1em;padding-left:0.75em;border-left:2px solid #cccccc;color:#555555;\n\
+pre|font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;font-size:0.9em;background-color:#f6f8fa;padding:0.75em;white-space:pre-wrap;\n\
+code|font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;font-size:0.95em;\n\
+a|color:#0b57d0;text-decoration:underline;\n\
+img|max-width:100%;height:auto;\n\
+ul|margin:0 0 1em 0;padding-left:1.5em;\n\
+ol|margin:0 0 1em 0;padding-left:1.5em;\n\
+li|margin:0.15em 0;\n\
+hr|border:0;border-top:1px solid #cccccc;margin:1em 0;\n\
+table|border-collapse:collapse;margin:0 0 1em 0;\n\
+th|border:1px solid #cccccc;padding:0.35em 0.6em;background-color:#f0f0f0;font-weight:600;\n\
+td|border:1px solid #cccccc;padding:0.35em 0.6em;";
 
-struct Stylesheet {
-    /// `(tag, declarations)` in stylesheet order.
-    rules: Vec<(String, String)>,
-}
-
-impl Stylesheet {
-    fn parse(css: &str) -> Self {
-        let mut rules = Vec::new();
-        let mut rest = css;
-        while let Some(open) = rest.find('{') {
-            let selector = rest[..open].trim();
-            let Some(relative) = rest[open..].find('}') else {
-                break;
-            };
-            let close = open + relative;
-            let declarations = sanitize_declarations(&rest[open + 1..close]);
-            if !declarations.is_empty() {
-                for part in selector.split(',') {
-                    let tag = part.trim();
-                    if is_tag_selector(tag) {
-                        rules.push((tag.to_string(), declarations.clone()));
-                    }
-                }
-            }
-            rest = &rest[close + 1..];
-        }
-        Self { rules }
-    }
-
-    fn get(&self, tag: &str) -> Option<String> {
-        let mut merged = String::new();
-        let mut found = false;
-        for (rule, declarations) in &self.rules {
-            if rule == tag {
-                merged.push_str(declarations);
-                found = true;
-            }
-        }
-        found.then_some(merged)
-    }
-}
-
-fn stylesheet() -> &'static Stylesheet {
-    static STYLESHEET: std::sync::OnceLock<Stylesheet> = std::sync::OnceLock::new();
-    STYLESHEET.get_or_init(|| Stylesheet::parse(include_str!("compose/stylesheet.css")))
-}
-
-fn is_tag_selector(selector: &str) -> bool {
-    !selector.is_empty()
-        && selector
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-')
-}
-
-/// Keep only declarations the reader's CSS policy allows (spec/10
-/// "Rendering"), so the built-in stylesheet cannot smuggle a property
-/// the reader would strip.
-fn sanitize_declarations(body: &str) -> String {
-    let mut out = String::new();
-    for declaration in body.split(';') {
-        let Some((name, value)) = declaration.split_once(':') else {
-            continue;
-        };
-        let name = name.trim().to_ascii_lowercase();
-        let value = value.trim();
-        if value.is_empty() || !is_allowed_property(&name) {
-            continue;
-        }
-        out.push_str(&name);
-        out.push(':');
-        out.push_str(value);
-        out.push(';');
-    }
-    out
-}
-
-/// The reader's CSS policy allows these plus the `margin-*`, `padding-*`
-/// and `border-*` sides and parts (spec/10 "Rendering").
-const ALLOWED_PROPERTIES: &str = "color background-color font-family font-size font-weight \
-font-style text-align text-decoration text-indent line-height vertical-align \
-white-space list-style-type margin padding border border-collapse border-spacing \
-width min-width max-width height background-image";
-
-fn is_allowed_property(name: &str) -> bool {
-    ALLOWED_PROPERTIES
-        .split_whitespace()
-        .any(|property| property == name)
-        || ["margin", "padding", "border"].iter().any(|base| {
-            name.strip_prefix(base)
-                .and_then(|rest| rest.strip_prefix('-'))
-                .is_some()
-        })
+fn style_for(tag: &str) -> Option<&'static str> {
+    STYLES
+        .lines()
+        .find_map(|line| line.strip_prefix(tag)?.strip_prefix('|'))
 }
 
 // ---------------------------------------------------------------------------
