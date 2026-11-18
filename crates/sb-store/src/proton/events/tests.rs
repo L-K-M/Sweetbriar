@@ -179,6 +179,165 @@ fn owned(rows: &[(&str, &str)]) -> Vec<(String, String)> {
         .collect()
 }
 
+fn count(store: &Store, sql: &'static str) -> i64 {
+    reading(store, |tx| {
+        Ok(tx.query_row(sql, [], |row| row.get(0)).unwrap())
+    })
+}
+
+#[test]
+fn reread_metadata_moves_labels_without_the_cursor_or_breaker() {
+    let (_scratch, store) = complete_store("proton-reread");
+    // A withheld delete, which the re-read must leave alone: it
+    // records nothing and forgets nothing (spec/04 step 3).
+    write(&store, |tx| {
+        let message_id: i64 = tx
+            .query_row(
+                "SELECT message_id FROM logical_messages WHERE provider_key = 'm1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        tx.execute(
+            "INSERT INTO proton_disappearances
+             (message_id, account_id, pass_cursor, mailbox_id, confirmed)
+             VALUES (?1, ?2, 'event-0', NULL, 1)",
+            params![message_id, ACCOUNT],
+        )
+        .unwrap();
+        Ok(())
+    })
+    .unwrap();
+
+    let mut moved = message("m1", &["3", "5"], false);
+    moved.columns.subject = Some("Re-read".to_owned());
+    let stats = write(&store, move |tx| {
+        apply_reread_message(
+            tx,
+            &RereadMessage {
+                account_id: ACCOUNT,
+                message: &moved,
+                expected_revision: 4,
+            },
+            now(),
+        )
+    })
+    .unwrap();
+    assert_eq!(
+        stats,
+        ListedPageStats {
+            new_messages: 0,
+            inserted: 1,
+            refreshed: 1,
+            vanished: 1
+        }
+    );
+    assert_eq!(
+        occurrences(&store, "m1"),
+        owned(&[("0", "vanished"), ("3", "present"), ("5", "present")])
+    );
+    let (subject, seen): (String, i64) = reading(&store, |tx| {
+        Ok(tx
+            .query_row(
+                "SELECT h.subject, MIN(o.f_seen) FROM message_headers h
+                 JOIN logical_messages l ON l.message_id = h.message_id
+                 JOIN occurrences o ON o.message_id = l.message_id AND o.state = 'present'
+                 WHERE l.provider_key = 'm1'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap())
+    });
+    assert_eq!((subject.as_str(), seen), ("Re-read", 1));
+
+    // The cursor, the revision and the breaker are untouched.
+    let account = reading(&store, |tx| Ok(proton_account(tx, ACCOUNT)?.unwrap()));
+    assert_eq!(account.event_cursor.as_deref(), Some("event-0"));
+    assert_eq!(account.revision, 4);
+    assert_eq!(count(&store, "SELECT COUNT(*) FROM breaker_events"), 0);
+    assert_eq!(
+        count(&store, "SELECT COUNT(*) FROM proton_disappearances"),
+        1
+    );
+}
+
+#[test]
+fn reread_metadata_is_refused_unless_the_listing_is_complete() {
+    let (_scratch, store) = complete_store("proton-reread-refused");
+    let stale = {
+        let message = message("m2", &["0", "5"], true);
+        write(&store, move |tx| {
+            apply_reread_message(
+                tx,
+                &RereadMessage {
+                    account_id: ACCOUNT,
+                    message: &message,
+                    expected_revision: 3,
+                },
+                now(),
+            )
+        })
+    };
+    assert!(
+        matches!(stale, Err(StoreError::Conflict { .. })),
+        "{stale:?}"
+    );
+
+    write(&store, |tx| {
+        begin_listing(tx, ACCOUNT, "event-5", 4).map(drop)
+    })
+    .unwrap();
+    let listing = {
+        let message = message("m2", &["0", "5"], true);
+        write(&store, move |tx| {
+            apply_reread_message(
+                tx,
+                &RereadMessage {
+                    account_id: ACCOUNT,
+                    message: &message,
+                    expected_revision: 5,
+                },
+                now(),
+            )
+        })
+    };
+    assert!(
+        matches!(listing, Err(StoreError::Conflict { .. })),
+        "{listing:?}"
+    );
+    assert!(occurrences(&store, "m2").is_empty());
+}
+
+#[test]
+fn reread_metadata_pays_the_write_budget() {
+    use crate::sync::MAX_HEADER_BATCH_BYTES;
+
+    let (_scratch, store) = complete_store("proton-reread-budget");
+    let mut padded = message("m1", &["0", "5"], true);
+    let pad = "x".repeat(MAX_HEADER_BATCH_BYTES);
+    padded.raw_metadata =
+        format!(r#"{{"v":1,"proton_metadata":{{"ID":"m1"}},"pad":"{pad}"}}"#).into_bytes();
+    let refused = write(&store, move |tx| {
+        apply_reread_message(
+            tx,
+            &RereadMessage {
+                account_id: ACCOUNT,
+                message: &padded,
+                expected_revision: 4,
+            },
+            now(),
+        )
+    });
+    assert!(
+        matches!(refused, Err(StoreError::InvalidInput { .. })),
+        "{refused:?}"
+    );
+    assert_eq!(
+        occurrences(&store, "m1"),
+        owned(&[("0", "present"), ("5", "present")])
+    );
+}
+
 #[test]
 fn changes_follow_the_metadata_and_labels_and_the_cursor_moves() {
     let (_scratch, store) = complete_store("proton-events-apply");

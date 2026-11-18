@@ -460,13 +460,71 @@ pub(super) fn store_message(
     stats: &mut ListedPageStats,
     changed: &mut BTreeSet<i64>,
 ) -> Result<i64, StoreError> {
+    let message_id = find_or_create_message(tx, account_id, message, now, stats)?;
+    super::breaker::reappeared(tx, message_id, now)?;
+    let mut writes = OccurrenceWrites { stats, changed };
+    store_occurrences(
+        tx,
+        message_id,
+        account_id,
+        message,
+        mailboxes,
+        now,
+        &mut writes,
+    )
+}
+
+/// `store_message` without the breaker's reappearance: a message's
+/// re-read metadata after a refused body updates its occurrences but
+/// leaves `proton_disappearances` alone (plan M2.16d).
+pub(super) fn store_reread_message(
+    tx: &Transaction,
+    account_id: &str,
+    message: &ListedMessage,
+    mailboxes: &HashMap<String, i64>,
+    now: Timestamp,
+    stats: &mut ListedPageStats,
+    changed: &mut BTreeSet<i64>,
+) -> Result<i64, StoreError> {
+    let message_id = find_or_create_message(tx, account_id, message, now, stats)?;
+    let mut writes = OccurrenceWrites { stats, changed };
+    store_occurrences(
+        tx,
+        message_id,
+        account_id,
+        message,
+        mailboxes,
+        now,
+        &mut writes,
+    )
+}
+
+/// The writes one message's occurrences make: the page's stats and
+/// the list rows its occurrences changed.
+struct OccurrenceWrites<'a> {
+    stats: &'a mut ListedPageStats,
+    changed: &'a mut BTreeSet<i64>,
+}
+
+/// The occurrence half of [`store_message`]: the message's labels
+/// become its current occurrences, a lost label's occurrence becomes
+/// `vanished`, and its headers and list rows follow.
+fn store_occurrences(
+    tx: &Transaction,
+    message_id: i64,
+    account_id: &str,
+    message: &ListedMessage,
+    mailboxes: &HashMap<String, i64>,
+    now: Timestamp,
+    writes: &mut OccurrenceWrites<'_>,
+) -> Result<i64, StoreError> {
     if !message.raw_metadata.starts_with(METADATA_PREFIX) {
         return Err(invalid(
             "listed metadata must be the canonical proton_metadata JSON",
         ));
     }
-    let message_id = find_or_create_message(tx, account_id, message, now, stats)?;
-    super::breaker::reappeared(tx, message_id, now)?;
+    let stats = &mut *writes.stats;
+    let changed = &mut *writes.changed;
     let wanted: BTreeSet<i64> = message
         .label_ids
         .iter()

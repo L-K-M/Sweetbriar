@@ -16,7 +16,7 @@ use sb_types::time::Timestamp;
 use super::breaker::{self, Classified};
 use super::listing::{
     ListedMessage, ListedPageStats, ObservedLabel, invalid, live_mailboxes,
-    reconcile_proton_labels, store_message,
+    reconcile_proton_labels, store_message, store_reread_message,
 };
 use super::{ProtonListingState, require_account, require_revision, set_event_cursor};
 use crate::sync::{MAX_HEADER_BATCH, MAX_HEADER_BATCH_BYTES};
@@ -149,6 +149,66 @@ pub fn apply_event_chunk(
         None => account.revision,
     };
     Ok(applied)
+}
+
+/// One message's re-read metadata, as the refused body's re-read
+/// returns it (plan M2.16d).
+pub struct RereadMessage<'a> {
+    pub account_id: &'a str,
+    pub message: &'a ListedMessage,
+    /// The account row's revision the metadata was read under.
+    pub expected_revision: i64,
+}
+
+/// Apply one message's re-read metadata (spec/04 "Sync loop" step
+/// 3): its occurrences follow its labels, as an event's change would,
+/// and its headers and list rows refresh. The event cursor doesn't
+/// move, the breaker doesn't count it, and `proton_disappearances` is
+/// left alone; only a delete event or a complete listing removes a
+/// message. Refused unless the account's listing is complete and
+/// still at `expected_revision`; the write pays the same budget as a
+/// listed page.
+pub fn apply_reread_message(
+    tx: &Transaction,
+    reread: &RereadMessage<'_>,
+    now: Timestamp,
+) -> Result<ListedPageStats, StoreError> {
+    let account = require_account(tx, reread.account_id)?;
+    require_revision(&account, reread.expected_revision)?;
+    if account.listing_state != ProtonListingState::Complete {
+        return Err(StoreError::conflict(
+            "the Proton account is not done listing",
+        ));
+    }
+    let mailboxes = live_mailboxes(tx, reread.account_id)?;
+    let mut remaining = MAX_HEADER_BATCH_BYTES;
+    remaining = remaining
+        .checked_sub(reread.message.raw_metadata.len() + 1024)
+        .ok_or_else(|| invalid("a re-read message exceeds the write budget"))?;
+    let mut stats = ListedPageStats::default();
+    let mut changed = BTreeSet::new();
+    store_reread_message(
+        tx,
+        reread.account_id,
+        reread.message,
+        &mailboxes,
+        now,
+        &mut stats,
+        &mut changed,
+    )?;
+    if list_rows::refresh_priced(tx, &changed, &mut |bytes| {
+        remaining = remaining
+            .checked_sub(bytes)
+            .ok_or_else(|| invalid("a re-read message's list rows exceed the write budget"))?;
+        Ok(())
+    })? {
+        list_rows::advance_generation(tx)?;
+    }
+    if stats.new_messages > 0 {
+        crate::threads::note_new_messages(tx)?;
+        crate::seen::note_inputs(tx)?;
+    }
+    Ok(stats)
 }
 
 #[cfg(test)]

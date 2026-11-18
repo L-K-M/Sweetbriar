@@ -507,10 +507,14 @@ struct Account {
     /// Message ids whose full-message request answers with the
     /// account's damaged body fixture (plan M2.16c).
     damaged_bodies: HashSet<String>,
-    /// Message ids `GET /mail/v4/messages` doesn't list, so a by-id
-    /// metadata read answers none while the full-message read still
-    /// serves them (plan M2.16d's empty re-read).
+    /// Message ids a by-id metadata read (`ID` filter) answers none
+    /// for, while the unfiltered listing and the full-message read
+    /// still serve them (plan M2.16d's empty re-read).
     metadata_hidden: HashSet<String>,
+    /// Message ids whose by-id metadata answer carries these labels
+    /// instead of the stored ones, as metadata changed since the
+    /// listing (plan M2.16d's applied re-read).
+    metadata_answer_labels: HashMap<String, Vec<String>>,
 }
 
 impl Account {
@@ -821,6 +825,7 @@ impl FakeProtonServer {
                     wrong_metadata_id: false,
                     damaged_bodies: HashSet::new(),
                     metadata_hidden: HashSet::new(),
+                    metadata_answer_labels: HashMap::new(),
                 },
             );
         }
@@ -1108,9 +1113,9 @@ impl FakeProtonServer {
         account_mut(&mut state, username).wrong_metadata_id = on;
     }
 
-    /// Makes `GET /mail/v4/messages` skip `id`, so a by-id metadata
-    /// read answers none, or list it again (plan M2.16d). The
-    /// full-message read still serves it.
+    /// Makes a by-id metadata read answer none for `id`, or answer it
+    /// again (plan M2.16d). The unfiltered listing and the
+    /// full-message read still serve it.
     pub fn set_metadata_hidden(&self, username: &str, id: &str, on: bool) {
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         let account = account_mut(&mut state, username);
@@ -1119,6 +1124,18 @@ impl FakeProtonServer {
         } else {
             account.metadata_hidden.remove(id);
         }
+    }
+
+    /// Makes a by-id metadata read answer `labels` for `id`, as
+    /// metadata that moved since the listing (plan M2.16d). The
+    /// unfiltered listing is unaffected.
+    pub fn set_metadata_answer_labels(&self, username: &str, id: &str, labels: &[&str]) {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let account = account_mut(&mut state, username);
+        account.metadata_answer_labels.insert(
+            id.to_owned(),
+            labels.iter().map(|label| (*label).to_owned()).collect(),
+        );
     }
 
     /// Makes `id`'s full-message request answer with the account's
@@ -1871,15 +1888,12 @@ fn handle_messages(
         .accounts
         .get(&username)
         .expect("the session's account exists");
-    let mut ordered: Vec<&FakeMessage> = account
-        .messages
-        .iter()
-        .filter(|message| !account.metadata_hidden.contains(&message.id))
-        .collect();
+    let mut ordered: Vec<&FakeMessage> = account.messages.iter().collect();
     // The by-id read (research `mail-sync.md` §3): only the asked
     // message, or none.
     if let Some(id) = &id_filter {
-        ordered.retain(|message| &message.id == id);
+        ordered
+            .retain(|message| &message.id == id && !account.metadata_hidden.contains(&message.id));
     }
     ordered.sort_by(|a, b| b.time.cmp(&a.time).then_with(|| b.id.cmp(&a.id)));
     if !desc {
@@ -1907,19 +1921,26 @@ fn handle_messages(
             if account.malformed_messages {
                 value["ID"] = json!(7);
             }
+            // The by-id read's changed labels (plan M2.16d): metadata
+            // that moved since the listing.
+            if id_filter.is_some()
+                && let Some(labels) = account.metadata_answer_labels.get(&message.id)
+            {
+                value["LabelIDs"] = json!(labels);
+            }
             // The by-id read's wrong-id answer (plan M2.16d): a
             // well-typed id that differs from the asked one.
-            if let (Some(asked), true) = (&id_filter, account.wrong_metadata_id) {
-                if message.id == *asked {
-                    value["ID"] = json!(
-                        account
-                            .messages
-                            .iter()
-                            .find(|other| other.id != message.id)
-                            .map(|other| other.id.clone())
-                            .unwrap_or_else(|| format!("{asked}-other"))
-                    );
-                }
+            if let (Some(asked), true) = (&id_filter, account.wrong_metadata_id)
+                && message.id == *asked
+            {
+                value["ID"] = json!(
+                    account
+                        .messages
+                        .iter()
+                        .find(|other| other.id != message.id)
+                        .map(|other| other.id.clone())
+                        .unwrap_or_else(|| format!("{asked}-other"))
+                );
             }
             value
         })

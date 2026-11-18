@@ -909,7 +909,9 @@ pub use bodies::{
     commit_proton_body, pending_proton_bodies, proton_open_state,
 };
 pub use breaker::{BreakerResolution, Classified, resolve_breaker_event};
-pub use events::{AppliedEvents, EventChunk, ProtonChange, apply_event_chunk};
+pub use events::{
+    AppliedEvents, EventChunk, ProtonChange, RereadMessage, apply_event_chunk, apply_reread_message,
+};
 pub use listing::{
     ListedMessage, ListedPage, ListedPageStats, MailboxCoverage, ObservedLabel, ProtonCoverage,
     commit_listed_page, finish_listing, proton_coverage, reconcile_proton_labels,

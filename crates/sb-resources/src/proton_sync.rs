@@ -10,9 +10,9 @@ use sb_store::Timestamp;
 pub use sb_store::{
     AppliedEvents, BreakerResolution, Classified, EventChunk, ListedMessage, ListedPage,
     ListedPageStats, MailboxCoverage, ObservedLabel, ProtonChange, ProtonCoverage,
-    ProtonListingState, apply_event_chunk, begin_listing, commit_listed_page, finish_listing,
-    proton_coverage, reconcile_proton_labels, refresh_proton_identities, resolve_breaker_event,
-    withhold_unlisted,
+    ProtonListingState, RereadMessage, apply_event_chunk, apply_reread_message, begin_listing,
+    commit_listed_page, finish_listing, proton_coverage, reconcile_proton_labels,
+    refresh_proton_identities, resolve_breaker_event, withhold_unlisted,
 };
 
 use crate::sync::{HeaderColumns, SyncedFlags};
