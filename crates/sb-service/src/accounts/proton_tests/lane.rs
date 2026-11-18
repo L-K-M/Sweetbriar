@@ -245,7 +245,8 @@ fn read_lane(path: impl AsRef<std::path::Path>) -> LaneLine {
 /// logs `METHOD<TAB>path` for each lane-phase request. A missing log,
 /// or one without reads, fails: an unaudited run must not pass.
 fn audit_requests(path: &str) -> Vec<String> {
-    let log = fs::read_to_string(path).expect("the driver's request log is readable");
+    let log = fs::read_to_string(path)
+        .unwrap_or_else(|error| panic!("the driver's request log {path} is unreadable: {error}"));
     assert!(
         log.lines().any(|line| line.starts_with("GET\t")),
         "the request log at {path} holds no reads, so it audited nothing"
