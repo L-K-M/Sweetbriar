@@ -3292,6 +3292,7 @@ dependencies = [
  "lol_html",
  "mail-parser",
  "markup5ever",
+ "proptest",
  "sb-types",
  "sha2 0.11.1",
  "url",

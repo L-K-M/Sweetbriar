@@ -17,6 +17,7 @@ mod limits;
 mod mbox;
 mod outcome;
 mod reader;
+mod reconstruct;
 mod render;
 mod render_css;
 mod rendition;
@@ -43,6 +44,10 @@ pub use outcome::{ParseFailure, ParseOutcome, ParseWarning};
 pub use reader::{
     AttachmentDescriptor, AttachmentError, PartId, RelatedResource, RenderInput, RenderWarning,
     RenderWarningCode, SelectedBody, extract_attachment, render_input,
+};
+pub use reconstruct::{
+    Disposition, RECONSTRUCTION_VERSION, ReconstructError, ReconstructInput, ReconstructPart,
+    reconstruct,
 };
 pub use render::{HtmlSanitizeError, LinkRecord, LinkWarning, SanitizedHtml, sanitize_html};
 pub use rendition::{MAX_RENDITION_BYTES, Manifest, RenderKind, Rendition, Resource, render};

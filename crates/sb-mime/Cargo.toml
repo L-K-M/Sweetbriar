@@ -39,3 +39,6 @@ html5ever = "=0.40.1"
 insta = "=1.49.0"
 # Pin the exact decoded fixture bytes independently of MIME summaries.
 sha2 = { version = "=0.11.1", default-features = false }
+# M2.16a: the reconstruction determinism proptest (already in the
+# workspace through sb-store).
+proptest = { version = "=1.12.0", default-features = false, features = ["std"] }
