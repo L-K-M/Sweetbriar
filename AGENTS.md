@@ -158,6 +158,10 @@ suite exists. The `proptest` job runs the Proton sync model with
 `SB_PROPTEST_SCALE=20` times the cases a pull request runs. M1.1
 enables the 60-second Linux MIME fuzz run; reproduction and its
 isolated nightly toolchain are documented in `fuzz/README.md`.
+M2.17's `go-proton-api` job runs the read-only sync lane against Proton's
+own development server; locally, build and start `ci/go-proton-api`
+(`go build -o /tmp/gpa-driver . && /tmp/gpa-driver`), then run
+`SB_GPA_LANE=<its JSON line> cargo test -p sb-service --lib lane`.
 Tags `v*` run the Rust CI gate and the same macOS package
 checks before publishing the DMG. The tag must match the workspace
 version; keep the README and XcodeGen marketing version in step.

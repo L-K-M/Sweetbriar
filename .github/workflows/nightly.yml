@@ -11,6 +11,8 @@ on:
       - '.github/workflows/nightly.yml'
       - '.github/workflows/release.yml'
       - 'apps/macos/project.yml'
+      - 'ci/go-proton-api/**'
+      - 'crates/sb-service/src/accounts/proton_tests/lane.rs'
       - 'apps/macos/Tests/SweetbriarUITests/**'
       - 'crates/sb-mime/**'
       - 'crates/sb-store/Cargo.toml'
@@ -67,6 +69,68 @@ jobs:
           name: proptest-regressions
           path: crates/sb-store/proptest-regressions
           if-no-files-found: ignore
+
+  # M2.17: the read-only sync suite against Proton's own development
+  # server. The driver seeds one synthetic account; the lane test is
+  # gated on its JSON line.
+  go-proton-api:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: 'true'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: ci/go-proton-api/go.mod
+      - name: Log toolchains and image
+        run: |
+          go version
+          rustup show
+          rustc -Vv
+          echo "Runner image: ${ImageOS:-unknown} ${ImageVersion:-unknown}"
+      - name: Build the driver
+        working-directory: ci/go-proton-api
+        run: go build -o "$RUNNER_TEMP/gpa-driver" .
+      - name: Date the artifact
+        id: date
+        run: echo "date=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
+      - name: Start the driver and run the lane
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/gpa"
+          mkfifo "$RUNNER_TEMP/gpa/stdin"
+          "$RUNNER_TEMP/gpa-driver" -request-log "$RUNNER_TEMP/gpa/requests.log" \
+            < "$RUNNER_TEMP/gpa/stdin" > "$RUNNER_TEMP/gpa/line.json" \
+            2> "$RUNNER_TEMP/gpa/driver.log" &
+          driver=$!
+          # Read-write so opening the FIFO never blocks; the driver's
+          # stdin stays open until the trap kills it.
+          exec 3<>"$RUNNER_TEMP/gpa/stdin"
+          trap 'kill "$driver" 2>/dev/null || true' EXIT
+          for _ in $(seq 1 120); do
+            [ -s "$RUNNER_TEMP/gpa/line.json" ] && break
+            sleep 1
+          done
+          test -s "$RUNNER_TEMP/gpa/line.json"
+          SB_GPA_LANE="$RUNNER_TEMP/gpa/line.json" \
+          SB_GPA_LANE_SUMMARY="$RUNNER_TEMP/gpa/summary.json" \
+            cargo test -p sb-service --lib lane -- --nocapture \
+            2>&1 | tee "$RUNNER_TEMP/gpa/test.log"
+      - name: Upload the lane artifact
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: go-proton-api-${{ steps.date.outputs.date }}
+          path: |
+            ${{ runner.temp }}/gpa/line.json
+            ${{ runner.temp }}/gpa/summary.json
+            ${{ runner.temp }}/gpa/requests.log
+            ${{ runner.temp }}/gpa/test.log
+            ${{ runner.temp }}/gpa/driver.log
+          if-no-files-found: warn
 
   fuzz:
     strategy:
