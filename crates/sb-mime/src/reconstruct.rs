@@ -91,9 +91,13 @@ pub fn reconstruct(
     // at least its own length and each attachment exactly its base64
     // length, so a message that fits is never refused here. The final
     // check below enforces the limit exactly.
+    // A multipart body already holds its parts, so its attachments
+    // aren't added again (`reconstruct_multipart`).
     let mut bound = input.header.len().saturating_add(input.body.len());
-    for part in input.attachments {
-        bound = bound.saturating_add(base64_len(part.data.len()));
+    if !multipart {
+        for part in input.attachments {
+            bound = bound.saturating_add(base64_len(part.data.len()));
+        }
     }
     if bound > limit {
         return Err(ReconstructError::TooLarge);
@@ -238,15 +242,25 @@ fn reconstruct_multipart(
     // Without a boundary its parts can't be framed, and none can be
     // invented for bytes already framed.
     let (entity_header, entity_body) = split_entity(input.body);
-    let has_content_type = entity_header
-        .iter()
-        .any(|line| field_name(line).is_some_and(|name| name.as_slice() == b"content-type"));
-    let has_boundary = entity_header.iter().any(|line| {
-        line.to_ascii_lowercase()
-            .windows(9)
-            .any(|w| w == b"boundary=")
-    });
-    if !has_content_type || !has_boundary {
+    // The boundary must be a parameter of the Content-Type field itself,
+    // which may continue on folded lines.
+    let mut in_content_type = false;
+    let mut has_boundary = false;
+    for line in &entity_header {
+        if !line
+            .first()
+            .is_some_and(|byte| matches!(byte, b' ' | b'\t'))
+        {
+            in_content_type =
+                field_name(line).is_some_and(|name| name.as_slice() == b"content-type");
+        }
+        has_boundary |= in_content_type
+            && line
+                .to_ascii_lowercase()
+                .windows(9)
+                .any(|window| window == b"boundary=");
+    }
+    if !has_boundary {
         return Err(ReconstructError::InvalidInput(
             "a multipart body has no Content-Type boundary",
         ));

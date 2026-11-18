@@ -374,6 +374,37 @@ fn headers_and_encoding_details_hold() {
         reconstruct(&unframed, &Limits::default()),
         Err(ReconstructError::InvalidInput(_))
     ));
+    // `boundary=` in another field doesn't frame it either.
+    let elsewhere = ReconstructInput {
+        body: b"X-Note: boundary=x\r\nContent-Type: multipart/mixed\r\n\r\nno parts",
+        ..expanding_input("msg-1", "multipart/mixed")
+    };
+    assert!(matches!(
+        reconstruct(&elsewhere, &Limits::default()),
+        Err(ReconstructError::InvalidInput(_))
+    ));
+    // A multipart body's listed attachments aren't counted twice: a body
+    // over half the limit still fits.
+    let data = vec![b'a'; 600];
+    let body = [
+        &b"Content-Type: multipart/mixed;\r\n boundary=\"b\"\r\n\r\n--b\r\n\r\n"[..],
+        &data,
+        b"\r\n--b--\r\n",
+    ]
+    .concat();
+    let listed = [part(
+        "a.txt",
+        "text/plain",
+        Disposition::Attachment,
+        None,
+        &data,
+    )];
+    let framed = ReconstructInput {
+        body: &body,
+        attachments: &listed,
+        ..expanding_input("msg-1", "multipart/mixed")
+    };
+    assert!(reconstruct(&framed, &Limits::default().with_max_message_bytes(1200)).is_ok());
     // MIME-Version once, and mid-line spaces stay literal.
     let input = ReconstructInput {
         body: b"two words here",
