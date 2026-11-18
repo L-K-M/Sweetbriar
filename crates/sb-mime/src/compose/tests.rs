@@ -184,6 +184,29 @@ fn markdown_plain_alternative_has_no_emphasis_or_heading_markers() {
     assert!(plain.contains("Example <https://example.com/path>"));
 }
 
+#[test]
+fn markdown_bare_urls_become_autolinks() {
+    let input = base_input(
+        "See https://example.com/a_(b), www.example.org. and `https://code.example`.\n\n    https://block.example\n",
+        ComposeFormat::Markdown,
+    );
+    let composed = compose(&input).unwrap();
+    let html = composed.html.as_deref().unwrap();
+    assert!(
+        html.contains("href=\"https://example.com/a_(b)\""),
+        "{html}"
+    );
+    assert!(html.contains("href=\"http://www.example.org"), "{html}");
+    assert!(!html.contains("href=\"https://code.example"), "{html}");
+    assert!(!html.contains("href=\"https://block.example"), "{html}");
+    let plain = &composed.plain_text;
+    assert!(
+        plain.contains("See https://example.com/a_(b), www.example.org."),
+        "{plain}"
+    );
+    assert!(!plain.contains("<https://example.com"), "{plain}");
+}
+
 // ---- header safety ----
 
 #[test]

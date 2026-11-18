@@ -19,7 +19,7 @@ use mail_builder::headers::message_id::MessageId;
 use mail_builder::headers::raw::Raw;
 use mail_builder::headers::text::Text;
 use mail_builder::mime::{BodyPart, MimePart};
-use pulldown_cmark::{Event, LinkType, Options, Parser, Tag, TagEnd};
+use pulldown_cmark::{CowStr, Event, LinkType, Options, Parser, Tag, TagEnd};
 
 use crate::render::{ResourcePolicy, sanitize_run};
 
@@ -343,11 +343,129 @@ fn markdown_options() -> Options {
     options
 }
 
+/// GFM's extended autolinks (spec/05 "Composing"), which
+/// `pulldown-cmark` doesn't parse: a bare `https://`, `http://` or
+/// `www.` URL in text outside links and code blocks becomes an autolink.
+/// Trailing punctuation and an unmatched `)` stay outside the link, as
+/// GFM specifies.
+fn with_autolinks<'a>(events: impl Iterator<Item = Event<'a>>) -> Vec<Event<'a>> {
+    let mut out = Vec::new();
+    let mut opaque = 0usize;
+    // The parser splits text at possible emphasis delimiters such as
+    // `_`; a URL may span such pieces, so adjacent text joins first.
+    let mut pending = String::new();
+    for event in events {
+        if let Event::Text(text) = &event
+            && opaque == 0
+        {
+            pending.push_str(text);
+            continue;
+        }
+        if !pending.is_empty() {
+            split_autolinks(&std::mem::take(&mut pending), &mut out);
+        }
+        match &event {
+            Event::Start(Tag::Link { .. } | Tag::Image { .. } | Tag::CodeBlock(_)) => opaque += 1,
+            Event::End(TagEnd::Link | TagEnd::Image | TagEnd::CodeBlock) => {
+                opaque = opaque.saturating_sub(1);
+            }
+            _ => {}
+        }
+        out.push(event);
+    }
+    if !pending.is_empty() {
+        split_autolinks(&pending, &mut out);
+    }
+    out
+}
+
+fn split_autolinks<'a>(text: &str, out: &mut Vec<Event<'a>>) {
+    let mut rest = text;
+    while let Some((start, scheme_len)) = next_url_start(rest) {
+        let candidate = &rest[start..];
+        let end = candidate
+            .find(|c: char| c.is_whitespace() || c == '<')
+            .unwrap_or(candidate.len());
+        let url = trim_url(&candidate[..end]);
+        if url.len() <= scheme_len {
+            out.push(Event::Text(CowStr::from(
+                rest[..start + scheme_len].to_owned(),
+            )));
+            rest = &rest[start + scheme_len..];
+            continue;
+        }
+        if start > 0 {
+            out.push(Event::Text(CowStr::from(rest[..start].to_owned())));
+        }
+        let dest = if url.starts_with("www.") {
+            format!("http://{url}")
+        } else {
+            url.to_owned()
+        };
+        out.push(Event::Start(Tag::Link {
+            link_type: LinkType::Autolink,
+            dest_url: CowStr::from(dest),
+            title: CowStr::Borrowed(""),
+            id: CowStr::Borrowed(""),
+        }));
+        out.push(Event::Text(CowStr::from(url.to_owned())));
+        out.push(Event::End(TagEnd::Link));
+        rest = &rest[start + url.len()..];
+    }
+    if !rest.is_empty() {
+        out.push(Event::Text(CowStr::from(rest.to_owned())));
+    }
+}
+
+/// The next URL start in `text` at a word boundary, and its prefix length.
+fn next_url_start(text: &str) -> Option<(usize, usize)> {
+    let mut best: Option<(usize, usize)> = None;
+    for prefix in ["https://", "http://", "www."] {
+        let mut from = 0;
+        while let Some(found) = text[from..].find(prefix) {
+            let at = from + found;
+            let boundary = text[..at]
+                .chars()
+                .next_back()
+                .is_none_or(|c| c.is_whitespace() || matches!(c, '(' | '*' | '_' | '~'));
+            if boundary {
+                if best.is_none_or(|(b, _)| at < b) {
+                    best = Some((at, prefix.len()));
+                }
+                break;
+            }
+            from = at + prefix.len();
+        }
+    }
+    best
+}
+
+/// GFM's trailing-punctuation rule: `?!.,:*_~'"` never end a URL, and a
+/// `)` ends it only when it closes a `(` inside it.
+fn trim_url(url: &str) -> &str {
+    let mut url = url;
+    loop {
+        let Some(last) = url.chars().next_back() else {
+            return url;
+        };
+        let unmatched_paren = last == ')' && url.matches(')').count() > url.matches('(').count();
+        if matches!(
+            last,
+            '?' | '!' | '.' | ',' | ':' | '*' | '_' | '~' | '\'' | '"'
+        ) || unmatched_paren
+        {
+            url = &url[..url.len() - last.len_utf8()];
+        } else {
+            return url;
+        }
+    }
+}
+
 fn render_markdown(source: &str) -> Result<Rendered, ComposeError> {
     let options = markdown_options();
     let plain = {
         let mut renderer = PlainRenderer::default();
-        for event in Parser::new_ext(source, options) {
+        for event in with_autolinks(Parser::new_ext(source, options)) {
             renderer.event(event);
         }
         renderer.finish()
@@ -630,10 +748,12 @@ impl PlainRenderer {
 /// escaped as text (spec/05 "Composing").
 fn render_html(source: &str) -> Result<String, ComposeError> {
     let options = markdown_options();
-    let events = Parser::new_ext(source, options).map(|event| match event {
-        Event::Html(html) | Event::InlineHtml(html) => Event::Text(html),
-        other => other,
-    });
+    let events = with_autolinks(Parser::new_ext(source, options))
+        .into_iter()
+        .map(|event| match event {
+            Event::Html(html) | Event::InlineHtml(html) => Event::Text(html),
+            other => other,
+        });
     let mut html = String::new();
     pulldown_cmark::html::push_html(&mut html, events);
     let styled = rewrite_str(
