@@ -628,6 +628,21 @@ the provider policies (`proton_bridge`, `generic_imap`) live in
 - **Deliverables:** the body queue; `sb_mime::reconstruct` with its
   fixtures; acquisition, header refresh and search queueing; decryption
   failures and their retry on key change.
+- **Split** (over the PR size limit as one; estimated 1,200 lines for
+  the reconstruction, the transport's full-message and attachment
+  reads and the fake server's support, and about 1,400 more for the
+  store writes and the worker's queue): **M2.16a** `sb_mime::
+  reconstruct` with its fixtures and the determinism proptest, the
+  transport's `GET /mail/v4/messages/{id}` and attachment download,
+  and the fake server's bodies and attachments (the first two checks;
+  measured at 1,666 lines, it lands as **M2.16a1**, the reconstruction,
+  and **M2.16a2**, the transport's reads and the fake server);
+  **M2.16b** the store's body writes: the `proton_fetch` acquisition
+  linked to the logical message, `message_headers` refreshed from the
+  stored header block, search queueing, `proton_body_failures` and
+  the queue's order (opened first, then newest); **M2.16c** the
+  worker's body queue, decryption failures and their retry on key
+  change (the last three checks).
 - **Acceptance:** the same parts always give the same bytes (proptest);
   each fixture shape reconstructs and parses back to the same structure;
   a message in three labels is fetched once (request log); a wrong id
