@@ -2,14 +2,15 @@
 
 **Revised 2026-11-18 (owner decision, 2026-11-15):** filing acts
 through Sweetbriar's own Proton API client: a move labels the message
-with its destination folder, and labels are added and removed with
+with its destination folder and unlabels its previous one, and labels are added and removed with
 `label` and `unlabel` (spec/04-sync-proton "Intents and the mutation
 matrix"). No M5 step had merged before this revision. The generic IMAP
 policy's filing (`UID MOVE`, copy-and-delete with UIDPLUS, Dovecot) is
 deferred with generic accounts (*later*, like M2.5 and M2.6).
 
 **Outcome:** archive, move to folder, move to Trash and add label, with
-undo for moves (add label has none in the pilot; 07). Every action is checked against the Proton mutation matrix and
+undo for moves (adding and removing a label have none in the pilot;
+07). Every action is checked against the Proton mutation matrix and
 verified before it completes.
 
 ### M5.1 Proton mutation matrix — L, linux
@@ -19,20 +20,25 @@ verified before it completes.
   never touch the server.
 - **Spec:** 04-sync-proton (Intents and the mutation matrix), 04-sync-imap
   (Intents: execution, Undo), 07 (Messages commands).
-- **Depends on:** M4 complete.
+- **Depends on:** M4 complete and M2.17 (the `go-proton-api` lane).
 - **Deliverables:**
   - a spec commit first: 07 gains `remove_label(selection,
     label_mailbox)`, which the 04-sync-proton matrix allows, and its
     note on `add_label` drops the EXPUNGE reason (label undo stays out
-    of the pilot);
+    of the pilot); and 04-sync-proton's move row gains the `unlabel`
+    of the previous folder when the confirming read still shows it;
   - policy checks: the matrix's allowed destinations (Inbox, Archive,
     Spam, Trash or a folder) and source ≠ destination; a move acts on
     the message whichever view it was chosen in (Starred, All Mail or a
     label), since Proton keeps one location; any action in Scheduled is
     refused with an explanation;
   - pre-acquisition: the body is published before any move;
-  - execution with `label` to the destination folder, confirmed by a
-    metadata read that shows the new location before `done`;
+  - execution as `label` to the destination folder, then `unlabel` of
+    the message's previous folder when the metadata read still shows
+    it (the server may not drop it; Bridge unlabels the old one
+    explicitly, research/proton-api/mail-sync.md), confirmed by a
+    metadata read that shows only the destination before `done`; a
+    message without a folder (only labels) needs the `label` alone;
   - `add_label` and `remove_label` with a user label;
   - `delete_to_trash` as a move to Trash under every move rule;
   - undo intents with the "moved elsewhere since" refusal;
@@ -40,20 +46,22 @@ verified before it completes.
   - the mutation-matrix suite added to the `go-proton-api` lane
     (M2.17).
 - **Acceptance:**
-  - no test sends a permanent delete or empties a folder (a global
-    assertion in the fake server);
+  - no test sends a permanent delete or empties a folder: the fake
+    server refuses those calls and the suite asserts none was
+    attempted;
   - a move from Starred, All Mail or a label view moves the message's
-    folder, and its user labels stay;
-  - an action in Scheduled is refused, and same-folder filing sends
-    nothing;
+    folder: the source folder no longer holds it, and its user labels
+    stay;
+  - an action in Scheduled is refused, and same-folder filing is
+    refused with an explanation and sends nothing;
   - `add_label` and `remove_label` return no undo token;
   - in the local archive, `delete_to_trash` moves to a local Trash
     mailbox, sends nothing and deletes nothing;
   - a move without an acquired body fetches it first;
   - a destination the metadata doesn't confirm leaves the intent
     pending for reconciliation rather than marking it done;
-  - a drop after the fake applied a move reconciles without re-issuing
-    it (mutation counter);
+  - a drop after the fake applied a move's `label` or `unlabel`
+    reconciles without re-issuing it (mutation counter);
   - crash cuts across move steps never lose or duplicate a message
     (fake server state check);
   - the `go-proton-api` lane passes the matrix.
