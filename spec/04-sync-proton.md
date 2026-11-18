@@ -300,6 +300,13 @@ Execution follows 04-sync-imap's intent rules, with Proton's evidence:
 - **Reconcile before retry:** Proton's calls set state rather than
   toggle it, so after a dropped connection the engine re-reads the
   metadata and re-issues only if the state isn't there yet.
+- **Flag conflicts** follow 04-sync-imap with events in place of the
+  sweep: while a flag intent is pending or in flight, events don't
+  overwrite that flag on any occurrence of the message; once it is
+  done, the next event wins, so another client's later change is
+  kept. Events apply in cursor order and the intent's own change
+  arrives as a later event, so an older event delivered after the
+  intent is `done` is overtaken by it, at the latest on the next poll.
 - **Undo** is the inverse intent, as for IMAP. Proton's undo tokens
   aren't used.
 
