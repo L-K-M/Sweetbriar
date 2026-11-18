@@ -1063,8 +1063,10 @@ The process holds `<data root>.lock` throughout.
      The writable open resolves the marker under the lock before it
      looks at the data root; the read-only open refuses (`Unavailable`)
      while a marker exists.
-   - Then open the restored store, with every account other than the
-     local archive `paused` and `restore_pending` (02).
+   - Then open the restored store. Every account other than the local
+     archive is marked `restore_pending` (02), and an `active` one
+     becomes `paused`; `needs_attention` and `disconnected` accounts
+     keep their state, so only signing in again revives them.
    - Nothing is deleted. The preserved root is listed in Settings →
      Backups until the user removes it.
 5. **Reconcile.** For each account the user resumes

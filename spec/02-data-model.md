@@ -83,7 +83,8 @@ CREATE TABLE accounts (
   sort_order        INTEGER NOT NULL,
   created_at        INTEGER NOT NULL,
   revision          INTEGER NOT NULL DEFAULT 1,
-  restore_pending   INTEGER NOT NULL DEFAULT 0 CHECK (restore_pending IN (0,1)) -- paused by a restore, not yet reconciled (03, M2.7)
+  restore_pending   INTEGER NOT NULL DEFAULT 0 CHECK (restore_pending IN (0,1)), -- restored, not yet reconciled (03, M2.7)
+  CHECK (restore_pending = 0 OR state <> 'active')    -- reconciling is what makes it active
 ) STRICT;
 CREATE UNIQUE INDEX accounts_one_local_archive ON accounts(provider)
   WHERE provider = 'local_archive';

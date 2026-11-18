@@ -365,8 +365,9 @@ async fn Core::shutdown(self);   // flush writer, release the lease
   - `resume_account(id)` sets a paused account `active` and starts its
     worker; resuming an active one changes nothing; a
     `needs_attention` or `disconnected` one is `Conflict` (it needs
-    "Sign in again"). An account a restore paused (`restore_pending`,
-    02) first reconciles, in the same transaction as the state change:
+    "Sign in again"). A `restore_pending` account (02) reconciles in
+    the transaction that makes it active, whether `resume_account` or
+    a sign-in again's `Complete`:
     IMAP cursors are discarded (03 "Restore", step 5); a Proton
     account's `event_cursor` and listing are reset so its worker
     starts with the bootstrap, which matches messages by id and keeps
@@ -648,13 +649,16 @@ a receipt or file-export command; Service/FFI exposure remains M1.7e/f.
     answering with the next retry, rate limited with the time, or
     healthy); its warnings (addresses whose keys didn't unlock); open
     breaker events (id, mailbox, count, detected time); coverage
-    (`coverage(scope)` for the account); and the last sync time. Retry
+    (`coverage(scope)` for the account); and the last sync time. A
+    `disconnected` account's condition is disconnected, offering "Sign
+    in again". Retry
     times and the last sync time come from the running worker's memory:
     a paused account, or one not synced since launch, has none. `subscribe_account_health()` wakes when
     any of it changes.
   - `intents(filter)` (M2.7) → parked and quarantined intents, each
     with its account, kind, target message, reason and what it would
-    do; at most 1,000, oldest first, with whether more exist.
+    do; oldest first, keyset paged like a window (at most 1,000 a
+    page).
   - `recovery(account_id?)` (M2.7) → the Recovery list (04-sync-imap
     "Epoch change"): logical messages with no `present` occurrence,
     each with its last occurrence's mailbox, state (`vanished`,
@@ -1058,10 +1062,12 @@ fn subscribe_account_health() -> AccountHealthSubscription; // same shape, for a
 
 fn subscribe_new_mail() -> NewMailSubscription;             // M2.7
 impl NewMailSubscription {
-    /// Returns the messages that arrived since this subscription's last answer.
+    /// Returns one account's arrivals since this subscription's last answer.
     async fn next(&self) -> Result<NewMail, CoreError>;
 }
-struct NewMail { account_id: String, message_ids: Vec<i64>, more: bool } // at most 20 ids
+// `count` arrivals; `message_ids` holds the newest 20 of them, and the
+// shell summarizes the rest ("N more new messages"), so none is dropped.
+struct NewMail { account_id: String, count: u32, message_ids: Vec<i64> }
 ```
 
 - **Pull, not push.** The shell asks for the next event, then re-reads

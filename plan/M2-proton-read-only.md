@@ -685,8 +685,10 @@ the provider policies (`proton_bridge`, `generic_imap`) live in
   through store, engine, service and FFI with regenerated bindings;
   per-account worker stop and start; launch skips paused accounts; the
   migration adding `restore_pending`, set by a restore on every account
-  other than the local archive, and the resume reconcile it triggers
-  (03 step 5; a Proton account restarts with the bootstrap).
+  other than the local archive (pausing only `active` ones), and the
+  reconcile it triggers when the account next becomes active, by
+  resume or by signing in again (03 step 5; a Proton account restarts
+  with the bootstrap).
 - **Acceptance:** pausing stops the account's requests to the fake
   before the receipt and survives a reopen; resuming a restored IMAP
   account clears its cursors and a restored Proton account
