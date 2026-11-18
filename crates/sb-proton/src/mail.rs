@@ -297,7 +297,7 @@ fn content_id_of(headers: &Value) -> Option<String> {
 }
 
 /// A message or attachment id must be one non-empty path segment: no empty
-/// id, no control character, and none of `/ ? # %`, which would change the
+/// id, no control character, and none of `/ \ ? # %`, which would change the
 /// request's path or query.
 fn validate_path_id(id: &str) -> Result<(), ProtonError> {
     // `.` and `..` are dot segments a proxy may resolve to another path,
