@@ -336,7 +336,7 @@ struct EventResponse {
 
 /// Proton's booleans are `0`/`1` on the wire (`go-proton-api/boolean.go`),
 /// so both that and JSON `true`/`false` decode.
-fn proton_bool<'de, D>(deserializer: D) -> Result<bool, D::Error>
+pub(crate) fn proton_bool<'de, D>(deserializer: D) -> Result<bool, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
