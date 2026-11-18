@@ -20,9 +20,11 @@ pub use keys::{
     KeySet, KeyStore, KeyUnlockError, SecretBuffer, Sendable, USER_PATH,
 };
 pub use mail::{
-    AddressEvent, EVENTS_LATEST_PATH, EVENTS_PATH, EventAction, EventBatch, EventId, LABELS_PATH,
-    Label, LabelCount, LabelEvent, LabelKind, ListingAnchor, MAX_PAGE_SIZE, MESSAGE_COUNTS_PATH,
-    MESSAGES_PATH, MailAddress, MessageEvent, MessageMetadata, MessagePage, REFRESH_MAIL,
+    ATTACHMENT_PATH, AddressEvent, AttachmentMetadata, Disposition, EVENTS_LATEST_PATH,
+    EVENTS_PATH, EventAction, EventBatch, EventId, FullMessage, LABELS_PATH, Label, LabelCount,
+    LabelEvent, LabelKind, ListingAnchor, MAX_ATTACHMENT_BYTES, MAX_PAGE_SIZE, MESSAGE_COUNTS_PATH,
+    MESSAGE_PATH, MESSAGES_PATH, MailAddress, MessageEvent, MessageMetadata, MessagePage,
+    REFRESH_MAIL,
 };
 // Trust types the layers above name for their transport seam (spec/01
 // rule 3).

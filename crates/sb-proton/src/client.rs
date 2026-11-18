@@ -403,6 +403,42 @@ pub(crate) async fn read_response(answer: Answer) -> Result<(StatusCode, Bytes),
     read_body(answer.response).await
 }
 
+/// Reads a response body to bytes under a hard size bound, frame by
+/// frame, so an oversized body is refused before it is all buffered:
+/// a truncated return is never mistaken for the whole packet (spec/04
+/// step 3). The in-flight permit is released once the body is read or
+/// the bound is breached.
+pub(crate) async fn read_response_bounded(
+    answer: Answer,
+    limit: u64,
+) -> Result<(StatusCode, Bytes), ProtonError> {
+    let status = answer.response.status();
+    let mut body = answer.response.into_body();
+    let mut total = 0u64;
+    let mut bytes = Vec::new();
+    loop {
+        let frame = match tokio::time::timeout(REQUEST_TIMEOUT, body.frame()).await {
+            Ok(Some(frame)) => frame,
+            Ok(None) => break,
+            Err(_) => return Err(ProtonError::Timeout),
+        };
+        let data = frame
+            .map_err(|e| ProtonError::Unavailable {
+                message: format!("the response body didn't read: {e}"),
+            })?
+            .into_data()
+            .map_err(|_| ProtonError::Unavailable {
+                message: "the response body carried a trailer instead of data".to_owned(),
+            })?;
+        total = total.saturating_add(data.len() as u64);
+        if total > limit {
+            return Err(ProtonError::AttachmentTooLarge);
+        }
+        bytes.extend_from_slice(&data);
+    }
+    Ok((status, Bytes::from(bytes)))
+}
+
 /// A response with its in-flight permit. The permit is held until the
 /// body has been read or the response dropped, so a body still
 /// streaming counts against [`MAX_IN_FLIGHT`] (spec/04).

@@ -7,11 +7,13 @@
 
 use std::fmt;
 
+use base64::Engine as _;
+use hyper::{Method, StatusCode};
 use serde::{Deserialize, Deserializer};
 use serde_json::Value;
 
 use crate::auth::Session;
-use crate::client::{Client, Priority};
+use crate::client::{Client, Priority, code_of, error_message, read_response_bounded};
 use crate::error::ProtonError;
 
 /// `GET /core/v4/labels` (research `mail-sync.md` §1).
@@ -24,6 +26,13 @@ pub const MESSAGE_COUNTS_PATH: &str = "/mail/v4/messages/count";
 pub const EVENTS_LATEST_PATH: &str = "/core/v4/events/latest";
 /// `GET /core/v4/events/{id}` (research `mail-sync.md` §5).
 pub const EVENTS_PATH: &str = "/core/v4/events";
+/// `GET /mail/v4/messages/{id}` (research `mail-sync.md` §4).
+pub const MESSAGE_PATH: &str = "/mail/v4/messages";
+/// `GET /mail/v4/attachments/{id}` (research `mail-sync.md` §4).
+pub const ATTACHMENT_PATH: &str = "/mail/v4/attachments";
+/// The bound on one attachment data packet: 30 MiB. A larger body is a
+/// typed failure, never a truncated return (spec/04 step 3).
+pub const MAX_ATTACHMENT_BYTES: u64 = 30 * 1024 * 1024;
 /// The largest page the transport asks for (research `mail-sync.md`
 /// §3: go-proton-api's client page size).
 pub const MAX_PAGE_SIZE: u32 = 150;
@@ -157,6 +166,147 @@ fn metadata_with_raw<'de, D: Deserializer<'de>>(
         serde_json::from_value(value.clone()).map_err(serde::de::Error::custom)?;
     metadata.raw = value;
     Ok(Some(metadata))
+}
+
+/// An attachment's disposition (`go-proton-api/attachment_types.go`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Disposition {
+    Inline,
+    Attachment,
+}
+
+impl<'de> Deserialize<'de> for Disposition {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        use serde::de::Error as _;
+        let value = String::deserialize(deserializer)?.to_ascii_lowercase();
+        match value.as_str() {
+            "inline" => Ok(Self::Inline),
+            "attachment" => Ok(Self::Attachment),
+            _ => Err(D::Error::custom(
+                "a Proton attachment disposition must be inline or attachment",
+            )),
+        }
+    }
+}
+
+/// One attachment of a full message (`go-proton-api/attachment_types.go`).
+/// `key_packets` is the base64 `KeyPackets` field decoded, ready to
+/// concatenate with the downloaded data packet (research
+/// `mail-sync.md` §4).
+#[derive(Debug, Clone)]
+pub struct AttachmentMetadata {
+    pub id: String,
+    pub name: String,
+    pub size: i64,
+    pub mime_type: String,
+    pub disposition: Disposition,
+    /// From `Headers["content-id"]`, which may be a string or an array
+    /// of strings; surrounding `<>` are stripped.
+    pub content_id: Option<String>,
+    pub key_packets: Vec<u8>,
+}
+
+/// A full message as `GET /mail/v4/messages/{id}` answers it: the
+/// metadata, the stored header block, the armored body, the body's
+/// `MIMEType` and the attachment metadata (research `mail-sync.md` §4).
+#[derive(Debug, Clone)]
+pub struct FullMessage {
+    pub metadata: MessageMetadata,
+    pub header: String,
+    /// Armored PGP; decrypt with the address keys.
+    pub body: String,
+    pub mime_type: String,
+    pub attachments: Vec<AttachmentMetadata>,
+}
+
+#[derive(Debug, Deserialize)]
+struct FullMessageResponse {
+    #[serde(rename = "Message")]
+    message: Value,
+}
+
+#[derive(Debug, Deserialize)]
+struct MessageWire {
+    #[serde(rename = "Header")]
+    header: String,
+    #[serde(rename = "Body")]
+    body: String,
+    #[serde(rename = "MIMEType")]
+    mime_type: String,
+    #[serde(rename = "Attachments", default)]
+    attachments: Vec<AttachmentWire>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AttachmentWire {
+    #[serde(rename = "ID")]
+    id: String,
+    #[serde(rename = "Name", default)]
+    name: String,
+    #[serde(rename = "Size")]
+    size: i64,
+    #[serde(rename = "MIMEType")]
+    mime_type: String,
+    #[serde(rename = "Disposition")]
+    disposition: Disposition,
+    #[serde(rename = "Headers", default)]
+    headers: Value,
+    #[serde(rename = "KeyPackets", default)]
+    key_packets: String,
+}
+
+impl AttachmentMetadata {
+    fn from_wire(wire: AttachmentWire, path: &str) -> Result<Self, ProtonError> {
+        let key_packets = base64::engine::general_purpose::STANDARD
+            .decode(wire.key_packets.as_bytes())
+            .map_err(|e| ProtonError::decode(path, e))?;
+        Ok(Self {
+            id: wire.id,
+            name: wire.name,
+            size: wire.size,
+            mime_type: wire.mime_type,
+            disposition: wire.disposition,
+            content_id: content_id_of(&wire.headers),
+            key_packets,
+        })
+    }
+}
+
+/// The first `content-id` header value, as a string or one array element,
+/// without its surrounding `<>`.
+fn content_id_of(headers: &Value) -> Option<String> {
+    let value = headers
+        .as_object()?
+        .iter()
+        .find(|(key, _)| key.eq_ignore_ascii_case("content-id"))
+        .map(|(_, value)| value)?;
+    let value = match value {
+        Value::String(value) => value.as_str(),
+        Value::Array(values) => values.first().and_then(Value::as_str)?,
+        _ => return None,
+    };
+    let value = value.trim();
+    let value = value
+        .strip_prefix('<')
+        .and_then(|value| value.strip_suffix('>'))
+        .unwrap_or(value);
+    (!value.is_empty()).then(|| value.trim().to_owned())
+}
+
+/// A message or attachment id must be one non-empty path segment: no empty
+/// id, no control character, and none of `/ ? # %`, which would change the
+/// request's path or query.
+fn validate_path_id(id: &str) -> Result<(), ProtonError> {
+    let path_safe = !id.is_empty()
+        && id
+            .bytes()
+            .all(|byte| byte.is_ascii_graphic() && !matches!(byte, b'/' | b'?' | b'#' | b'%'));
+    path_safe.then_some(()).ok_or(ProtonError::Malformed {
+        message: "a message or attachment id must be one non-empty path segment".to_owned(),
+    })
 }
 
 /// Where a listing stands: the last listed message's time and id
@@ -456,6 +606,73 @@ impl Client {
             addresses: response.addresses,
             user_changed: response.user.is_some(),
         })
+    }
+
+    /// `GET /mail/v4/messages/{id}`: the full message with its stored
+    /// header block, armored body, `MIMEType` and attachment metadata
+    /// (spec/04 "Sync loop" step 3). The id in the response must
+    /// equal the requested one; anything else is refused and the
+    /// caller re-reads the message's metadata.
+    pub async fn message(&self, session: &Session, id: &str) -> Result<FullMessage, ProtonError> {
+        validate_path_id(id)?;
+        let path = format!("{MESSAGE_PATH}/{id}");
+        let response: FullMessageResponse =
+            self.get_json(&path, session, Priority::Background).await?;
+        let message = response.message;
+        let metadata = MessageMetadata::from_value(message.clone(), &path)?;
+        if metadata.id != id {
+            return Err(ProtonError::UnexpectedMessage);
+        }
+        let wire: MessageWire =
+            serde_json::from_value(message).map_err(|e| ProtonError::decode(&path, e))?;
+        let attachments = wire
+            .attachments
+            .into_iter()
+            .map(|attachment| AttachmentMetadata::from_wire(attachment, &path))
+            .collect::<Result<_, _>>()?;
+        Ok(FullMessage {
+            metadata,
+            header: wire.header,
+            body: wire.body,
+            mime_type: wire.mime_type,
+            attachments,
+        })
+    }
+
+    /// `GET /mail/v4/attachments/{id}`: the raw data packet, not JSON
+    /// (research `mail-sync.md` §4). The body is bounded by
+    /// [`MAX_ATTACHMENT_BYTES`]; a larger one is a typed failure.
+    pub async fn attachment(&self, session: &Session, id: &str) -> Result<Vec<u8>, ProtonError> {
+        validate_path_id(id)?;
+        let path = format!("{ATTACHMENT_PATH}/{id}");
+        let answer = self
+            .send(
+                Method::GET,
+                &path,
+                None,
+                Priority::Background,
+                Some((session.uid(), session.expose_access_token())),
+                &[],
+            )
+            .await?;
+        let (status, bytes) = read_response_bounded(answer, MAX_ATTACHMENT_BYTES).await?;
+        if status == StatusCode::UNAUTHORIZED {
+            return Err(ProtonError::Unauthorized);
+        }
+        if !status.is_success() {
+            let message = error_message(&bytes);
+            return Err(
+                match code_of(&bytes).and_then(crate::error::ApiCode::from_i64) {
+                    Some(api) => {
+                        ProtonError::from_api(api, &message).unwrap_or(ProtonError::Unavailable {
+                            message: message.clone(),
+                        })
+                    }
+                    None => ProtonError::Unavailable { message },
+                },
+            );
+        }
+        Ok(bytes.to_vec())
     }
 }
 

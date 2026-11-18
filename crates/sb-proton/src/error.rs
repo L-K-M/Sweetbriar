@@ -160,6 +160,13 @@ pub enum ProtonError {
         /// A static description; never the response body.
         message: String,
     },
+    /// A full-message response named a different message than the one
+    /// requested. spec/04 step 3: the id must equal `provider_key`;
+    /// anything else is refused.
+    UnexpectedMessage,
+    /// An attachment data packet grew past the download bound. It is a
+    /// typed failure, never a truncated return (spec/04 step 3).
+    AttachmentTooLarge,
     /// The request exceeded its 30 s deadline.
     Timeout,
 }
@@ -253,6 +260,12 @@ impl fmt::Display for ProtonError {
             ),
             Self::KeyUnlock(error) => write!(f, "{error}"),
             Self::Malformed { message } => write!(f, "a response didn't decode: {message}"),
+            Self::UnexpectedMessage => {
+                f.write_str("the message response named a different message")
+            }
+            Self::AttachmentTooLarge => {
+                f.write_str("the attachment data packet exceeded the download bound")
+            }
             Self::Timeout => f.write_str("the request exceeded its 30 s deadline"),
         }
     }
