@@ -17,6 +17,18 @@ test-seams = ["sb-engine/test-seams"]
 
 [dev-dependencies]
 sb-test-support = { version = "0.0.1", path = "../sb-test-support" }
+# The go-proton-api lane (M2.17): the driver's JSON line, the dev
+# server's PEM certificate, and Proton's production SRP modulus
+# verifier, all already pinned workspace-wide.
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.154"
+rustls = { version = "=0.23.46", default-features = false, features = [
+    "ring",
+    "std",
+    "logging",
+    "tls12",
+] }
+proton-srp = "=0.8.4"
 # The fake Proton server's sockets and the engine open run on a test
 # runtime; the same pinned tokio as the other crates.
 tokio = { version = "=1.54.1", default-features = false, features = ["rt-multi-thread", "macros", "time"] }
