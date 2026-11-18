@@ -865,6 +865,24 @@ pub fn clear_body_failure(tx: &Transaction, message_id: i64) -> Result<(), Store
     Ok(())
 }
 
+/// Bump the account's `key_generation` (spec/02): key unlocking
+/// changed what it unlocked, so body failures recorded under an older
+/// generation become eligible again. Returns the new generation.
+pub fn bump_key_generation(tx: &Transaction, account_id: &str) -> Result<i64, StoreError> {
+    let current = require_account(tx, account_id)?;
+    let next = current
+        .key_generation
+        .checked_add(1)
+        .ok_or_else(|| StoreError::corrupt("a Proton key generation is exhausted"))?;
+    tx.execute(
+        "UPDATE proton_accounts SET key_generation = ?2, revision = revision + 1
+         WHERE account_id = ?1",
+        params![account_id, next],
+    )
+    .map_err(|e| classify(e, "bump the Proton key generation"))?;
+    Ok(next)
+}
+
 /// The stored columns as a [`ProtonBodyFailure`].
 fn stored_failure(
     row: (i64, String, Option<String>, i64, i64, i64),
@@ -880,10 +898,15 @@ fn stored_failure(
     })
 }
 
+mod bodies;
 mod breaker;
 mod events;
 mod listing;
 mod refresh;
+pub use bodies::{
+    MAX_PENDING_BODIES, PendingBody, ProtonBody, ProtonBodyCommit, commit_proton_body,
+    pending_proton_bodies,
+};
 pub use breaker::{BreakerResolution, Classified, resolve_breaker_event};
 pub use events::{AppliedEvents, EventChunk, ProtonChange, apply_event_chunk};
 pub use listing::{
