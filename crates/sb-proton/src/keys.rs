@@ -581,6 +581,14 @@ mod tests {
         }))
         .expect("absent booleans default to false");
         assert!(!address.send && !address.receive);
+        let address: Address = serde_json::from_value(serde_json::json!({
+            "ID": "addr-1",
+            "Email": "owner@example.test",
+            "Send": true,
+            "Receive": false,
+        }))
+        .expect("JSON booleans still decode");
+        assert!(address.send && !address.receive);
     }
 
     #[test]
