@@ -300,11 +300,12 @@ fn content_id_of(headers: &Value) -> Option<String> {
 /// id, no control character, and none of `/ ? # %`, which would change the
 /// request's path or query.
 fn validate_path_id(id: &str) -> Result<(), ProtonError> {
-    // `.` and `..` are dot segments a proxy may resolve to another path.
+    // `.` and `..` are dot segments a proxy may resolve to another path,
+    // and some servers read `\` as `/`.
     let path_safe = !matches!(id, "" | "." | "..")
-        && id
-            .bytes()
-            .all(|byte| byte.is_ascii_graphic() && !matches!(byte, b'/' | b'?' | b'#' | b'%'));
+        && id.bytes().all(|byte| {
+            byte.is_ascii_graphic() && !matches!(byte, b'/' | b'\\' | b'?' | b'#' | b'%')
+        });
     path_safe.then_some(()).ok_or(ProtonError::Malformed {
         message: "a message or attachment id must be one non-empty path segment".to_owned(),
     })

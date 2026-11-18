@@ -167,7 +167,8 @@ pub enum ProtonError {
     /// An attachment data packet grew past the download bound. It is a
     /// typed failure, never a truncated return (spec/04 step 3).
     AttachmentTooLarge,
-    /// The request exceeded its 30 s deadline.
+    /// The request exceeded its deadline: 30 s, or a bounded body
+    /// read's whole-body deadline.
     Timeout,
 }
 
@@ -266,7 +267,7 @@ impl fmt::Display for ProtonError {
             Self::AttachmentTooLarge => {
                 f.write_str("the attachment data packet exceeded the download bound")
             }
-            Self::Timeout => f.write_str("the request exceeded its 30 s deadline"),
+            Self::Timeout => f.write_str("the request exceeded its deadline"),
         }
     }
 }

@@ -1320,7 +1320,7 @@ async fn a_wrong_id_in_the_response_is_refused() {
 #[tokio::test]
 async fn unsafe_ids_and_unknown_ids_are_refused() {
     let (server, client, session, _) = read_client().await;
-    for id in ["a/b", "a?b", "a#b", "a%b", "", "a b", ".", ".."] {
+    for id in ["a/b", "a?b", "a#b", "a%b", "", "a b", ".", "..", "a\\b"] {
         let error = client
             .message(&session, id)
             .await

@@ -445,8 +445,8 @@ pub(crate) async fn read_response_bounded(
 }
 
 /// The whole-body deadline of a bounded read: enough for the largest
-/// attachment over a slow link (30 MiB at about 100 KiB/s).
-pub(crate) const BOUNDED_READ_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+/// attachment over a slow link (30 MiB at 100 KiB/s takes 307 s).
+pub(crate) const BOUNDED_READ_TIMEOUT: Duration = Duration::from_secs(6 * 60);
 
 /// A response with its in-flight permit. The permit is held until the
 /// body has been read or the response dropped, so a body still
