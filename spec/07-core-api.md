@@ -372,7 +372,9 @@ async fn Core::shutdown(self);   // flush writer, release the lease
     account's `event_cursor` and listing are reset so its worker
     starts with the bootstrap, which matches messages by id and keeps
     local data, and whose disappearances go through the breaker
-    (04-sync-proton "Refresh"). Then `restore_pending` is cleared.
+    (04-sync-proton "Refresh"). The resets come first; the one
+    statement that makes the account active also clears
+    `restore_pending`, since 02's CHECK holds after every statement.
   - `disconnect_account(id)` is unchanged (M2.12), apart from the key
     and receipt.
   - `set_app_active(active)` is a lifecycle signal, not a command: no
