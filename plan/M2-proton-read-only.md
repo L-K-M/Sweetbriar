@@ -645,8 +645,8 @@ the provider policies (`proton_bridge`, `generic_imap`) live in
   change (the last three checks); **M2.16d** the metadata re-read
   after a refused response (spec/04 step 3), which needs a by-id
   metadata read whose wire shape research `mail-sync.md` §3 leaves
-  unverified. Until M2.16d, the worker refuses such a response,
-  writes nothing and skips the message for the rest of its run.
+  unverified. M2.16d also adds the transport's by-id metadata read,
+  which M3.1's live target check reuses.
 - **Acceptance:** the same parts always give the same bytes (proptest);
   each fixture shape reconstructs and parses back to the same structure;
   a message in three labels is fetched once (request log); a wrong id
