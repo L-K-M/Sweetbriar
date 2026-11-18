@@ -1,0 +1,26 @@
+---
+source: crates/sb-mime/src/compose/tests.rs
+expression: composed.plain_text
+---
+Heading
+
+Some emphasis, strong, struck and code.
+
+- first
+- second
+   - nested
+
+1. one
+2. two
+
+ > quoted text
+
+Example <https://example.com/path>
+
+| Left | Center | Right |
+| --- | --- | --- |
+| a | b | c |
+
+***
+
+<em>raw html</em>

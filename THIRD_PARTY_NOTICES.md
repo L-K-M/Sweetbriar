@@ -2691,6 +2691,35 @@ THE SOFTWARE.
 ## MIT License (MIT)
 
 Used by:
+- `unicase 2.10.0` — <https://github.com/seanmonstar/unicase>
+
+```text
+Copyright (c) 2014-2026 Sean McArthur
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+
+
+```
+
+## MIT License (MIT)
+
+Used by:
 - `either 1.19.0` — <https://github.com/rayon-rs/either>
 - `itertools 0.13.0` — <https://github.com/rust-itertools/itertools>
 - `maplit 1.0.2` — <https://github.com/bluss/maplit>
@@ -7117,6 +7146,7 @@ Used by:
 - `itoa 1.0.18` — <https://github.com/dtolnay/itoa>
 - `lazy_static 1.5.1` — <https://github.com/rust-lang-nursery/lazy-static.rs>
 - `linux-raw-sys 0.12.1` — <https://github.com/sunfishcode/linux-raw-sys>
+- `mail-builder 1.0.0` — <https://github.com/stalwartlabs/mail-builder>
 - `minimal-lexical 0.2.1` — <https://github.com/Alexhuszagh/minimal-lexical>
 - `num_enum 0.7.6` — <https://github.com/illicitonion/num_enum>
 - `num_enum_derive 0.7.6` — <https://github.com/illicitonion/num_enum>
@@ -7287,6 +7317,37 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+```
+
+## MIT License (MIT)
+
+Used by:
+- `pulldown-cmark-escape 0.11.0` — <https://github.com/raphlinus/pulldown-cmark>
+- `pulldown-cmark 0.13.6` — <https://github.com/raphlinus/pulldown-cmark>
+
+```text
+The MIT License
+
+Copyright 2015 Google Inc. All rights reserved.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
 
 ```
 
