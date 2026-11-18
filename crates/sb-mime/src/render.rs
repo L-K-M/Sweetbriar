@@ -212,8 +212,8 @@ pub(crate) enum ResourcePolicy {
     Strip,
     Rewritten,
     /// Outgoing composition (M4.2): the reader's `Rewritten` allow-list
-    /// plus the `cid` scheme, so an inline image keeps its `cid:`
-    /// reference in the sent message.
+    /// with `cid` in place of `sweetbriar-cid`, so an inline image keeps
+    /// its `cid:` reference in the sent message.
     Outgoing,
 }
 
@@ -257,10 +257,11 @@ fn policy(minted: &HashSet<String>, resources: ResourcePolicy) -> Builder<'stati
         policy.add_generic_attributes(["style"]);
         policy.add_tags(["img"]);
         policy.add_tag_attributes("img", ["src", "alt", "width", "height"]);
-        policy.add_url_schemes(["sweetbriar-cid"]);
-        if resources == ResourcePolicy::Outgoing {
-            policy.add_url_schemes(["cid"]);
-        }
+        // The reader's internal scheme never reaches a recipient.
+        policy.add_url_schemes([match resources {
+            ResourcePolicy::Outgoing => "cid",
+            _ => "sweetbriar-cid",
+        }]);
     }
     policy
 }

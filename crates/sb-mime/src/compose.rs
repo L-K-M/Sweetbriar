@@ -4,8 +4,9 @@
 //! Message-ID and Date, and every MIME boundary is derived from the
 //! Message-ID, so the same [`ComposeInput`] always yields the same
 //! bytes. `mail-builder` writes the message; `pulldown-cmark` parses the
-//! Markdown source with raw HTML disabled, and the generated HTML is
-//! sanitized with the reader's allow-list before it is frozen.
+//! Markdown source, raw HTML in it is escaped as literal text, and the
+//! generated HTML is sanitized with the reader's allow-list before it is
+//! frozen.
 
 use std::collections::HashSet;
 use std::fmt;
@@ -196,7 +197,15 @@ fn validate(input: &ComposeInput<'_>) -> Result<(), ComposeError> {
 }
 
 fn validate_address(address: &ComposeAddress<'_>) -> Result<(), ComposeError> {
-    reject_crlf(address.address)?;
+    // mail-builder quotes the display name but writes the address
+    // verbatim inside `<>`, so a delimiter there could add recipients.
+    if address.address.chars().any(|c| {
+        c.is_whitespace() || c.is_control() || matches!(c, '<' | '>' | ',' | ';' | '"' | '\\')
+    }) {
+        return Err(ComposeError::InvalidInput(
+            "an address must not contain whitespace or <>,;\"\\",
+        ));
+    }
     if let Some(name) = address.name {
         reject_crlf(name)?;
     }
@@ -242,7 +251,14 @@ fn flowed(body: &str) -> String {
         }
         first_block = false;
         if is_fixed_block(block) {
+            // A trailing space marks a flowed line (RFC 3676 4.2), so a
+            // fixed line loses its own; "-- " keeps the separator's.
             for line in block {
+                let line = if *line == "-- " {
+                    line
+                } else {
+                    line.trim_end_matches([' ', '\t'])
+                };
                 push_flowed_line(&mut out, line);
             }
         } else {
@@ -271,12 +287,9 @@ fn is_fixed_block(block: &[&str]) -> bool {
         if indent > 0 && line[..indent].chars().all(|c| c == ' ' || c == '\t') {
             return true;
         }
-        trimmed.starts_with('>')
-            || trimmed.starts_with('|')
-            || trimmed.starts_with("- ")
-            || trimmed.starts_with("* ")
-            || trimmed.starts_with("+ ")
-            || trimmed.starts_with("-- ")
+        [">", "|", "- ", "* ", "+ ", "-- "]
+            .iter()
+            .any(|marker| trimmed.starts_with(marker))
             || is_ordered_marker(trimmed)
     })
 }
@@ -580,13 +593,15 @@ impl PlainRenderer {
                 self.current.push_str("***");
                 self.end_block();
             }
-            Event::FootnoteReference(_) => {}
             _ => {}
         }
     }
 
     fn start(&mut self, tag: Tag<'_>) {
         match tag {
+            // A loose list's item opens with a paragraph; its marker
+            // stays on the item's first line.
+            Tag::Paragraph if !self.current.is_empty() => {}
             Tag::Paragraph | Tag::Heading { .. } => {
                 self.start_block();
                 self.current = self.prefix();
@@ -871,19 +886,7 @@ fn build_mime(
     }
 
     let root = match input.format {
-        ComposeFormat::Plain { .. } => {
-            if files.is_empty() {
-                text
-            } else {
-                let mut children = vec![text];
-                children.extend(files.iter().map(|a| attachment_part(a)));
-                multipart(
-                    "multipart/mixed",
-                    &boundary(input.message_id, "mixed"),
-                    children,
-                )
-            }
-        }
+        ComposeFormat::Plain { .. } => text,
         ComposeFormat::Markdown => {
             let mut alternative = vec![text];
             if let Some(html) = html {
@@ -899,23 +902,23 @@ fn build_mime(
                     ));
                 }
             }
-            let alternative = multipart(
+            multipart(
                 "multipart/alternative",
                 &boundary(input.message_id, "alternative"),
                 alternative,
-            );
-            if files.is_empty() {
-                alternative
-            } else {
-                let mut children = vec![alternative];
-                children.extend(files.iter().map(|a| attachment_part(a)));
-                multipart(
-                    "multipart/mixed",
-                    &boundary(input.message_id, "mixed"),
-                    children,
-                )
-            }
+            )
         }
+    };
+    let root = if files.is_empty() {
+        root
+    } else {
+        let mut children = vec![root];
+        children.extend(files.iter().map(|a| attachment_part(a)));
+        multipart(
+            "multipart/mixed",
+            &boundary(input.message_id, "mixed"),
+            children,
+        )
     };
 
     let mut builder = MessageBuilder::new()

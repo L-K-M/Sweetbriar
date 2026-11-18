@@ -41,6 +41,7 @@ mail-builder = { version = "=1.0.0", default-features = false }
 # features off; the `html` feature renders the HTML part, and compose.rs
 # escapes raw HTML as literal text and applies the built-in CSS (spec/05).
 pulldown-cmark = { version = "=0.13.6", default-features = false, features = ["html"] }
+
 [dev-dependencies]
 # spec/01 crate table: snapshot testing of the fixtures/eml corpus.
 insta = "=1.49.0"

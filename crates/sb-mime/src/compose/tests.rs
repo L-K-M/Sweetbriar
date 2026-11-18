@@ -66,7 +66,7 @@ fn plain_literal_snapshot() {
     let composed = compose(&input).unwrap();
     insta::assert_snapshot!("plain-literal", snapshot_text(&composed));
     let text = String::from_utf8_lossy(&composed.bytes);
-    assert!(!text.contains("format=flowed"));
+    assert!(!text.contains("flowed"), "{text}");
     assert!(composed.plain_text.contains(
         "-a line that is quite long and must not be wrapped because this is a literal patch body\n"
     ));
@@ -196,7 +196,7 @@ fn markdown_bare_urls_become_autolinks() {
         html.contains("href=\"https://example.com/a_(b)\""),
         "{html}"
     );
-    assert!(html.contains("href=\"http://www.example.org"), "{html}");
+    assert!(html.contains("href=\"http://www.example.org/\""), "{html}");
     assert!(!html.contains("href=\"https://code.example"), "{html}");
     assert!(!html.contains("href=\"https://block.example"), "{html}");
     let plain = &composed.plain_text;
@@ -234,26 +234,32 @@ fn bcc_recipients_produce_no_bcc_header() {
 
 #[test]
 fn crlf_in_header_inputs_is_refused() {
-    let mut subject = base_input("Hello.\n", ComposeFormat::Plain { literal: false });
+    let plain = || base_input("Hello.\n", ComposeFormat::Plain { literal: false });
+    let (mut subject, mut name, mut injected, mut empty_id) = (plain(), plain(), plain(), plain());
     subject.subject = "bad\r\nBcc: victim@example.org";
-    assert!(matches!(
-        compose(&subject),
-        Err(ComposeError::InvalidInput(_))
-    ));
-
-    let mut name = base_input("Hello.\n", ComposeFormat::Plain { literal: false });
-    name.from = ComposeAddress {
-        name: Some("Ada\nLovelace"),
-        address: "ada@example.org",
-    };
-    assert!(matches!(compose(&name), Err(ComposeError::InvalidInput(_))));
-
-    let mut empty_id = base_input("Hello.\n", ComposeFormat::Plain { literal: false });
+    name.from.name = Some("Ada\nLovelace");
+    // A delimiter in the address itself would add a recipient.
+    injected.from.address = "a@example.org> , victim@example.org";
     empty_id.message_id = "";
-    assert!(matches!(
-        compose(&empty_id),
-        Err(ComposeError::InvalidInput(_))
-    ));
+    for input in [subject, name, injected, empty_id] {
+        assert!(matches!(
+            compose(&input),
+            Err(ComposeError::InvalidInput(_))
+        ));
+    }
+}
+
+#[test]
+fn loose_lists_and_fixed_lines_stay_intact_when_flowed() {
+    let composed = compose(&base_input(
+        "- alpha\n\n- beta\n\n```\ncode   \n```\n",
+        ComposeFormat::Markdown,
+    ))
+    .unwrap();
+    let plain = &composed.plain_text;
+    assert!(plain.starts_with("- alpha\n\n- beta\n"), "{plain:?}");
+    // A fixed line ending in a space would read as flowed (RFC 3676).
+    assert!(plain.lines().all(|line| !line.ends_with(' ')), "{plain:?}");
 }
 
 // ---- limits ----
@@ -261,39 +267,24 @@ fn crlf_in_header_inputs_is_refused() {
 #[test]
 fn limits_block_with_typed_errors() {
     let big = vec![0u8; 26_000_000];
-    let oversized = [ComposeAttachment {
-        name: "big.bin",
+    let file = |data| ComposeAttachment {
+        name: "f.bin",
         mime_type: "application/octet-stream",
-        data: &big,
+        data,
         content_id: None,
-    }];
-    assert_eq!(
-        check_limits(&oversized),
-        Err(ComposeError::TooLarge { total: 26_000_000 })
-    );
-    let mut input = base_input("Hello.\n", ComposeFormat::Plain { literal: false });
-    input.attachments = &oversized;
-    assert_eq!(
-        compose(&input),
-        Err(ComposeError::TooLarge { total: 26_000_000 })
-    );
-
-    let empty: [ComposeAttachment; 101] = [ComposeAttachment {
-        name: "empty.bin",
-        mime_type: "application/octet-stream",
-        data: &[],
-        content_id: None,
-    }; 101];
-    assert_eq!(
-        check_limits(&empty),
-        Err(ComposeError::TooManyFiles { count: 101 })
-    );
-    let mut input = base_input("Hello.\n", ComposeFormat::Plain { literal: false });
-    input.attachments = &empty;
-    assert_eq!(
-        compose(&input),
-        Err(ComposeError::TooManyFiles { count: 101 })
-    );
+    };
+    let oversized = [file(&big)];
+    let many: [ComposeAttachment; 101] = [file(&[]); 101];
+    let cases: [(&[ComposeAttachment], ComposeError); 2] = [
+        (&oversized, ComposeError::TooLarge { total: 26_000_000 }),
+        (&many, ComposeError::TooManyFiles { count: 101 }),
+    ];
+    for (attachments, expected) in cases {
+        assert_eq!(check_limits(attachments), Err(expected));
+        let mut input = base_input("Hello.\n", ComposeFormat::Plain { literal: false });
+        input.attachments = attachments;
+        assert_eq!(compose(&input), Err(expected));
+    }
 }
 
 // ---- re-parse round trip ----
