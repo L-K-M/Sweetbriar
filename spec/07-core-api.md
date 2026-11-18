@@ -381,6 +381,21 @@ async fn Core::shutdown(self);   // flush writer, release the lease
     key, no receipt, nothing stored. The shell calls it when the app
     becomes or stops being active; workers poll at 04-sync-proton's
     active or idle cadence. It starts inactive.
+- **Identities (M4.1):** both commands take an idempotency key and
+  return a receipt naming the identity.
+  - `upsert_identity(params)` inserts or updates the identity its id
+    names, with its address, display name, reply-to, signature source
+    and sendable state; a new one isn't the default. It refuses a Proton
+    account (its identities come from Proton, M2.12) and the local
+    archive (`InvalidInput` on `account_id`), an id another account
+    holds and an address another identity of the account holds
+    (`Conflict`), and `validated` unless the row already holds it for
+    the same address: only a send the server accepts validates (05).
+    A change of address, name, reply-to or sendable state bumps the
+    account's `config_generation` (02); a signature edit doesn't.
+  - `set_default_identity(id)` leaves the identity its account's only
+    default, in one transaction; one that can't send (05) is
+    `InvalidInput` on `identity_id`.
 - **Local archive:** filing commands act locally, with no intent.
   `delete_to_trash` moves to the account's local Trash mailbox, created
   on first use; nothing is deleted. `add_label` doesn't apply.

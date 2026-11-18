@@ -35,6 +35,11 @@ inspectable Out Box. Unknown outcomes are never retried automatically.
     `Delivered-To`);
   - a cross-account reply raises the check, and acknowledgement is
     invalidated by identity or recipient edits.
+- **Split (2026-11-18):** the step measured about 2,100 changed lines,
+  so it lands as **M4.1a**, the two identity commands through store,
+  engine and service (about 970), and **M4.1b**, stacked on it: the
+  pure resolver, the header-only read gathering its inputs, reply
+  recipients and the cross-account check (about 1,150).
 
 ### M4.2 Outgoing MIME — M, linux
 
