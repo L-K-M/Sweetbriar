@@ -83,8 +83,8 @@ CREATE TABLE accounts (
   sort_order        INTEGER NOT NULL,
   created_at        INTEGER NOT NULL,
   revision          INTEGER NOT NULL DEFAULT 1,
-  restore_pending   INTEGER NOT NULL DEFAULT 0 CHECK (restore_pending IN (0,1)), -- restored, not yet reconciled (03, M2.7)
-  CHECK (restore_pending = 0 OR state <> 'active')    -- reconciling is what makes it active
+  restore_pending   INTEGER NOT NULL DEFAULT 0 CHECK (restore_pending IN (0,1)) -- restored, not yet reconciled (03, M2.7)
+                    CHECK (restore_pending = 0 OR state <> 'active')            -- reconciling is what makes it active
 ) STRICT;
 CREATE UNIQUE INDEX accounts_one_local_archive ON accounts(provider)
   WHERE provider = 'local_archive';
@@ -248,6 +248,10 @@ body's `proton_fetch` source (`<message ID>#r<reconstruction version>`)
 is recorded once per account, so a replay finds it without a scan and a
 second row for the same reconstruction is refused (04-sync-proton
 "Reconstruction").
+Migration 33 adds `accounts.restore_pending`, whose checks are column
+constraints because `ALTER TABLE ADD COLUMN` can't add a table
+constraint: a restore marks its accounts until each reconciles
+(03 "Restore", M2.7).
 
 **New tables:**
 

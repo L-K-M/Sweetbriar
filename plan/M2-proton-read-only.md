@@ -683,12 +683,13 @@ the provider policies (`proton_bridge`, `generic_imap`) live in
 - **Deliverables:** `update_account`, `pause_account`, `resume_account`
   and `disconnect_account` with idempotency keys and receipts (07),
   through store, engine, service and FFI with regenerated bindings;
-  per-account worker stop and start; launch skips paused accounts; the
-  migration adding `restore_pending`, set by a restore on every account
-  other than the local archive (pausing only `active` ones), and the
-  reconcile it triggers when the account next becomes active, by
-  resume or by signing in again (03 step 5; a Proton account restarts
-  with the bootstrap).
+  per-account worker stop and start; launch skips paused accounts; and
+  the reconcile `restore_pending` triggers when the account next
+  becomes active, by resume or by signing in again (03 step 5; a
+  Proton account restarts with the bootstrap). The migration adding
+  `restore_pending`, set by a restore on every account other than the
+  local archive (pausing only `active` ones), lands with the spec PR,
+  since the spec's schema and the migrated one must agree.
 - **Acceptance:** pausing stops the account's requests to the fake
   before the receipt and survives a reopen; resuming a restored IMAP
   account clears its cursors and a restored Proton account
