@@ -361,7 +361,8 @@ test, except where the spec says "manual qualification".
   upload and send calls 05 uses (recording what each recipient's
   package carries); its draft read reports each attachment's name, type
   and size as uploaded, the measure 05's retry matching uses.
-- **Fault knobs:** refuse a connection before it is established; drop
+- **Fault knobs:** refuse a connection before it is established, or
+  stall it before the TLS handshake completes (a connect timeout); drop
   or stall a request; drop the reply after the
   server processed a draft creation, attachment upload or send (05's
   `outcome_unknown`, evidence check and retry paths); answer 429 or 503 with

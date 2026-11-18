@@ -114,8 +114,11 @@ inspectable Out Box. Unknown outcomes are never retried automatically.
   - a draft creation whose reply the fake dropped isn't reused: the
     retry creates a second draft and sends with it, and the first stays
     in Proton's Drafts (05 "Drafts on the server");
-  - a send whose connection was refused before it was established
-    stays `queued` with `send_requested_at` cleared, and is retried;
+  - a send whose connection was refused, or timed out before it was
+    established, stays `queued` with `send_requested_at` cleared, and
+    is retried; a timeout after the request began is `outcome_unknown`;
+  - `retry_rejected_recipients` on a Proton attempt gets `Conflict` and
+    sends nothing (the fake's counter);
   - an account reconfiguration between queueing and submission keeps the
     attempt `queued` until `confirm_send_route`, and `cancel_send` works
     while it waits;
