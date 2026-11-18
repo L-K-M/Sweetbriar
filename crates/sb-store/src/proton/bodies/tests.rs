@@ -372,6 +372,22 @@ fn the_same_source_ref_with_other_bytes_is_a_conflict() {
         linked_acquisition(&store, "m1"),
         Some(committed.acquisition_id)
     );
+    // A refused commit leaves its reservation; an abandoned publication's
+    // reservation expires at startup (spec/03).
+    assert_eq!(reservations(&store), 1);
+
+    // The index refuses a second row for the same reconstruction even
+    // past the commit's own check (migration 32).
+    let duplicate = write(&store, move |tx| {
+        tx.execute(
+            "INSERT INTO acquisition_sources
+             (acquisition_id, account_id, source_kind, source_ref, completeness, acquired_at)
+             VALUES (?1, ?2, 'proton_fetch', 'm1#r1', 'complete', 0)",
+            params![committed.acquisition_id, ACCOUNT],
+        )
+        .map_err(|e| crate::schema::classify(e, "insert a duplicate source"))
+    });
+    assert!(duplicate.is_err(), "{duplicate:?}");
 }
 
 #[test]
@@ -461,6 +477,9 @@ fn a_body_for_an_unknown_key_or_account_writes_nothing() {
         sources
     );
     assert_eq!(count(&store, "SELECT count(*) FROM d_index_queue"), 0);
+    // Both refused publications keep their reservations until startup's
+    // expiry (spec/03).
+    assert_eq!(reservations(&store), 2);
 }
 
 #[test]
@@ -533,6 +552,8 @@ fn pending_bodies_order_then_newest_and_skip_unfetchable_messages() {
     // The opened keys lead, in the order given, then newest.
     assert_eq!(keys(&["m-old", "m-new"], 10), vec!["m-old", "m-new"]);
     assert_eq!(keys(&["m-new", "m-old"], 10), vec!["m-new", "m-old"]);
+    // A key opened twice is queued once.
+    assert_eq!(keys(&["m-old", "m-old"], 10), vec!["m-old", "m-new"]);
     assert_eq!(keys(&[], 1), vec!["m-new"]);
     // An opened key that no longer qualifies is skipped, not a stop.
     assert_eq!(keys(&["m-bodied"], 10), vec!["m-new", "m-old"]);

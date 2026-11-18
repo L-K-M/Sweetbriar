@@ -207,7 +207,9 @@ pub fn pending_proton_bodies(
         if pending.len() >= limit {
             break;
         }
-        if let Some(body) = qualifying_message(tx, account_id, key, account.key_generation)? {
+        if let Some(body) = qualifying_message(tx, account_id, key, account.key_generation)?
+            && !opened.contains(&body.message_id)
+        {
             opened.push(body.message_id);
             pending.push(body);
         }
@@ -254,7 +256,8 @@ fn qualifying_message(
 /// The newest qualifying messages, newest first. The sort date is the
 /// listing's own first choice, `occurrences.internal_date`, falling
 /// back to `message_headers.date_header`; ties go to the higher message
-/// id, so the order is deterministic.
+/// id, so the order is deterministic. A message with neither date sorts
+/// last (SQLite orders NULL last under `DESC`).
 fn newest_pending(
     tx: &Transaction,
     account_id: &str,
