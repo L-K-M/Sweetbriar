@@ -327,6 +327,42 @@ fn invalid_inputs_and_limits_are_typed_failures() {
     ));
 }
 
+#[test]
+fn proton_sized_attachments_fit_the_default_limit() {
+    // Proton allows 25 MB of attachments; base64 makes them about a
+    // third larger with line breaks, well under the 100 MB limit.
+    let data = vec![0x5a_u8; 25_000_000];
+    let attachments = [part(
+        "large.bin",
+        "application/octet-stream",
+        Disposition::Attachment,
+        None,
+        &data,
+    )];
+    let input = ReconstructInput {
+        attachments: &attachments,
+        ..expanding_input("msg-1", "text/plain")
+    };
+    let out = reconstruct(&input, &Limits::default()).expect("it fits");
+    assert!(out.len() < 35_000_000);
+}
+
+#[test]
+fn encoded_lengths_and_line_widths_hold() {
+    for len in 0..400 {
+        assert_eq!(
+            base64_len(len),
+            base64_encode(&vec![0xff; len]).len(),
+            "{len}"
+        );
+    }
+    let text = "word ".repeat(200) + &"\u{e9}".repeat(200) + &"=".repeat(200);
+    let encoded = quoted_printable(text.as_bytes());
+    for line in encoded.split(|byte| *byte == b'\n') {
+        assert!(line.len() <= 77, "{}", line.len()); // 76 plus the CR
+    }
+}
+
 proptest! {
     #[test]
     fn the_same_parts_always_reconstruct_to_the_same_bytes(

@@ -87,8 +87,10 @@ pub fn reconstruct(
     }
     let cleaned = clean_header(input.header);
     let limit = limits.max_message_bytes();
-    // Cheap upper bound before allocating: base64 is four for three,
-    // quoted-printable at most three for one, plus framing.
+    // An upper bound before allocating, tight enough not to refuse a
+    // message that fits: quoted-printable is at most three bytes per
+    // byte plus soft breaks, base64 four per three plus CRLFs, and each
+    // part's framing stays under a fixed allowance.
     let mut bound = input
         .header
         .len()
@@ -96,8 +98,8 @@ pub fn reconstruct(
         .saturating_add(4096);
     for part in input.attachments {
         bound = bound
-            .saturating_add(part.data.len().saturating_mul(4))
-            .saturating_add(part.name.len().saturating_mul(4))
+            .saturating_add(base64_len(part.data.len()))
+            .saturating_add(part.name.len().saturating_mul(6))
             .saturating_add(512);
     }
     if bound > limit {
@@ -502,7 +504,8 @@ fn quoted_printable(bytes: &[u8]) -> Vec<u8> {
             encoded = [b'=', HEX[(byte >> 4) as usize], HEX[(byte & 0x0f) as usize]];
             &encoded
         };
-        if line_len + chunk.len() > 76 {
+        // A soft break's `=` counts toward the 76 (RFC 2045 6.7).
+        if line_len + chunk.len() > 75 {
             out.extend_from_slice(b"=\r\n");
             line_len = 0;
         }
@@ -510,6 +513,15 @@ fn quoted_printable(bytes: &[u8]) -> Vec<u8> {
         line_len += chunk.len();
     }
     out
+}
+
+/// The length [`base64_encode`] gives `len` bytes: four per three, and
+/// a CRLF between 76-character lines.
+fn base64_len(len: usize) -> usize {
+    let groups = len.div_ceil(3);
+    groups
+        .saturating_mul(4)
+        .saturating_add(groups.saturating_sub(1) / 19 * 2)
 }
 
 /// Standard base64, 76-character lines (19 groups), no trailing break.
