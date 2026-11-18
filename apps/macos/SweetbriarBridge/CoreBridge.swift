@@ -938,7 +938,9 @@ extension CoreBridge: ProtonSignInSource {
     public func disconnectAccount(accountId: String) async throws {
         let token = SweetbriarCore.CancelToken()
         _ = try await Self.withCancellation(token: token) {
-            try await self.core.disconnectAccount(token: token, accountId: accountId)
+            try await self.core.disconnectAccount(
+                token: token, idempotencyKey: UUID().uuidString, accountId: accountId
+            )
         }
     }
 }

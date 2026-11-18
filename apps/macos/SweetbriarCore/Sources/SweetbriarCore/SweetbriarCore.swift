@@ -1134,11 +1134,33 @@ public protocol CoreProtocol: AnyObject, Sendable {
     func continueProtonSignIn(token: CancelToken, signInId: String, step: ProtonSignInStep) async throws  -> ProtonSignInState
     
     /**
-     * `disconnect_account(id)` (spec/07): revoke a Proton account's
-     * session, delete its secret and mark it disconnected, keeping
-     * every row and its data. A command.
+     * `disconnect_account(key, id)` (spec/07): revoke a Proton
+     * account's session, delete its secret and mark it disconnected,
+     * keeping every row and its data. A repeated key answers its
+     * stored receipt and does nothing else. A command.
      */
-    func disconnectAccount(token: CancelToken, accountId: String) async throws 
+    func disconnectAccount(token: CancelToken, idempotencyKey: String, accountId: String) async throws  -> Receipt
+    
+    /**
+     * `pause_account(id)` (spec/07 "Account management") under an
+     * idempotency key the shell made. A command: the account's worker
+     * stops before the receipt answers.
+     */
+    func pauseAccount(token: CancelToken, idempotencyKey: String, accountId: String) async throws  -> Receipt
+    
+    /**
+     * `resume_account(id)` (spec/07 "Account management") under an
+     * idempotency key the shell made. A command: the account's worker
+     * starts once the state change commits.
+     */
+    func resumeAccount(token: CancelToken, idempotencyKey: String, accountId: String) async throws  -> Receipt
+    
+    /**
+     * `update_account(id, params)` (spec/07 "Account management")
+     * under an idempotency key the shell made: the display name only.
+     * A command.
+     */
+    func updateAccount(token: CancelToken, idempotencyKey: String, accountId: String, displayName: String) async throws  -> Receipt
     
     /**
      * `set_setting` (spec/07 "Commands"): one command under an
@@ -1722,22 +1744,86 @@ open func continueProtonSignIn(token: CancelToken, signInId: String, step: Proto
 }
     
     /**
-     * `disconnect_account(id)` (spec/07): revoke a Proton account's
-     * session, delete its secret and mark it disconnected, keeping
-     * every row and its data. A command.
+     * `disconnect_account(key, id)` (spec/07): revoke a Proton
+     * account's session, delete its secret and mark it disconnected,
+     * keeping every row and its data. A repeated key answers its
+     * stored receipt and does nothing else. A command.
      */
-open func disconnectAccount(token: CancelToken, accountId: String)async throws   {
+open func disconnectAccount(token: CancelToken, idempotencyKey: String, accountId: String)async throws  -> Receipt  {
     return
         try  await uniffiRustCallAsync(
             rustFutureFunc: {
                 uniffi_sb_ffi_fn_method_core_disconnect_account(
-                        self.uniffiCloneHandle(),FfiConverterTypeCancelToken_lower(token),FfiConverterString.lower(accountId)
+                        self.uniffiCloneHandle(),FfiConverterTypeCancelToken_lower(token),FfiConverterString.lower(idempotencyKey),FfiConverterString.lower(accountId)
                 )
             },
-            pollFunc: ffi_sb_ffi_rust_future_poll_void,
-            completeFunc: ffi_sb_ffi_rust_future_complete_void,
-            freeFunc: ffi_sb_ffi_rust_future_free_void,
-            liftFunc: { $0 },
+            pollFunc: ffi_sb_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_sb_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_sb_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeReceipt_lift,
+            errorHandler: FfiConverterTypeCoreError_lift
+        )
+}
+    
+    /**
+     * `pause_account(id)` (spec/07 "Account management") under an
+     * idempotency key the shell made. A command: the account's worker
+     * stops before the receipt answers.
+     */
+open func pauseAccount(token: CancelToken, idempotencyKey: String, accountId: String)async throws  -> Receipt  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_sb_ffi_fn_method_core_pause_account(
+                        self.uniffiCloneHandle(),FfiConverterTypeCancelToken_lower(token),FfiConverterString.lower(idempotencyKey),FfiConverterString.lower(accountId)
+                )
+            },
+            pollFunc: ffi_sb_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_sb_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_sb_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeReceipt_lift,
+            errorHandler: FfiConverterTypeCoreError_lift
+        )
+}
+    
+    /**
+     * `resume_account(id)` (spec/07 "Account management") under an
+     * idempotency key the shell made. A command: the account's worker
+     * starts once the state change commits.
+     */
+open func resumeAccount(token: CancelToken, idempotencyKey: String, accountId: String)async throws  -> Receipt  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_sb_ffi_fn_method_core_resume_account(
+                        self.uniffiCloneHandle(),FfiConverterTypeCancelToken_lower(token),FfiConverterString.lower(idempotencyKey),FfiConverterString.lower(accountId)
+                )
+            },
+            pollFunc: ffi_sb_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_sb_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_sb_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeReceipt_lift,
+            errorHandler: FfiConverterTypeCoreError_lift
+        )
+}
+    
+    /**
+     * `update_account(id, params)` (spec/07 "Account management")
+     * under an idempotency key the shell made: the display name only.
+     * A command.
+     */
+open func updateAccount(token: CancelToken, idempotencyKey: String, accountId: String, displayName: String)async throws  -> Receipt  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_sb_ffi_fn_method_core_update_account(
+                        self.uniffiCloneHandle(),FfiConverterTypeCancelToken_lower(token),FfiConverterString.lower(idempotencyKey),FfiConverterString.lower(accountId),FfiConverterString.lower(displayName)
+                )
+            },
+            pollFunc: ffi_sb_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_sb_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_sb_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeReceipt_lift,
             errorHandler: FfiConverterTypeCoreError_lift
         )
 }
@@ -14324,7 +14410,16 @@ private let initializationResult: InitializationResult = {
     if (uniffi_sb_ffi_checksum_method_core_continue_proton_sign_in() != 25506) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_sb_ffi_checksum_method_core_disconnect_account() != 25539) {
+    if (uniffi_sb_ffi_checksum_method_core_disconnect_account() != 22580) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sb_ffi_checksum_method_core_pause_account() != 41086) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sb_ffi_checksum_method_core_resume_account() != 44820) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sb_ffi_checksum_method_core_update_account() != 22644) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sb_ffi_checksum_method_core_set_setting() != 25429) {

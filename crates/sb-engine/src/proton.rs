@@ -5,10 +5,13 @@ use crate::EngineError;
 use crate::engine::{Engine, Spawn, Worker, validate_idempotency_key};
 use sb_resources::{
     AccountKind, AccountState, BEGIN_PROTON_SIGN_IN, CredentialPause, FinishedSignIn, ProtonError,
-    ProtonRefusal, ProtonSignInParams, RestoredProtonSession, Secret, SecretError, Session, SignIn,
-    SignInStep, WritePriority, accounts, decode_proton_session, disconnect_proton_account,
-    pause_for_credential, pause_for_session, proton_account,
+    ProtonRefusal, ProtonSignInParams, Receipt, RestoredProtonSession, Secret, SecretError,
+    Session, SignIn, SignInStep, WritePriority, accounts, decode_proton_session,
+    disconnect_proton_account, pause_for_credential, pause_for_session, proton_account, run_once,
 };
+
+/// `disconnect_account`'s name in `command_receipts` (spec/07).
+const DISCONNECT_ACCOUNT: &str = "disconnect_account";
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -326,14 +329,34 @@ impl Engine {
         });
     }
 
-    /// `disconnect_account(id)` (spec/07, 04): revoke a Proton
+    /// `disconnect_account(key, id)` (spec/07, 04): revoke a Proton
     /// account's session, delete its secret and mark it disconnected,
     /// keeping every row and its data. Only a Proton account; another
-    /// kind is `InvalidInput` on `account`.
-    pub async fn disconnect_account(&self, account_id: &str) -> Result<(), EngineError> {
+    /// kind is `InvalidInput` on `account`. A repeated key answers its
+    /// stored receipt and does nothing else: no logout, no secret write.
+    pub async fn disconnect_account(
+        &self,
+        idempotency_key: &str,
+        account_id: &str,
+    ) -> Result<Receipt, EngineError> {
+        validate_idempotency_key(idempotency_key)?;
+        let key = idempotency_key.to_owned();
         let id = account_id.to_owned();
         let sessions = Arc::clone(&self.proton_sessions);
         self.command(move |worker| async move {
+            // A repeated key answers its stored receipt before any
+            // contact or secret work (spec/07).
+            let replayed = worker
+                .blocking({
+                    let key = key.clone();
+                    move |resources| {
+                        resources.read(|tx| sb_resources::replay(tx, &key, DISCONNECT_ACCOUNT))
+                    }
+                })
+                .await??;
+            if let Some(receipt) = replayed {
+                return Ok(receipt);
+            }
             match account_kind(&worker, &id).await? {
                 Some(AccountKind::Proton) => {}
                 Some(_) => {
@@ -383,10 +406,14 @@ impl Engine {
                 }
                 Err(error) => return Err(error),
             }
+            let now = worker.resources().now();
             let disconnected = worker
                 .resources()
                 .write(WritePriority::User, move |tx| {
-                    disconnect_proton_account(tx, &id)
+                    run_once(tx, &key, DISCONNECT_ACCOUNT, now, |tx| {
+                        disconnect_proton_account(tx, &id)?;
+                        Ok("{}".to_owned())
+                    })
                 })
                 .await;
             // Revoked only once the secret is gone: a disconnect that
@@ -400,8 +427,7 @@ impl Engine {
                     .logout_proton_session(&restored.session)
                     .await;
             }
-            disconnected?;
-            Ok(())
+            disconnected.map_err(EngineError::from)
         })
         .await
     }

@@ -280,7 +280,22 @@ uint64_t uniffi_sb_ffi_fn_method_core_continue_proton_sign_in(uint64_t ptr, uint
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_DISCONNECT_ACCOUNT
 #define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_DISCONNECT_ACCOUNT
-uint64_t uniffi_sb_ffi_fn_method_core_disconnect_account(uint64_t ptr, uint64_t token, RustBuffer account_id
+uint64_t uniffi_sb_ffi_fn_method_core_disconnect_account(uint64_t ptr, uint64_t token, RustBuffer idempotency_key, RustBuffer account_id
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_PAUSE_ACCOUNT
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_PAUSE_ACCOUNT
+uint64_t uniffi_sb_ffi_fn_method_core_pause_account(uint64_t ptr, uint64_t token, RustBuffer idempotency_key, RustBuffer account_id
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_RESUME_ACCOUNT
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_RESUME_ACCOUNT
+uint64_t uniffi_sb_ffi_fn_method_core_resume_account(uint64_t ptr, uint64_t token, RustBuffer idempotency_key, RustBuffer account_id
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_UPDATE_ACCOUNT
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_UPDATE_ACCOUNT
+uint64_t uniffi_sb_ffi_fn_method_core_update_account(uint64_t ptr, uint64_t token, RustBuffer idempotency_key, RustBuffer account_id, RustBuffer display_name
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_SET_SETTING
@@ -1003,6 +1018,24 @@ uint16_t uniffi_sb_ffi_checksum_method_core_continue_proton_sign_in(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_DISCONNECT_ACCOUNT
 #define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_DISCONNECT_ACCOUNT
 uint16_t uniffi_sb_ffi_checksum_method_core_disconnect_account(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_PAUSE_ACCOUNT
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_PAUSE_ACCOUNT
+uint16_t uniffi_sb_ffi_checksum_method_core_pause_account(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_RESUME_ACCOUNT
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_RESUME_ACCOUNT
+uint16_t uniffi_sb_ffi_checksum_method_core_resume_account(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_UPDATE_ACCOUNT
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_UPDATE_ACCOUNT
+uint16_t uniffi_sb_ffi_checksum_method_core_update_account(void
     
 );
 #endif
