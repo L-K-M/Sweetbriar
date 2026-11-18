@@ -551,7 +551,20 @@ fn find_or_create_message(
             tx.last_insert_rowid()
         }
     };
-    let columns = &message.columns;
+    store_headers(tx, message_id, &message.raw_metadata, &message.columns, now)?;
+    Ok(message_id)
+}
+
+/// Store one message's header literal and its parsed columns, replacing
+/// any earlier row (spec/02 "Headers before bodies"): listed metadata
+/// over listed metadata, and a body's stored header block last.
+pub(super) fn store_headers(
+    tx: &Transaction,
+    message_id: i64,
+    raw_fields: &[u8],
+    columns: &HeaderColumns,
+    now: Timestamp,
+) -> Result<(), StoreError> {
     tx.execute(
         "INSERT INTO message_headers
          (message_id, raw_fields, header_message_id, subject, from_json, reply_to_json,
@@ -568,7 +581,7 @@ fn find_or_create_message(
            fetched_at = excluded.fetched_at",
         params![
             message_id,
-            message.raw_metadata,
+            raw_fields,
             columns.header_message_id,
             columns.subject,
             columns.from_json,
@@ -583,8 +596,8 @@ fn find_or_create_message(
             now.as_millis(),
         ],
     )
-    .map_err(|e| classify(e, "store a Proton message's listed headers"))?;
-    Ok(message_id)
+    .map_err(|e| classify(e, "store a Proton message's headers"))?;
+    Ok(())
 }
 
 /// The message's current occurrences, oldest first, so a duplicate the

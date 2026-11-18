@@ -391,41 +391,16 @@ fn store_message(
         )
         .optional()
         .map_err(sql_error)?;
-    if previous.as_ref().is_some_and(|previous| previous != &hash) {
-        return Err(StoreError::conflict(
-            "source identity was already imported with different bytes",
-        ));
-    }
-    let inserted = tx.execute(
-        "INSERT INTO acquisitions (content_sha256, byte_length, object_state, first_acquired_at)
-         VALUES (?1, ?2, 'published', ?3) ON CONFLICT(content_sha256) DO NOTHING",
-        params![hash, length, now.as_millis()],
-    ).map_err(sql_error)? > 0;
-    let (acquisition, stored_length): (i64, i64) = tx
-        .query_row(
-            "SELECT acquisition_id, byte_length FROM acquisitions WHERE content_sha256 = ?1",
-            [&hash],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )
-        .map_err(sql_error)?;
-    if stored_length != length {
-        return Err(StoreError::corrupt(
-            "an acquisition hash has a different byte length",
-        ));
-    }
-    tx.execute(
-        "UPDATE acquisitions SET object_state = 'published' WHERE acquisition_id = ?1",
-        [acquisition],
-    )
-    .map_err(sql_error)?;
-    crate::index::enqueue_one(
+    let (acquisition, inserted) = store_acquisition(
         tx,
-        acquisition,
-        if inserted {
-            crate::index::IndexReason::New
-        } else {
-            crate::index::IndexReason::Reextract
+        &AcquisitionSource {
+            account_id: account,
+            source_kind: message.source_kind.name(),
+            source_ref: &source_ref,
         },
+        &hash,
+        length,
+        previous.as_deref(),
         now,
     )?;
     stats.processed += 1;
@@ -455,19 +430,6 @@ fn store_message(
         release_reservation(tx, &message.object, ReservationRelease::Tolerated)?;
         return Ok(());
     }
-    tx.execute(
-        "INSERT INTO acquisition_sources
-         (acquisition_id, account_id, source_kind, source_ref, completeness, acquired_at)
-         VALUES (?1, ?2, ?3, ?4, 'complete', ?5)",
-        params![
-            acquisition,
-            account,
-            message.source_kind.name(),
-            source_ref,
-            now.as_millis()
-        ],
-    )
-    .map_err(sql_error)?;
     tx.execute(
         "INSERT INTO logical_messages (account_id, acquisition_id, created_at) VALUES (?1, ?2, ?3)",
         params![account, acquisition, now.as_millis()],
@@ -506,9 +468,91 @@ fn store_message(
     Ok(())
 }
 
+/// The provenance one commit records: which account and source
+/// delivered the bytes.
+pub(crate) struct AcquisitionSource<'a> {
+    pub account_id: &'a str,
+    pub source_kind: &'a str,
+    pub source_ref: &'a str,
+}
+
+/// The acquisition-row half a commit shares (spec/02 "Acquisitions:
+/// immutable originals"): the bytes' one `acquisitions` row, marked
+/// `published` and queued for search, and the source that delivered
+/// them. `previous` is the caller's source-identity lookup: `Some` when
+/// the source already delivered bytes, naming their hash. Those bytes
+/// replay as a no-op; other bytes are `Conflict` and write nothing,
+/// since an original is never overwritten. Returns the acquisition id
+/// and whether these bytes are new.
+pub(crate) fn store_acquisition(
+    tx: &Transaction,
+    source: &AcquisitionSource<'_>,
+    hash: &str,
+    length: i64,
+    previous: Option<&str>,
+    now: Timestamp,
+) -> Result<(i64, bool), StoreError> {
+    if previous.is_some_and(|previous| previous != hash) {
+        return Err(StoreError::conflict(
+            "the source was already recorded with different bytes",
+        ));
+    }
+    let inserted = tx
+        .execute(
+            "INSERT INTO acquisitions (content_sha256, byte_length, object_state, first_acquired_at)
+             VALUES (?1, ?2, 'published', ?3) ON CONFLICT(content_sha256) DO NOTHING",
+            params![hash, length, now.as_millis()],
+        )
+        .map_err(sql_error)?
+        > 0;
+    let (acquisition, stored_length): (i64, i64) = tx
+        .query_row(
+            "SELECT acquisition_id, byte_length FROM acquisitions WHERE content_sha256 = ?1",
+            [&hash],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .map_err(sql_error)?;
+    if stored_length != length {
+        return Err(StoreError::corrupt(
+            "an acquisition hash has a different byte length",
+        ));
+    }
+    tx.execute(
+        "UPDATE acquisitions SET object_state = 'published' WHERE acquisition_id = ?1",
+        [acquisition],
+    )
+    .map_err(sql_error)?;
+    crate::index::enqueue_one(
+        tx,
+        acquisition,
+        if inserted {
+            crate::index::IndexReason::New
+        } else {
+            crate::index::IndexReason::Reextract
+        },
+        now,
+    )?;
+    if previous.is_none() {
+        tx.execute(
+            "INSERT INTO acquisition_sources
+             (acquisition_id, account_id, source_kind, source_ref, completeness, acquired_at)
+             VALUES (?1, ?2, ?3, ?4, 'complete', ?5)",
+            params![
+                acquisition,
+                source.account_id,
+                source.source_kind,
+                source.source_ref,
+                now.as_millis()
+            ],
+        )
+        .map_err(sql_error)?;
+    }
+    Ok((acquisition, inserted))
+}
+
 /// Store `acquisition`'s first summary; an existing one, even from an
 /// older parser, stays (spec/02). Returns whether one was stored.
-fn save_summary(
+pub(crate) fn save_summary(
     tx: &Transaction,
     acquisition: i64,
     summary: &ImportSummary,

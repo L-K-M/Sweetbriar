@@ -15,6 +15,11 @@ pub use messages::{
     commit_import_batch,
 };
 
+/// The acquisition-row and summary writes other commit paths (a
+/// Proton body) share with imports, so provenance and the
+/// first-summary rule stay in one place.
+pub(crate) use messages::{AcquisitionSource, save_summary, store_acquisition};
+
 use rusqlite::Error;
 use serde_json::Value;
 

@@ -87,13 +87,15 @@ pub use objects::{
 pub use paths::StorePaths;
 pub use proton::{
     AppliedEvents, BreakerResolution, Classified, EventChunk, ListedMessage, ListedPage,
-    ListedPageStats, MailboxCoverage, NewProtonAccount, ObservedLabel, ProtonAccount,
-    ProtonBodyFailure, ProtonBodyFailureReason, ProtonChange, ProtonCoverage, ProtonListingState,
-    ProtonPasswordMode, apply_event_chunk, begin_listing, body_failure, clear_body_failure,
-    commit_listed_page, complete_listing, finish_listing, insert_proton_account, proton_account,
-    proton_account_by_user_id, proton_coverage, reconcile_proton_labels, record_body_failure,
-    refresh_proton_identities, resolve_breaker_event, set_diagnostics, set_event_cursor,
-    update_listing_checkpoint, withhold_unlisted,
+    ListedPageStats, MAX_PENDING_BODIES, MailboxCoverage, NewProtonAccount, ObservedLabel,
+    PendingBody, ProtonAccount, ProtonBody, ProtonBodyCommit, ProtonBodyFailure,
+    ProtonBodyFailureReason, ProtonChange, ProtonCoverage, ProtonListingState, ProtonPasswordMode,
+    apply_event_chunk, begin_listing, body_failure, bump_key_generation, clear_body_failure,
+    commit_listed_page, commit_proton_body, complete_listing, finish_listing,
+    insert_proton_account, pending_proton_bodies, proton_account, proton_account_by_user_id,
+    proton_coverage, reconcile_proton_labels, record_body_failure, refresh_proton_identities,
+    resolve_breaker_event, set_diagnostics, set_event_cursor, update_listing_checkpoint,
+    withhold_unlisted,
 };
 pub use readers::{ReadStop, Scoped};
 pub use receipts::{
