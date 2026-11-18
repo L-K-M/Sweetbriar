@@ -1697,8 +1697,9 @@ fn handle_addresses(
                 "ID": address.id,
                 "Email": address.email,
                 "DisplayName": address.display_name,
-                "Send": address.send,
-                "Receive": address.receive,
+                // Production's `0`/`1` booleans (`go-proton-api` `Bool`).
+                "Send": u8::from(address.send),
+                "Receive": u8::from(address.receive),
                 "Status": address.status,
                 "Order": address.order,
                 "Keys": keys,

@@ -70,9 +70,17 @@ pub struct Address {
     pub email: String,
     #[serde(rename = "DisplayName", default)]
     pub display_name: String,
-    #[serde(rename = "Send", default)]
+    #[serde(
+        rename = "Send",
+        default,
+        deserialize_with = "crate::mail::proton_bool"
+    )]
     pub send: bool,
-    #[serde(rename = "Receive", default)]
+    #[serde(
+        rename = "Receive",
+        default,
+        deserialize_with = "crate::mail::proton_bool"
+    )]
     pub receive: bool,
     #[serde(rename = "Status", default)]
     pub status: u8,
@@ -552,6 +560,28 @@ impl Client {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn address_send_and_receive_decode_proton_s_zero_one() {
+        // Production sends `Send`/`Receive` as `0`/`1`
+        // (`go-proton-api/address_types.go` `Bool`).
+        let address: Address = serde_json::from_value(serde_json::json!({
+            "ID": "addr-1",
+            "Email": "owner@example.test",
+            "Send": 1,
+            "Receive": 0,
+            "Status": 1,
+        }))
+        .expect("an address with 0/1 booleans decodes");
+        assert!(address.send);
+        assert!(!address.receive);
+        let address: Address = serde_json::from_value(serde_json::json!({
+            "ID": "addr-1",
+            "Email": "owner@example.test",
+        }))
+        .expect("absent booleans default to false");
+        assert!(!address.send && !address.receive);
+    }
 
     #[test]
     fn zeroizing_buffers_wipe_their_contents_on_drop() {

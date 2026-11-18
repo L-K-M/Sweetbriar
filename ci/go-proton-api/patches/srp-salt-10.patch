@@ -1,0 +1,94 @@
+--- a/server/backend/backend.go
++++ b/server/backend/backend.go
+@@ -122,21 +122,26 @@
+ 
+ func (b *Backend) CreateUser(username string, password []byte) (string, error) {
+ 	return writeBackendRetErr(b, func(b *unsafeBackend) (string, error) {
+-		salt, err := crypto.RandomToken(16)
++		keySalt, err := crypto.RandomToken(16)
+ 		if err != nil {
+ 			return "", err
+ 		}
+ 
+-		passphrase, err := hashPassword(password, salt)
++		passphrase, err := hashPassword(password, keySalt)
+ 		if err != nil {
+ 			return "", err
+ 		}
+ 
+-		srpAuth, err := srp.NewAuthForVerifier(password, modulus, salt)
++		srpSalt, err := crypto.RandomToken(10)
+ 		if err != nil {
+ 			return "", err
+ 		}
+ 
++		srpAuth, err := srp.NewAuthForVerifier(password, modulus, srpSalt)
++		if err != nil {
++			return "", err
++		}
++
+ 		verifier, err := srpAuth.GenerateVerifier(2048)
+ 		if err != nil {
+ 			return "", err
+@@ -149,7 +154,7 @@
+ 
+ 		userID := uuid.NewString()
+ 
+-		b.accounts[userID] = newAccount(userID, username, armKey, salt, verifier)
++		b.accounts[userID] = newAccount(userID, username, armKey, keySalt, verifier, srpSalt)
+ 
+ 		return userID, nil
+ 	})
+--- a/server/backend/account.go
++++ b/server/backend/account.go
+@@ -20,6 +20,7 @@
+ 
+ 	keys     []key
+ 	salt     []byte
++	srpSalt  []byte
+ 	verifier []byte
+ 
+ 	labelIDs   []string
+@@ -27,7 +28,7 @@
+ 	updateIDs  []ID
+ }
+ 
+-func newAccount(userID, username string, armKey string, salt, verifier []byte) *account {
++func newAccount(userID, username string, armKey string, salt, verifier, srpSalt []byte) *account {
+ 	return &account{
+ 		userID:       userID,
+ 		username:     username,
+@@ -39,6 +40,7 @@
+ 		auth:     make(map[string]auth),
+ 		keys:     []key{{keyID: uuid.NewString(), key: armKey}},
+ 		salt:     salt,
++		srpSalt:  srpSalt,
+ 		verifier: verifier,
+ 	}
+ }
+--- a/server/backend/api_auth.go
++++ b/server/backend/api_auth.go
+@@ -32,7 +32,7 @@
+ 				Version:         4,
+ 				Modulus:         modulus,
+ 				ServerEphemeral: base64.StdEncoding.EncodeToString(challenge),
+-				Salt:            base64.StdEncoding.EncodeToString(acc.salt),
++				Salt:            base64.StdEncoding.EncodeToString(acc.srpSalt),
+ 				SRPSession:      session,
+ 			}, nil
+ 		})
+--- a/server/backend/api.go
++++ b/server/backend/api.go
+@@ -1186,7 +1186,11 @@
+ 				labelStats := make(map[string]stats)
+ 
+ 				for _, msg := range m {
+-					for _, lbl := range msg.getLabelIDs() {
++					// Production counts every label a message
++					// carries; getLabelIDs only yields the system
++					// labels, so include the user labels too.
++					labelIDs := append(append([]string{}, msg.labelIDs...), msg.getLabelIDs()...)
++					for _, lbl := range labelIDs {
+ 						v, ok := labelStats[lbl]
+ 						if !ok {
+ 							v = stats{}

@@ -3354,8 +3354,12 @@ dependencies = [
 name = "sb-service"
 version = "0.0.1"
 dependencies = [
+ "proton-srp",
+ "rustls",
  "sb-engine",
  "sb-test-support",
+ "serde",
+ "serde_json",
  "tokio",
 ]
 
