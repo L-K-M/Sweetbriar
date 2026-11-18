@@ -7,12 +7,28 @@
 //! errors.
 
 use sb_resources::{
-    AddedAccount, BridgeAccountError, BridgeAccountParams, CertificatePin, EndpointSecurity,
-    Secret, SecretError, certificate_pin_from_pem,
+    AccountKind, AccountState, AddedAccount, BridgeAccountError, BridgeAccountParams,
+    CertificatePin, EndpointSecurity, Receipt, Secret, SecretError, WritePriority, accounts,
+    certificate_pin_from_pem, pause_account, replay, resume_account, run_once, update_account,
 };
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use crate::EngineError;
-use crate::engine::{Engine, validate_idempotency_key};
+use crate::account_sync::AccountJobs;
+use crate::engine::{Engine, Worker, validate_idempotency_key};
+use crate::proton::Sessions;
+use crate::proton_sync::ProtonOpened;
+use crate::threads::ThreadRebuilds;
+
+/// The commands' names in `command_receipts` (spec/07).
+const UPDATE_ACCOUNT: &str = "update_account";
+const PAUSE_ACCOUNT: &str = "pause_account";
+const RESUME_ACCOUNT: &str = "resume_account";
+
+/// The stored byte bound on a display name (spec/02, 07).
+const MAX_DISPLAY_NAME_BYTES: usize = 128;
 
 impl Engine {
     /// `add_bridge_account(params)` (spec/07) under `idempotency_key`.
@@ -57,6 +73,238 @@ impl Engine {
         }
         Ok(added)
     }
+}
+
+impl Engine {
+    /// `update_account(id, params)` (spec/07) under `idempotency_key`:
+    /// the display name only, trimmed and validated, with `revision`
+    /// bumped and `config_generation` untouched. A repeated key
+    /// answers its stored receipt and writes nothing.
+    pub async fn update_account(
+        &self,
+        idempotency_key: &str,
+        account_id: &str,
+        display_name: &str,
+    ) -> Result<Receipt, EngineError> {
+        validate_idempotency_key(idempotency_key)?;
+        let name = valid_display_name(display_name)?;
+        let (key, id, name) = (idempotency_key.to_owned(), account_id.to_owned(), name);
+        self.command(move |worker| async move {
+            let now = worker.resources().now();
+            worker
+                .resources()
+                .write(WritePriority::User, move |tx| {
+                    run_once(tx, &key, UPDATE_ACCOUNT, now, |tx| {
+                        update_account(tx, &id, &name)?;
+                        Ok("{}".to_owned())
+                    })
+                })
+                .await
+                .map_err(EngineError::from)
+        })
+        .await
+    }
+
+    /// `pause_account(id)` (spec/07) under `idempotency_key`: an active
+    /// account becomes paused and its worker stops before the command
+    /// answers, so no request for the account starts after the receipt.
+    /// A paused account answers a receipt and changes nothing; a
+    /// `needs_attention` or `disconnected` one is `Conflict`; the local
+    /// archive is `InvalidInput` on `account`.
+    pub async fn pause_account(
+        &self,
+        idempotency_key: &str,
+        account_id: &str,
+    ) -> Result<Receipt, EngineError> {
+        validate_idempotency_key(idempotency_key)?;
+        let jobs = Arc::clone(self.account_jobs());
+        let sessions = Arc::clone(&self.proton_sessions);
+        let opened = Arc::clone(self.proton_opened());
+        let threads = Arc::clone(self.imports().threads());
+        let (key, id) = (idempotency_key.to_owned(), account_id.to_owned());
+        self.command(move |worker| async move {
+            let (kind, state) = match account_kind_and_state(&worker, &id).await? {
+                Some((AccountKind::Local, _)) => {
+                    return Err(EngineError::invalid_input(
+                        "account",
+                        format!("account {id} is the local archive, which has no server"),
+                    ));
+                }
+                Some(found) => found,
+                None => {
+                    return Err(EngineError::NotFound {
+                        what: format!("account {id}"),
+                    });
+                }
+            };
+            // A repeated key answers its stored receipt and does nothing
+            // else: no worker stop, no write.
+            let replayed = worker
+                .blocking({
+                    let key = key.clone();
+                    move |resources| resources.read(|tx| replay(tx, &key, PAUSE_ACCOUNT))
+                })
+                .await??;
+            if let Some(receipt) = replayed {
+                return Ok(receipt);
+            }
+            // Only an active account's worker is stopped, before the
+            // state change, so no request for the account starts after
+            // the receipt. A paused account's write is a no-op and a
+            // `needs_attention` or `disconnected` one's is `Conflict`;
+            // neither stops a worker.
+            let stopping = state == AccountState::Active;
+            if stopping {
+                jobs.stop_account(&id).await;
+            }
+            let now = worker.resources().now();
+            let write_id = id.clone();
+            let result = worker
+                .resources()
+                .write(WritePriority::User, move |tx| {
+                    run_once(tx, &key, PAUSE_ACCOUNT, now, |tx| {
+                        pause_account(tx, &write_id)?;
+                        Ok("{}".to_owned())
+                    })
+                })
+                .await;
+            if result.is_err() && stopping {
+                // The account stays as it was, so its worker runs again.
+                jobs.unpause(&id);
+                start_worker(&worker, &jobs, &sessions, &opened, &threads, kind, id).await;
+            }
+            result.map_err(EngineError::from)
+        })
+        .await
+    }
+
+    /// `resume_account(id)` (spec/07) under `idempotency_key`: a paused
+    /// account becomes active and its worker starts. An account a
+    /// restore paused reconciles first, in the same transaction as the
+    /// state change (03 "Restore" step 5). An active account answers a
+    /// receipt and changes nothing; a `needs_attention` or
+    /// `disconnected` one is `Conflict`; the local archive is
+    /// `InvalidInput` on `account`.
+    pub async fn resume_account(
+        &self,
+        idempotency_key: &str,
+        account_id: &str,
+    ) -> Result<Receipt, EngineError> {
+        validate_idempotency_key(idempotency_key)?;
+        let jobs = Arc::clone(self.account_jobs());
+        let sessions = Arc::clone(&self.proton_sessions);
+        let opened = Arc::clone(self.proton_opened());
+        let threads = Arc::clone(self.imports().threads());
+        let (key, id) = (idempotency_key.to_owned(), account_id.to_owned());
+        self.command(move |worker| async move {
+            let kind = match crate::proton::account_kind(&worker, &id).await? {
+                Some(kind) => kind,
+                None => {
+                    return Err(EngineError::NotFound {
+                        what: format!("account {id}"),
+                    });
+                }
+            };
+            if kind == AccountKind::Local {
+                return Err(EngineError::invalid_input(
+                    "account",
+                    format!("account {id} is the local archive, which has no server"),
+                ));
+            }
+            // A repeated key answers its stored receipt and does nothing
+            // else: no worker start, no write.
+            let replayed = worker
+                .blocking({
+                    let key = key.clone();
+                    move |resources| resources.read(|tx| replay(tx, &key, RESUME_ACCOUNT))
+                })
+                .await??;
+            if let Some(receipt) = replayed {
+                return Ok(receipt);
+            }
+            let now = worker.resources().now();
+            let write_id = id.clone();
+            let activated = Arc::new(AtomicBool::new(false));
+            let write_activated = Arc::clone(&activated);
+            let receipt = worker
+                .resources()
+                .write(WritePriority::User, move |tx| {
+                    run_once(tx, &key, RESUME_ACCOUNT, now, |tx| {
+                        let changed = resume_account(tx, &write_id)?;
+                        write_activated.store(changed, Ordering::Relaxed);
+                        Ok("{}".to_owned())
+                    })
+                })
+                .await?;
+            // Resuming an active account changes nothing: no worker
+            // start, no session restore.
+            if !activated.load(Ordering::Relaxed) {
+                return Ok(receipt);
+            }
+            jobs.unpause(&id);
+            start_worker(&worker, &jobs, &sessions, &opened, &threads, kind, id).await;
+            Ok(receipt)
+        })
+        .await
+    }
+}
+
+/// The account's kind and state, or `None` for an unknown account.
+async fn account_kind_and_state(
+    worker: &Worker,
+    account_id: &str,
+) -> Result<Option<(AccountKind, AccountState)>, EngineError> {
+    let accounts = worker
+        .blocking(move |resources| resources.read(accounts))
+        .await??;
+    Ok(accounts
+        .into_iter()
+        .find(|account| account.account_id == account_id)
+        .map(|account| (account.kind, account.state)))
+}
+
+/// Start a server account's worker. Launch skips a paused account's
+/// Proton session, so one without a session restores it first.
+async fn start_worker(
+    worker: &Worker,
+    jobs: &Arc<AccountJobs>,
+    sessions: &Arc<Sessions>,
+    opened: &Arc<ProtonOpened>,
+    threads: &Arc<ThreadRebuilds>,
+    kind: AccountKind,
+    id: String,
+) {
+    match kind {
+        AccountKind::Proton => {
+            if sessions.lock().await.get(&id).is_none() {
+                crate::proton::restore_proton_account(worker, sessions, &id).await;
+            }
+            crate::proton_sync::start(worker, jobs, sessions, opened, id);
+        }
+        AccountKind::Imap => crate::account_sync::start_account(worker, jobs, threads, id),
+        AccountKind::Local => {}
+    }
+}
+
+/// A display name is trimmed, 1–128 UTF-8 bytes and control-free
+/// (spec/07); the trimmed name is what stores.
+fn valid_display_name(name: &str) -> Result<String, EngineError> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() || trimmed.len() > MAX_DISPLAY_NAME_BYTES {
+        return Err(EngineError::invalid_input(
+            "display_name",
+            format!(
+                "a display name is 1 through {MAX_DISPLAY_NAME_BYTES} UTF-8 bytes once trimmed"
+            ),
+        ));
+    }
+    if trimmed.chars().any(char::is_control) {
+        return Err(EngineError::invalid_input(
+            "display_name",
+            "a display name has no control characters",
+        ));
+    }
+    Ok(trimmed.to_owned())
 }
 
 impl Engine {

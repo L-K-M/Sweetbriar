@@ -13,8 +13,8 @@ use crate::proton::{
     ProtonPasswordMode, SESSION_REFUSED_REASON, begin_listing, body_failure, clear_body_failure,
     commit_proton_sign_in, complete_listing, disconnect_proton_account, insert_proton_account,
     pause_for_proton_credential, pause_for_session, proton_account, proton_account_by_user_id,
-    record_body_failure, refresh_proton_identities, set_diagnostics, set_event_cursor,
-    update_listing_checkpoint,
+    reactivate_proton_account, record_body_failure, refresh_proton_identities, set_diagnostics,
+    set_event_cursor, update_listing_checkpoint,
 };
 use crate::testing::{reading, scratch_paths, test_seams};
 
@@ -76,6 +76,51 @@ fn sign_in_for(account_id: &str, proton_user_id: &str) -> NewProtonSignIn {
             sendable: IdentitySendable::Validated,
         }],
     }
+}
+
+/// A sign-in again's `Complete` makes a restored account active, so it
+/// reconciles in the same transaction (07): the listing resets and
+/// `restore_pending` clears.
+#[test]
+fn reactivate_reconciles_a_restore_pending_account() {
+    let (_scratch, store) = proton_store("proton-reactivate-restore");
+    block_on(store.write(crate::WritePriority::User, |tx| {
+        insert_account(tx, "a1", 1);
+        insert_proton_account(tx, &new_account("a1", "user-1"))?;
+        // A restore left the account needs_attention and restore-pending,
+        // with the backed-up completed listing.
+        tx.execute(
+            "UPDATE accounts
+             SET state = 'needs_attention', state_reason = 'Sign in again',
+                 restore_pending = 1
+             WHERE account_id = 'a1'",
+            [],
+        )
+        .map_err(|e| crate::schema::classify(e, "pause the account"))?;
+        tx.execute(
+            "UPDATE proton_accounts
+             SET listing_state = 'complete', event_cursor = 'e1'
+             WHERE account_id = 'a1'",
+            [],
+        )
+        .map_err(|e| crate::schema::classify(e, "complete the listing"))?;
+        reactivate_proton_account(tx, "a1").map(|_| ())
+    }))
+    .unwrap();
+
+    let account = reading(&store, |tx| proton_account(tx, "a1")).expect("the row exists");
+    assert_eq!(account.listing_state, ProtonListingState::None);
+    assert_eq!(account.event_cursor, None);
+    let (state, pending): (String, i64) = reading(&store, |tx| {
+        tx.query_row(
+            "SELECT state, restore_pending FROM accounts WHERE account_id = 'a1'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .map_err(|e| crate::schema::classify(e, "read the account"))
+    });
+    assert_eq!(state, "active");
+    assert_eq!(pending, 0);
 }
 
 /// Insert, read by both keys, refuse a second account for one Proton

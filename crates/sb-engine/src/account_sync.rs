@@ -11,7 +11,7 @@
 //! until the worker is stopped, the session fails, or the account
 //! stops syncing.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::ErrorKind;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
@@ -22,7 +22,7 @@ use sb_resources::{
     SecretError, WritePriority, clear_connection_pause, connect_account, imap_endpoint,
     pause_for_connection, pause_for_credential, syncable_accounts,
 };
-use tokio::sync::watch;
+use tokio::sync::{Notify, watch};
 
 use crate::Engine;
 use crate::engine::{Spawn, Worker};
@@ -88,12 +88,18 @@ pub(crate) struct AccountJobs {
     /// Raised to make every waiting worker sync now rather than at its
     /// next poll (spec/04-sync-proton "Sync loop" step 2).
     poll: watch::Sender<()>,
+    /// Notified when a worker's registry entry goes, so a per-account
+    /// stop can wait for the worker to end.
+    stopped: Notify,
 }
 
 #[derive(Default)]
 struct Jobs {
     stopping: bool,
     live: HashMap<String, watch::Sender<bool>>,
+    /// Accounts a user pause stopped. No new worker starts for one
+    /// until [`AccountJobs::unpause`] (a resume or a completed sign-in).
+    user_paused: HashSet<String>,
     #[cfg(test)]
     starts: usize,
 }
@@ -151,11 +157,14 @@ impl AccountJobs {
         self.lock().starts
     }
 
-    /// Reserve the account's one worker, unless stopping or already
-    /// running.
+    /// Reserve the account's one worker, unless stopping, already
+    /// running or user-paused.
     pub(crate) fn claim(&self, account_id: &str) -> Option<watch::Receiver<bool>> {
         let mut jobs = self.lock();
-        if jobs.stopping || jobs.live.contains_key(account_id) {
+        if jobs.stopping
+            || jobs.live.contains_key(account_id)
+            || jobs.user_paused.contains(account_id)
+        {
             return None;
         }
         let (stop, stopped) = watch::channel(false);
@@ -169,6 +178,40 @@ impl AccountJobs {
 
     pub(crate) fn release(&self, account_id: &str) {
         self.lock().live.remove(account_id);
+        self.stopped.notify_one();
+    }
+
+    /// Stop one account's worker and wait for it to end, so a pause
+    /// answers only once no request for the account can start. The
+    /// account is marked user-paused first, so a concurrent start does
+    /// not slip a new worker in before the state change commits. A
+    /// failed state change clears the mark again.
+    pub(crate) async fn stop_account(&self, account_id: &str) {
+        {
+            let mut jobs = self.lock();
+            jobs.user_paused.insert(account_id.to_owned());
+            match jobs.live.get(account_id) {
+                Some(stop) => {
+                    let _ = stop.send(true);
+                }
+                None => return,
+            }
+        }
+        // The worker's release is the task's last act; a permit stored
+        // before the wait still resolves it, and the loop re-checks.
+        loop {
+            let ended = self.stopped.notified();
+            if !self.lock().live.contains_key(account_id) {
+                return;
+            }
+            ended.await;
+        }
+    }
+
+    /// Allow a worker for the account again (a resume, or a completed
+    /// sign-in that reactivates it).
+    pub(crate) fn unpause(&self, account_id: &str) {
+        self.lock().user_paused.remove(account_id);
     }
 }
 
@@ -203,7 +246,7 @@ impl Engine {
     }
 }
 
-fn start_account(
+pub(crate) fn start_account(
     spawner: &impl Spawn,
     jobs: &Arc<AccountJobs>,
     threads: &Arc<ThreadRebuilds>,

@@ -153,7 +153,9 @@ impl Engine {
                     )
                     .await?;
                     // Its listing starts, or a running worker takes the
-                    // new session.
+                    // new session. Signing in again reactivates the
+                    // account, so a user pause no longer blocks it.
+                    jobs.unpause(&completed);
                     crate::proton_sync::start(
                         &worker,
                         &jobs,
@@ -251,6 +253,7 @@ impl Engine {
                         finished,
                     )
                     .await?;
+                    jobs.unpause(&completed);
                     crate::proton_sync::start(
                         &worker,
                         &jobs,
@@ -293,10 +296,11 @@ impl Engine {
 
     /// Restore every Proton account's session in the background after
     /// open (spec/04 "On every start"): the open itself never waits for
-    /// Proton. Each account not disconnected reads its secret item,
-    /// refreshes and unlocks its keys without the password; a missing or
-    /// unreadable item, or a refused refresh, marks it `needs_attention`
-    /// and keeps its data.
+    /// Proton. Each account not disconnected and not paused reads its
+    /// secret item, refreshes and unlocks its keys without the password;
+    /// a missing or unreadable item, or a refused refresh, marks it
+    /// `needs_attention` and keeps its data. A paused account's session
+    /// waits for its resume, which restores it before the worker starts.
     pub(crate) fn schedule_proton_restore(&self) {
         let sessions = Arc::clone(&self.proton_sessions);
         let done = Arc::clone(&self.proton_restore_done);
@@ -305,16 +309,17 @@ impl Engine {
         let _ = self.spawn_worker(move |worker| async move {
             let accounts = worker.blocking(|resources| resources.read(accounts)).await;
             if let Ok(Ok(accounts)) = accounts {
-                for account in accounts {
+                for account in &accounts {
                     if account.kind != AccountKind::Proton
                         || account.state == AccountState::Disconnected
+                        || account.state == AccountState::Paused
                     {
                         continue;
                     }
                     restore_proton_account(&worker, &sessions, &account.account_id).await;
                 }
+                crate::proton_sync::start_all(&worker, &jobs, &sessions, &opened, &accounts).await;
             }
-            crate::proton_sync::start_all(&worker, &jobs, &sessions, &opened).await;
             done.notify_one();
         });
     }
@@ -435,7 +440,7 @@ async fn is_disconnected(worker: &Worker, account_id: &str) -> bool {
 }
 
 /// The account's kind, or `None` when it doesn't exist.
-async fn account_kind(
+pub(crate) async fn account_kind(
     worker: &Worker,
     account_id: &str,
 ) -> Result<Option<AccountKind>, EngineError> {

@@ -19,7 +19,7 @@ use sb_store::accounts::{IdentitySendable, NewIdentity};
 use sb_store::proton::{NewProtonSignIn, ProtonPasswordMode, commit_proton_sign_in};
 pub use sb_store::proton::{
     ProtonAccount, disconnect_proton_account, pause_for_proton_credential, pause_for_session,
-    proton_account, reactivate_proton_account,
+    proton_account, reactivate_proton_account, reset_proton_for_restore,
 };
 use sb_store::{StoreError, WritePriority, run_once};
 use std::future::Future;

@@ -452,13 +452,31 @@ pub fn pause_for_proton_credential(
 
 /// Return a Proton account to `active` once its new secret is stored
 /// (spec/04, 07): the user has just signed in, so any prior state
-/// clears. An already-active account writes nothing. `NotFound` for an
-/// unknown account.
+/// clears. A sign-in again's `Complete` is one of the transactions that
+/// make a restored account active, so it reconciles `restore_pending`
+/// here (07): the listing resets for the bootstrap. An already-active
+/// account writes nothing. `NotFound` for an unknown account.
 pub fn reactivate_proton_account(tx: &Transaction, account_id: &str) -> Result<(), StoreError> {
+    let restore_pending = tx
+        .query_row(
+            "SELECT restore_pending FROM accounts WHERE account_id = ?1",
+            params![account_id],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()
+        .map_err(|e| classify(e, "read the account's restore flag"))?
+        .ok_or_else(|| StoreError::not_found(format!("account {account_id}")))?;
+    if restore_pending != 0 {
+        // A sign-in again's `Complete` is one of the transactions that
+        // make a restored account active, so it reconciles here (07):
+        // the listing resets for the bootstrap.
+        reset_proton_for_restore(tx, account_id)?;
+    }
     let changed = tx
         .execute(
             "UPDATE accounts
-             SET state = 'active', state_reason = NULL, revision = revision + 1
+             SET state = 'active', state_reason = NULL, restore_pending = 0,
+                 revision = revision + 1
              WHERE account_id = ?1 AND kind = 'proton' AND state != 'active'",
             params![account_id],
         )
@@ -500,6 +518,23 @@ pub fn disconnect_proton_account(tx: &Transaction, account_id: &str) -> Result<(
         )),
         None => Err(StoreError::not_found(format!("account {account_id}"))),
     }
+}
+
+/// Reset a Proton account's listing so its worker starts with the
+/// bootstrap again (07 `resume_account`, 03 "Restore" step 5): the
+/// event cursor and listing state clear, and the CHECK-constrained
+/// pending cursor and checkpoint clear with them. A non-Proton account
+/// matches no row and is left alone.
+pub fn reset_proton_for_restore(tx: &Transaction, account_id: &str) -> Result<(), StoreError> {
+    tx.execute(
+        "UPDATE proton_accounts
+         SET event_cursor = NULL, pending_cursor = NULL, listing_checkpoint = NULL,
+             listing_state = 'none', revision = revision + 1
+         WHERE account_id = ?1",
+        params![account_id],
+    )
+    .map_err(|e| classify(e, "reset the Proton listing"))?;
+    Ok(())
 }
 
 /// One account read by a fixed key column. `Corrupt` for a stored

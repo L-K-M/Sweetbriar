@@ -361,3 +361,239 @@ fn a_stored_secret_reads_back_by_its_reference() {
         PASSWORD.as_bytes()
     );
 }
+
+/// Set an account's state directly, as a fault or a fixture would.
+fn set_account_state(engine: &Engine, id: &str, state: &str) {
+    let id = id.to_owned();
+    let state = state.to_owned();
+    block_on(
+        engine
+            .resources()
+            .write(sb_resources::WritePriority::User, move |tx| {
+                tx.execute(
+                    "UPDATE accounts SET state = ?2 WHERE account_id = ?1",
+                    (id, state),
+                )
+                .map(drop)
+                .map_err(|error| sb_resources::StoreError::internal(error.to_string()))
+            }),
+    )
+    .unwrap();
+}
+
+/// One integer column of an account's row.
+fn account_column_i64(engine: &Engine, id: &str, column: &str) -> i64 {
+    engine
+        .resources()
+        .read(move |tx| {
+            tx.query_row(
+                &format!("SELECT {column} FROM accounts WHERE account_id = ?1"),
+                [id],
+                |row| row.get(0),
+            )
+            .map_err(|error| sb_resources::StoreError::internal(error.to_string()))
+        })
+        .unwrap()
+}
+
+/// One text column of an account's row.
+fn account_column_text(engine: &Engine, id: &str, column: &str) -> String {
+    engine
+        .resources()
+        .read(move |tx| {
+            tx.query_row(
+                &format!("SELECT {column} FROM accounts WHERE account_id = ?1"),
+                [id],
+                |row| row.get(0),
+            )
+            .map_err(|error| sb_resources::StoreError::internal(error.to_string()))
+        })
+        .unwrap()
+}
+
+fn local_archive(engine: &Engine) -> String {
+    block_on(engine.accounts())
+        .unwrap()
+        .into_iter()
+        .find(|account| account.kind == crate::AccountKind::Local)
+        .unwrap()
+        .account_id
+}
+
+#[test]
+fn update_account_renames_with_a_receipt_and_replays() {
+    let secrets = Arc::new(FakeSecrets::new());
+    let (_scratch, engine) = engine("engine-account-update", secrets);
+    let archive = local_archive(&engine);
+
+    let receipt = block_on(engine.update_account("update-1", &archive, "  Owner  ")).unwrap();
+    assert_eq!(receipt.command(), "update_account");
+    let named = block_on(engine.accounts())
+        .unwrap()
+        .into_iter()
+        .find(|account| account.account_id == archive)
+        .unwrap();
+    assert_eq!(named.display_name, "Owner");
+    assert_eq!(account_column_i64(&engine, &archive, "revision"), 2);
+    assert_eq!(
+        account_column_i64(&engine, &archive, "config_generation"),
+        1
+    );
+
+    let replayed = block_on(engine.update_account("update-1", &archive, "Other")).unwrap();
+    assert_eq!(replayed, receipt, "the stored receipt comes back");
+    let named = block_on(engine.accounts())
+        .unwrap()
+        .into_iter()
+        .find(|account| account.account_id == archive)
+        .unwrap();
+    assert_eq!(named.display_name, "Owner", "the replay renamed nothing");
+    assert_eq!(account_column_i64(&engine, &archive, "revision"), 2);
+
+    for (key, bad) in [
+        ("empty", ""),
+        ("blank", "   "),
+        ("control", "a\nb"),
+        ("long", "x".repeat(129).as_str()),
+    ] {
+        let error =
+            block_on(engine.update_account(key, &archive, bad)).expect_err("a bad name is refused");
+        assert!(
+            matches!(&error, EngineError::InvalidInput { field, .. } if field == "display_name"),
+            "{key}: {error:?}"
+        );
+    }
+    let error = block_on(engine.update_account("missing", "no-such-account", "Owner"))
+        .expect_err("an unknown account is not found");
+    assert!(matches!(error, EngineError::NotFound { .. }), "{error:?}");
+}
+
+#[test]
+fn pause_and_resume_follow_the_state_table() {
+    let server = FakeImapServer::serve(vec![bridge_script(true)]).unwrap();
+    let secrets = Arc::new(FakeSecrets::new());
+    let (_scratch, engine) = engine("engine-account-pause-table", Arc::clone(&secrets));
+    let added = block_on(engine.add_bridge_account("setup", params(server.port()))).unwrap();
+    let id = added.account_id;
+
+    // (initial state, command, conflict, state after)
+    let cases = [
+        ("active", "pause", false, "paused"),
+        ("paused", "pause", false, "paused"),
+        ("needs_attention", "pause", true, "needs_attention"),
+        ("disconnected", "pause", true, "disconnected"),
+        ("paused", "resume", false, "active"),
+        ("active", "resume", false, "active"),
+        ("needs_attention", "resume", true, "needs_attention"),
+        ("disconnected", "resume", true, "disconnected"),
+    ];
+    for (index, (state, command, conflict, expected)) in cases.iter().enumerate() {
+        set_account_state(&engine, &id, state);
+        let key = format!("{command}-{index}");
+        let result = if *command == "pause" {
+            block_on(engine.pause_account(&key, &id))
+        } else {
+            block_on(engine.resume_account(&key, &id))
+        };
+        if *conflict {
+            assert!(
+                matches!(result, Err(EngineError::Conflict { .. })),
+                "{state}/{command}: {result:?}"
+            );
+        } else {
+            result.expect("the command succeeds");
+        }
+        assert_eq!(
+            account_column_text(&engine, &id, "state"),
+            *expected,
+            "{state}/{command}"
+        );
+    }
+
+    let archive = local_archive(&engine);
+    for (key, id) in [
+        ("pause-archive", archive.as_str()),
+        ("resume-archive", archive.as_str()),
+    ] {
+        let error = if key.starts_with("pause") {
+            block_on(engine.pause_account(key, id))
+        } else {
+            block_on(engine.resume_account(key, id))
+        }
+        .expect_err("the local archive has no server");
+        assert!(
+            matches!(&error, EngineError::InvalidInput { field, .. } if field == "account"),
+            "{key}: {error:?}"
+        );
+    }
+    for (key, command) in [("pause-missing", "pause"), ("resume-missing", "resume")] {
+        let error = if command == "pause" {
+            block_on(engine.pause_account(key, "no-such-account"))
+        } else {
+            block_on(engine.resume_account(key, "no-such-account"))
+        }
+        .expect_err("an unknown account is not found");
+        assert!(
+            matches!(error, EngineError::NotFound { .. }),
+            "{key}: {error:?}"
+        );
+    }
+}
+
+#[test]
+fn pausing_an_imap_account_stops_its_worker_and_resume_starts_it() {
+    let server = FakeImapServer::serve(vec![bridge_script(true)]).unwrap();
+    let secrets = Arc::new(FakeSecrets::new());
+    let scratch = ScratchDir::new("engine-account-worker-stop");
+    let store: Arc<dyn SecretStore> = secrets.clone();
+    let engine = block_on(Engine::open_with_secrets(
+        &scratch.path().join("store"),
+        store,
+    ))
+    .unwrap();
+    let added = block_on(engine.add_bridge_account("setup", params(server.port()))).unwrap();
+    let id = added.account_id;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while !engine.account_jobs().running(&id) {
+        assert!(std::time::Instant::now() < deadline, "the worker starts");
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+
+    block_on(engine.pause_account("pause", &id)).unwrap();
+    assert!(!engine.account_jobs().running(&id), "the worker stopped");
+    let received = server.received().len();
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    assert_eq!(
+        server.received().len(),
+        received,
+        "a paused account makes no request"
+    );
+    block_on(engine.shutdown()).unwrap();
+
+    // Launch skips the paused account; a resume starts it again.
+    let engine = block_on(Engine::open_with_secrets(
+        &scratch.path().join("store"),
+        secrets.clone(),
+    ))
+    .unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    assert!(
+        !engine.account_jobs().running(&id),
+        "launch starts a paused worker"
+    );
+    assert_eq!(
+        engine.account_jobs().starts(),
+        0,
+        "launch starts no worker for a paused account"
+    );
+    block_on(engine.resume_account("resume", &id)).unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while !engine.account_jobs().running(&id) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the resumed worker starts"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    block_on(engine.shutdown()).unwrap();
+}
