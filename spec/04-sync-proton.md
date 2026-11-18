@@ -304,7 +304,9 @@ Execution follows 04-sync-imap's intent rules, with Proton's evidence:
   sweep: while a flag intent is pending or in flight, events don't
   overwrite that flag on any occurrence of the message; once it is
   done, the next event wins, so another client's later change is
-  kept.
+  kept. Events apply in cursor order and the intent's own change
+  arrives as a later event, so an older event delivered after the
+  intent is `done` is overtaken by it, at the latest on the next poll.
 - **Undo** is the inverse intent, as for IMAP. Proton's undo tokens
   aren't used.
 

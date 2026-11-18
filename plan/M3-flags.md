@@ -41,7 +41,8 @@ the intent framework every later mutation uses.
   - health actions (`release_intents`, `cancel_intents`) and the
     Activity window's intent rows (M2.7) wired to them;
   - the breaker's Explained class: a delete or move matching a `done`
-    intent is applied.
+    intent is applied (M3 creates only read and star intents, so its
+    tests insert the move intent directly; M5 brings real ones).
 - **Acceptance:**
   - crash cuts between the local commit, the request, the response and
     intent completion never lose an intent, never apply an effect twice
@@ -51,11 +52,14 @@ the intent framework every later mutation uses.
     doesn't re-issue when the effect is present;
   - a Refresh makes pending intents wait (`resync`) without
     quarantining any; they run once the listing completes;
-  - a message Proton no longer has quarantines its intent
-    (`ambiguous_match`) and no mutation is sent;
+  - an intent whose message Proton no longer has is quarantined
+    (`ambiguous_match`), and no mutation is sent;
   - an account reconfiguration (generation bump) quarantines pending
     intents (`config_change`);
-  - five failures park an intent; `release_intents` runs it again;
+  - five failures park an intent; `release_intents` runs it again,
+    and `cancel_intents` ends it so it never runs;
+  - undoing a completed star plans the inverse intent, which unstars
+    the message on the fake;
   - the proptest model (M2.15c4b) includes intents and converges.
 
 ### M3.2 Read and star on Proton — M, linux + macos-ci
@@ -64,7 +68,7 @@ the intent framework every later mutation uses.
   policy, with the flag-conflict rule, wired into the app.
 - **Spec:** 04-sync-proton (the mutation matrix's read and star rows),
   04-sync-imap (Flag conflicts), 08 (Message list keyboard; Reader).
-- **Depends on:** M3.1.
+- **Depends on:** M3.1 and M2.17 (the `go-proton-api` lane).
 - **Deliverables:**
   - `set_flags` planning and execution: `read`/`unread`, and `label`/
     `unlabel` with Starred (`10`);
@@ -82,7 +86,7 @@ the intent framework every later mutation uses.
   - another client's later flag change (fake server) is preserved after
     our intent completes;
   - the UI updates instantly (local effect) and stays correct after the
-    next events;
+    next events poll;
   - the `go-proton-api` lane passes the flag tests.
 
 ### M3.Q Qualification
