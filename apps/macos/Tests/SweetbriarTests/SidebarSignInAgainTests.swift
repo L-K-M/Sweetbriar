@@ -1,6 +1,7 @@
 // The sidebar's Sign In Again… (plan M2.14b, spec/08 "Signing in
 // again"): offered on a Proton account's heading and mailboxes only,
-// and it hands that account, username included, to the sign-in sheet.
+// disabled while the archive takes no writes, and it hands that
+// account, username included, to the sign-in sheet.
 
 import AppKit
 import Testing
@@ -61,6 +62,13 @@ struct SidebarSignInAgainTests {
             sidebar.updateMenu(viewId: nil, rowId: row)
             #expect(!item.isHidden && item.isEnabled, "\(row)")
         }
+        // A read-only archive takes no sign-in: shown, but disabled.
+        sidebar.canWrite = { false }
+        sidebar.updateMenu(viewId: nil, rowId: proton.accountId)
+        #expect(!item.isHidden && !item.isEnabled)
+        sidebar.canWrite = { true }
+        sidebar.updateMenu(viewId: nil, rowId: proton.accountId)
+
         let action = try #require(item.action)
         #expect(NSApp.sendAction(action, to: item.target, from: item))
         #expect(opened == [proton])

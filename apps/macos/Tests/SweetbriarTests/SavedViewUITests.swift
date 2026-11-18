@@ -200,10 +200,12 @@ struct SavedViewUITests {
             sidebar.choose(entryID: SidebarModel.savedViewEntryID(view.viewId))
         }
 
+        let save = try #require(find(in: search.view, id: "search.saveView") as? NSButton)
         searchModel.updateText(#""hello""#)
         #expect(await waitUntil { searchModel.queryJSON != nil })
-        let save = try #require(find(in: search.view, id: "search.saveView") as? NSButton)
-        #expect(save.isEnabled)
+        // The field enables the button on its next main-actor turn
+        // after the query changes, not with it.
+        #expect(await waitUntil { save.isEnabled })
         save.performClick(nil)
 
         #expect(await waitUntil { chosen != nil })
