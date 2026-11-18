@@ -126,10 +126,11 @@ async fn a_response_naming_another_message_is_refused_without_a_loop() {
     let h = setup(vec![TestAccount::new(USER, PASSWORD)]).await;
     h.server
         .add_message(USER, FakeMessage::new("m1").with_time(100));
+    // Armed before sign-in, so the worker's first fetch can't win.
+    h.server.set_wrong_message_id(USER, true);
     let (_id, state) = begin(&h, "wrong-id").await;
     let id = account_id(&state);
     listed(&h.core, &id).await;
-    h.server.set_wrong_message_id(USER, true);
 
     // The queue fetches once, refuses the response, and does not spin.
     wait_for(|| !body_fetches(&h).is_empty()).await;
@@ -157,11 +158,11 @@ async fn a_damaged_body_is_recorded_and_retried_after_a_key_change() {
     let h = setup(vec![TestAccount::new(USER, PASSWORD)]).await;
     h.server
         .add_message(USER, FakeMessage::new("m1").with_time(100));
+    h.server.set_damaged_body(USER, "m1", true);
     let (_id, state) = begin(&h, "damaged").await;
     let id = account_id(&state);
     listed(&h.core, &id).await;
 
-    h.server.set_damaged_body(USER, "m1", true);
     until(&h, "proton_body_failures WHERE reason = 'decrypt'", 1).await;
     assert_eq!(
         count(
@@ -237,10 +238,10 @@ async fn an_open_of_a_message_that_could_not_be_decrypted_is_distinguished() {
     let h = setup(vec![TestAccount::new(USER, PASSWORD)]).await;
     h.server
         .add_message(USER, FakeMessage::new("m1").with_time(100));
+    h.server.set_damaged_body(USER, "m1", true);
     let (_id, state) = begin(&h, "undecryptable").await;
     let id = account_id(&state);
     listed(&h.core, &id).await;
-    h.server.set_damaged_body(USER, "m1", true);
     until(&h, "proton_body_failures WHERE reason = 'decrypt'", 1).await;
 
     let message = message_id(&h, "m1");

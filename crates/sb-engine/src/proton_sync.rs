@@ -504,13 +504,14 @@ impl Attempt<'_> {
             return Ok(());
         }
         let opened = self.opened.keys(&id);
+        // Skipped messages stay in the store's queue, so ask for that
+        // many more: a run of them ahead can't fill every batch.
+        let limit = (BODY_BATCH + self.skipped.len()).min(MAX_PENDING_BODIES);
         let pending = self
             .worker
             .blocking({
                 let id = self.account_id.to_owned();
-                move |resources| {
-                    resources.read(|tx| pending_proton_bodies(tx, &id, &opened, BODY_BATCH))
-                }
+                move |resources| resources.read(|tx| pending_proton_bodies(tx, &id, &opened, limit))
             })
             .await
             .map_err(|_| Halt::Stopped)??;
