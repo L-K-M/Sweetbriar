@@ -68,6 +68,7 @@ struct SidebarSignInAgainTests {
         #expect(!item.isHidden && !item.isEnabled)
         sidebar.canWrite = { true }
         sidebar.updateMenu(viewId: nil, rowId: proton.accountId)
+        #expect(!item.isHidden && item.isEnabled)
 
         let action = try #require(item.action)
         #expect(NSApp.sendAction(action, to: item.target, from: item))
