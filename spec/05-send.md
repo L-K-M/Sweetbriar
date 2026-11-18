@@ -145,7 +145,7 @@ Otherwise the draft keeps its state.
      automatically. One without it never issued the send request, so it
      returns to `queued` and keeps its recorded `proton_draft_id` (02).
      A generic attempt (*later*) found in `submitting` becomes
-     `outcome_unknown` whatever its state, until SMTP records its own
+     `outcome_unknown` whatever its progress, until SMTP records its own
      marker that `DATA` began.
 4. **Proton submission** (04-sync-proton's transport, on the account's
    worker; one request in flight per account):

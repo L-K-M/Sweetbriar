@@ -83,7 +83,7 @@ inspectable Out Box. Unknown outcomes are never retried automatically.
     recipients, drafts, uploads and sends, recording each recipient's
     package and counting sends, with faults that drop the connection
     after a send is applied and that refuse with a chosen code;
-  - startup recovery of every `submitting` attempt by
+  - startup recovery of every Proton `submitting` attempt by
     `send_requested_at` (05): with it, `outcome_unknown` and the
     evidence check; without it, back to `queued` with the recorded
     draft and uploads;
