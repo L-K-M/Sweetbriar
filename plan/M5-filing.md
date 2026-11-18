@@ -2,7 +2,7 @@
 
 **Revised 2026-11-18 (owner decision, 2026-11-15):** filing acts
 through Sweetbriar's own Proton API client: a move labels the message
-with its destination folder and unlabels its previous one, and labels are added and removed with
+with its destination folder and unlabels its previous one if it had one, and labels are added and removed with
 `label` and `unlabel` (spec/04-sync-proton "Intents and the mutation
 matrix"). No M5 step had merged before this revision. The generic IMAP
 policy's filing (`UID MOVE`, copy-and-delete with UIDPLUS, Dovecot) is
@@ -26,7 +26,9 @@ verified before it completes.
     label_mailbox)`, which the 04-sync-proton matrix allows, and its
     note on `add_label` drops the EXPUNGE reason (label undo stays out
     of the pilot); and 04-sync-proton's move row gains the `unlabel`
-    of the previous folder when the confirming read still shows it;
+    of the previous folder when the confirming read still shows it,
+    always after the `label`, so a crash between them leaves the
+    message in two folders for a while, never in none;
   - policy checks: the matrix's allowed destinations (Inbox, Archive,
     Spam, Trash or a folder) and source ≠ destination; a move acts on
     the message whichever view it was chosen in (Starred, All Mail or a
@@ -36,9 +38,11 @@ verified before it completes.
   - execution as `label` to the destination folder, then `unlabel` of
     the message's previous folder when the metadata read still shows
     it (the server may not drop it; Bridge unlabels the old one
-    explicitly, research/proton-api/mail-sync.md), confirmed by a
-    metadata read that shows only the destination before `done`; a
-    message without a folder (only labels) needs the `label` alone;
+    explicitly, research/proton-api/mail-sync.md); until it lands,
+    reads may show both folders. `done` needs a final read showing the
+    destination as the message's only folder, its user labels
+    unchanged; a message without a folder (only labels) needs the
+    `label` alone;
   - `add_label` and `remove_label` with a user label;
   - `delete_to_trash` as a move to Trash under every move rule;
   - undo intents with the "moved elsewhere since" refusal;
@@ -60,8 +64,9 @@ verified before it completes.
   - a move without an acquired body fetches it first;
   - a destination the metadata doesn't confirm leaves the intent
     pending for reconciliation rather than marking it done;
-  - a drop after the fake applied a move's `label` or `unlabel`
-    reconciles without re-issuing it (mutation counter);
+  - a drop after the fake applied a move's `label` but not its
+    `unlabel` reconciles by issuing only the `unlabel`, and a drop
+    after both issues nothing more (mutation counter);
   - crash cuts across move steps never lose or duplicate a message
     (fake server state check);
   - the `go-proton-api` lane passes the matrix.
