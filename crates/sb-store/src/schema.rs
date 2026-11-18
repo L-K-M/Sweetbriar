@@ -183,6 +183,10 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         version: 31,
         run: migration_31,
     },
+    Migration {
+        version: 32,
+        run: migration_32,
+    },
 ];
 
 /// The `store_meta` keys every migrated store holds (spec/02): a
@@ -1050,6 +1054,18 @@ fn migration_31(tx: &Transaction, _seams: &Seams) -> Result<(), StoreError> {
            FOREIGN KEY (message_id, account_id) REFERENCES logical_messages(message_id, account_id)
          ) STRICT;
          CREATE INDEX proton_listed_account ON proton_listed(account_id);",
+    )
+    .map_err(bug)
+}
+
+/// Version 32 (spec/02 "Acquisitions: immutable originals"): one
+/// `proton_fetch` source row per account and reconstruction, so a body
+/// commit finds its replay record through an index instead of a scan.
+fn migration_32(tx: &Transaction, _seams: &Seams) -> Result<(), StoreError> {
+    tx.execute_batch(
+        "CREATE UNIQUE INDEX acquisition_proton_fetch_identity
+           ON acquisition_sources(account_id, source_ref)
+           WHERE source_kind = 'proton_fetch';",
     )
     .map_err(bug)
 }

@@ -588,3 +588,25 @@ fn coverage_counts_a_committed_body_and_clears_its_failure() {
         (1, 1, 0)
     );
 }
+
+#[test]
+fn the_fetch_source_lookup_uses_its_index() {
+    let (_scratch, store) = proton_store("bodies-plan");
+    let plan = write(&store, |tx| {
+        let mut statement = tx
+            .prepare(&format!("EXPLAIN QUERY PLAN {FIND_PROTON_FETCH_SOURCE}"))
+            .unwrap();
+        let details = statement
+            .query_map(params![ACCOUNT, "m-1#r1"], |row| row.get::<_, String>(3))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        Ok(details.join("\n"))
+    })
+    .unwrap();
+    assert!(
+        plan.contains("USING INDEX acquisition_proton_fetch_identity"),
+        "{plan}"
+    );
+    assert!(!plan.contains("SCAN s"), "{plan}");
+}

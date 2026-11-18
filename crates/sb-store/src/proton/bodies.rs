@@ -23,6 +23,13 @@ use crate::{StoreError, threads};
 /// opened first, then newest first).
 pub const MAX_PENDING_BODIES: usize = 500;
 
+/// The `proton_fetch` source a body commit records, through
+/// `acquisition_proton_fetch_identity` (migration 32): the replay
+/// record, found without scanning every source.
+const FIND_PROTON_FETCH_SOURCE: &str = "SELECT s.acquisition_id, a.content_sha256
+     FROM acquisition_sources s JOIN acquisitions a USING(acquisition_id)
+     WHERE s.account_id = ?1 AND s.source_kind = 'proton_fetch' AND s.source_ref = ?2";
+
 /// One reconstructed Proton message, as the transport and
 /// `sb_mime::reconstruct` leave it: the published object, the stored
 /// header block and its parsed columns, and the body's summary.
@@ -83,9 +90,7 @@ pub fn commit_proton_body(
     let source_ref = format!("{}#r{}", body.provider_key, body.reconstruction_version);
     let previous: Option<(i64, String)> = tx
         .query_row(
-            "SELECT s.acquisition_id, a.content_sha256
-             FROM acquisition_sources s JOIN acquisitions a USING(acquisition_id)
-             WHERE s.account_id = ?1 AND s.source_kind = 'proton_fetch' AND s.source_ref = ?2",
+            FIND_PROTON_FETCH_SOURCE,
             params![body.account_id, source_ref],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
