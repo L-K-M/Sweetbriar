@@ -207,7 +207,11 @@ pub fn reply_all_recipients(headers: &SourceMessageHeaders, exclude: &str) -> Ve
     let mut recipients = reply_recipients(headers);
     for original in headers.to.iter().chain(&headers.cc) {
         let Some(key) = address_key(original.address.as_deref().unwrap_or_default()) else {
-            recipients.push(original.clone());
+            // An unparseable entry has no key; an identical spelling
+            // still counts as a repeat.
+            if !recipients.contains(original) {
+                recipients.push(original.clone());
+            }
             continue;
         };
         if excluded.as_deref() == Some(key.as_str())
@@ -263,7 +267,8 @@ fn recipient_keys(recipients: &[DraftRecipient]) -> BTreeSet<String> {
 /// The acknowledgement token for a cross-account send: bound to the
 /// revision's identity and recipients, so editing either invalidates it.
 /// Recipients are deduplicated by their comparison key and sorted, so
-/// To/Cc order and repeats don't matter.
+/// To/Cc order and repeats don't matter. The parts are a JSON array, so
+/// the token's shape never depends on what a key may contain.
 pub fn cross_account_ack(
     identity_id: &str,
     to: &[DraftRecipient],
@@ -273,10 +278,10 @@ pub fn cross_account_ack(
     let mut keys = recipient_keys(to);
     keys.extend(recipient_keys(cc));
     keys.extend(recipient_keys(bcc));
-    format!(
-        "cross_account:{identity_id}:{}",
-        keys.into_iter().collect::<Vec<_>>().join(",")
-    )
+    let keys: Vec<String> = keys.into_iter().collect();
+    let parts =
+        serde_json::to_string(&(identity_id, keys)).expect("strings always serialise as JSON");
+    format!("cross_account:{parts}")
 }
 
 /// Whether `acks` carries the acknowledgement the warning needs. M4.3's

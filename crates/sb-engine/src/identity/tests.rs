@@ -168,6 +168,12 @@ fn the_identity_rules_are_table_driven() {
         ),
         ResolvedIdentity::ChooseSendingIdentity
     );
+    // A first compose with nothing selected and no global default
+    // asks, rather than picking any sendable identity.
+    assert_eq!(
+        r(ComposeContext::New, None, pair(), None, None),
+        ResolvedIdentity::ChooseSendingIdentity
+    );
 
     // Reply and Reply All: the recorded attempt wins, even over To.
     let recorded = Some(SourceIdentityInputs {
@@ -288,6 +294,9 @@ fn reply_recipients_prefer_a_differing_reply_to_and_reply_all_excludes_the_sende
         &[],
     );
     assert_eq!(reply_recipients(&same), list(&["sender@example.test"]));
+    // No Reply-To, the common case: Reply goes to From.
+    let plain = headers(&["sender@example.test"], &[], &[], &[], &[]);
+    assert_eq!(reply_recipients(&plain), list(&["sender@example.test"]));
     let all = headers(
         &["sender@example.test"],
         &["lists@example.test"],
@@ -375,6 +384,15 @@ fn the_cross_account_check_binds_its_ack_to_identity_and_recipients() {
             "{identity} {to:?}"
         );
     }
+    // A hidden recipient added after the acknowledgement asks again.
+    assert!(!cross_account_acknowledged(
+        Some(&warning),
+        &acked,
+        "r",
+        &[recipient("person@example.test")],
+        &[],
+        &[recipient("hidden@example.test")]
+    ));
     // Order doesn't matter; no warning needs no acknowledgement.
     let reordered = [cross_account_ack(
         "r",

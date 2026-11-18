@@ -390,9 +390,10 @@ fn the_resolution_read_is_header_only_and_validates_the_global_default() {
     assert!(matches!(error, StoreError::Corrupt { .. }), "{error:?}");
     for (stored, expected) in [("\"\"", None), ("\"a\"", Some("a"))] {
         writing(&store, move |tx| {
-            tx.execute_batch(&format!(
-                "UPDATE settings SET value_json = '{stored}' WHERE key = 'identity.default'"
-            ))
+            tx.execute(
+                "UPDATE settings SET value_json = ?1 WHERE key = 'identity.default'",
+                [stored],
+            )
             .map_err(|e| StoreError::internal(e.to_string()))?;
             Ok(())
         });
