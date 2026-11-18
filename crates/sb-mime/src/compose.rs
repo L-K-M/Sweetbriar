@@ -212,9 +212,7 @@ fn reject_crlf(value: &str) -> Result<(), ComposeError> {
     Ok(())
 }
 
-// ---------------------------------------------------------------------------
 // Plain text: RFC 3676 flowed wrapping
-// ---------------------------------------------------------------------------
 
 /// Suggested paragraph wrap width (RFC 3676 section 4.2).
 const FLOWED_WRAP: usize = 72;
@@ -327,9 +325,7 @@ fn wrap_paragraph(text: &str) -> Vec<String> {
     lines
 }
 
-// ---------------------------------------------------------------------------
 // Markdown
-// ---------------------------------------------------------------------------
 
 struct Rendered {
     plain: String,
@@ -380,6 +376,7 @@ fn with_autolinks<'a>(events: impl Iterator<Item = Event<'a>>) -> Vec<Event<'a>>
 }
 
 fn split_autolinks<'a>(text: &str, out: &mut Vec<Event<'a>>) {
+    let plain = |piece: &str| Event::Text(CowStr::from(piece.to_owned()));
     let mut rest = text;
     while let Some((start, scheme_len)) = next_url_start(rest) {
         let candidate = &rest[start..];
@@ -388,32 +385,30 @@ fn split_autolinks<'a>(text: &str, out: &mut Vec<Event<'a>>) {
             .unwrap_or(candidate.len());
         let url = trim_url(&candidate[..end]);
         if url.len() <= scheme_len {
-            out.push(Event::Text(CowStr::from(
-                rest[..start + scheme_len].to_owned(),
-            )));
+            out.push(plain(&rest[..start + scheme_len]));
             rest = &rest[start + scheme_len..];
             continue;
         }
         if start > 0 {
-            out.push(Event::Text(CowStr::from(rest[..start].to_owned())));
+            out.push(plain(&rest[..start]));
         }
-        let dest = if url.starts_with("www.") {
-            format!("http://{url}")
+        let scheme = if url.starts_with("www.") {
+            "http://"
         } else {
-            url.to_owned()
+            ""
         };
         out.push(Event::Start(Tag::Link {
             link_type: LinkType::Autolink,
-            dest_url: CowStr::from(dest),
+            dest_url: CowStr::from(format!("{scheme}{url}")),
             title: CowStr::Borrowed(""),
             id: CowStr::Borrowed(""),
         }));
-        out.push(Event::Text(CowStr::from(url.to_owned())));
+        out.push(plain(url));
         out.push(Event::End(TagEnd::Link));
         rest = &rest[start + url.len()..];
     }
     if !rest.is_empty() {
-        out.push(Event::Text(CowStr::from(rest.to_owned())));
+        out.push(plain(rest));
     }
 }
 
@@ -794,10 +789,9 @@ fn escape_attr(value: &str) -> String {
     out
 }
 
-/// The built-in stylesheet (spec/05 "Composing"), per tag, applied as
-/// inline `style=` attributes. Every property is one the reader's CSS
-/// policy keeps (spec/10 "Rendering"); the sanitizer checks again.
-/// One `tag|declarations` line per tag.
+/// The built-in stylesheet (spec/05 "Composing"), one `tag|declarations`
+/// line per tag, applied as inline `style=` attributes; the reader's
+/// sanitizer checks the properties again (spec/10 "Rendering").
 const STYLES: &str = "\
 body|font-family:-apple-system, BlinkMacSystemFont, \"Segoe UI\", Helvetica, Arial, sans-serif;font-size:16px;line-height:1.5;color:#1f2328;\n\
 p|margin:0 0 1em 0;\n\
@@ -826,9 +820,7 @@ fn style_for(tag: &str) -> Option<&'static str> {
         .find_map(|line| line.strip_prefix(tag)?.strip_prefix('|'))
 }
 
-// ---------------------------------------------------------------------------
 // MIME assembly
-// ---------------------------------------------------------------------------
 
 fn minted_cids(attachments: &[ComposeAttachment<'_>]) -> HashSet<String> {
     attachments
@@ -929,9 +921,13 @@ fn build_mime(
     let mut builder = MessageBuilder::new()
         .header("Message-ID", MessageId::new(input.message_id))
         .header("Date", Date::new(input.date))
-        .header("From", address(&input.from))
-        .header("To", address_list(input.to))
-        .header("Cc", address_list(input.cc));
+        .header("From", address(&input.from));
+    // An empty To or Cc (a Bcc-only draft) is left out (RFC 5322 3.4).
+    for (name, list) in [("To", input.to), ("Cc", input.cc)] {
+        if !list.is_empty() {
+            builder = builder.header(name, address_list(list));
+        }
+    }
     if let Some(reply_to) = &input.reply_to {
         builder = builder.header("Reply-To", address(reply_to));
     }

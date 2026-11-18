@@ -223,6 +223,10 @@ fn bcc_recipients_produce_no_bcc_header() {
     assert!(!headers.contains("Bcc:"), "{headers}");
     assert!(!headers.contains("secret@example.org"), "{headers}");
     assert!(
+        !headers.contains("Cc:"),
+        "an empty Cc is left out: {headers}"
+    );
+    assert!(
         headers.contains("To: \"Grace Hopper\" <grace@example.com>"),
         "{headers}"
     );
