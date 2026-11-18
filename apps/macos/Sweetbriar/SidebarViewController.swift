@@ -32,6 +32,9 @@ final class SidebarViewController: NSViewController, NSMenuDelegate {
     /// Opens the Proton sign-in sheet for an account (spec/08 "Signing
     /// in again"); the health row offers it too once M2.7 lands.
     var onSignInAgain: (@MainActor (Account) -> Void)?
+    /// Whether the archive takes writes now: a sign-in again writes, so
+    /// a read-only archive shows it disabled, as the File menu does.
+    var canWrite: @MainActor () -> Bool = { true }
 
     /// Asks for a new name; tests substitute a direct answer.
     var promptName: (@MainActor (@escaping (String?) -> Void) -> Void)?
@@ -365,7 +368,7 @@ extension SidebarViewController: NSOutlineViewDataSource, NSOutlineViewDelegate 
         deleteItem.representedObject = viewId
         let proton = rowId.flatMap(model.protonAccount(forRow:))
         signInAgainItem.isHidden = proton == nil
-        signInAgainItem.isEnabled = proton != nil && onSignInAgain != nil
+        signInAgainItem.isEnabled = proton != nil && onSignInAgain != nil && canWrite()
         signInAgainItem.representedObject = proton?.accountId
     }
 

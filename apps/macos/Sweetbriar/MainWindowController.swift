@@ -228,6 +228,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         let sidebar = SidebarViewController(model: sidebarModel, appearance: appearanceModel)
         sidebar.onSignInAgain = { [weak self] account in self?.beginProtonSignIn(signingInAgain: account) }
         let policy = backups
+        sidebar.canWrite = { policy.canWrite }
         let messageList = MessageListViewController(bridge: bridge, sidebar: sidebarModel, appearance: appearanceModel,
                                                      writes: writes, canWrite: { policy.canWrite })
         let reader = ReaderViewController(

@@ -171,6 +171,8 @@ enum HumanVerificationRules {
 
     static func compiled() async throws -> WKContentRuleList {
         let task = compilation ?? Task { @MainActor in
+            // WebKit keeps compiled lists by identifier across launches:
+            // a change to the rules needs a new identifier.
             guard let rules = try await WKContentRuleListStore.default().compileContentRuleList(
                 forIdentifier: "SweetbriarHumanVerification-v1",
                 encodedContentRuleList: HumanVerificationPolicy.contentRules
@@ -181,7 +183,9 @@ enum HumanVerificationRules {
         do {
             return try await task.value
         } catch {
-            compilation = nil
+            // Only the failed task: a caller may already have started
+            // the next one.
+            if compilation == task { compilation = nil }
             throw error
         }
     }

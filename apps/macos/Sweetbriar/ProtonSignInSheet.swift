@@ -1,8 +1,10 @@
 // File → Add Proton Account… and the sidebar's Sign In Again… (plan
 // M2.14b; spec/08 "Proton sign-in", spec/10 "The Proton API"): a
 // SwiftUI sheet over the main window driving `ProtonSignInForm`, with
-// human verification in a child sheet. Only Cancel and Done end it, so
-// the conversation is always cancelled or finished at the core.
+// human verification in a child sheet. Cancel and Done end it; a sheet
+// ended any other way, as when its window goes, cancels its
+// conversation too, so the conversation is always cancelled or
+// finished at the core.
 
 import AppKit
 import SwiftUI
@@ -18,8 +20,8 @@ final class ProtonSignInSheet {
     private let source: any ProtonSignInSource
     private let writes: ArchiveWriteTasks
     private let canWrite: @MainActor () -> Bool
-    private var sheet: NSWindow?
-    private var form: ProtonSignInForm?
+    private(set) var sheet: NSWindow?
+    private(set) var form: ProtonSignInForm?
     private var verification: HumanVerificationSheet?
 
     init(window: NSWindow, source: any ProtonSignInSource, writes: ArchiveWriteTasks,
@@ -58,7 +60,13 @@ final class ProtonSignInSheet {
         sheet.styleMask.remove([.closable, .miniaturizable])
         self.sheet = sheet
         self.form = form
-        window.beginSheet(sheet)
+        window.beginSheet(sheet) { [weak self, weak sheet] _ in
+            // `end` lets go of its sheet first, so only a sheet ended
+            // from outside is still held here.
+            guard let self, let sheet, self.sheet === sheet else { return }
+            self.sheet = nil
+            self.end(added: false)
+        }
     }
 
     /// The archive is being replaced: drop the conversation and the
@@ -75,8 +83,8 @@ final class ProtonSignInSheet {
         }
         form = nil
         guard let sheet else { return }
-        window?.endSheet(sheet)
         self.sheet = nil
+        window?.endSheet(sheet)
         if added { onAdded() }
     }
 
