@@ -36,13 +36,16 @@ verified before it completes.
     refused with an explanation;
   - pre-acquisition: the body is published before any move;
   - execution as `label` to the destination folder, then `unlabel` of
-    the message's previous folder when the metadata read still shows
-    it (the server may not drop it; Bridge unlabels the old one
+    the message's previous folder only when a metadata read shows both
+    (the server may not drop it; Bridge unlabels the old one
     explicitly, research/proton-api/mail-sync.md); until it lands,
     reads may show both folders. `done` needs a final read showing the
-    destination as the message's only folder, its user labels
-    unchanged; a message without a folder (only labels) needs the
-    `label` alone;
+    destination as the message's only folder; a read showing the
+    message in a third folder, or the destination gone, ends the
+    intent with the "moved elsewhere since" outcome rather than acting
+    on it. User labels aren't part of the move: other intents and
+    other clients may change them meanwhile. A message without a folder
+    (only labels) needs the `label` alone;
   - `add_label` and `remove_label` with a user label;
   - `delete_to_trash` as a move to Trash under every move rule;
   - undo intents with the "moved elsewhere since" refusal;
@@ -65,8 +68,9 @@ verified before it completes.
   - a destination the metadata doesn't confirm leaves the intent
     pending for reconciliation rather than marking it done;
   - a drop after the fake applied a move's `label` but not its
-    `unlabel` reconciles by issuing only the `unlabel`, and a drop
-    after both issues nothing more (mutation counter);
+    `unlabel` reconciles through the same read: it issues only the
+    `unlabel`, and a drop after both issues nothing more (mutation
+    counter);
   - crash cuts across move steps never lose or duplicate a message
     (fake server state check);
   - the `go-proton-api` lane passes the matrix.
