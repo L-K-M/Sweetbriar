@@ -87,27 +87,20 @@ pub fn reconstruct(
     }
     let cleaned = clean_header(input.header);
     let limit = limits.max_message_bytes();
-    // An upper bound before allocating, tight enough not to refuse a
-    // message that fits: quoted-printable is at most three bytes per
-    // byte plus soft breaks, base64 four per three plus CRLFs, and each
-    // part's framing stays under a fixed allowance.
-    let mut bound = input
-        .header
-        .len()
-        .saturating_add(input.body.len().saturating_mul(4))
-        .saturating_add(4096);
+    // A lower bound on the output before any encoding work: the body is
+    // at least its own length and each attachment exactly its base64
+    // length, so a message that fits is never refused here. The final
+    // check below enforces the limit exactly.
+    let mut bound = input.header.len().saturating_add(input.body.len());
     for part in input.attachments {
-        bound = bound
-            .saturating_add(base64_len(part.data.len()))
-            .saturating_add(part.name.len().saturating_mul(6))
-            .saturating_add(512);
+        bound = bound.saturating_add(base64_len(part.data.len()));
     }
     if bound > limit {
         return Err(ReconstructError::TooLarge);
     }
     let mut out = Vec::new();
     if multipart {
-        reconstruct_multipart(input, &media_type, message_id, cleaned, &mut out);
+        reconstruct_multipart(input, message_id, cleaned, &mut out)?;
     } else {
         reconstruct_text(input, &media_type, message_id, cleaned, &mut out);
     }
@@ -231,28 +224,39 @@ fn reconstruct_text(
     out.extend_from_slice(&top.1);
 }
 
+/// A multipart body is the MIME entity, parts included, so
+/// `input.attachments` (which Proton lists for it too) are not added
+/// again.
 fn reconstruct_multipart(
     input: &ReconstructInput<'_>,
-    media_type: &str,
     message_id: &str,
     mut cleaned: CleanHeader,
     out: &mut Vec<u8>,
-) {
+) -> Result<(), ReconstructError> {
     // The entity's header lines join the stored block (so its own
     // Content-Type, with its boundary, applies); its body follows as is.
+    // Without a boundary its parts can't be framed, and none can be
+    // invented for bytes already framed.
     let (entity_header, entity_body) = split_entity(input.body);
-    let mut has_content_type = false;
-    for line in entity_header {
-        has_content_type |= field_name(line).is_some_and(|name| name.as_slice() == b"content-type");
-        cleaned.lines.push(line.to_vec());
+    let has_content_type = entity_header
+        .iter()
+        .any(|line| field_name(line).is_some_and(|name| name.as_slice() == b"content-type"));
+    let has_boundary = entity_header.iter().any(|line| {
+        line.to_ascii_lowercase()
+            .windows(9)
+            .any(|w| w == b"boundary=")
+    });
+    if !has_content_type || !has_boundary {
+        return Err(ReconstructError::InvalidInput(
+            "a multipart body has no Content-Type boundary",
+        ));
     }
-    if !has_content_type {
-        cleaned
-            .lines
-            .push(format!("Content-Type: {media_type}").into_bytes());
-    }
+    cleaned
+        .lines
+        .extend(entity_header.iter().map(|line| line.to_vec()));
     push_message_header(out, &cleaned.lines, &[], message_id);
     out.extend_from_slice(entity_body);
+    Ok(())
 }
 
 /// An attachment part: `Content-Type`, `Content-Disposition`, an optional
@@ -294,6 +298,12 @@ fn push_message_header(
     for line in header_lines {
         out.extend_from_slice(line);
         out.extend_from_slice(b"\r\n");
+    }
+    if !header_lines
+        .iter()
+        .any(|line| field_name(line).is_some_and(|name| name.as_slice() == b"mime-version"))
+    {
+        out.extend_from_slice(b"MIME-Version: 1.0\r\n");
     }
     out.extend_from_slice(body_header);
     out.extend_from_slice(format!("X-Pm-Internal-Id: {message_id}\r\n\r\n").as_bytes());
@@ -496,7 +506,9 @@ fn quoted_printable(bytes: &[u8]) -> Vec<u8> {
         {
             encoded = if byte == b'\t' { *b"=09" } else { *b"=20" };
             &encoded
-        } else if (33..=126).contains(&byte) {
+        } else if (33..=126).contains(&byte) || matches!(byte, b' ' | b'\t') {
+            // Whitespace mid-line is literal; trailing whitespace was
+            // encoded above.
             encoded = [byte, 0, 0];
             &encoded[..1]
         } else {

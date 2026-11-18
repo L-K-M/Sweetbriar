@@ -363,11 +363,40 @@ fn encoded_lengths_and_line_widths_hold() {
     }
 }
 
+#[test]
+fn headers_and_encoding_details_hold() {
+    // A multipart body without a boundary can't be framed: refused.
+    let unframed = ReconstructInput {
+        body: b"Content-Type: multipart/mixed\r\n\r\nno parts",
+        ..expanding_input("msg-1", "multipart/mixed")
+    };
+    assert!(matches!(
+        reconstruct(&unframed, &Limits::default()),
+        Err(ReconstructError::InvalidInput(_))
+    ));
+    // MIME-Version once, and mid-line spaces stay literal.
+    let input = ReconstructInput {
+        body: b"two words here",
+        ..expanding_input("msg-1", "text/plain")
+    };
+    let out = reconstruct(&input, &Limits::default()).unwrap();
+    assert_eq!(field_count(&out, "MIME-Version"), 1);
+    assert!(contains(&out, "two words here"));
+    let with_version = [HEADER, b"MIME-Version: 1.0\r\n"].concat();
+    let input = ReconstructInput {
+        header: &with_version,
+        ..input
+    };
+    let out = reconstruct(&input, &Limits::default()).unwrap();
+    assert_eq!(field_count(&out, "MIME-Version"), 1);
+}
+
 proptest! {
     #[test]
     fn the_same_parts_always_reconstruct_to_the_same_bytes(
         message_id in "[A-Za-z0-9_-]{1,24}",
-        body in ".*",
+        // `(?s)` lets `.` match newlines, so bodies span lines.
+        body in "(?s).*",
         attachments in prop::collection::vec(
             ("[A-Za-z0-9 ._-]{0,24}", prop::collection::vec(any::<u8>(), 0..64)),
             0..3,
@@ -418,7 +447,9 @@ proptest! {
 fn boundary_of(output: &[u8]) -> Option<String> {
     let header = header_text(output);
     header.lines().find_map(|line| {
-        line.split_once("boundary=")
-            .map(|(_, value)| value.trim().trim_matches('"').to_owned())
+        line.split_once("boundary=").map(|(_, value)| {
+            let value = value.split(';').next().unwrap_or_default();
+            value.trim().trim_matches('"').to_owned()
+        })
     })
 }
