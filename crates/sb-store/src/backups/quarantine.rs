@@ -109,7 +109,7 @@ fn authorize(ctx: AuthContext<'_>) -> Authorization {
         } if ctx.database_name == Some("main") => matches!(
             (table_name, column_name),
             ("store_meta", "value")
-                | ("accounts", "state")
+                | ("accounts", "state" | "restore_pending")
                 | ("import_jobs", "state")
                 | ("intents", "state" | "quarantine_reason")
                 | ("send_attempts", "state")
@@ -349,7 +349,12 @@ fn apply_inner(conn: &mut Connection, input: &Quarantine<'_>) -> Result<(), Stor
         Ok(())
     })?;
     for sql in [
-        "UPDATE OR ABORT accounts NOT INDEXED SET state='paused'",
+        // One statement: accounts' CHECK forbids the flag on an active
+        // row after every statement (spec/03 "Restore" step 4).
+        "UPDATE OR ABORT accounts NOT INDEXED
+         SET state = CASE state WHEN 'active' THEN 'paused' ELSE state END,
+             restore_pending = 1
+         WHERE provider <> 'local_archive'",
         "UPDATE OR ABORT import_jobs NOT INDEXED SET state='failed' WHERE state IN ('inventory','awaiting_confirmation','running')",
         "UPDATE OR ABORT intents NOT INDEXED SET state='quarantined', quarantine_reason='restore' WHERE state IN ('pending','in_flight','parked')",
         "UPDATE OR ABORT send_attempts NOT INDEXED SET state='outcome_unknown' WHERE state IN ('held','queued','submitting')",
@@ -631,14 +636,31 @@ mod tests {
             .query_row("SELECT state FROM send_attempts", [], |r| r.get(0))
             .unwrap();
         assert_eq!(attempt, "outcome_unknown");
-        let active: i64 = conn
+        // Every account but the local archive is paused and
+        // restore-pending; the local archive has no server and keeps
+        // its state (spec/03 "Restore" step 4).
+        let (non_local, paused): (i64, i64) = conn
             .query_row(
-                "SELECT count(*) FROM accounts WHERE state<>'paused'",
+                "SELECT
+                   (SELECT count(*) FROM accounts WHERE provider <> 'local_archive'),
+                   (SELECT count(*) FROM accounts
+                    WHERE provider <> 'local_archive'
+                      AND state = 'paused' AND restore_pending = 1)",
                 [],
-                |r| r.get(0),
+                |r| Ok((r.get(0)?, r.get(1)?)),
             )
             .unwrap();
-        assert_eq!(active, 0);
+        assert!(non_local > 0, "the fixture has no account to pause");
+        assert_eq!(non_local, paused);
+        let archive: (String, i64) = conn
+            .query_row(
+                "SELECT state, restore_pending FROM accounts
+                 WHERE provider = 'local_archive'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(archive, ("active".to_owned(), 0));
         let generation: (String, String) = conn
             .query_row(
                 "SELECT state, location FROM backup_generations WHERE generation_id=?1",
@@ -933,6 +955,8 @@ mod tests {
         assert_eq!(child, location);
     }
 
+    /// Pausing the active account collides with the paused local
+    /// archive on a hostile UNIQUE; the policy must not hide it.
     fn rejects_schema_conflict_policy(policy: &str) {
         let (_scratch, paths, store) = open("restore-conflict-policy");
         let snapshot = store.backup_snapshot(BackupDestination::DataRoot).unwrap();
@@ -940,9 +964,10 @@ mod tests {
         std::fs::copy(snapshot.state_db(), &stage).unwrap();
         let mut conn = Connection::open(stage).unwrap();
         conn.execute_batch(&format!("PRAGMA foreign_keys=OFF;
-                CREATE TABLE new_accounts (account_id TEXT PRIMARY KEY, kind TEXT NOT NULL, provider TEXT NOT NULL, display_name TEXT NOT NULL, state TEXT NOT NULL UNIQUE ON CONFLICT {policy}, state_reason TEXT, config_generation INTEGER NOT NULL DEFAULT 1, sort_order INTEGER NOT NULL, created_at INTEGER NOT NULL, revision INTEGER NOT NULL DEFAULT 1) STRICT;
+                CREATE TABLE new_accounts (account_id TEXT PRIMARY KEY, kind TEXT NOT NULL, provider TEXT NOT NULL, display_name TEXT NOT NULL, state TEXT NOT NULL UNIQUE ON CONFLICT {policy}, state_reason TEXT, config_generation INTEGER NOT NULL DEFAULT 1, sort_order INTEGER NOT NULL, created_at INTEGER NOT NULL, revision INTEGER NOT NULL DEFAULT 1, restore_pending INTEGER NOT NULL DEFAULT 0) STRICT;
                 INSERT INTO new_accounts SELECT * FROM accounts;
-                INSERT INTO new_accounts (account_id,kind,provider,display_name,state,sort_order,created_at) VALUES ('other','imap','generic_imap','other','paused',0,0);
+                UPDATE new_accounts SET state='paused';
+                INSERT INTO new_accounts (account_id,kind,provider,display_name,state,sort_order,created_at) VALUES ('other','imap','generic_imap','other','active',0,0);
                 DROP TABLE accounts; ALTER TABLE new_accounts RENAME TO accounts;")).unwrap();
         let before: Vec<(String, String)> = conn
             .prepare("SELECT account_id,state FROM accounts ORDER BY account_id")
@@ -1064,6 +1089,15 @@ mod tests {
             conn.execute("INSERT INTO draft_revisions (revision_id,draft_id,seq,account_id,identity_id,compose_format,subject,to_json,cc_json,bcc_json,body_source,attachments_json,created_at) SELECT ?1,draft_id,?2,account_id,identity_id,'plain','','[]','[]','[]','','[]',0 FROM draft_revisions LIMIT 1", params![id, i as i64 + 2]).unwrap();
             conn.execute("INSERT INTO send_attempts (attempt_id,draft_id,revision_id,account_id,config_generation,identity_id,mime_sha256,message_id_header,envelope_from,state,sent_copy,created_at,updated_at) SELECT ?1,draft_id,revision_id,account_id,1,identity_id,'sha','<m@x>','a@b',?1,'pending',0,0 FROM draft_revisions WHERE revision_id=?2", params![state, id]).unwrap();
         }
+        // After the intents, which copy every generic_imap account.
+        for state in ["active", "paused", "needs_attention", "disconnected"] {
+            conn.execute(
+                "INSERT INTO accounts (account_id,kind,provider,display_name,state,sort_order,created_at)
+                 VALUES (?1,'imap','generic_imap',?1,?1,9,0)",
+                [state],
+            )
+            .unwrap();
+        }
         let cancel = Arc::new(AtomicBool::new(false));
         let input = Quarantine {
             new_incarnation: "00000000-0000-4000-8000-000000000001",
@@ -1103,6 +1137,23 @@ mod tests {
                     "position".into()
                 )
             );
+        }
+        // A restore pauses only active accounts and marks every
+        // non-local one; the others keep their state (spec/03).
+        for (state, expected) in [
+            ("active", "paused"),
+            ("paused", "paused"),
+            ("needs_attention", "needs_attention"),
+            ("disconnected", "disconnected"),
+        ] {
+            let row: (String, i64) = conn
+                .query_row(
+                    "SELECT state,restore_pending FROM accounts WHERE account_id=?1",
+                    [state],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .unwrap();
+            assert_eq!(row, (expected.to_owned(), 1), "{state}");
         }
         for state in [
             "pending",

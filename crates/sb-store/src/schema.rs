@@ -57,7 +57,9 @@ const FOREIGN_KEYS_OFF_MIGRATIONS: &[u32] = &[28];
 /// adds the Proton account schema and rebuilds the three tables whose CHECK
 /// values it extends; version 29 keeps Proton's label totals; version 30
 /// records Proton deletes for the breaker; version 31 records what a
-/// Proton listing listed and the disappearances a listing alone saw.
+/// Proton listing listed and the disappearances a listing alone saw;
+/// version 32 indexes a fetched body's source once per account; version
+/// 33 adds `accounts.restore_pending` (02, 03 "Restore").
 pub(crate) const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 1,
@@ -186,6 +188,10 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 32,
         run: migration_32,
+    },
+    Migration {
+        version: 33,
+        run: migration_33,
     },
 ];
 
@@ -1066,6 +1072,19 @@ fn migration_32(tx: &Transaction, _seams: &Seams) -> Result<(), StoreError> {
         "CREATE UNIQUE INDEX acquisition_proton_fetch_identity
            ON acquisition_sources(account_id, source_ref)
            WHERE source_kind = 'proton_fetch';",
+    )
+    .map_err(bug)
+}
+
+/// Version 33 (spec/02 "Accounts and identities", spec/03 "Restore"
+/// step 4): `accounts.restore_pending`, which a restore sets on every
+/// account other than the local archive until it reconciles (07). Its
+/// checks are column constraints: `ADD COLUMN` can't add a table one.
+fn migration_33(tx: &Transaction, _seams: &Seams) -> Result<(), StoreError> {
+    tx.execute_batch(
+        "ALTER TABLE accounts
+           ADD COLUMN restore_pending INTEGER NOT NULL DEFAULT 0 CHECK (restore_pending IN (0,1))
+           CHECK (restore_pending = 0 OR state <> 'active');",
     )
     .map_err(bug)
 }

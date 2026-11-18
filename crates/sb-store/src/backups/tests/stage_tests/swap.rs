@@ -89,18 +89,34 @@ fn a_qualified_stage_swaps_in_and_reopens_under_the_kept_lock() {
     let restored = store.swap_restore(stage, &AtomicBool::new(false)).unwrap();
 
     // The restored store is the snapshot under a new incarnation, with
-    // every account paused (quarantine).
+    // every account but the local archive paused and restore-pending
+    // (quarantine).
     assert_eq!(meta(&restored, "incarnation"), incarnation);
     assert_eq!(meta(&restored, "store_uuid"), store_uuid);
-    let unpaused: i64 = reading(&restored, |tx| {
+    let (non_local, paused): (i64, i64) = reading(&restored, |tx| {
         tx.query_row(
-            "SELECT count(*) FROM accounts WHERE state <> 'paused'",
+            "SELECT
+               (SELECT count(*) FROM accounts WHERE provider <> 'local_archive'),
+               (SELECT count(*) FROM accounts
+                WHERE provider <> 'local_archive'
+                  AND state = 'paused' AND restore_pending = 1)",
             [],
-            |row| row.get(0),
+            |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .map_err(bug)
     });
-    assert_eq!(unpaused, 0, "every account paused");
+    assert!(non_local > 0, "the fixture has no account to pause");
+    assert_eq!(paused, non_local, "every non-local account paused");
+    let archive: (String, i64) = reading(&restored, |tx| {
+        tx.query_row(
+            "SELECT state, restore_pending FROM accounts
+             WHERE provider = 'local_archive'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .map_err(bug)
+    });
+    assert_eq!(archive, ("active".to_owned(), 0));
     // The old root is preserved by name, never deleted; the stage name
     // is gone and so is the marker.
     assert_eq!(

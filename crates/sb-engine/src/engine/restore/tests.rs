@@ -93,16 +93,16 @@ fn settings(engine: &Engine) -> Vec<String> {
         .unwrap()
 }
 
-/// Every account's state, in id order.
-fn account_states(engine: &Engine) -> Vec<String> {
+/// Every account's provider and state, in id order.
+fn account_states(engine: &Engine) -> Vec<(String, String)> {
     engine
         .resources()
         .read(|tx| {
             let mut statement = tx
-                .prepare("SELECT state FROM accounts ORDER BY account_id")
+                .prepare("SELECT provider, state FROM accounts ORDER BY account_id")
                 .map_err(sql_error)?;
             statement
-                .query_map([], |row| row.get(0))
+                .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
                 .map_err(sql_error)?
                 .collect::<Result<_, _>>()
                 .map_err(sql_error)
@@ -194,8 +194,8 @@ fn a_restore_swaps_the_generation_in_and_resets_subscriptions() {
     assert!(
         account_states(&engine)
             .iter()
-            .all(|state| state == "paused"),
-        "the restored store opens quarantined"
+            .all(|(provider, state)| (provider == "local_archive") == (state == "active")),
+        "the restored store opens with every non-local account paused"
     );
     assert_eq!(
         finish(appearance.next()).unwrap(),
