@@ -164,6 +164,7 @@ pub fn upsert_identity(tx: &Transaction, write: &IdentityWrite) -> Result<(), Id
     }
 
     let reply_to = write.reply_to.as_deref().map(str::trim);
+    let display_name = write.display_name.trim();
     // The route fields (spec/02: `config_generation` moves when an
     // identity changes) as stored before this write; a signature edit
     // alone leaves queued sends and pending intents on their generation.
@@ -190,7 +191,7 @@ pub fn upsert_identity(tx: &Transaction, write: &IdentityWrite) -> Result<(), Id
     }
     let route_changed = before.is_none_or(|(email, name, stored_reply_to, sendable)| {
         email != write.email.trim()
-            || name != write.display_name
+            || name != display_name
             || stored_reply_to.as_deref() != reply_to
             || sendable != write.sendable.as_str()
     });
@@ -211,7 +212,7 @@ pub fn upsert_identity(tx: &Transaction, write: &IdentityWrite) -> Result<(), Id
                 write.identity_id,
                 write.account_id,
                 write.email.trim(),
-                write.display_name,
+                display_name,
                 reply_to,
                 write.signature_source,
                 write.sendable.as_str(),
@@ -254,15 +255,17 @@ pub fn set_default_identity(tx: &Transaction, identity_id: &str) -> Result<(), I
             sendable: sendable.as_str(),
         });
     }
+    // Only rows whose flag changes move their revision: re-setting the
+    // current default writes nothing.
     tx.execute(
         "UPDATE identities SET is_default = 0, revision = revision + 1
-         WHERE account_id = ?1 AND is_default = 1",
-        params![account_id],
+         WHERE account_id = ?1 AND is_default = 1 AND identity_id <> ?2",
+        params![account_id, identity_id],
     )
     .map_err(|e| IdentityError::Store(classify(e, "clear the account's defaults")))?;
     tx.execute(
         "UPDATE identities SET is_default = 1, revision = revision + 1
-         WHERE identity_id = ?1 AND account_id = ?2",
+         WHERE identity_id = ?1 AND account_id = ?2 AND is_default = 0",
         params![identity_id, account_id],
     )
     .map_err(|e| IdentityError::Store(classify(e, "set the account's default")))?;
@@ -272,3 +275,6 @@ pub fn set_default_identity(tx: &Transaction, identity_id: &str) -> Result<(), I
 fn store_error(error: rusqlite::Error) -> IdentityError {
     IdentityError::Store(classify(error, "read an identity"))
 }
+
+#[cfg(test)]
+mod tests;

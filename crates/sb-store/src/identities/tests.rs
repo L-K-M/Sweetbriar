@@ -233,11 +233,17 @@ fn route_edits_bump_the_generation_and_the_local_archive_is_refused() {
     let mut signature_only = write("a", "alias@example.test");
     signature_only.display_name = "Alias".to_owned();
     signature_only.signature_source = Some("-- \nAlias".to_owned());
-    let cases: [(&str, IdentityWrite, i64); 4] = [
+    // A padded name stores trimmed, so it is the same name.
+    let padded = IdentityWrite {
+        display_name: "  Name  ".to_owned(),
+        ..write("c", "moved@example.test")
+    };
+    let cases: [(&str, IdentityWrite, i64); 5] = [
         ("new identity", write("c", "new@example.test"), 1),
         ("same values again", write("c", "new@example.test"), 0),
         ("signature only", signature_only, 0),
         ("address change", write("c", "moved@example.test"), 1),
+        ("padded name", padded, 0),
     ];
     let mut expected = start;
     for (label, identity, bump) in cases {
@@ -292,4 +298,28 @@ fn route_edits_bump_the_generation_and_the_local_archive_is_refused() {
         ),
         "{refused:?}"
     );
+}
+
+/// Re-setting the current default changes no row, so no revision
+/// moves; moving it changes exactly the two rows whose flag flips.
+#[test]
+fn set_default_identity_moves_only_the_flags_that_change() {
+    let (_scratch, store) = scratch();
+    seed(&store);
+    let revisions = |store: &Store| {
+        reading(store, |tx| {
+            tx.query_row(
+                "SELECT (SELECT revision FROM identities WHERE identity_id = 'a'),
+                        (SELECT revision FROM identities WHERE identity_id = 'b')",
+                [],
+                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+            )
+            .map_err(|e| StoreError::internal(e.to_string()))
+        })
+    };
+    let (a, b) = revisions(&store);
+    write_command(&store, |tx| set_default_identity(tx, "b")).unwrap();
+    assert_eq!(revisions(&store), (a, b), "re-setting the default");
+    write_command(&store, |tx| set_default_identity(tx, "a")).unwrap();
+    assert_eq!(revisions(&store), (a + 1, b + 1), "moving the default");
 }

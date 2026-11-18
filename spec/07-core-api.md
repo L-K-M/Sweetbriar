@@ -393,7 +393,7 @@ async fn Core::shutdown(self);   // flush writer, release the lease
     the same address: only a send the server accepts validates (05).
     A change of address, name, reply-to or sendable state bumps the
     account's `config_generation` (02); a signature edit doesn't.
-  - `set_default_identity(id)` leaves the identity its account's only
+  - `set_default_identity(id)` makes the identity its account's only
     default, in one transaction; one that can't send (05) is
     `InvalidInput` on `identity_id`.
 - **Local archive:** filing commands act locally, with no intent.
