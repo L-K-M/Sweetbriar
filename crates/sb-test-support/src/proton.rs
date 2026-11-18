@@ -344,7 +344,7 @@ fn default_header(id: &str) -> String {
         "Subject: synthetic subject {id}\r\n\
          From: Sender <sender@example.test>\r\n\
          To: To <to@example.test>\r\n\
-         Date: Tue, 14 Nov 2023 22:26:40 +0000\r\n\
+         Date: Tue, 14 Nov 2023 22:13:20 +0000\r\n\
          Message-ID: <{id}@example.test>\r\n"
     )
 }
@@ -938,8 +938,8 @@ impl FakeProtonServer {
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         let account = account_mut(&mut state, username);
         let id = message.id.clone();
-        account.record(FakeEvent::message(id.clone(), 1, Some(message.clone())));
         account.encrypt_message(&mut message);
+        account.record(FakeEvent::message(id.clone(), 1, Some(message.clone())));
         account.messages.push(message);
         id
     }
@@ -957,8 +957,8 @@ impl FakeProtonServer {
             "the message exists"
         );
         let id = message.id.clone();
-        account.record(FakeEvent::message(id, 2, Some(message.clone())));
         account.encrypt_message(&mut message);
+        account.record(FakeEvent::message(id, 2, Some(message.clone())));
         let existing = account
             .messages
             .iter_mut()

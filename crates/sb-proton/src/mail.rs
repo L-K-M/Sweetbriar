@@ -300,7 +300,8 @@ fn content_id_of(headers: &Value) -> Option<String> {
 /// id, no control character, and none of `/ ? # %`, which would change the
 /// request's path or query.
 fn validate_path_id(id: &str) -> Result<(), ProtonError> {
-    let path_safe = !id.is_empty()
+    // `.` and `..` are dot segments a proxy may resolve to another path.
+    let path_safe = !matches!(id, "" | "." | "..")
         && id
             .bytes()
             .all(|byte| byte.is_ascii_graphic() && !matches!(byte, b'/' | b'?' | b'#' | b'%'));
@@ -672,7 +673,7 @@ impl Client {
                 },
             );
         }
-        Ok(bytes.to_vec())
+        Ok(bytes)
     }
 }
 

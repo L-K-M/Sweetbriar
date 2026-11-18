@@ -411,13 +411,18 @@ pub(crate) async fn read_response(answer: Answer) -> Result<(StatusCode, Bytes),
 pub(crate) async fn read_response_bounded(
     answer: Answer,
     limit: u64,
-) -> Result<(StatusCode, Bytes), ProtonError> {
+) -> Result<(StatusCode, Vec<u8>), ProtonError> {
     let status = answer.response.status();
     let mut body = answer.response.into_body();
     let mut total = 0u64;
     let mut bytes = Vec::new();
+    // Each frame must arrive within the request timeout, and the whole
+    // body within BOUNDED_READ_TIMEOUT, so a server dribbling frames
+    // can't hold the in-flight permit forever.
+    let deadline = tokio::time::Instant::now() + BOUNDED_READ_TIMEOUT;
     loop {
-        let frame = match tokio::time::timeout(REQUEST_TIMEOUT, body.frame()).await {
+        let frame_deadline = (tokio::time::Instant::now() + REQUEST_TIMEOUT).min(deadline);
+        let frame = match tokio::time::timeout_at(frame_deadline, body.frame()).await {
             Ok(Some(frame)) => frame,
             Ok(None) => break,
             Err(_) => return Err(ProtonError::Timeout),
@@ -436,8 +441,12 @@ pub(crate) async fn read_response_bounded(
         }
         bytes.extend_from_slice(&data);
     }
-    Ok((status, Bytes::from(bytes)))
+    Ok((status, bytes))
 }
+
+/// The whole-body deadline of a bounded read: enough for the largest
+/// attachment over a slow link (30 MiB at about 100 KiB/s).
+pub(crate) const BOUNDED_READ_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 
 /// A response with its in-flight permit. The permit is held until the
 /// body has been read or the response dropped, so a body still
