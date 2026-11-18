@@ -140,10 +140,13 @@ Otherwise the draft keeps its state.
      no longer sendable, confirming fails and only cancelling remains.
    - The draft must have a valid sending identity. Drafts without one
      can't be sent.
-   - On startup, an attempt found in `submitting` with `send_requested_at`
-     set becomes `outcome_unknown`: never retried automatically. One
-     without it never issued the send request, so it returns to
-     `queued` and keeps its recorded `proton_draft_id` (02).
+   - On startup, a Proton attempt found in `submitting` with
+     `send_requested_at` set becomes `outcome_unknown`: never retried
+     automatically. One without it never issued the send request, so it
+     returns to `queued` and keeps its recorded `proton_draft_id` (02).
+     A generic attempt (*later*) found in `submitting` becomes
+     `outcome_unknown` whatever its state, until SMTP records its own
+     marker that `DATA` began.
 4. **Proton submission** (04-sync-proton's transport, on the account's
    worker; one request in flight per account):
    1. **Recipient keys.** `GET /core/v4/keys?Email=` for each recipient.
