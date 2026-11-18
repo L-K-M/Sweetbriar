@@ -352,7 +352,8 @@ async fn Core::shutdown(self);   // flush writer, release the lease
     `config_generation`. Proton credentials change only by signing in
     again (above).
   - The local archive account has no server: pausing, resuming or
-    disconnecting it is `InvalidInput` on field `account_id`.
+    disconnecting it is `InvalidInput` on field `account`, as for
+    disconnecting any account that isn't Proton's (M2.12).
   - `pause_account(id)` sets an `active` account `paused` and stops
     its worker before it answers: no request for the account starts
     after the receipt. A paused account's queries keep answering from
