@@ -65,6 +65,9 @@ secrecy = "=0.10.3"
 zeroize = "=1.9.1"
 serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = "=1.0.154"
+# M2.16a: an attachment's KeyPackets are base64 on the wire
+# (research/proton-api/mail-sync.md §4); the same pin sb-imap carries.
+base64 = "=0.23.1"
 # Request diagnostics only; never bodies or credentials (spec/10).
 log = { version = "=0.4.34", features = ["max_level_debug"] }
 
