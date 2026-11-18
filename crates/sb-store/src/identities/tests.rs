@@ -1,5 +1,5 @@
 //! Identity store tests (spec/02 `identities`, spec/05): the writes'
-//! exact rows and refusals.
+//! exact rows and refusals, and the header-only resolution read.
 
 use std::sync::{Arc, Mutex};
 
@@ -322,4 +322,83 @@ fn set_default_identity_moves_only_the_flags_that_change() {
     assert_eq!(revisions(&store), (a, b), "re-setting the default");
     write_command(&store, |tx| set_default_identity(tx, "a")).unwrap();
     assert_eq!(revisions(&store), (a + 1, b + 1), "moving the default");
+}
+
+#[test]
+fn the_resolution_read_is_header_only_and_validates_the_global_default() {
+    let (_scratch, store) = scratch();
+    seed(&store);
+    let inputs = reading(&store, |tx| {
+        identity_resolution_inputs(tx, Some(11), None, None)
+    });
+    let source = inputs.source.expect("the source inputs");
+    assert_eq!(
+        (source.account_id.as_str(), source.account_kind),
+        ("acct", crate::sidebar::AccountKind::Imap)
+    );
+    assert_eq!(source.sent_identity_id.as_deref(), Some("a"));
+    assert_eq!(source.headers.delivered_to, ["alias@example.test"]);
+    assert_eq!(source.headers.from.len(), 1);
+    assert_eq!(inputs.identities.len(), 3);
+    assert_eq!(inputs.identities[0].identity_id, "a");
+    assert!(!inputs.identities[0].is_default);
+    assert!(inputs.identities[1].is_default);
+
+    // A mailbox resolves to its account; a disagreeing pair is refused.
+    let selected = reading(&store, |tx| {
+        identity_resolution_inputs(tx, None, None, Some(7))
+    });
+    assert_eq!(selected.selected_account_id.as_deref(), Some("acct"));
+    let disagreement = store
+        .read(|tx| identity_resolution_inputs(tx, None, Some("acct"), Some(8)))
+        .unwrap_err();
+    assert!(
+        matches!(disagreement, StoreError::InvalidInput { .. }),
+        "{disagreement:?}"
+    );
+
+    // No headers row is absence, not damage.
+    writing(&store, |tx| {
+        tx.execute_batch(
+            "INSERT INTO logical_messages (message_id, account_id, created_at) VALUES (10, 'acct', 0);
+             INSERT INTO occurrences (occurrence_id, account_id, mailbox_id, message_id, first_seen_at, last_seen_at, state)
+             VALUES (12, 'acct', 7, 10, 0, 0, 'present');",
+        )
+        .map_err(|e| StoreError::internal(e.to_string()))?;
+        Ok(())
+    });
+    let bare = reading(&store, |tx| {
+        identity_resolution_inputs(tx, Some(12), None, None)
+    });
+    let source = bare.source.unwrap();
+    assert!(source.headers.from.is_empty() && source.headers.delivered_to.is_empty());
+    assert_eq!(source.sent_identity_id, None);
+
+    // The global default: malformed stored text is Corrupt, absent or
+    // empty selects nothing, and a valid string passes through.
+    writing(&store, |tx| {
+        tx.execute_batch(
+            "INSERT INTO settings (key, value_json, revision, updated_at)
+             VALUES ('identity.default', 'not json', 1, 0);",
+        )
+        .map_err(|e| StoreError::internal(e.to_string()))?;
+        Ok(())
+    });
+    let error = store
+        .read(|tx| identity_resolution_inputs(tx, None, None, None))
+        .unwrap_err();
+    assert!(matches!(error, StoreError::Corrupt { .. }), "{error:?}");
+    for (stored, expected) in [("\"\"", None), ("\"a\"", Some("a"))] {
+        writing(&store, move |tx| {
+            tx.execute_batch(&format!(
+                "UPDATE settings SET value_json = '{stored}' WHERE key = 'identity.default'"
+            ))
+            .map_err(|e| StoreError::internal(e.to_string()))?;
+            Ok(())
+        });
+        let inputs = reading(&store, |tx| {
+            identity_resolution_inputs(tx, None, None, None)
+        });
+        assert_eq!(inputs.global_default_identity_id.as_deref(), expected);
+    }
 }

@@ -83,7 +83,11 @@ pub use drafts::{DraftContent, DraftCreated, DraftSaved};
 pub use engine::{Engine, PreparedRestore, RestoreError, Restored};
 pub use error::EngineError;
 pub use health::{Health, Integrity};
-pub use identity::IdentityParams;
+pub use identity::{
+    ComposeContext, ComposeSelection, CrossAccountWarning, IdentityParams, ResolvedIdentity,
+    cross_account_ack, cross_account_acknowledged, cross_account_warning, reply_all_recipients,
+    reply_recipients, resolve_identity,
+};
 pub use import::{
     ExportJobStatus, ExportScopeInput, ExportStarted, ImportJobStatus, ImportReport,
     ImportSourceStatus, ImportStarted,
