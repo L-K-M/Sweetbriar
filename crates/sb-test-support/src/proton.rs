@@ -501,9 +501,16 @@ struct Account {
     next_refresh: bool,
     malformed_messages: bool,
     wrong_message_id: bool,
+    /// Answers a by-id metadata read with another message's id, which
+    /// the transport must refuse as `Malformed` (plan M2.16d).
+    wrong_metadata_id: bool,
     /// Message ids whose full-message request answers with the
     /// account's damaged body fixture (plan M2.16c).
     damaged_bodies: HashSet<String>,
+    /// Message ids `GET /mail/v4/messages` doesn't list, so a by-id
+    /// metadata read answers none while the full-message read still
+    /// serves them (plan M2.16d's empty re-read).
+    metadata_hidden: HashSet<String>,
 }
 
 impl Account {
@@ -811,7 +818,9 @@ impl FakeProtonServer {
                     next_refresh: false,
                     malformed_messages: false,
                     wrong_message_id: false,
+                    wrong_metadata_id: false,
                     damaged_bodies: HashSet::new(),
+                    metadata_hidden: HashSet::new(),
                 },
             );
         }
@@ -1090,6 +1099,26 @@ impl FakeProtonServer {
     pub fn set_wrong_message_id(&self, username: &str, on: bool) {
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         account_mut(&mut state, username).wrong_message_id = on;
+    }
+
+    /// Answers a by-id metadata read with another message's id, which
+    /// the transport must refuse as `Malformed` (plan M2.16d).
+    pub fn set_wrong_metadata_id(&self, username: &str, on: bool) {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        account_mut(&mut state, username).wrong_metadata_id = on;
+    }
+
+    /// Makes `GET /mail/v4/messages` skip `id`, so a by-id metadata
+    /// read answers none, or list it again (plan M2.16d). The
+    /// full-message read still serves it.
+    pub fn set_metadata_hidden(&self, username: &str, id: &str, on: bool) {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let account = account_mut(&mut state, username);
+        if on {
+            account.metadata_hidden.insert(id.to_owned());
+        } else {
+            account.metadata_hidden.remove(id);
+        }
     }
 
     /// Makes `id`'s full-message request answer with the account's
@@ -1836,12 +1865,22 @@ fn handle_messages(
         .unwrap_or(true);
     let end: Option<i64> = query_value(query, "End").and_then(|value| value.parse().ok());
     let end_id: Option<String> = query_value(query, "EndID");
+    let id_filter = query_value(query, "ID");
     let stale = state.stale;
     let account = state
         .accounts
         .get(&username)
         .expect("the session's account exists");
-    let mut ordered: Vec<&FakeMessage> = account.messages.iter().collect();
+    let mut ordered: Vec<&FakeMessage> = account
+        .messages
+        .iter()
+        .filter(|message| !account.metadata_hidden.contains(&message.id))
+        .collect();
+    // The by-id read (research `mail-sync.md` §3): only the asked
+    // message, or none.
+    if let Some(id) = &id_filter {
+        ordered.retain(|message| &message.id == id);
+    }
     ordered.sort_by(|a, b| b.time.cmp(&a.time).then_with(|| b.id.cmp(&a.id)));
     if !desc {
         ordered.reverse();
@@ -1867,6 +1906,20 @@ fn handle_messages(
             let mut value = message.to_json();
             if account.malformed_messages {
                 value["ID"] = json!(7);
+            }
+            // The by-id read's wrong-id answer (plan M2.16d): a
+            // well-typed id that differs from the asked one.
+            if let (Some(asked), true) = (&id_filter, account.wrong_metadata_id) {
+                if message.id == *asked {
+                    value["ID"] = json!(
+                        account
+                            .messages
+                            .iter()
+                            .find(|other| other.id != message.id)
+                            .map(|other| other.id.clone())
+                            .unwrap_or_else(|| format!("{asked}-other"))
+                    );
+                }
             }
             value
         })

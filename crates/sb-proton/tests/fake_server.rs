@@ -1318,6 +1318,92 @@ async fn a_wrong_id_in_the_response_is_refused() {
 }
 
 #[tokio::test]
+async fn by_id_metadata_read_filters_and_returns_the_message() {
+    let (server, client, session, _) = read_client().await;
+    server.add_message(USER, FakeMessage::new("msg-0"));
+    server.add_message(USER, FakeMessage::new("msg-1"));
+
+    let metadata = client
+        .message_metadata(&session, "msg-0")
+        .await
+        .expect("the by-id read");
+    let metadata = metadata.expect("the message is listed");
+    assert_eq!(metadata.id, "msg-0");
+    assert_eq!(metadata.subject, "synthetic subject msg-0");
+    assert_eq!(metadata.label_ids, ["0"]);
+
+    let request = server
+        .requests()
+        .into_iter()
+        .find(|request| request.path == "/mail/v4/messages")
+        .expect("the by-id request");
+    assert_eq!(request.method, "GET");
+    assert_eq!(request.query.as_deref(), Some("ID=msg-0&Page=0&PageSize=1"));
+}
+
+#[tokio::test]
+async fn by_id_metadata_read_answers_none_for_an_unknown_id() {
+    let (server, client, session, _) = read_client().await;
+    server.add_message(USER, FakeMessage::new("msg-0"));
+
+    let metadata = client
+        .message_metadata(&session, "missing")
+        .await
+        .expect("an empty answer is not a failure");
+    assert!(metadata.is_none());
+    assert!(
+        server
+            .requests()
+            .iter()
+            .any(|request| request.query.as_deref() == Some("ID=missing&Page=0&PageSize=1"))
+    );
+}
+
+#[tokio::test]
+async fn by_id_metadata_read_refuses_another_id() {
+    let (server, client, session, _) = read_client().await;
+    server.add_message(USER, FakeMessage::new("msg-0"));
+    server.add_message(USER, FakeMessage::new("msg-1"));
+    server.set_wrong_metadata_id(USER, true);
+
+    let error = client
+        .message_metadata(&session, "msg-0")
+        .await
+        .expect_err("the answer names another id");
+    assert!(matches!(error, ProtonError::Malformed { .. }), "{error:?}");
+}
+
+#[tokio::test]
+async fn by_id_metadata_read_validates_the_id() {
+    let (server, client, session, _) = read_client().await;
+    for id in [
+        "a/b",
+        "a?b",
+        "a#b",
+        "a%b",
+        "",
+        "a b",
+        ".",
+        "..",
+        "a\\b",
+        "a&PageSize=150",
+        "a+b",
+    ] {
+        let error = client
+            .message_metadata(&session, id)
+            .await
+            .expect_err("the id is not base64url");
+        assert!(matches!(error, ProtonError::Malformed { .. }), "{id}");
+    }
+    assert!(
+        !server
+            .requests()
+            .iter()
+            .any(|request| request.path == "/mail/v4/messages")
+    );
+}
+
+#[tokio::test]
 async fn unsafe_ids_and_unknown_ids_are_refused() {
     let (server, client, session, _) = read_client().await;
     for id in ["a/b", "a?b", "a#b", "a%b", "", "a b", ".", "..", "a\\b"] {
