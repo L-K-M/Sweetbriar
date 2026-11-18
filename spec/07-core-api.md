@@ -341,6 +341,42 @@ async fn Core::shutdown(self);   // flush writer, release the lease
     without contacting Proton.
   - Signing an existing account in again keeps its UUID and data, bumps
     `config_generation`, and replaces its secrets only on `Complete`.
+- **Account management (M2.7):** every command below takes an
+  idempotency key and returns a `Receipt` (Shape); M2.7 brings the
+  existing `disconnect_account` and `resolve_breaker_event` to that
+  shape. An unknown account is `NotFound`.
+  - `update_account(id, params)` changes the display name only: 1–128
+    UTF-8 bytes once surrounding whitespace is trimmed (the trimmed name
+    is stored), no controls, else `InvalidInput` on field
+    `display_name`. It bumps `revision`, not
+    `config_generation`. Proton credentials change only by signing in
+    again (above).
+  - The local archive account has no server: pausing, resuming or
+    disconnecting it is `InvalidInput` on field `account_id`.
+  - `pause_account(id)` sets an `active` account `paused` and stops
+    its worker before it answers: no request for the account starts
+    after the receipt. A paused account's queries keep answering from
+    the store; its commands that need the server are `Unavailable` with
+    reason "account paused". It stays paused across launches. Pausing a
+    paused account answers a receipt and changes nothing; a
+    `needs_attention` one (its worker already stopped; it needs "Sign
+    in again") or a `disconnected` one is `Conflict`.
+  - `resume_account(id)` sets a paused account `active` and starts its
+    worker; resuming an active one changes nothing; a
+    `needs_attention` or `disconnected` one is `Conflict` (it needs
+    "Sign in again"). An account a restore paused (`restore_pending`,
+    02) first reconciles, in the same transaction as the state change:
+    IMAP cursors are discarded (03 "Restore", step 5); a Proton
+    account's `event_cursor` and listing are reset so its worker
+    starts with the bootstrap, which matches messages by id and keeps
+    local data, and whose disappearances go through the breaker
+    (04-sync-proton "Refresh"). Then `restore_pending` is cleared.
+  - `disconnect_account(id)` is unchanged (M2.12), apart from the key
+    and receipt.
+  - `set_app_active(active)` is a lifecycle signal, not a command: no
+    key, no receipt, nothing stored. The shell calls it when the app
+    becomes or stops being active; workers poll at 04-sync-proton's
+    active or idle cadence. It starts inactive.
 - **Local archive:** filing commands act locally, with no intent.
   `delete_to_trash` moves to the account's local Trash mailbox, created
   on first use; nothing is deleted. `add_label` doesn't apply.
@@ -603,6 +639,29 @@ a receipt or file-export command; Service/FFI exposure remains M1.7e/f.
     time in milliseconds since the epoch, the path a string for
     display (M1.8h5b3). Over FFI it is a query under a token like any
     other;
+  - `account_health()` (M2.7) → per account, in `accounts()` order:
+    its state and reason; its condition from 04-sync-proton's
+    "Account states and health" table (a paused or `needs_attention`
+    account: paused, sign in again, verify, this version refused with
+    Proton's message, or secret store; an active one: offline or not
+    answering with the next retry, rate limited with the time, or
+    healthy); its warnings (addresses whose keys didn't unlock); open
+    breaker events (id, mailbox, count, detected time); coverage
+    (`coverage(scope)` for the account); and the last sync time. Retry
+    times and the last sync time come from the running worker's memory:
+    a paused account, or one not synced since launch, has none. `subscribe_account_health()` wakes when
+    any of it changes.
+  - `intents(filter)` (M2.7) → parked and quarantined intents, each
+    with its account, kind, target message, reason and what it would
+    do; at most 1,000, oldest first, with whether more exist.
+  - `recovery(account_id?)` (M2.7) → the Recovery list (04-sync-imap
+    "Epoch change"): logical messages with no `present` occurrence,
+    each with its last occurrence's mailbox, state (`vanished`,
+    `epoch_stale` or `superseded`) and time, newest first, keyset
+    paged like a window. Nothing in it is deleted.
+  - `diagnostics_package()` (M2.7, 10) → the package's text, for the
+    shell to preview and, only if the user saves it, to write where the
+    user chooses. The core writes no file.
   - `out_box()`;
   - `drafts()` → local drafts with state, route, subject, recipients,
     update time and any live attempt's state (the sidebar's Drafts
@@ -993,6 +1052,15 @@ impl HealthSubscription {
     /// Returns when `health()` changed since this subscription's last answer.
     async fn next(&self) -> Result<(), CoreError>;
 }
+
+fn subscribe_account_health() -> AccountHealthSubscription; // same shape, for account_health() (M2.7)
+
+fn subscribe_new_mail() -> NewMailSubscription;             // M2.7
+impl NewMailSubscription {
+    /// Returns the messages that arrived since this subscription's last answer.
+    async fn next(&self) -> Result<NewMail, CoreError>;
+}
+struct NewMail { account_id: String, message_ids: Vec<i64>, more: bool } // at most 20 ids
 ```
 
 - **Pull, not push.** The shell asks for the next event, then re-reads

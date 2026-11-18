@@ -269,6 +269,11 @@ As in 04-sync-imap, with Proton's evidence:
 The thresholds, the pause, Accept, Keep and `cleared` are those of
 04-sync-imap, counted per mailbox of the message's last location.
 
+A message whose last occurrence became `vanished` stays in the archive
+and is listed in the Recovery list, as 04-sync-imap's is (07
+`recovery`). Proton ids don't change, so Proton has no `epoch_stale`
+or `superseded` occurrences and no intent needs `retarget_intent`.
+
 - **A pass** is one events response. A delete withholds the message's
   current occurrences as `vanish_pending` and records it in
   `proton_disappearances` (02); the response's last chunk classifies
@@ -339,4 +344,7 @@ M3 and M5 qualify each call on the fake server and the
 | Healthy | `active` | Last sync time and coverage |
 
 None of these deletes local data. Every refusal records Proton's code
-and message in the account's diagnostics (redacted, 10).
+and message in the account's diagnostics (redacted, 10): the worker
+keeps Proton's numeric code when it maps a refusal. A paused account
+(07 `pause_account`) runs no worker and makes no request; its row reads
+"Paused". `account_health` (07) answers this table.

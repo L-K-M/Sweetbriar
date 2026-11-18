@@ -39,7 +39,7 @@ the intent framework every later mutation uses.
   - parking after 5 attempts;
   - undo tokens creating inverse intents;
   - health actions (`release_intents`, `cancel_intents`) and the
-    Activity window's intent rows (M2.7) wired to them;
+    Activity window's intent rows (M2.7d) wired to them;
   - the breaker's Explained class: a delete or move matching a `done`
     intent is applied (M3 creates only read and star intents, so its
     tests insert the move intent directly; M5 brings real ones).

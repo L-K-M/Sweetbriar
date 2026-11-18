@@ -164,7 +164,22 @@ and D24, D29.
   page's own traffic.
 - **Diagnostics:** a diagnostics package is assembled on demand with
   redaction (tokens, passwords, addresses and subjects masked). The user
-  previews it before saving.
+  previews it before saving (07 `diagnostics_package`, M2.7).
+  - It is one UTF-8 JSON document: the app and core versions, the OS
+    version, the store's schema version and integrity state, and per
+    account its id, kind, state, reason, condition (07
+    `account_health`), open breaker events with counts, parked and
+    quarantined intent counts, coverage counts, and for a Proton
+    account its last refusal (`diagnostics_json`, 02), listing state
+    and refresh count. It holds no message content, no log lines, no
+    file paths under the home folder and no display names.
+  - Redaction happens when a value is recorded and again when the
+    package is assembled: anything shaped like an address becomes
+    `<address>`, and refusal messages, which may quote one, pass the
+    same mask. Tokens, passwords, key material and session ids are
+    never read into it.
+  - A log-scan test seeds every secret, address and subject the
+    fixtures know and finds none of them in the package.
 - **Encryption at rest (pilot):** relies on FileVault, stated in
   Settings. App-level encryption is a later decision, made from a threat
   model (D24). The object-store trait and SQLite open path keep a codec
@@ -172,7 +187,10 @@ and D24, D29.
 - **Spotlight:** Sweetbriar doesn't index mail into Spotlight in the
   pilot.
 - **Notifications:** show sender and subject only if the user enables
-  previews. They name the account in text.
+  previews (`notifications.previews`, 02). They name the account in
+  text. Only messages that arrive in an account's Inbox through the
+  event loop notify; a bootstrap, a refresh or a resumed account's
+  resync never does (07 `subscribe_new_mail`, M2.7).
 
 ## Supply chain
 

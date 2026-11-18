@@ -1063,10 +1063,12 @@ The process holds `<data root>.lock` throughout.
      The writable open resolves the marker under the lock before it
      looks at the data root; the read-only open refuses (`Unavailable`)
      while a marker exists.
-   - Then open the restored store, with every account paused.
+   - Then open the restored store, with every account other than the
+     local archive `paused` and `restore_pending` (02).
    - Nothing is deleted. The preserved root is listed in Settings →
      Backups until the user removes it.
-5. **Reconcile.** For each account the user resumes:
+5. **Reconcile.** For each account the user resumes
+   (`resume_account`, 07):
    - discard IMAP cursors for that account (`uidvalidity`, `highest_modseq`
      and `uidnext` set to NULL), forcing a full resync;
    - reconcile occurrences against the server.
