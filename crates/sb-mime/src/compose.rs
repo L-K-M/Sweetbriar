@@ -197,7 +197,7 @@ fn validate(input: &ComposeInput<'_>) -> Result<(), ComposeError> {
 }
 
 fn validate_address(address: &ComposeAddress<'_>) -> Result<(), ComposeError> {
-    // mail-builder quotes the display name but writes the address
+    // mail-builder quotes and escapes the display name but writes the address
     // verbatim inside `<>`, so a delimiter there could add recipients.
     if address.address.chars().any(|c| {
         c.is_whitespace() || c.is_control() || matches!(c, '<' | '>' | ',' | ';' | '"' | '\\')
@@ -257,7 +257,7 @@ fn flowed(body: &str) -> String {
                 let line = if *line == "-- " {
                     line
                 } else {
-                    line.trim_end_matches([' ', '\t'])
+                    line.trim_end_matches(' ')
                 };
                 push_flowed_line(&mut out, line);
             }

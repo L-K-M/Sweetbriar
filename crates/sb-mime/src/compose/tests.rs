@@ -252,7 +252,7 @@ fn crlf_in_header_inputs_is_refused() {
 #[test]
 fn loose_lists_and_fixed_lines_stay_intact_when_flowed() {
     let composed = compose(&base_input(
-        "- alpha\n\n- beta\n\n```\ncode   \n```\n",
+        "- alpha\n\n- beta\n\n```\ncode   \nindent\t\n```\n",
         ComposeFormat::Markdown,
     ))
     .unwrap();
@@ -260,6 +260,8 @@ fn loose_lists_and_fixed_lines_stay_intact_when_flowed() {
     assert!(plain.starts_with("- alpha\n\n- beta\n"), "{plain:?}");
     // A fixed line ending in a space would read as flowed (RFC 3676).
     assert!(plain.lines().all(|line| !line.ends_with(' ')), "{plain:?}");
+    // Only a space marks a flowed line, so a trailing tab stays.
+    assert!(plain.contains("indent\t\n"), "{plain:?}");
 }
 
 // ---- limits ----
@@ -309,7 +311,8 @@ fn generated_messages_reparse_to_the_same_content() {
     );
     markdown.subject = "Round trip";
     markdown.cc = &[ComposeAddress {
-        name: Some("CC Recipient"),
+        // mail-builder escapes the quotes: no recipient is added.
+        name: Some("CC \"R\" <x@example.org>, Y"),
         address: "cc@example.net",
     }];
     markdown.in_reply_to = Some("original@example.org");
@@ -360,6 +363,8 @@ fn generated_messages_reparse_to_the_same_content() {
         other => panic!("expected Parsed, got {other:?}"),
     };
     assert_eq!(summary.subject().unwrap(), "Round trip");
+    assert_eq!(summary.cc().len(), 1);
+    assert_eq!(summary.cc()[0].name(), Some("CC \"R\" <x@example.org>, Y"));
     assert_eq!(summary.cc()[0].address().unwrap(), "cc@example.net");
     assert_eq!(summary.in_reply_to().unwrap(), "original@example.org");
     assert_eq!(
