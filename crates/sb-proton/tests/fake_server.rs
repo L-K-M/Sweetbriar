@@ -9,8 +9,8 @@ use sb_proton::{
     PasswordMode, ProtonError, SignInStep, Trust,
 };
 use sb_test_support::{
-    ATTACHMENT_PLAINTEXT, FakeLabel, FakeMessage, FakeProtonServer, Fault, KeyFault,
-    MESSAGE_PLAINTEXT, ModulusSignatureVerifier, TestAccount, cert_der,
+    ATTACHMENT_PLAINTEXT, FakeAttachment, FakeLabel, FakeMessage, FakeProtonServer, Fault,
+    KeyFault, MESSAGE_PLAINTEXT, ModulusSignatureVerifier, TestAccount, cert_der,
 };
 use secrecy::{ExposeSecret, SecretString};
 
@@ -1232,6 +1232,118 @@ async fn mail_reads_are_paced_as_background_calls() {
         start.elapsed() >= Duration::from_millis(400),
         "three background reads were paced"
     );
+}
+
+// ---- M2.16a: full message and attachment reads (spec/04 step 3) ----
+
+/// A signed-in client with unlocked keys, for the read tests.
+async fn read_client() -> (
+    FakeProtonServer,
+    Client,
+    sb_proton::Session,
+    Box<dyn sb_proton::KeyStore>,
+) {
+    let server = server_with(TestAccount::new(USER, PASSWORD)).await;
+    let client = client(&server);
+    let session = sign_in(&client, USER, PASSWORD).await;
+    let keys = client
+        .unlock_keys(&session, PASSWORD.as_bytes())
+        .await
+        .expect("the keys unlock");
+    (server, client, session, keys)
+}
+
+#[tokio::test]
+async fn full_message_and_attachment_reads_round_trip() {
+    let (server, client, session, keys) = read_client().await;
+    let attachment = FakeAttachment::new("logo.png", "image/png", ATTACHMENT_PLAINTEXT)
+        .inline_with_ids(&["logo@example.test", "other@example.test"]);
+    server.add_message(USER, FakeMessage::new("msg-0").with_attachment(attachment));
+
+    let full = client
+        .message(&session, "msg-0")
+        .await
+        .expect("the message");
+    assert_eq!(full.metadata.id, "msg-0");
+    assert_eq!(full.mime_type, "text/plain");
+    assert!(full.header.contains("Subject: synthetic subject msg-0"));
+    assert!(full.header.contains("From: Sender <sender@example.test>"));
+    let plaintext = keys
+        .decrypt_body(full.body.as_bytes())
+        .expect("the body decrypts");
+    assert_eq!(plaintext.as_slice(), MESSAGE_PLAINTEXT.as_bytes());
+
+    assert_eq!(full.attachments.len(), 1);
+    let metadata = &full.attachments[0];
+    assert_eq!(metadata.id, "msg-0-att-0");
+    assert_eq!(metadata.name, "logo.png");
+    assert_eq!(metadata.size, ATTACHMENT_PLAINTEXT.len() as i64);
+    assert_eq!(metadata.mime_type, "image/png");
+    assert_eq!(metadata.disposition, sb_proton::Disposition::Inline);
+    assert_eq!(metadata.content_id.as_deref(), Some("logo@example.test"));
+    assert!(!metadata.key_packets.is_empty());
+    let data = client
+        .attachment(&session, &metadata.id)
+        .await
+        .expect("the data packet");
+    let plaintext = keys
+        .decrypt_attachment(&metadata.key_packets, &data)
+        .expect("the attachment decrypts");
+    assert_eq!(plaintext.as_slice(), ATTACHMENT_PLAINTEXT);
+
+    // Exactly one GET per call.
+    let requests = server.requests();
+    let count = |path: &str| {
+        requests
+            .iter()
+            .filter(|request| request.path == path)
+            .count()
+    };
+    assert_eq!(count("/mail/v4/messages/msg-0"), 1);
+    assert_eq!(count("/mail/v4/attachments/msg-0-att-0"), 1);
+}
+
+#[tokio::test]
+async fn a_wrong_id_in_the_response_is_refused() {
+    let (server, client, session, _) = read_client().await;
+    server.add_message(USER, FakeMessage::new("msg-0"));
+    server.add_message(USER, FakeMessage::new("msg-1"));
+    server.set_wrong_message_id(USER, true);
+    let error = client
+        .message(&session, "msg-0")
+        .await
+        .expect_err("the response names another message");
+    assert!(matches!(error, ProtonError::UnexpectedMessage));
+    assert!(!error.to_string().contains("msg-0"));
+}
+
+#[tokio::test]
+async fn unsafe_ids_and_unknown_ids_are_refused() {
+    let (server, client, session, _) = read_client().await;
+    for id in ["a/b", "a?b", "a#b", "a%b", "", "a b"] {
+        let error = client
+            .message(&session, id)
+            .await
+            .expect_err("the id is not a path segment");
+        assert!(matches!(error, ProtonError::Malformed { .. }), "{id}");
+    }
+    assert!(
+        !server
+            .requests()
+            .iter()
+            .any(|request| request.path.starts_with("/mail/v4/messages/"))
+    );
+
+    let error = client
+        .message(&session, "missing-message")
+        .await
+        .expect_err("the message does not exist");
+    assert!(matches!(error, ProtonError::Unavailable { .. }));
+    let error = client
+        .attachment(&session, "missing-attachment")
+        .await
+        .expect_err("the attachment does not exist");
+    assert!(matches!(error, ProtonError::Unavailable { .. }));
 }
 
 #[tokio::test]

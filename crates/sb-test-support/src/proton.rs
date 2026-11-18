@@ -48,6 +48,11 @@ use tokio_rustls::TlsAcceptor;
 use crate::SeededRandom;
 use crate::imap_cert::server_config;
 
+/// Encrypts a message body to the account's primary address key.
+type EncryptBody = Arc<dyn Fn(&[u8]) -> Vec<u8> + Send + Sync>;
+/// Encrypts an attachment, returning its key packets and data packet.
+type EncryptAttachment = Arc<dyn Fn(&[u8]) -> (Vec<u8>, Vec<u8>) + Send + Sync>;
+
 /// The synthetic plaintext body the fake encrypts for its message
 /// fixture; tests compare a decryption against it.
 pub const MESSAGE_PLAINTEXT: &str = "Sweetbriar synthetic body: none of this is real mail.";
@@ -202,15 +207,63 @@ impl FakeLabel {
     }
 }
 
-/// One message's metadata as the fake serves it (research
-/// `mail-sync.md` §2). Build one with [`FakeMessage::new`] and the
-/// `with_*` helpers.
+/// One attachment of a fake message: the plaintext the fake encrypts
+/// to the account's primary address key, and the metadata it serves.
+#[derive(Debug, Clone)]
+pub struct FakeAttachment {
+    pub name: String,
+    pub mime_type: String,
+    pub inline: bool,
+    /// `Content-ID` values; one serializes as a string, several as an
+    /// array (research `mail-sync.md` §2's `Headers`).
+    pub content_ids: Vec<String>,
+    pub plaintext: Vec<u8>,
+}
+
+impl FakeAttachment {
+    /// An attachment with the given name, type and bytes.
+    pub fn new(name: &str, mime_type: &str, bytes: &[u8]) -> Self {
+        Self {
+            name: name.to_owned(),
+            mime_type: mime_type.to_owned(),
+            inline: false,
+            content_ids: Vec::new(),
+            plaintext: bytes.to_vec(),
+        }
+    }
+
+    /// Makes it inline with one `Content-ID`.
+    pub fn inline(mut self, content_id: &str) -> Self {
+        self.inline = true;
+        self.content_ids = vec![content_id.to_owned()];
+        self
+    }
+
+    /// Makes it inline with several `Content-ID` values, which the fake
+    /// serves as an array.
+    pub fn inline_with_ids(mut self, content_ids: &[&str]) -> Self {
+        self.inline = true;
+        self.content_ids = content_ids.iter().map(|id| (*id).to_owned()).collect();
+        self
+    }
+}
+
+/// One message as the fake serves it (research `mail-sync.md` §2, §4).
+/// The default is a small synthetic `text/plain` body and a header block
+/// consistent with the metadata. The server fills the encrypted fields
+/// when the message is added.
 #[derive(Debug, Clone)]
 pub struct FakeMessage {
     pub id: String,
     pub label_ids: Vec<String>,
     pub time: i64,
     pub unread: bool,
+    header: String,
+    mime_type: String,
+    body: Vec<u8>,
+    attachments: Vec<FakeAttachment>,
+    encrypted_body: Option<String>,
+    encrypted_attachments: Vec<(String, Vec<u8>, Vec<u8>)>,
 }
 
 impl FakeMessage {
@@ -221,6 +274,12 @@ impl FakeMessage {
             label_ids: vec!["0".to_owned()],
             time: 1_700_000_000,
             unread: true,
+            header: default_header(id),
+            mime_type: "text/plain".to_owned(),
+            body: MESSAGE_PLAINTEXT.as_bytes().to_vec(),
+            attachments: Vec::new(),
+            encrypted_body: None,
+            encrypted_attachments: Vec::new(),
         }
     }
 
@@ -239,6 +298,25 @@ impl FakeMessage {
         self
     }
 
+    /// Replaces the stored header block (M2.16a).
+    pub fn with_header(mut self, block: &str) -> Self {
+        self.header = block.to_owned();
+        self
+    }
+
+    /// Replaces the decrypted body and its `MIMEType` (M2.16a).
+    pub fn with_body(mut self, mime_type: &str, plaintext: &[u8]) -> Self {
+        self.mime_type = mime_type.to_owned();
+        self.body = plaintext.to_vec();
+        self
+    }
+
+    /// Adds an attachment (M2.16a).
+    pub fn with_attachment(mut self, attachment: FakeAttachment) -> Self {
+        self.attachments.push(attachment);
+        self
+    }
+
     fn to_json(&self) -> Value {
         json!({
             "ID": self.id,
@@ -252,12 +330,43 @@ impl FakeMessage {
             "BCCList": [],
             "ReplyTos": [],
             "Time": self.time,
-            "Size": 128,
+            "Size": self.body.len(),
             "Unread": self.unread,
             "Flags": 1,
-            "NumAttachments": 0,
+            "NumAttachments": self.attachments.len(),
         })
     }
+}
+
+/// A synthetic header block consistent with the message's metadata.
+fn default_header(id: &str) -> String {
+    format!(
+        "Subject: synthetic subject {id}\r\n\
+         From: Sender <sender@example.test>\r\n\
+         To: To <to@example.test>\r\n\
+         Date: Tue, 14 Nov 2023 22:26:40 +0000\r\n\
+         Message-ID: <{id}@example.test>\r\n"
+    )
+}
+
+/// The attachment JSON the API serves: metadata plus the base64 key
+/// packets that match the downloadable data packet.
+fn attachment_json(id: &str, attachment: &FakeAttachment, key_packets: &[u8]) -> Value {
+    let headers = match attachment.content_ids.len() {
+        0 => json!({}),
+        1 => json!({"content-id": attachment.content_ids[0]}),
+        _ => json!({"content-id": attachment.content_ids}),
+    };
+    json!({
+        "ID": id,
+        "Name": attachment.name,
+        "Size": attachment.plaintext.len(),
+        "MIMEType": attachment.mime_type,
+        "Disposition": if attachment.inline { "inline" } else { "attachment" },
+        "Headers": headers,
+        "KeyPackets": base64::engine::general_purpose::STANDARD.encode(key_packets),
+        "Signature": Value::Null,
+    })
 }
 
 /// Proton's event actions for an item.
@@ -380,15 +489,42 @@ struct Account {
     attachment_key_packets: Vec<u8>,
     attachment_data_packet: Vec<u8>,
     attachment_plaintext: Vec<u8>,
+    /// Encrypts a message body to the primary address key, armored.
+    encrypt_body: EncryptBody,
+    /// Encrypts an attachment to the primary address key, returning the
+    /// key packets and the data packet.
+    encrypt_attachment: EncryptAttachment,
     labels: Vec<FakeLabel>,
     messages: Vec<FakeMessage>,
     events: Vec<FakeEvent>,
     event_counter: u64,
     next_refresh: bool,
     malformed_messages: bool,
+    wrong_message_id: bool,
 }
 
 impl Account {
+    /// Encrypts a message's body and attachments to the primary address
+    /// key, as an API message carries them.
+    fn encrypt_message(&self, message: &mut FakeMessage) {
+        let armored = (self.encrypt_body)(&message.body);
+        message.encrypted_body =
+            Some(String::from_utf8(armored).expect("the armored body is ASCII"));
+        message.encrypted_attachments = message
+            .attachments
+            .iter()
+            .enumerate()
+            .map(|(index, attachment)| {
+                let (key_packets, data_packet) = (self.encrypt_attachment)(&attachment.plaintext);
+                (
+                    format!("{}-att-{index}", message.id),
+                    key_packets,
+                    data_packet,
+                )
+            })
+            .collect();
+    }
+
     /// Appends an event, assigning its id and consuming the one-shot
     /// refresh marker (spec/04 "Refresh").
     fn record(&mut self, mut event: FakeEvent) {
@@ -606,6 +742,10 @@ impl FakeProtonServer {
                 keys: vec![disabled],
             });
 
+            // Every message and attachment body is encrypted to the
+            // primary address key when it is added (M2.16a).
+            let (encrypt_body, encrypt_attachment) = encryptors(&provider, &primary_unlocked);
+
             // The fixtures are encrypted to the primary address key.
             let mut body = Vec::new();
             provider
@@ -659,12 +799,15 @@ impl FakeProtonServer {
                     attachment_key_packets,
                     attachment_data_packet: data_packet,
                     attachment_plaintext: ATTACHMENT_PLAINTEXT.to_vec(),
+                    encrypt_body,
+                    encrypt_attachment,
                     labels: system_labels(),
                     messages: Vec::new(),
                     events: Vec::new(),
                     event_counter: 0,
                     next_refresh: false,
                     malformed_messages: false,
+                    wrong_message_id: false,
                 },
             );
         }
@@ -788,27 +931,40 @@ impl FakeProtonServer {
         account.record(FakeEvent::label(id.to_owned(), 0, None));
     }
 
-    /// Adds a message and appends a create event; returns its id.
-    pub fn add_message(&self, username: &str, message: FakeMessage) -> String {
+    /// Adds a message and appends a create event; returns its id. The
+    /// body and attachments are encrypted to the account's primary
+    /// address key.
+    pub fn add_message(&self, username: &str, mut message: FakeMessage) -> String {
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         let account = account_mut(&mut state, username);
         let id = message.id.clone();
         account.record(FakeEvent::message(id.clone(), 1, Some(message.clone())));
+        account.encrypt_message(&mut message);
         account.messages.push(message);
         id
     }
 
-    /// Replaces a message's metadata and appends an update event.
-    pub fn update_message(&self, username: &str, message: FakeMessage) {
+    /// Replaces a message's metadata and body and appends an update
+    /// event.
+    pub fn update_message(&self, username: &str, mut message: FakeMessage) {
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         let account = account_mut(&mut state, username);
+        assert!(
+            account
+                .messages
+                .iter()
+                .any(|existing| existing.id == message.id),
+            "the message exists"
+        );
+        let id = message.id.clone();
+        account.record(FakeEvent::message(id, 2, Some(message.clone())));
+        account.encrypt_message(&mut message);
         let existing = account
             .messages
             .iter_mut()
             .find(|existing| existing.id == message.id)
             .expect("the message exists");
-        *existing = message.clone();
-        account.record(FakeEvent::message(message.id.clone(), 2, Some(message)));
+        *existing = message;
     }
 
     /// Removes a message and appends a delete event.
@@ -923,6 +1079,13 @@ impl FakeProtonServer {
     pub fn set_undecodable_message(&self, username: &str, on: bool) {
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         account_mut(&mut state, username).malformed_messages = on;
+    }
+
+    /// Answers a full-message request with another message's id, which
+    /// the transport must refuse (spec/04 step 3).
+    pub fn set_wrong_message_id(&self, username: &str, on: bool) {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        account_mut(&mut state, username).wrong_message_id = on;
     }
 
     /// The encrypted message body fixture and a damaged copy. Taken
@@ -1095,9 +1258,17 @@ async fn dispatch(
         ("GET", "/core/v4/events/latest") => handle_latest_event(state, headers),
         ("GET", "/tests/ping") => Ok(json_response(200, json!({"Code": 1000}))),
         _ => {
-            if method.as_str() == "GET"
-                && let Some(id) = path.strip_prefix("/core/v4/events/")
-            {
+            if method.as_str() != "GET" {
+                return Ok(json_response(
+                    404,
+                    json!({"Code": 2001, "Error": "not found"}),
+                ));
+            }
+            if let Some(id) = path.strip_prefix("/mail/v4/messages/") {
+                handle_message(state, headers, id)
+            } else if let Some(id) = path.strip_prefix("/mail/v4/attachments/") {
+                handle_attachment(state, headers, id)
+            } else if let Some(id) = path.strip_prefix("/core/v4/events/") {
                 handle_events(state, headers, id)
             } else {
                 Ok(json_response(
@@ -1726,6 +1897,89 @@ fn handle_message_counts(
     Ok(json_response(200, json!({"Code": 1000, "Counts": counts})))
 }
 
+/// `GET /mail/v4/messages/{id}`: the full message (research
+/// `mail-sync.md` §4). An unknown id is the fake's not-found error.
+fn handle_message(
+    state: &Arc<Mutex<State>>,
+    headers: &hyper::HeaderMap,
+    id: &str,
+) -> Result<Response<Full<Bytes>>, io::Error> {
+    let mut state = state.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(username) = authenticated(&mut state, headers) else {
+        return Ok(unauthorized());
+    };
+    let account = state
+        .accounts
+        .get(&username)
+        .expect("the session's account exists");
+    let Some(stored) = account.messages.iter().find(|message| message.id == id) else {
+        return Ok(json_response(
+            404,
+            json!({"Code": 2001, "Error": "message not found"}),
+        ));
+    };
+    let mut value = stored.to_json();
+    value["Header"] = json!(&stored.header);
+    value["Body"] = json!(
+        stored
+            .encrypted_body
+            .as_ref()
+            .expect("the body is encrypted")
+    );
+    value["MIMEType"] = json!(&stored.mime_type);
+    value["Attachments"] = Value::Array(
+        stored
+            .attachments
+            .iter()
+            .zip(&stored.encrypted_attachments)
+            .map(|(a, (id, key_packets, _))| attachment_json(id, a, key_packets))
+            .collect(),
+    );
+    if account.wrong_message_id {
+        let other = account
+            .messages
+            .iter()
+            .find(|message| message.id != id)
+            .map(|message| message.id.clone())
+            .unwrap_or_else(|| format!("{id}-other"));
+        value["ID"] = json!(other);
+    }
+    Ok(json_response(200, json!({"Code": 1000, "Message": value})))
+}
+
+/// `GET /mail/v4/attachments/{id}`: the raw data packet, not JSON
+/// (research `mail-sync.md` §4).
+fn handle_attachment(
+    state: &Arc<Mutex<State>>,
+    headers: &hyper::HeaderMap,
+    id: &str,
+) -> Result<Response<Full<Bytes>>, io::Error> {
+    let mut state = state.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(username) = authenticated(&mut state, headers) else {
+        return Ok(unauthorized());
+    };
+    let account = state
+        .accounts
+        .get(&username)
+        .expect("the session's account exists");
+    let Some((_, _, data_packet)) = account
+        .messages
+        .iter()
+        .flat_map(|message| message.encrypted_attachments.iter())
+        .find(|(attachment_id, _, _)| attachment_id == id)
+    else {
+        return Ok(json_response(
+            404,
+            json!({"Code": 2001, "Error": "attachment not found"}),
+        ));
+    };
+    Ok(Response::builder()
+        .status(StatusCode::OK)
+        .header("content-type", "application/octet-stream")
+        .body(Full::new(Bytes::from(data_packet.clone())))
+        .expect("a raw response builds"))
+}
+
 fn handle_latest_event(
     state: &Arc<Mutex<State>>,
     headers: &hyper::HeaderMap,
@@ -1805,6 +2059,62 @@ fn handle_events(
         response["User"] = user;
     }
     Ok(json_response(200, response))
+}
+
+/// The per-account encryptors: an armored, signed message body and a
+/// split attachment (key packets plus data packet), both to the primary
+/// address key.
+fn encryptors<P>(
+    provider: &P,
+    key: &DecryptedAddressKey<P::PrivateKey, P::PublicKey>,
+) -> (EncryptBody, EncryptAttachment)
+where
+    P: PGPProviderSync,
+{
+    let encrypt_body: EncryptBody = {
+        let provider = provider.clone();
+        let public = key.public_key.clone();
+        let private = key.private_key.clone();
+        Arc::new(move |plaintext: &[u8]| {
+            let mut armored = Vec::new();
+            provider
+                .new_encryptor()
+                .with_encryption_key(&public)
+                .with_signing_key(&private)
+                .encrypt_to_writer(
+                    plaintext,
+                    DataEncoding::Armor,
+                    SigningMode::Inline,
+                    WritingMode::All,
+                    &mut armored,
+                )
+                .expect("the body encrypts");
+            armored
+        })
+    };
+    let encrypt_attachment: EncryptAttachment = {
+        let provider = provider.clone();
+        let public = key.public_key.clone();
+        Arc::new(move |plaintext: &[u8]| {
+            let mut data_packet = Vec::new();
+            let detached = provider
+                .new_encryptor()
+                .with_encryption_key(&public)
+                .encrypt_to_writer(
+                    plaintext,
+                    DataEncoding::Bytes,
+                    SigningMode::Inline,
+                    WritingMode::SplitKeyPackets,
+                    &mut data_packet,
+                )
+                .expect("the attachment encrypts");
+            let key_packets = detached
+                .key_packets
+                .expect("split mode returns the key packets");
+            (key_packets, data_packet)
+        })
+    };
+    (encrypt_body, encrypt_attachment)
 }
 
 /// Builds the `LockedKey` the API stores for a generated user key.
