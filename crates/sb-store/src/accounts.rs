@@ -49,6 +49,23 @@ impl IdentitySendable {
             Self::Unavailable => "unavailable",
         }
     }
+
+    pub(crate) fn from_stored(name: &str) -> Result<Self, StoreError> {
+        match name {
+            "validated" => Ok(Self::Validated),
+            "provisional" => Ok(Self::Provisional),
+            "unavailable" => Ok(Self::Unavailable),
+            _ => Err(StoreError::corrupt(format!(
+                "an identity's sendable state is '{name}'"
+            ))),
+        }
+    }
+
+    /// Whether the From list may offer it (spec/05): only a backend-
+    /// confirmed address or a user-provisioned one can send.
+    pub fn can_send(self) -> bool {
+        matches!(self, Self::Validated | Self::Provisional)
+    }
 }
 
 /// `imap_endpoints.address_mode`, Proton Bridge only (spec/02).

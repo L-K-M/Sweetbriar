@@ -16,6 +16,7 @@ mod error;
 mod export_metadata;
 pub mod exports;
 mod gc;
+pub mod identities;
 #[allow(unsafe_code)]
 mod image_vfs;
 mod import_reports;
