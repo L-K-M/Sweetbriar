@@ -1287,6 +1287,17 @@ CREATE TABLE send_recipients (
   `RCPT TO`): `a@X.NET` in To and `a@x.net` in Cc are one row. `kind` records the most visible field it appeared
   in (`to` > `cc` > `bcc`); the frozen MIME keeps the headers as written.
 - The state machine and its rules are in [05-send](05-send.md).
+- **Proton submission (M4, 05):** a migration adds to `send_attempts`
+  `proton_draft_id TEXT` (the draft Proton created, which becomes the
+  sent message), `proton_uploads_json TEXT` (`{"v":1,"attachments":[…]}`:
+  the attachment ids uploaded so far, in the frozen MIME's order) and
+  `send_requested_at INTEGER` (Proton only, committed just before the
+  send request), with `CHECK (send_requested_at IS NULL OR
+  proton_draft_id IS NOT NULL)`; generic attempts (*later*) never set
+  it. For Proton attempts `final_reply` holds Proton's code and
+  message when a reply arrived (redacted, 10), and
+  `send_recipients.rcpt_reply` the reason a recipient was refused
+  before submission; both are NULL otherwise.
 
 ## Commands, receipts and settings
 

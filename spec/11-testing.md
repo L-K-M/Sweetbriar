@@ -356,9 +356,16 @@ test, except where the spec says "manual qualification".
   verification, sessions and refresh, keys and salts (test keys
   generated with `proton-crypto`), addresses, labels and folders,
   message metadata, full messages with encrypted bodies and attachments,
-  the events stream with `More` and `Refresh`, counts, and the mutation
-  calls 04-sync-proton uses.
-- **Fault knobs:** drop or stall a request; answer 429 or 503 with
+  the events stream with `More` and `Refresh`, counts, the mutation
+  calls 04-sync-proton uses, and the key lookup, draft, attachment
+  upload and send calls 05 uses (recording what each recipient's
+  package carries); its draft read reports each attachment's name, type
+  and size as uploaded, the measure 05's retry matching uses.
+- **Fault knobs:** refuse a connection before it is established, or
+  stall it before the TLS handshake completes (a connect timeout); drop
+  or stall a request; drop the reply after the
+  server processed a draft creation, attachment upload or send (05's
+  `outcome_unknown`, evidence check and retry paths); answer 429 or 503 with
   `Retry-After`, 401, 9001, 10013, 2064 or 5003; return stale pages;
   change messages behind the client's back; emit a refresh; damage a
   ciphertext; rotate a key.
