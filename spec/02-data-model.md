@@ -1286,8 +1286,9 @@ CREATE TABLE send_recipients (
   `send_requested_at INTEGER` (committed just before the send request),
   with `CHECK (send_requested_at IS NULL OR proton_draft_id IS NOT
   NULL)`. For Proton attempts `final_reply` holds Proton's code and
-  message (redacted, 10) and `send_recipients.rcpt_reply` the reason a
-  recipient was refused before submission; both are NULL otherwise.
+  message when a reply arrived (redacted, 10), and
+  `send_recipients.rcpt_reply` the reason a recipient was refused
+  before submission; both are NULL otherwise.
 
 ## Commands, receipts and settings
 

@@ -83,7 +83,10 @@ inspectable Out Box. Unknown outcomes are never retried automatically.
     recipients, drafts, uploads and sends, recording each recipient's
     package and counting sends, with faults that drop the connection
     after a send is applied and that refuse with a chosen code;
-  - startup recovery by `send_requested_at` (05);
+  - startup recovery of every `submitting` attempt by
+    `send_requested_at` (05): with it, `outcome_unknown` and the
+    evidence check; without it, back to `queued` with the recorded
+    draft and uploads;
   - the Proton evidence check for `outcome_unknown`;
   - Sent reconciliation by `proton_draft_id`, display only;
   - `seen_addresses` sent-to counts updated on `accepted`;
@@ -105,7 +108,9 @@ inspectable Out Box. Unknown outcomes are never retried automatically.
     external recipient with keys fails the attempt before any draft is
     created (the fake holds none);
   - a crash after the draft was created reuses it (one draft on the
-    fake), and recorded uploads aren't repeated;
+    fake), and recorded uploads aren't repeated; an upload whose reply
+    the fake dropped is recorded from the draft on retry, so the sent
+    message carries each attachment once;
   - an account reconfiguration between queueing and submission keeps the
     attempt `queued` until `confirm_send_route`, and `cancel_send` works
     while it waits;

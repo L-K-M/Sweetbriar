@@ -148,25 +148,34 @@ Otherwise the draft keeps its state.
    worker; one request in flight per account):
    1. **Recipient keys.** `GET /core/v4/keys?Email=` for each recipient.
       An internal recipient (Proton) is encrypted to its keys. An
-      external recipient without keys is sent in clear, as Proton's own
-      clients do by default; the Out Box says so. An external recipient
-      who publishes keys (WKD or Proton's key server) isn't supported in
-      the pilot: the attempt becomes `failed` before anything is created
-      on Proton, that recipient `rejected_permanent` with the reason and
-      the others `unsent`. Sweetbriar never downgrades such a recipient
-      to clear text. Password-protected sending isn't in the pilot.
+      external recipient for whom the endpoint returns no keys is sent
+      in clear, as Proton's own clients do by default; the Out Box says
+      so. An external recipient for whom it returns keys isn't
+      supported in the pilot: the attempt becomes `failed` before
+      anything is created on Proton, that recipient `rejected_permanent`
+      with the reason and the others `unsent`, so Sweetbriar never
+      downgrades a key the endpoint knows to clear text. Keys the
+      endpoint doesn't return (a WKD it doesn't consult, keys pinned in
+      Proton contacts) aren't looked up in the pilot; that lookup is
+      *later*. Password-protected sending isn't in the pilot.
    2. **Create the draft.** `POST /mail/v4/messages` with the sender
       address, the recipient lists, the subject, the body encrypted to
       the sender's address key, and, for a reply or forward of a
       message in the same Proton account, its `ParentID` and `Action`.
       The returned draft id is committed to the attempt
-      (`proton_draft_id`) before the next request. A retried attempt
+      (`proton_draft_id`) before the next request; a crash or a lost
+      reply in that window leaves a draft Sweetbriar can't name, which
+      stays in Proton's Drafts ("Drafts on the server"). A retried attempt
       reuses a recorded draft, updating it (`PUT`) rather than creating
       another.
    3. **Upload the attachments** to the draft (`POST
       /mail/v4/attachments`): key packets, data packet and a detached
       signature each, in the frozen MIME's order. An upload already
-      recorded on the attempt isn't repeated.
+      recorded on the attempt isn't repeated. A retry first reads the
+      draft: an attachment it carries that the attempt didn't record
+      (its reply was lost) is recorded when its name, type and size
+      match the next pending one; any other mismatch makes the attempt
+      `failed` before the send request, naming the draft.
    4. **Send.** Build one package per MIME type the recipients need
       (`text/html` for a Markdown draft, with the frozen `text/plain`
       for recipients who prefer it; `text/plain` for a plain draft):
@@ -185,8 +194,9 @@ Otherwise the draft keeps its state.
         A class is qualified only when the `go-proton-api` lane (11) or
         research shows Proton refuses before anything is sent; the list
         starts empty and grows only with that evidence.
-      - **Any other reply,** a connection lost or a timeout after the
-        request was written → `outcome_unknown`, recipients `unknown`.
+      - **Any other reply,** and any connection loss or timeout once
+        `send_requested_at` is committed, whether or not the request
+        was fully written → `outcome_unknown`, recipients `unknown`.
       - Proton sends a message as a whole, so there is no partial
         acceptance: `retry_rejected_recipients` (07) applies to generic
         accounts only.
@@ -241,10 +251,13 @@ Otherwise the draft keeps its state.
      current-revision rule (02): a newer revision keeps its state,
      including `queued`.
    - **A `failed` attempt** also returns its draft to `editing`.
-   - **Proton evidence:** the engine reads the draft's metadata by
-     `proton_draft_id`. If Proton shows it sent (it carries Sent, `7`,
-     and no longer Drafts, `8`), the attempt becomes `accepted` and its
-     `unknown` recipients `sent`: that is Proton's own record, and
+   - **Proton evidence:** when a Proton attempt becomes
+     `outcome_unknown` (from a reply, at startup or after a restore),
+     and again when the Out Box opens it, the engine reads the draft's
+     metadata by `proton_draft_id`. If Proton shows it sent (it carries
+     Sent, `7`, and no longer Drafts, `8`), the attempt becomes
+     `accepted`, its `unknown` recipients `sent` and the draft `sent`
+     under the current-revision rule (02): that is Proton's own record, and
      nothing is sent again. Any other observation, a draft still in
      Drafts included, proves nothing and is only shown; the user
      resolves the attempt.
@@ -292,6 +305,8 @@ drafts to Proton's Drafts is *later*.
 ## Restore and send
 
 After a restore (03), every attempt in `held`, `queued` or `submitting`
-becomes `outcome_unknown`, whatever its `send_requested_at`. Nothing is
+becomes `outcome_unknown`, whatever its `send_requested_at`: the backup
+may predate a send request the original store made later, so its
+`send_requested_at` proves nothing. Nothing is
 sent until the user resolves it; for a Proton attempt with a
 `proton_draft_id` the evidence check above runs first.
