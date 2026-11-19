@@ -212,6 +212,9 @@ inspectable Out Box. Unknown outcomes are never retried automatically.
   chosen code (11).
 - **Acceptance:** tests driving the fake directly: each call's
   recorded effect, the counter, and each fault.
+- **Split (2026-11-19):** the calls measured about 1,400 changed
+  lines, so the faults land as their own PR: M4.3c1 the calls and the
+  counter, M4.3c2 the four faults. M4.3d follows M4.3c2.
 
 #### M4.3d Proton submission transport — linux
 
