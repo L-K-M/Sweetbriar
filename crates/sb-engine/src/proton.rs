@@ -4,9 +4,9 @@
 use crate::EngineError;
 use crate::engine::{Engine, Spawn, Worker, validate_idempotency_key};
 use sb_resources::{
-    AccountKind, AccountState, BEGIN_PROTON_SIGN_IN, CredentialPause, FinishedSignIn, ProtonClient,
-    ProtonError, ProtonRefusal, ProtonSignInParams, Receipt, RestoredProtonSession, Secret,
-    SecretError, Session, SignIn, SignInStep, WritePriority, accounts, decode_proton_session,
+    AccountKind, AccountState, BEGIN_PROTON_SIGN_IN, CredentialPause, FinishedSignIn, ProtonError,
+    ProtonRefusal, ProtonSignInParams, Receipt, RestoredProtonSession, Secret, SecretError,
+    Session, SignIn, SignInStep, WritePriority, accounts, decode_proton_session,
     disconnect_proton_account, pause_for_credential, pause_for_session, proton_account, run_once,
 };
 
@@ -465,7 +465,10 @@ impl Engine {
     /// memory.
     #[cfg(feature = "test-seams")]
     #[doc(hidden)]
-    pub async fn proton_lane_transport(&self, account_id: &str) -> Option<(ProtonClient, Session)> {
+    pub async fn proton_lane_transport(
+        &self,
+        account_id: &str,
+    ) -> Option<(sb_resources::ProtonClient, Session)> {
         let session = self
             .proton_sessions
             .lock()

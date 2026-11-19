@@ -88,7 +88,9 @@ pub use sb_proton::{
 };
 // The send lane's transport items (M4.3g): the lane drives the
 // submission calls and their crypto the way sb-proton's fake-server
-// tests do, so the resources layer re-exports what that needs.
+// tests do, so the resources layer re-exports what that needs, only
+// under the test-only `test-seams` feature.
+#[cfg(feature = "test-seams")]
 pub use sb_proton::{
     AttachmentUpload, DecryptedAddressKey, DraftAddress, DraftCreate, DraftTemplate, KeyFlag,
     KeyGenerator, KeyGeneratorSync, KeyId, PGPProviderSync, ProtonPGP, RecipientKeys,
