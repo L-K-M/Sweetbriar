@@ -235,6 +235,12 @@ inspectable Out Box. Unknown outcomes are never retried automatically.
   carries the session keys encrypted to its key and the fake decrypts
   the body; an external recipient without keys gets the clear scheme;
   a dropped send reply is not replayed.
+- **Split (2026-11-19):** the step measured about 2,500 changed lines,
+  so it lands as two PRs: M4.3d1 the encryption, signing and packages
+  (about 970 lines), with the internal and clear-scheme acceptance
+  checked through the fake's decryption; M4.3d2 the HTTP calls and
+  their error classes (about 1,530 lines), with the round trip, the
+  dropped reply and the connect failures. M4.3d2 follows M4.3d1.
 
 #### M4.3e Submission on the account worker — linux
 
