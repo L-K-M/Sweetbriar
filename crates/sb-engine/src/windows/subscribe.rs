@@ -15,6 +15,8 @@
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
+use crate::new_mail::{NewMail, Subscriber};
+
 use tokio::runtime::Handle;
 
 use super::{OpenWindow, Versions, WindowId, WindowSpec, Windows};
@@ -293,6 +295,59 @@ impl AccountHealthSubscription {
             }
             if self.answered.swap(seen.account_health, Ordering::AcqRel) != seen.account_health {
                 return Ok(());
+            }
+            versions.changed().await.map_err(|_| shut_down())?;
+        }
+    }
+}
+
+/// One account's new-mail arrivals since the subscription's last
+/// answer (spec/07 `subscribe_new_mail`). The pull contract of
+/// [`HealthSubscription`], except an answer names the account and
+/// carries its arrivals, and each subscription keeps its own queue.
+pub struct NewMailSubscription {
+    windows: Arc<Windows>,
+    subscriber: Arc<Subscriber>,
+    waiting: AtomicBool,
+}
+
+impl Windows {
+    /// `subscribe_new_mail` (spec/07), starting from now: the
+    /// subscription's queue is empty, so only later arrivals answer. In memory only.
+    pub(crate) fn subscribe_new_mail(self: &Arc<Self>) -> NewMailSubscription {
+        let subscriber = Arc::new(Subscriber::new());
+        self.new_mail
+            .lock()
+            .expect("the new-mail subscriber lock poisoned")
+            .push(Arc::downgrade(&subscriber));
+        NewMailSubscription {
+            windows: Arc::clone(self),
+            subscriber,
+            waiting: AtomicBool::new(false),
+        }
+    }
+}
+
+impl NewMailSubscription {
+    /// Wait for one account's arrivals since the last answer. Several
+    /// are one answer: `count` is all of them and `message_ids` the
+    /// newest 20, so none is dropped silently
+    /// (spec/07 "Coalescing"). One call at a time; a cancelled call
+    /// moves nothing; shutdown ends a wait with `Unavailable`.
+    pub async fn next(&self) -> Result<NewMail, EngineError> {
+        let _waiting = Waiting::claim(&self.waiting)?;
+        let mut versions = self.windows.versions.subscribe();
+        loop {
+            let seen = *versions.borrow_and_update();
+            if seen.shut {
+                return Err(shut_down());
+            }
+            // The queue, not the version, decides: another account's
+            // batch may already wait behind the one last answered.
+            // Reading the version first means an arrival after the
+            // pop still wakes the wait below.
+            if let Some(batch) = self.subscriber.pop() {
+                return Ok(batch);
             }
             versions.changed().await.map_err(|_| shut_down())?;
         }

@@ -394,6 +394,70 @@ fn changes_follow_the_metadata_and_labels_and_the_cursor_moves() {
 }
 
 #[test]
+fn new_inbox_arrivals_are_reported_and_other_mailboxes_are_not() {
+    let (_scratch, store) = complete_store("proton-events-new-mail");
+    let applied = apply(
+        &store,
+        "event-0",
+        None,
+        vec![
+            ProtonChange::Upsert(Box::new(message("m2", &["0", "5"], true))),
+            ProtonChange::Upsert(Box::new(message("m3", &["6", "5"], true))),
+        ],
+        Some("event-1"),
+        4,
+    )
+    .unwrap();
+    let m2: i64 = reading(&store, |tx| {
+        Ok(tx
+            .query_row(
+                "SELECT message_id FROM logical_messages WHERE provider_key = 'm2'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap())
+    });
+    assert_eq!(applied.new_inbox, vec![m2]);
+
+    // A message that moves into the Inbox already exists, so its
+    // change is not an arrival (spec/10 "Notifications").
+    let moved = apply(
+        &store,
+        "event-1",
+        None,
+        vec![ProtonChange::Upsert(Box::new(message(
+            "m3",
+            &["0", "5"],
+            true,
+        )))],
+        Some("event-2"),
+        5,
+    )
+    .unwrap();
+    assert!(
+        moved.new_inbox.is_empty(),
+        "a message moving into the Inbox is not new mail"
+    );
+}
+
+#[test]
+fn a_new_message_repeated_or_replayed_is_one_arrival() {
+    let (_scratch, store) = complete_store("proton-events-new-mail-replay");
+    let upsert = || ProtonChange::Upsert(Box::new(message("m2", &["0"], true)));
+
+    // Named twice in one chunk: its first change is the arrival.
+    let first = apply(&store, "event-0", None, vec![upsert(), upsert()], None, 4).unwrap();
+    assert_eq!(first.new_inbox.len(), 1);
+
+    // The same chunk replayed after a crash announces nothing again.
+    let replay = apply(&store, "event-0", None, vec![upsert()], Some("event-1"), 4).unwrap();
+    assert!(
+        replay.new_inbox.is_empty(),
+        "a replayed arrival is not new mail"
+    );
+}
+
+#[test]
 fn a_delete_is_withheld_and_a_replayed_chunk_changes_nothing() {
     let (_scratch, store) = complete_store("proton-events-delete");
     let changes = vec![

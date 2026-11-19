@@ -749,10 +749,13 @@ the provider policies (`proton_bridge`, `generic_imap`) live in
     930);
   - M2.7c3: both queries' FFI exports and regenerated bindings
     (about 530);
-  - M2.7c4: `diagnostics_package()`, `subscribe_new_mail` and the
-    `notifications.previews` setting.
-  The PRs follow one another in order. M2.7c2 carries the Recovery
-  acceptance and M2.7c4 the diagnostics and new-mail ones.
+  - M2.7c4a: `subscribe_new_mail` and the `notifications.previews`
+    setting through engine, service and FFI (847 lines, so it splits
+    from the package);
+  - M2.7c4b: `diagnostics_package()` and its log-scan test.
+  M2.7c1 to M2.7c3 follow one another; M2.7c4a needs only M2.7b2, and
+  M2.7c4b follows the rest. M2.7c2 carries the Recovery acceptance,
+  M2.7c4a the new-mail one and M2.7c4b the diagnostics one.
 
 #### M2.7d Activity window — macos-ci
 

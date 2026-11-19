@@ -1636,6 +1636,14 @@ public protocol CoreProtocol: AnyObject, Sendable {
     func setNote(token: CancelToken, idempotencyKey: String, messageId: Int64, text: String) async throws  -> Receipt
     
     /**
+     * `subscribe_new_mail` (spec/07 "Subscriptions"): one account's
+     * Inbox arrivals since the subscription's last answer. Subscribe
+     * first, then pull, and none is missed. A query: the token races
+     * the core's lock.
+     */
+    func subscribeNewMail(token: CancelToken) async throws  -> NewMailSubscription
+    
+    /**
      * `recovery(account_id?)` (spec/07): logical messages with no
      * `present` occurrence, newest first, at most `limit` rows. A
      * query: the token races the core's lock and the read itself.
@@ -2928,6 +2936,28 @@ open func setNote(token: CancelToken, idempotencyKey: String, messageId: Int64, 
 }
     
     /**
+     * `subscribe_new_mail` (spec/07 "Subscriptions"): one account's
+     * Inbox arrivals since the subscription's last answer. Subscribe
+     * first, then pull, and none is missed. A query: the token races
+     * the core's lock.
+     */
+open func subscribeNewMail(token: CancelToken)async throws  -> NewMailSubscription  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_sb_ffi_fn_method_core_subscribe_new_mail(
+                        self.uniffiCloneHandle(),FfiConverterTypeCancelToken_lower(token)
+                )
+            },
+            pollFunc: ffi_sb_ffi_rust_future_poll_u64,
+            completeFunc: ffi_sb_ffi_rust_future_complete_u64,
+            freeFunc: ffi_sb_ffi_rust_future_free_u64,
+            liftFunc: FfiConverterTypeNewMailSubscription_lift,
+            errorHandler: FfiConverterTypeCoreError_lift
+        )
+}
+    
+    /**
      * `recovery(account_id?)` (spec/07): logical messages with no
      * `present` occurrence, newest first, at most `limit` rows. A
      * query: the token races the core's lock and the read itself.
@@ -3667,6 +3697,152 @@ public func FfiConverterTypeHealthSubscription_lift(_ handle: UInt64) throws -> 
 #endif
 public func FfiConverterTypeHealthSubscription_lower(_ value: HealthSubscription) -> UInt64 {
     return FfiConverterTypeHealthSubscription.lower(value)
+}
+
+
+
+
+
+
+/**
+ * The new-mail stream (spec/07): one in-flight `next` at a time, in
+ * memory only.
+ */
+public protocol NewMailSubscriptionProtocol: AnyObject, Sendable {
+    
+    /**
+     * Wait for one account's arrivals since the last answer; the
+     * shell then re-reads the affected range. One call at a time: a
+     * second is `InvalidInput`. A cancelled call answers `Cancelled`
+     * and moves nothing, so the next call still sees what it missed.
+     * Shutdown ends a wait with `Unavailable`.
+     */
+    func next(token: CancelToken) async throws  -> NewMail
+    
+}
+/**
+ * The new-mail stream (spec/07): one in-flight `next` at a time, in
+ * memory only.
+ */
+open class NewMailSubscription: NewMailSubscriptionProtocol, @unchecked Sendable {
+    fileprivate let handle: UInt64
+
+    /// Used to instantiate a [FFIObject] without an actual handle, for fakes in tests, mostly.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public struct NoHandle {
+        public init() {}
+    }
+
+    // TODO: We'd like this to be `private` but for Swifty reasons,
+    // we can't implement `FfiConverter` without making this `required` and we can't
+    // make it `required` without making it `public`.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    required public init(unsafeFromHandle handle: UInt64) {
+        self.handle = handle
+    }
+
+    // This constructor can be used to instantiate a fake object.
+    // - Parameter noHandle: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
+    //
+    // - Warning:
+    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing handle the FFI lower functions will crash.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public init(noHandle: NoHandle) {
+        self.handle = 0
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public func uniffiCloneHandle() -> UInt64 {
+        return try! rustCall { uniffi_sb_ffi_fn_clone_newmailsubscription(self.handle, $0) }
+    }
+    // No primary constructor declared for this class.
+
+    deinit {
+        if handle == 0 {
+            // Mock objects have handle=0 don't try to free them
+            return
+        }
+
+        try! rustCall { uniffi_sb_ffi_fn_free_newmailsubscription(handle, $0) }
+    }
+
+    
+
+    
+    /**
+     * Wait for one account's arrivals since the last answer; the
+     * shell then re-reads the affected range. One call at a time: a
+     * second is `InvalidInput`. A cancelled call answers `Cancelled`
+     * and moves nothing, so the next call still sees what it missed.
+     * Shutdown ends a wait with `Unavailable`.
+     */
+open func next(token: CancelToken)async throws  -> NewMail  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_sb_ffi_fn_method_newmailsubscription_next(
+                        self.uniffiCloneHandle(),FfiConverterTypeCancelToken_lower(token)
+                )
+            },
+            pollFunc: ffi_sb_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_sb_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_sb_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeNewMail_lift,
+            errorHandler: FfiConverterTypeCoreError_lift
+        )
+}
+    
+
+    
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeNewMailSubscription: FfiConverter {
+    typealias FfiType = UInt64
+    typealias SwiftType = NewMailSubscription
+
+    public static func lift(_ handle: UInt64) throws -> NewMailSubscription {
+        return NewMailSubscription(unsafeFromHandle: handle)
+    }
+
+    public static func lower(_ value: NewMailSubscription) -> UInt64 {
+        return value.uniffiCloneHandle()
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> NewMailSubscription {
+        let handle: UInt64 = try readInt(&buf)
+        return try lift(handle)
+    }
+
+    public static func write(_ value: NewMailSubscription, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeNewMailSubscription_lift(_ handle: UInt64) throws -> NewMailSubscription {
+    return try FfiConverterTypeNewMailSubscription.lift(handle)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeNewMailSubscription_lower(_ value: NewMailSubscription) -> UInt64 {
+    return FfiConverterTypeNewMailSubscription.lower(value)
 }
 
 
@@ -7279,6 +7455,69 @@ public func FfiConverterTypeMailboxes_lift(_ buf: RustBuffer) throws -> Mailboxe
 #endif
 public func FfiConverterTypeMailboxes_lower(_ value: Mailboxes) -> RustBuffer {
     return FfiConverterTypeMailboxes.lower(value)
+}
+
+
+/**
+ * One account's arrivals since the subscription's last answer
+ * (spec/07). `count` is every arrival; `message_ids` the newest 20,
+ * so the shell summarizes the rest and none is dropped.
+ */
+public struct NewMail: Equatable, Hashable {
+    public var accountId: String
+    public var count: UInt32
+    public var messageIds: [Int64]
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(accountId: String, count: UInt32, messageIds: [Int64]) {
+        self.accountId = accountId
+        self.count = count
+        self.messageIds = messageIds
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension NewMail: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeNewMail: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> NewMail {
+        return
+            try NewMail(
+                accountId: FfiConverterString.read(from: &buf), 
+                count: FfiConverterUInt32.read(from: &buf), 
+                messageIds: FfiConverterSequenceInt64.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: NewMail, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.accountId, into: &buf)
+        FfiConverterUInt32.write(value.count, into: &buf)
+        FfiConverterSequenceInt64.write(value.messageIds, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeNewMail_lift(_ buf: RustBuffer) throws -> NewMail {
+    return try FfiConverterTypeNewMail.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeNewMail_lower(_ value: NewMail) -> RustBuffer {
+    return FfiConverterTypeNewMail.lower(value)
 }
 
 
@@ -16368,6 +16607,9 @@ private let initializationResult: InitializationResult = {
     if (uniffi_sb_ffi_checksum_method_core_set_note() != 52753) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_sb_ffi_checksum_method_core_subscribe_new_mail() != 2414) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_sb_ffi_checksum_method_core_recovery() != 24643) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -16444,6 +16686,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sb_ffi_checksum_method_healthsubscription_next() != 45174) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sb_ffi_checksum_method_newmailsubscription_next() != 16619) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sb_ffi_checksum_method_subscription_next() != 14648) {

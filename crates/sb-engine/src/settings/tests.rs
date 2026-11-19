@@ -68,6 +68,56 @@ fn reading_view_senders_accept_only_the_canonical_list() {
 }
 
 #[test]
+fn notifications_previews_default_off_and_take_only_off_and_on() {
+    let scratch = ScratchDir::new("engine-notifications-previews");
+    let engine = block_on(Engine::open(scratch.path().join("store"))).unwrap();
+    let previews = |engine: &Engine| {
+        block_on(engine.settings())
+            .unwrap()
+            .into_iter()
+            .find(|setting| setting.key() == "notifications.previews")
+            .unwrap()
+    };
+    let setting = previews(&engine);
+    assert_eq!(setting.value(), "off");
+    assert!(setting.is_default());
+
+    for value in ["on", "off"] {
+        block_on(engine.set_setting(
+            &engine.new_idempotency_key(),
+            "notifications.previews",
+            value,
+        ))
+        .unwrap();
+        assert_eq!(previews(&engine).value(), value);
+    }
+    assert!(previews(&engine).is_default(), "set back to the default");
+    let error = block_on(engine.set_setting(
+        &engine.new_idempotency_key(),
+        "notifications.previews",
+        "maybe",
+    ))
+    .unwrap_err();
+    assert!(
+        matches!(error, EngineError::InvalidInput { ref field, .. } if field == "value"),
+        "{error:?}"
+    );
+
+    // A stored value no allowed choice matches is Corrupt, never the
+    // default (spec/02).
+    let now = engine.resources().now();
+    block_on(engine.resources().write(WritePriority::User, move |tx| {
+        upsert(tx, "notifications.previews", "null", now)
+    }))
+    .unwrap();
+    assert!(matches!(
+        block_on(engine.settings()),
+        Err(EngineError::Corrupt { detail }) if detail.contains("notifications.previews")
+    ));
+    block_on(engine.shutdown()).unwrap();
+}
+
+#[test]
 fn malformed_stored_reading_senders_is_corrupt() {
     let scratch = ScratchDir::new("engine-reading-senders-corrupt");
     let engine = block_on(Engine::open(scratch.path().join("store"))).unwrap();

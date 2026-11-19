@@ -523,6 +523,11 @@ uint64_t uniffi_sb_ffi_fn_method_core_remove_tag(uint64_t ptr, uint64_t token, R
 uint64_t uniffi_sb_ffi_fn_method_core_set_note(uint64_t ptr, uint64_t token, RustBuffer idempotency_key, int64_t message_id, RustBuffer text
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_SUBSCRIBE_NEW_MAIL
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_SUBSCRIBE_NEW_MAIL
+uint64_t uniffi_sb_ffi_fn_method_core_subscribe_new_mail(uint64_t ptr, uint64_t token
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_RECOVERY
 #define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_RECOVERY
 uint64_t uniffi_sb_ffi_fn_method_core_recovery(uint64_t ptr, uint64_t token, RustBuffer account_id, RustBuffer anchor, uint32_t limit
@@ -707,6 +712,21 @@ void uniffi_sb_ffi_fn_free_healthsubscription(uint64_t handle, RustCallStatus *_
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_HEALTHSUBSCRIPTION_NEXT
 #define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_HEALTHSUBSCRIPTION_NEXT
 uint64_t uniffi_sb_ffi_fn_method_healthsubscription_next(uint64_t ptr, uint64_t token
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_CLONE_NEWMAILSUBSCRIPTION
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_CLONE_NEWMAILSUBSCRIPTION
+uint64_t uniffi_sb_ffi_fn_clone_newmailsubscription(uint64_t handle, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_FREE_NEWMAILSUBSCRIPTION
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_FREE_NEWMAILSUBSCRIPTION
+void uniffi_sb_ffi_fn_free_newmailsubscription(uint64_t handle, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_NEWMAILSUBSCRIPTION_NEXT
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_NEWMAILSUBSCRIPTION_NEXT
+uint64_t uniffi_sb_ffi_fn_method_newmailsubscription_next(uint64_t ptr, uint64_t token
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_CLONE_SUBSCRIPTION
@@ -1342,6 +1362,12 @@ uint16_t uniffi_sb_ffi_checksum_method_core_set_note(void
     
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_SUBSCRIBE_NEW_MAIL
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_SUBSCRIBE_NEW_MAIL
+uint16_t uniffi_sb_ffi_checksum_method_core_subscribe_new_mail(void
+    
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_RECOVERY
 #define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_RECOVERY
 uint16_t uniffi_sb_ffi_checksum_method_core_recovery(void
@@ -1495,6 +1521,12 @@ uint16_t uniffi_sb_ffi_checksum_method_draftattachmentobject_object_sha256(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_HEALTHSUBSCRIPTION_NEXT
 #define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_HEALTHSUBSCRIPTION_NEXT
 uint16_t uniffi_sb_ffi_checksum_method_healthsubscription_next(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_NEWMAILSUBSCRIPTION_NEXT
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_NEWMAILSUBSCRIPTION_NEXT
+uint16_t uniffi_sb_ffi_checksum_method_newmailsubscription_next(void
     
 );
 #endif

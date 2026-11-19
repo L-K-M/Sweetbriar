@@ -10,7 +10,7 @@
 
 use std::collections::BTreeSet;
 
-use rusqlite::Transaction;
+use rusqlite::{OptionalExtension, Transaction, params};
 use sb_types::time::Timestamp;
 
 use super::breaker::{self, Classified};
@@ -19,6 +19,7 @@ use super::listing::{
     reconcile_proton_labels, store_message, store_reread_message,
 };
 use super::{ProtonListingState, require_account, require_revision, set_event_cursor};
+use crate::schema::classify;
 use crate::sync::{MAX_HEADER_BATCH, MAX_HEADER_BATCH_BYTES};
 use crate::{StoreError, list_rows};
 
@@ -54,7 +55,7 @@ pub struct EventChunk<'a> {
 }
 
 /// What one chunk changed.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AppliedEvents {
     pub messages: ListedPageStats,
     /// Occurrences a delete withheld as `vanish_pending`.
@@ -63,6 +64,11 @@ pub struct AppliedEvents {
     pub breaker: Classified,
     /// The account row's revision after the chunk.
     pub revision: i64,
+    /// Logical message ids a change created that landed in the
+    /// account's Inbox role mailbox (spec/10 "Notifications"). The
+    /// event loop feeds these to `subscribe_new_mail`; a listing
+    /// (a bootstrap or resync) never reports one.
+    pub new_inbox: Vec<i64>,
 }
 
 /// Apply one chunk of an events response (spec/04-sync-proton "Sync
@@ -91,6 +97,7 @@ pub fn apply_event_chunk(
         reconcile_proton_labels(tx, chunk.account_id, labels)?;
     }
     let mailboxes = live_mailboxes(tx, chunk.account_id)?;
+    let inbox = inbox_mailbox(tx, chunk.account_id)?;
 
     let mut remaining = MAX_HEADER_BATCH_BYTES;
     let mut applied = AppliedEvents::default();
@@ -105,7 +112,8 @@ pub fn apply_event_chunk(
             .ok_or_else(|| invalid("an events chunk exceeds the write budget"))?;
         match change {
             ProtonChange::Upsert(message) => {
-                store_message(
+                let existed = message_exists(tx, chunk.account_id, &message.provider_key)?;
+                let message_id = store_message(
                     tx,
                     chunk.account_id,
                     message,
@@ -114,6 +122,20 @@ pub fn apply_event_chunk(
                     &mut applied.messages,
                     &mut changed,
                 )?;
+                // A new logical message whose occurrence lands in the
+                // Inbox role mailbox is an arrival; a message that
+                // moved into the Inbox, or one created outside it, is
+                // not (spec/10 "Notifications").
+                if !existed
+                    && inbox.is_some_and(|inbox| {
+                        message
+                            .label_ids
+                            .iter()
+                            .any(|label| mailboxes.get(label) == Some(&inbox))
+                    })
+                {
+                    applied.new_inbox.push(message_id);
+                }
             }
             ProtonChange::Delete(id) => {
                 applied.withheld += breaker::record_delete(
@@ -149,6 +171,38 @@ pub fn apply_event_chunk(
         None => account.revision,
     };
     Ok(applied)
+}
+
+/// The account's live Inbox-role mailbox, if it has one. Only the
+/// system Inbox carries the role (spec/04 "Mailbox mapping").
+fn inbox_mailbox(tx: &Transaction, account_id: &str) -> Result<Option<i64>, StoreError> {
+    tx.query_row(
+        "SELECT mailbox_id FROM mailboxes
+         WHERE account_id = ?1 AND role = 'inbox' AND sync_state <> 'gone'
+         LIMIT 1",
+        params![account_id],
+        |row| row.get(0),
+    )
+    .optional()
+    .map_err(|e| classify(e, "read the account's Inbox mailbox"))
+}
+
+/// Whether the account already holds the logical message a Proton id
+/// names. Read before the message is stored, so a chunk's first change
+/// for an id is its arrival and a later one is a replay.
+fn message_exists(
+    tx: &Transaction,
+    account_id: &str,
+    provider_key: &str,
+) -> Result<bool, StoreError> {
+    tx.query_row(
+        "SELECT 1 FROM logical_messages WHERE account_id = ?1 AND provider_key = ?2",
+        params![account_id, provider_key],
+        |_| Ok(()),
+    )
+    .optional()
+    .map(|row| row.is_some())
+    .map_err(|e| classify(e, "read a Proton message"))
 }
 
 /// One message's re-read metadata, as the refused body's re-read
