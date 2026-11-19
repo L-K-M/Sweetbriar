@@ -39,6 +39,16 @@ struct LaneLine {
     label_counts: BTreeMap<String, i64>,
     messages: Vec<LaneMessage>,
     request_log: String,
+    /// The send suite's synthetic sender and internal recipient
+    /// (M4.3g), and the driver's send log the suite reads back.
+    #[serde(default)]
+    send_username: String,
+    #[serde(default)]
+    send_email: String,
+    #[serde(default)]
+    peer_email: String,
+    #[serde(default)]
+    send_log: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -192,17 +202,32 @@ async fn the_development_server_lists_the_seeded_account_read_only() {
     );
 
     // The driver logged every call after it printed the line: the
-    // read-only suite sent no mutation.
+    // read-only suite sent no mutation. The send suite runs only
+    // after this audit, so its mutations are not mistaken for the
+    // read-only suite's.
     let mutations = audit_requests(&lane.request_log);
     assert!(
         mutations.is_empty(),
         "the read-only suite mutated the server: {mutations:?}"
     );
 
+    let send = lane_send::run_send_suite(
+        &core,
+        &lane_send::SendLaneParams {
+            send_username: lane.send_username.clone(),
+            password: lane.password.clone(),
+            send_email: lane.send_email.clone(),
+            peer_email: lane.peer_email.clone(),
+            send_log: lane.send_log.clone(),
+        },
+    )
+    .await;
+
     write_summary(
         SUMMARY_ENV,
         serde_json::json!({
             "result": "pass",
+            "date": utc_date(),
             "base_url": lane.base_url,
             "account_id": id,
             "messages": coverage.messages,
@@ -212,10 +237,36 @@ async fn the_development_server_lists_the_seeded_account_read_only() {
             // server adds to every listed message.
             "occurrences": multi.labels.len() + 1,
             "mutations": mutations,
+            "send": send,
         }),
     );
 
     core.shutdown().await;
+}
+
+/// The UTC date, for the artifact's run date.
+fn utc_date() -> String {
+    let days = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("the clock is after the epoch")
+        .as_secs()
+        / 86_400;
+    let (year, month, day) = civil_from_days(i64::try_from(days).expect("a small day count"));
+    format!("{year:04}-{month:02}-{day:02}")
+}
+
+/// Days since the epoch to a civil date (Howard Hinnant's algorithm).
+fn civil_from_days(days: i64) -> (i64, u32, u32) {
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let year = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
+    (if month <= 2 { year + 1 } else { year }, month, day)
 }
 
 /// Writes the lane's summary JSON when `env` names a path; the nightly

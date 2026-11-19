@@ -86,6 +86,15 @@ pub use sb_proton::{
     ModulusSignatureVerifier, ProtonError, SecretBuffer, SecretString, Session, SignIn, SignInStep,
     Trust,
 };
+// The send lane's transport items (M4.3g): the lane drives the
+// submission calls and their crypto the way sb-proton's fake-server
+// tests do, so the resources layer re-exports what that needs.
+pub use sb_proton::{
+    AttachmentUpload, DecryptedAddressKey, DraftAddress, DraftCreate, DraftTemplate, KeyFlag,
+    KeyGenerator, KeyGeneratorSync, KeyId, PGPProviderSync, ProtonPGP, RecipientKeys,
+    SendAttachment, SendBody, SendRecipient, SendTransportError, UnlockedAddressKey,
+    build_packages, encrypt_attachment, encrypt_draft_body,
+};
 mod renditions;
 mod repair;
 mod restore;
