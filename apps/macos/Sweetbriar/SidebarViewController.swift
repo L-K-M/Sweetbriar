@@ -15,9 +15,17 @@ final class SidebarViewController: NSViewController, NSMenuDelegate {
     static let accessibilityID = "sidebar"
     private static let entryCellID = NSUserInterfaceItemIdentifier("SidebarEntry")
     private static let headerCellID = NSUserInterfaceItemIdentifier("SidebarHeader")
+    private static let healthCellID = NSUserInterfaceItemIdentifier("SidebarHealth")
     private let model: SidebarModel
     private let appearance: AppearanceModel
+    /// The app's shared Activity model; its `accounts` drive the
+    /// account health rows.
+    private let activity: ActivityModel?
     private let outlineView = NSOutlineView()
+    private let presentation = ActivityPresentation()
+    /// Account id -> the health row's text, for the last reload; nil
+    /// when the account shows no row.
+    private var healthTextCache: [String: String] = [:]
     let contextMenu = NSMenu()
     private let renameItem = NSMenuItem(
         title: "Rename…", action: #selector(renameSavedViewItem(_:)), keyEquivalent: ""
@@ -30,7 +38,7 @@ final class SidebarViewController: NSViewController, NSMenuDelegate {
     )
 
     /// Opens the Proton sign-in sheet for an account (spec/08 "Signing
-    /// in again"); the health row offers it too once M2.7 lands.
+    /// in again").
     var onSignInAgain: (@MainActor (Account) -> Void)?
     /// Whether the archive takes writes now: a sign-in again writes, so
     /// a read-only archive shows it disabled, as the File menu does.
@@ -57,12 +65,33 @@ final class SidebarViewController: NSViewController, NSMenuDelegate {
     var onChoose: (@MainActor (WindowSpec) -> Void)?
     /// Choosing Drafts (local) (spec/08 "Drafts (local)").
     var onChooseDrafts: (@MainActor () -> Void)?
+    /// Clicking an account's health row (spec/08 "Activity / account
+    /// health").
+    var onOpenActivity: (@MainActor () -> Void)?
 
-    init(model: SidebarModel, appearance: AppearanceModel) {
+    init(model: SidebarModel, appearance: AppearanceModel, activity: ActivityModel? = nil) {
         self.model = model
         self.appearance = appearance
+        self.activity = activity
         super.init(nibName: nil, bundle: nil)
         observeAppearance()
+        observeActivity()
+    }
+
+    /// Follow the shared Activity model's accounts; each change
+    /// re-arms, and only the account sections whose row text changed
+    /// reload.
+    private func observeActivity() {
+        guard let activity else { return }
+        withObservationTracking {
+            _ = activity.accounts
+        } onChange: { [weak self] in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.updateHealthRows()
+                self.observeActivity()
+            }
+        }
     }
 
     private func observeAppearance() {
@@ -122,12 +151,73 @@ final class SidebarViewController: NSViewController, NSMenuDelegate {
     /// Show the model's sections, every one expanded, keeping the
     /// chosen entry selected while it is still listed.
     func reloadSections() {
-        nodes = model.sections.map(SectionNode.init)
+        nodes = model.sections.map { section in
+            SectionNode(section, health: healthText(for: section.account?.accountId))
+        }
+        for section in model.sections where section.account?.kind == .proton {
+            healthTextCache[section.id] = healthText(for: section.account?.accountId)
+        }
         outlineView.reloadData()
         for node in nodes {
             outlineView.expandItem(node)
         }
         select(entryID: chosenID)
+    }
+
+    /// Re-read each Proton account's health row after the Activity
+    /// model changed; only the sections whose row appeared, vanished
+    /// or changed text reload.
+    private func updateHealthRows() {
+        var changed: [String] = []
+        for section in model.sections {
+            guard let account = section.account, account.kind == .proton else { continue }
+            let text = healthText(for: account.accountId)
+            if healthTextCache[account.accountId] != text {
+                healthTextCache[account.accountId] = text
+                changed.append(account.accountId)
+            }
+        }
+        for accountId in changed {
+            guard let index = nodes.firstIndex(where: { $0.section.id == accountId }) else {
+                continue
+            }
+            nodes[index].updateHealth(healthTextCache[accountId])
+            outlineView.reloadItem(nodes[index], reloadChildren: true)
+        }
+        if !changed.isEmpty { select(entryID: chosenID) }
+    }
+
+    /// The health row's entry id, stable across reloads.
+    nonisolated static func healthEntryID(_ accountId: String) -> String {
+        "\(accountId)/health"
+    }
+
+    /// The health row's text for `accountId`: the breaker summary when
+    /// the account has open events, else the condition's title; nil
+    /// for a healthy account with no events.
+    private func healthText(for accountId: String?) -> String? {
+        guard let accountId, let activity,
+              let row = activity.accounts.first(where: { $0.accountId == accountId })
+        else { return nil }
+        return Self.healthRowText(
+            condition: row.condition, breakerEvents: row.breakerEvents,
+            presentation: presentation, now: Date())
+    }
+
+    /// The row text itself, free of the sidebar's state: one line per
+    /// account, summing the disappeared messages of its open events.
+    static func healthRowText(
+        condition: AccountCondition, breakerEvents: [AccountBreakerEvent],
+        presentation: ActivityPresentation, now: Date
+    ) -> String? {
+        if !breakerEvents.isEmpty {
+            let disappeared = breakerEvents.reduce(0) { $0 + $1.disappeared }
+            return presentation.breakerEvent(AccountBreakerEvent(
+                eventId: "summary", mailboxId: nil, disappeared: disappeared,
+                detectedAt: now))
+        }
+        guard condition != .healthy else { return nil }
+        return presentation.condition(condition, lastSync: nil, now: now).title
     }
 
     /// Rename the saved view `id`, asking first (spec/08).
@@ -311,7 +401,9 @@ extension SidebarViewController: NSOutlineViewDataSource, NSOutlineViewDelegate 
     }
 
     func outlineView(_ outlineView: NSOutlineView, heightOfRowByItem item: Any) -> CGFloat {
-        item is SectionNode ? 24 : outlineView.rowHeight
+        if item is SectionNode { return 24 }
+        if let node = item as? EntryNode, node.isHealth { return 18 }
+        return outlineView.rowHeight
     }
 
     /// Only entries that open a window or the drafts list can be
@@ -335,6 +427,14 @@ extension SidebarViewController: NSOutlineViewDataSource, NSOutlineViewDelegate 
             return cell
         }
         guard let node = item as? EntryNode else { return nil }
+        if node.isHealth {
+            let cell = outlineView.makeView(withIdentifier: Self.healthCellID, owner: nil)
+                as? SidebarHealthCellView ?? SidebarHealthCellView(identifier: Self.healthCellID)
+            cell.configure(text: node.entry.title) { [weak self] in
+                self?.onOpenActivity?()
+            }
+            return cell
+        }
         let cell = outlineView.makeView(withIdentifier: Self.entryCellID, owner: nil)
             as? SidebarEntryCellView ?? SidebarEntryCellView(identifier: Self.entryCellID)
         cell.configure(node.entry)
@@ -519,20 +619,44 @@ final class SidebarMonogramView: NSView {
 /// A section as an outline item.
 private final class SectionNode: NSObject {
     let section: SidebarModel.Section
-    let entries: [EntryNode]
+    var entries: [EntryNode]
 
-    init(_ section: SidebarModel.Section) {
+    init(_ section: SidebarModel.Section, health: String?) {
         self.section = section
-        entries = section.entries.map(EntryNode.init)
+        self.entries = []
+        super.init()
+        updateHealth(health)
+    }
+
+    /// The account's mailboxes, with its health row first when it has
+    /// one.
+    func updateHealth(_ text: String?) {
+        var entries = section.entries.map { EntryNode($0) }
+        if let text, section.account?.kind == .proton {
+            entries.insert(EntryNode.health(accountId: section.id, text: text), at: 0)
+        }
+        self.entries = entries
     }
 }
 
 /// An entry as an outline item.
 private final class EntryNode: NSObject {
     let entry: SidebarModel.Entry
+    /// True for the synthetic account health row, which no select
+    /// should change (spec/08).
+    let isHealth: Bool
 
-    init(_ entry: SidebarModel.Entry) {
+    init(_ entry: SidebarModel.Entry, isHealth: Bool = false) {
         self.entry = entry
+        self.isHealth = isHealth
+    }
+
+    static func health(accountId: String, text: String) -> EntryNode {
+        EntryNode(
+            SidebarModel.Entry(
+                id: SidebarViewController.healthEntryID(accountId),
+                title: text, unread: nil, target: .unavailable(note: text)),
+            isHealth: true)
     }
 }
 
@@ -586,4 +710,43 @@ private final class SidebarEntryCellView: NSTableCellView {
         }
         setAccessibilityLabel(count > 0 ? "\(entry.title), \(count) unread" : entry.title)
     }
+}
+
+/// An account's health row (spec/08 "Activity / account health"): a
+/// small button, so the non-selectable row still opens the Activity
+/// window when clicked.
+@MainActor
+private final class SidebarHealthCellView: NSTableCellView {
+    private let button = NSButton(title: "", target: nil, action: nil)
+    private var onOpen: (@MainActor () -> Void)?
+
+    init(identifier: NSUserInterfaceItemIdentifier) {
+        super.init(frame: .zero)
+        self.identifier = identifier
+        button.font = .systemFont(ofSize: 11)
+        button.controlSize = .small
+        button.bezelStyle = .inline
+        button.target = self
+        button.action = #selector(openActivity(_:))
+        button.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(button)
+        NSLayoutConstraint.activate([
+            button.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 2),
+            button.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -4),
+            button.topAnchor.constraint(equalTo: topAnchor),
+            button.bottomAnchor.constraint(equalTo: bottomAnchor),
+        ])
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("SidebarHealthCellView is built in code")
+    }
+
+    func configure(text: String, onOpen: @escaping @MainActor () -> Void) {
+        button.title = text
+        button.setAccessibilityLabel(text)
+        self.onOpen = onOpen
+    }
+
+    @objc private func openActivity(_ sender: Any?) { onOpen?() }
 }
