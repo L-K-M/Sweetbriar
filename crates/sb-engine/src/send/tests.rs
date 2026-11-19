@@ -770,6 +770,10 @@ fn a_reconfigured_account_keeps_the_attempt_waiting_until_confirmed() {
         .find(|row| row.attempt_id == attempt_id)
         .unwrap();
     assert_eq!(row.state, AttemptState::Cancelled);
+    assert!(
+        !row.waits_for_confirmation,
+        "only queued attempts wait for confirmation"
+    );
 
     // A fresh queued attempt confirms the new generation and no longer
     // waits.

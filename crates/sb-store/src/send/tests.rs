@@ -967,12 +967,6 @@ fn out_box_splits_live_and_history_orders_each_and_cuts_at_30_days() {
         )
         .map_err(|e| StoreError::internal(e.to_string()))?;
         tx.execute(
-            "UPDATE send_attempts SET updated_at = 7000000001, created_at = 7000000000
-             WHERE attempt_id = 'a_old_accepted'",
-            [],
-        )
-        .map_err(|e| StoreError::internal(e.to_string()))?;
-        tx.execute(
             "INSERT INTO send_attempts
              (attempt_id, draft_id, revision_id, account_id, config_generation, identity_id,
               mime_sha256, message_id_header, envelope_from, state, sent_copy, created_at, updated_at)
