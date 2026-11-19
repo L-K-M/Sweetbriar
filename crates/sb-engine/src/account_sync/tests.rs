@@ -976,3 +976,50 @@ fn an_integrity_finding_ends_the_worker_and_no_other_starts() {
     shutdown_promptly(engine);
     assert_eq!(jobs.starts(), 0);
 }
+
+/// Two pauses waiting at once each end when their own worker does: one
+/// worker's end must not be spent waking the other account's waiter.
+#[test]
+fn concurrent_stops_each_end_with_their_own_worker() {
+    use crate::account_sync::AccountJobs;
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        let jobs = Arc::new(AccountJobs::default());
+        let (first, second) = ("acct-first", "acct-second");
+        let _first_stop = jobs.claim(first).unwrap();
+        let _second_stop = jobs.claim(second).unwrap();
+
+        // The second account's pause waits first, so it is ahead of
+        // the first's in the wake queue.
+        let waiting_second = tokio::spawn({
+            let jobs = Arc::clone(&jobs);
+            async move { jobs.stop_account(second).await }
+        });
+        tokio::task::yield_now().await;
+        let waiting_first = tokio::spawn({
+            let jobs = Arc::clone(&jobs);
+            async move { jobs.stop_account(first).await }
+        });
+        tokio::task::yield_now().await;
+
+        jobs.release(first);
+        tokio::time::timeout(Duration::from_secs(5), waiting_first)
+            .await
+            .expect("the first account's pause ends with its worker")
+            .unwrap();
+        assert!(
+            !waiting_second.is_finished(),
+            "the second worker still runs"
+        );
+
+        jobs.release(second);
+        tokio::time::timeout(Duration::from_secs(5), waiting_second)
+            .await
+            .expect("the second account's pause ends with its worker")
+            .unwrap();
+    });
+}

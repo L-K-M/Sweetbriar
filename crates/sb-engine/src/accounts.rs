@@ -123,6 +123,7 @@ impl Engine {
         let threads = Arc::clone(self.imports().threads());
         let (key, id) = (idempotency_key.to_owned(), account_id.to_owned());
         self.command(move |worker| async move {
+            let _lifecycle = jobs.lifecycle().await;
             let (kind, state) = match account_kind_and_state(&worker, &id).await? {
                 Some((AccountKind::Local, _)) => {
                     return Err(EngineError::invalid_input(
@@ -197,6 +198,7 @@ impl Engine {
         let threads = Arc::clone(self.imports().threads());
         let (key, id) = (idempotency_key.to_owned(), account_id.to_owned());
         self.command(move |worker| async move {
+            let _lifecycle = jobs.lifecycle().await;
             let kind = match crate::proton::account_kind(&worker, &id).await? {
                 Some(kind) => kind,
                 None => {

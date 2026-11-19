@@ -142,6 +142,7 @@ impl Engine {
                     let finished = sign_in.finish_keys(complete).await.map_err(|error| {
                         EngineError::from(ProtonRefusal::from_transport(error, false))
                     })?;
+                    let _lifecycle = jobs.lifecycle().await;
                     let completed = complete_conversation(
                         &worker,
                         &sessions,
@@ -243,6 +244,7 @@ impl Engine {
                         unreachable!("the conversation was looked up above");
                     };
                     table.by_key.remove(&ended.idempotency_key);
+                    let _lifecycle = jobs.lifecycle().await;
                     let completed = complete_conversation(
                         &worker,
                         &sessions,

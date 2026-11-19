@@ -91,6 +91,12 @@ pub(crate) struct AccountJobs {
     /// Notified when a worker's registry entry goes, so a per-account
     /// stop can wait for the worker to end.
     stopped: Notify,
+    /// Held by each command that changes whether an account may run
+    /// (pause, resume, a sign-in's completion) from its state read to
+    /// its worker start or stop, so two of them never interleave: a
+    /// pause can't read a state a concurrent resume is about to
+    /// change, and stop no worker that resume then starts.
+    lifecycle: tokio::sync::Mutex<()>,
 }
 
 #[derive(Default)]
@@ -178,7 +184,10 @@ impl AccountJobs {
 
     pub(crate) fn release(&self, account_id: &str) {
         self.lock().live.remove(account_id);
-        self.stopped.notify_one();
+        // Every waiter re-checks its own account: one permit would wake
+        // a single waiter, perhaps another account's, and strand the
+        // rest.
+        self.stopped.notify_waiters();
     }
 
     /// Stop one account's worker and wait for it to end, so a pause
@@ -197,8 +206,9 @@ impl AccountJobs {
                 None => return,
             }
         }
-        // The worker's release is the task's last act; a permit stored
-        // before the wait still resolves it, and the loop re-checks.
+        // The worker's release is the task's last act. A `Notified`
+        // receives `notify_waiters` from its creation on, so a release
+        // between the check and the await still wakes it.
         loop {
             let ended = self.stopped.notified();
             if !self.lock().live.contains_key(account_id) {
@@ -206,6 +216,11 @@ impl AccountJobs {
             }
             ended.await;
         }
+    }
+
+    /// Serialize account lifecycle commands; see the field.
+    pub(crate) async fn lifecycle(&self) -> tokio::sync::MutexGuard<'_, ()> {
+        self.lifecycle.lock().await
     }
 
     /// Allow a worker for the account again (a resume, or a completed

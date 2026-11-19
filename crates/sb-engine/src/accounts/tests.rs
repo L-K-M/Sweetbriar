@@ -597,3 +597,36 @@ fn pausing_an_imap_account_stops_its_worker_and_resume_starts_it() {
     }
     block_on(engine.shutdown()).unwrap();
 }
+
+/// A pause waits for any other lifecycle command on the engine before
+/// it reads the account's state, so it never acts on a state a resume
+/// or a sign-in is changing (the race is too narrow to provoke from
+/// outside; holding the lock stands in for the other command).
+#[test]
+fn a_pause_waits_for_a_running_lifecycle_command() {
+    let server = FakeImapServer::serve(vec![bridge_script(true)]).unwrap();
+    let secrets = Arc::new(FakeSecrets::new());
+    let (_scratch, engine) = engine("engine-account-lifecycle", secrets);
+    let added = block_on(engine.add_bridge_account("setup", params(server.port()))).unwrap();
+    let id = added.account_id;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while !engine.account_jobs().running(&id) {
+        assert!(std::time::Instant::now() < deadline, "the worker starts");
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+
+    let other_command = block_on(engine.account_jobs().lifecycle());
+    std::thread::scope(|scope| {
+        let paused = scope.spawn(|| block_on(engine.pause_account("pause", &id)));
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        assert!(!paused.is_finished(), "the pause waits for the lock");
+        assert!(engine.account_jobs().running(&id), "nothing stopped yet");
+        assert_eq!(account_column_text(&engine, &id, "state"), "active");
+
+        drop(other_command);
+        paused.join().unwrap().unwrap();
+    });
+    assert!(!engine.account_jobs().running(&id), "the worker stopped");
+    assert_eq!(account_column_text(&engine, &id, "state"), "paused");
+    block_on(engine.shutdown()).unwrap();
+}
