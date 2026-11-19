@@ -1,0 +1,21 @@
+---
+source: crates/sb-mime/src/compose/tests.rs
+expression: snapshot_text(&composed)
+---
+Message-ID: <0191abcd-1234-4abc-8def-0123456789ab@example.org>
+Date: Thu, 9 Oct 2025 08:53:20 +0000
+From: "Ada Lovelace" <ada@example.org>
+To: "Grace Hopper" <grace@example.com>
+Subject: Sweetbriar draft
+User-Agent: Sweetbriar/0.0.1
+MIME-Version: 1.0
+Content-Type: text/plain; charset="utf-8"; format="flowed"
+Content-Transfer-Encoding: quoted-printable
+
+Hello Grace,
+
+This paragraph is long enough that the composer has to wrap it at the=20
+flowed width, and every soft line carries the trailing space that lets a=20
+recipient rewrap it.
+
+Bye, Ada

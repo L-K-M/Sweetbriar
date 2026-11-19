@@ -211,6 +211,10 @@ impl std::error::Error for HtmlSanitizeError {}
 pub(crate) enum ResourcePolicy {
     Strip,
     Rewritten,
+    /// Outgoing composition (M4.2): the reader's `Rewritten` allow-list
+    /// with `cid` in place of `sweetbriar-cid`, so an inline image keeps
+    /// its `cid:` reference in the sent message.
+    Outgoing,
 }
 
 fn policy(minted: &HashSet<String>, resources: ResourcePolicy) -> Builder<'static> {
@@ -246,11 +250,18 @@ fn policy(minted: &HashSet<String>, resources: ResourcePolicy) -> Builder<'stati
             };
             (value.len() <= limit).then(|| value.into())
         });
-    if resources == ResourcePolicy::Rewritten {
+    if matches!(
+        resources,
+        ResourcePolicy::Rewritten | ResourcePolicy::Outgoing
+    ) {
         policy.add_generic_attributes(["style"]);
         policy.add_tags(["img"]);
         policy.add_tag_attributes("img", ["src", "alt", "width", "height"]);
-        policy.add_url_schemes(["sweetbriar-cid"]);
+        // The reader's internal scheme never reaches a recipient.
+        policy.add_url_schemes([match resources {
+            ResourcePolicy::Outgoing => "cid",
+            _ => "sweetbriar-cid",
+        }]);
     }
     policy
 }

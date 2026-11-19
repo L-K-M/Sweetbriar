@@ -1,0 +1,28 @@
+---
+source: crates/sb-mime/src/compose/tests.rs
+expression: composed.html.as_deref().unwrap()
+---
+<div style="font-family:-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, Helvetica, Arial, sans-serif;font-size:16px;line-height:1.5;color:#1f2328;"><h1 style="font-weight:600;line-height:1.3;margin:1.2em 0 0.5em 0;font-size:1.5em;">Heading</h1>
+<p style="margin:0 0 1em 0;">Some <em>emphasis</em>, <strong>strong</strong>, <del>struck</del> and <code style="font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;font-size:0.95em;">code</code>.</p>
+<ul style="margin:0 0 1em 0;padding-left:1.5em;">
+<li style="margin:0.15em 0;">first</li>
+<li style="margin:0.15em 0;">second
+<ul style="margin:0 0 1em 0;padding-left:1.5em;">
+<li style="margin:0.15em 0;">nested</li>
+</ul>
+</li>
+</ul>
+<ol style="margin:0 0 1em 0;padding-left:1.5em;">
+<li style="margin:0.15em 0;">one</li>
+<li style="margin:0.15em 0;">two</li>
+</ol>
+<blockquote style="margin:0 0 1em 1em;padding-left:0.75em;border-left:2px solid #cccccc;color:#555555;">
+<p style="margin:0 0 1em 0;">quoted text</p>
+</blockquote>
+<p style="margin:0 0 1em 0;"><a href="https://example.com/path" style="color:#0b57d0;text-decoration:underline;" title="https://example.com/path">Example</a></p>
+<table style="border-collapse:collapse;margin:0 0 1em 0;"><thead><tr><th style="text-align: left;border:1px solid #cccccc;padding:0.35em 0.6em;background-color:#f0f0f0;font-weight:600;">Left</th><th style="text-align: center;border:1px solid #cccccc;padding:0.35em 0.6em;background-color:#f0f0f0;font-weight:600;">Center</th><th style="text-align: right;border:1px solid #cccccc;padding:0.35em 0.6em;background-color:#f0f0f0;font-weight:600;">Right</th></tr></thead><tbody>
+<tr><td style="text-align: left;border:1px solid #cccccc;padding:0.35em 0.6em;">a</td><td style="text-align: center;border:1px solid #cccccc;padding:0.35em 0.6em;">b</td><td style="text-align: right;border:1px solid #cccccc;padding:0.35em 0.6em;">c</td></tr>
+</tbody></table>
+<hr style="border:0;border-top:1px solid #cccccc;margin:1em 0;">
+<p style="margin:0 0 1em 0;">&lt;em&gt;raw html&lt;/em&gt;</p>
+</div>

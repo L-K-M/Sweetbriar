@@ -1,0 +1,88 @@
+---
+source: crates/sb-mime/src/compose/tests.rs
+expression: snapshot_text(&composed)
+---
+Message-ID: <0191abcd-1234-4abc-8def-0123456789ab@example.org>
+Date: Thu, 9 Oct 2025 08:53:20 +0000
+From: "Ada Lovelace" <ada@example.org>
+To: "Grace Hopper" <grace@example.com>
+Subject: Sweetbriar draft
+User-Agent: Sweetbriar/0.0.1
+MIME-Version: 1.0
+Content-Type: multipart/alternative;
+ boundary="----=_Sweetbriar_95551ef8f092dc7e_alternative"
+
+
+------=_Sweetbriar_95551ef8f092dc7e_alternative
+Content-Type: text/plain; charset="utf-8"; format="flowed"
+Content-Transfer-Encoding: 7bit
+
+Heading
+
+Some emphasis, strong, struck and code.
+
+- first
+- second
+   - nested
+
+1. one
+2. two
+
+> quoted text
+
+Example <https://example.com/path>
+
+| Left | Center | Right |
+| --- | --- | --- |
+| a | b | c |
+
+***
+
+<em>raw html</em>
+
+------=_Sweetbriar_95551ef8f092dc7e_alternative
+Content-Type: text/html; charset="utf-8"
+Content-Transfer-Encoding: quoted-printable
+
+<div style=3D"font-family:-apple-system, BlinkMacSystemFont, &quot;Segoe UI=
+&quot;, Helvetica, Arial, sans-serif;font-size:16px;line-height:1.5;color:#=
+1f2328;"><h1 style=3D"font-weight:600;line-height:1.3;margin:1.2em 0 0.5em =
+0;font-size:1.5em;">Heading</h1>
+<p style=3D"margin:0 0 1em 0;">Some <em>emphasis</em>, <strong>strong</stro=
+ng>, <del>struck</del> and <code style=3D"font-family:ui-monospace, SFMono-=
+Regular, Menlo, Consolas, monospace;font-size:0.95em;">code</code>.</p>
+<ul style=3D"margin:0 0 1em 0;padding-left:1.5em;">
+<li style=3D"margin:0.15em 0;">first</li>
+<li style=3D"margin:0.15em 0;">second
+<ul style=3D"margin:0 0 1em 0;padding-left:1.5em;">
+<li style=3D"margin:0.15em 0;">nested</li>
+</ul>
+</li>
+</ul>
+<ol style=3D"margin:0 0 1em 0;padding-left:1.5em;">
+<li style=3D"margin:0.15em 0;">one</li>
+<li style=3D"margin:0.15em 0;">two</li>
+</ol>
+<blockquote style=3D"margin:0 0 1em 1em;padding-left:0.75em;border-left:2px=
+ solid #cccccc;color:#555555;">
+<p style=3D"margin:0 0 1em 0;">quoted text</p>
+</blockquote>
+<p style=3D"margin:0 0 1em 0;"><a href=3D"https://example.com/path" style=
+=3D"color:#0b57d0;text-decoration:underline;" title=3D"https://example.com/=
+path">Example</a></p>
+<table style=3D"border-collapse:collapse;margin:0 0 1em 0;"><thead><tr><th =
+style=3D"text-align: left;border:1px solid #cccccc;padding:0.35em 0.6em;bac=
+kground-color:#f0f0f0;font-weight:600;">Left</th><th style=3D"text-align: c=
+enter;border:1px solid #cccccc;padding:0.35em 0.6em;background-color:#f0f0f=
+0;font-weight:600;">Center</th><th style=3D"text-align: right;border:1px so=
+lid #cccccc;padding:0.35em 0.6em;background-color:#f0f0f0;font-weight:600;"=
+>Right</th></tr></thead><tbody>
+<tr><td style=3D"text-align: left;border:1px solid #cccccc;padding:0.35em 0=
+.6em;">a</td><td style=3D"text-align: center;border:1px solid #cccccc;paddi=
+ng:0.35em 0.6em;">b</td><td style=3D"text-align: right;border:1px solid #cc=
+cccc;padding:0.35em 0.6em;">c</td></tr>
+</tbody></table>
+<hr style=3D"border:0;border-top:1px solid #cccccc;margin:1em 0;">
+<p style=3D"margin:0 0 1em 0;">&lt;em&gt;raw html&lt;/em&gt;</p>
+</div>
+------=_Sweetbriar_95551ef8f092dc7e_alternative--

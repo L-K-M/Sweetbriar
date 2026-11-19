@@ -10,6 +10,7 @@
 
 #![forbid(unsafe_code)]
 
+mod compose;
 mod document;
 mod extract;
 mod import_flags;
@@ -26,6 +27,10 @@ mod search_document;
 mod summary;
 mod walk;
 
+pub use compose::{
+    ComposeAddress, ComposeAttachment, ComposeError, ComposeFormat, ComposeInput, Composed,
+    MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS, check_limits, compose,
+};
 pub use document::{
     Block, DOCUMENT_VERSION, DocumentSupport, Heading, HeadingLevel, Image, ImageReference, Inline,
     LineBreak, Link, List, ListItem, MailDocument, Paragraph, Preformatted, Quote, Text,
