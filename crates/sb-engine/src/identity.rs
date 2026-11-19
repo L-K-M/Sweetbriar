@@ -205,6 +205,13 @@ pub fn reply_recipients(headers: &SourceMessageHeaders) -> Vec<ReaderAddress> {
 pub fn reply_all_recipients(headers: &SourceMessageHeaders, exclude: &str) -> Vec<ReaderAddress> {
     let excluded = address_key(exclude);
     let mut recipients = reply_recipients(headers);
+    // Reply All to a message the user sent has the chosen identity as
+    // its From (or a Reply-To can name it): it leaves the base list too.
+    if let Some(excluded) = excluded.as_deref() {
+        recipients.retain(|present| {
+            address_key(present.address.as_deref().unwrap_or_default()).as_deref() != Some(excluded)
+        });
+    }
     for original in headers.to.iter().chain(&headers.cc) {
         let Some(key) = address_key(original.address.as_deref().unwrap_or_default()) else {
             // An unparseable entry has no key; an identical spelling

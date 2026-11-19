@@ -312,6 +312,43 @@ fn reply_recipients_prefer_a_differing_reply_to_and_reply_all_excludes_the_sende
             "copy@example.test"
         ])
     );
+    // Reply All to a message the user sent: From is the chosen
+    // identity, which leaves the list as To and Cc did.
+    let sent = headers(
+        &["me@example.test"],
+        &[],
+        &["person@example.test"],
+        &["copy@example.test"],
+        &[],
+    );
+    assert_eq!(
+        reply_all_recipients(&sent, "me@example.test"),
+        list(&["person@example.test", "copy@example.test"])
+    );
+    // A Reply-To naming the chosen identity leaves the list too.
+    let to_me = headers(
+        &["sender@example.test"],
+        &["me@example.test"],
+        &["me@example.test", "person@example.test"],
+        &[],
+        &[],
+    );
+    assert_eq!(
+        reply_all_recipients(&to_me, "me@example.test"),
+        list(&["person@example.test"])
+    );
+    // A Reply-To that echoes From adds the sender once.
+    let echoed = headers(
+        &["sender@example.test"],
+        &["sender@example.test"],
+        &["person@example.test"],
+        &[],
+        &[],
+    );
+    assert_eq!(
+        reply_all_recipients(&echoed, "me@example.test"),
+        list(&["sender@example.test", "person@example.test"])
+    );
 }
 
 #[test]
@@ -392,6 +429,15 @@ fn the_cross_account_check_binds_its_ack_to_identity_and_recipients() {
         &[recipient("person@example.test")],
         &[],
         &[recipient("hidden@example.test")]
+    ));
+    // So does a Cc added after it.
+    assert!(!cross_account_acknowledged(
+        Some(&warning),
+        &acked,
+        "r",
+        &[recipient("person@example.test")],
+        &[recipient("later@example.test")],
+        &[]
     ));
     // Order doesn't matter; no warning needs no acknowledgement.
     let reordered = [cross_account_ack(
