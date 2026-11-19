@@ -35,6 +35,7 @@ pub mod proton;
 pub mod query;
 mod readers;
 mod receipts;
+pub mod recovery;
 pub mod repair;
 mod restore_artifacts;
 mod restore_pending;

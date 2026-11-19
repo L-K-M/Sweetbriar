@@ -52,6 +52,8 @@ pub use sb_resources::proton_sync::BreakerResolution;
 pub use sb_resources::proton_sync::{ProtonCoverage, ProtonListingState};
 mod rebuild;
 mod received;
+mod recovery;
+pub use recovery::{RecoveryAnchor, RecoveryPage};
 #[cfg(test)]
 mod received_tests;
 mod search;
@@ -77,9 +79,9 @@ pub use sb_resources::{
     AccountColor, AccountKind, AccountState, AppearanceAssignment, ExportSelection,
     ImportJobCheckpoint, ImportJobState, ImportProblem, ImportProblemKind, ImportTotals,
     IntentEffect, IntentFilter, IntentKind, IntentState, MailboxKind, MailboxList, MailboxRole,
-    MboxQuoting, MboxVariant, QuarantineReason, Receipt, SourceInventory, SourceKind,
-    SourcePosition, StoredAccount, StoredIntent, StoredMailbox, Timestamp, default_cache_root,
-    default_data_root,
+    MboxQuoting, MboxVariant, QuarantineReason, Receipt, RecoveryState, SourceInventory,
+    SourceKind, SourcePosition, StoredAccount, StoredIntent, StoredMailbox, StoredRecovery,
+    Timestamp, default_cache_root, default_data_root,
 };
 
 pub use drafts::{DraftContent, DraftCreated, DraftSaved};

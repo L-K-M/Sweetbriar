@@ -38,6 +38,8 @@ pub use intents::{
 mod messages;
 mod reading;
 mod rebuild;
+mod recovery;
+pub use recovery::{Recovery, RecoveryAnchor, RecoveryPage, RecoveryState};
 mod restore;
 mod search;
 mod sidebar;
