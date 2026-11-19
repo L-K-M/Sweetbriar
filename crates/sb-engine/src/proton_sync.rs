@@ -12,6 +12,7 @@
 //! every request, so signing in again hands it the new session and a
 //! disconnect, which removes the session, ends it.
 
+use crate::account_health::{LiveCondition, LiveStatus};
 use crate::account_sync::AccountJobs;
 use crate::engine::{Engine, Spawn, Worker, validate_idempotency_key};
 use crate::policy::proton_api;
@@ -27,10 +28,10 @@ use sb_resources::proton_sync::{
     refresh_proton_identities, resolve_breaker_event, withhold_unlisted,
 };
 use sb_resources::{
-    APP_IDENTITY_REFUSED_REASON, AccountState, ApiCode, EventAction, EventBatch, EventId,
-    HUMAN_VERIFICATION_REASON, KeyStore, ListingAnchor, PROTON_MAX_PAGE_SIZE, ProtonClient,
-    ProtonError, Receipt, Secret, Session, StoreError, StoredAccount, Transaction, WritePriority,
-    accounts, pause_for_reason, proton_account, proton_identities, run_once,
+    APP_IDENTITY_REFUSED_REASON, AccountState, ApiCode, BackoffKind, EventAction, EventBatch,
+    EventId, HUMAN_VERIFICATION_REASON, KeyStore, ListingAnchor, PROTON_MAX_PAGE_SIZE,
+    ProtonClient, ProtonError, Receipt, Secret, Session, StoreError, StoredAccount, Transaction,
+    WritePriority, accounts, pause_for_reason, proton_account, proton_identities, run_once,
 };
 
 use std::collections::{BTreeSet, HashSet};
@@ -227,20 +228,25 @@ impl Engine {
     ) -> Result<Receipt, crate::EngineError> {
         validate_idempotency_key(idempotency_key)?;
         let (key, id) = (idempotency_key.to_owned(), event_id.to_owned());
-        self.command(move |worker| async move {
-            let now = worker.resources().now();
-            worker
-                .resources()
-                .write(WritePriority::User, move |tx| {
-                    run_once(tx, &key, RESOLVE_BREAKER_EVENT, now, |tx| {
-                        resolve_breaker_event(tx, &id, resolution, now)?;
-                        Ok("{}".to_owned())
+        let receipt = self
+            .command(move |worker| async move {
+                let now = worker.resources().now();
+                worker
+                    .resources()
+                    .write(WritePriority::User, move |tx| {
+                        run_once(tx, &key, RESOLVE_BREAKER_EVENT, now, |tx| {
+                            resolve_breaker_event(tx, &id, resolution, now)?;
+                            Ok("{}".to_owned())
+                        })
                     })
-                })
-                .await
-                .map_err(crate::EngineError::from)
-        })
-        .await
+                    .await
+                    .map_err(crate::EngineError::from)
+            })
+            .await?;
+        // The event was accepted or kept: the health row changed
+        // (plan M2.7b2).
+        self.worker_statuses().rows_changed();
+        Ok(receipt)
     }
 }
 
@@ -319,10 +325,52 @@ async fn run(
     stop: watch::Receiver<bool>,
     signals: PollSignals,
 ) {
+    run_loop(worker, sessions, opened, account_id, stop, signals).await;
+    // The worker is done (paused, disconnected, a refusal that ended
+    // it, or shutdown): the account's live status goes with it and its
+    // condition comes from the stored state.
+    worker.statuses().clear(account_id);
+}
+
+async fn run_loop(
+    worker: &Worker,
+    sessions: &Sessions,
+    opened: &ProtonOpened,
+    account_id: &str,
+    stop: watch::Receiver<bool>,
+    signals: PollSignals,
+) {
     let PollSignals { poll, active, wake } = signals;
     let Ok(client) = worker.resources().proton_client() else {
         return;
     };
+    // Show the account's condition and next attempt while the client
+    // waits out a retry (spec/07); its retry behaviour is unchanged.
+    let statuses = Arc::clone(worker.statuses());
+    let observer_statuses = Arc::clone(&statuses);
+    let observer_id = account_id.to_owned();
+    let observer_worker = worker.clone();
+    client.set_backoff_observer(Some(Arc::new(move |kind, delay| {
+        let at_ms = observer_worker.resources().now().as_millis() + delay.as_millis() as i64;
+        let condition = match kind {
+            BackoffKind::Network => LiveCondition::Offline {
+                next_retry_ms: at_ms,
+            },
+            BackoffKind::ServerError => LiveCondition::NotAnswering {
+                next_retry_ms: at_ms,
+            },
+            BackoffKind::RateLimit => LiveCondition::RateLimited { until_ms: at_ms },
+        };
+        observer_statuses.set(
+            &observer_id,
+            LiveStatus {
+                last_sync_ms: observer_statuses
+                    .get(&observer_id)
+                    .and_then(|status| status.last_sync_ms),
+                condition,
+            },
+        );
+    })));
     let mut delay = FIRST_RETRY_DELAY;
     // The messages this run refused as another message's response
     // (spec/04 step 3); a restart re-reads them once.
@@ -351,7 +399,11 @@ async fn run(
         };
         match outcome {
             Halt::Stopped | Halt::Ended => return,
-            Halt::Retry | Halt::Refresh => {}
+            Halt::Retry => {
+                let now_ms = worker.resources().now().as_millis();
+                record_retry(&statuses, account_id, client.last_backoff(), now_ms, delay);
+            }
+            Halt::Refresh => {}
         }
         // Events applied since the last failure: this one is new.
         if attempt.advanced.load(Ordering::Relaxed) {
@@ -397,13 +449,29 @@ impl Attempt<'_> {
     async fn sync(&mut self) -> Halt {
         loop {
             let halt = match self.bootstrap().await {
-                Ok(()) => self.follow().await,
+                Ok(()) => {
+                    self.record_sync();
+                    self.follow().await
+                }
                 Err(halt) => halt,
             };
             if !matches!(halt, Halt::Refresh) {
                 return halt;
             }
         }
+    }
+
+    /// One successful pass over Proton: the last sync time moves and
+    /// any retry condition clears (plan M2.7b2).
+    fn record_sync(&self) {
+        let now_ms = self.worker.resources().now().as_millis();
+        self.worker.statuses().set(
+            self.account_id,
+            LiveStatus {
+                last_sync_ms: Some(now_ms),
+                condition: LiveCondition::Synced,
+            },
+        );
     }
 
     /// spec/04-sync-proton "Sync loop" step 1, from where the store
@@ -827,6 +895,7 @@ impl Attempt<'_> {
         }
         self.apply(&batch, from.as_str(), account.revision).await?;
         self.advanced.store(true, Ordering::Relaxed);
+        self.record_sync();
         Ok(batch.more)
     }
 
@@ -1014,6 +1083,8 @@ impl Attempt<'_> {
                 record_refusal(tx, &id, code, &message, now).map(|_| ())
             })
             .await;
+        // The refusal is part of `account_health()`: wake its subscription.
+        self.worker.statuses().rows_changed();
         let Some(reason) = needs_attention(error) else {
             return Halt::Retry;
         };
@@ -1032,6 +1103,7 @@ impl Attempt<'_> {
         if paused.is_err() {
             return Halt::Retry;
         }
+        self.worker.statuses().rows_changed();
         Halt::Ended
     }
 
@@ -1061,11 +1133,15 @@ impl Attempt<'_> {
         T: Send + 'static,
         F: FnOnce(&Transaction) -> Result<T, StoreError> + Send + 'static,
     {
-        Ok(self
+        let written = self
             .worker
             .resources()
             .write(WritePriority::Sync, closure)
-            .await?)
+            .await?;
+        // The write changed a row the health query reads: wake its
+        // subscription (plan M2.7b2).
+        self.worker.statuses().rows_changed();
+        Ok(written)
     }
 }
 
@@ -1158,6 +1234,41 @@ fn needs_attention(error: &ProtonError) -> Option<&'static str> {
         .then_some(APP_IDENTITY_REFUSED_REASON),
         _ => None,
     }
+}
+
+/// Record why the worker retries and when (spec/04's table). A rate
+/// limit keeps the time Proton asked for, which the observer recorded
+/// while the client slept.
+fn record_retry(
+    statuses: &Arc<crate::account_health::WorkerStatuses>,
+    account_id: &str,
+    backoff: Option<BackoffKind>,
+    now_ms: i64,
+    delay: Duration,
+) {
+    let last_sync_ms = statuses
+        .get(account_id)
+        .and_then(|status| status.last_sync_ms);
+    let next_retry_ms = now_ms + delay.as_millis() as i64;
+    let condition = match backoff {
+        Some(BackoffKind::Network) => LiveCondition::Offline { next_retry_ms },
+        Some(BackoffKind::ServerError) | None => LiveCondition::NotAnswering { next_retry_ms },
+        Some(BackoffKind::RateLimit) => match statuses.get(account_id) {
+            Some(status) if matches!(status.condition, LiveCondition::RateLimited { .. }) => {
+                status.condition
+            }
+            _ => LiveCondition::RateLimited {
+                until_ms: next_retry_ms,
+            },
+        },
+    };
+    statuses.set(
+        account_id,
+        LiveStatus {
+            last_sync_ms,
+            condition,
+        },
+    );
 }
 
 /// Whether the account's session is still the one a request used.

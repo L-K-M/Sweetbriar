@@ -346,6 +346,63 @@ pub(super) fn open_event(
     Ok(())
 }
 
+/// One open event as the account health surface shows it (spec/07
+/// `account_health`): its id, the mailbox it names, how many messages
+/// disappeared and when it was detected.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredBreakerEvent {
+    pub event_id: String,
+    pub mailbox_id: Option<i64>,
+    pub disappeared: u64,
+    pub detected_at_ms: i64,
+}
+
+/// The account's `open` breaker events, oldest first, with the counts
+/// and detection times the health surface lists (spec/07). Only
+/// `open` events are listed; one accepted or cleared is not an open
+/// question any more.
+pub fn open_breaker_events(
+    tx: &Transaction,
+    account_id: &str,
+) -> Result<Vec<StoredBreakerEvent>, StoreError> {
+    let mut statement = tx
+        .prepare_cached(
+            "SELECT event_id, mailbox_id, details_json, created_at
+             FROM breaker_events
+             WHERE account_id = ?1 AND state = 'open'
+             ORDER BY created_at, event_id",
+        )
+        .map_err(|e| classify(e, "read the account's open breaker events"))?;
+    let rows = statement
+        .query_map(params![account_id], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, Option<i64>>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, i64>(3)?,
+            ))
+        })
+        .map_err(|e| classify(e, "read the account's open breaker events"))?;
+    let mut events = Vec::new();
+    for row in rows {
+        let (event_id, mailbox_id, details, created_at) =
+            row.map_err(|e| classify(e, "read the account's open breaker events"))?;
+        let disappeared = serde_json::from_str::<serde_json::Value>(&details)
+            .ok()
+            .and_then(|value| value.get("disappeared")?.as_u64())
+            .ok_or_else(|| {
+                StoreError::corrupt(format!("breaker event {event_id} has no disappeared count"))
+            })?;
+        events.push(StoredBreakerEvent {
+            event_id,
+            mailbox_id,
+            disappeared,
+            detected_at_ms: created_at,
+        });
+    }
+    Ok(events)
+}
+
 /// The user's choice on a breaker event (04-sync-imap "While paused").
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BreakerResolution {

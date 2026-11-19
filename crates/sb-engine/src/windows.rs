@@ -475,6 +475,10 @@ struct Versions {
     /// Changes of the engine's health so far (plan M1.8h5b2): the store
     /// latching read-only, or a restore ending that.
     health: u64,
+    /// Changes of the per-account health surface (plan M2.7b2): a
+    /// worker's in-memory status, or a write to the accounts,
+    /// diagnostics or breaker rows the query reads.
+    account_health: u64,
     shut: bool,
 }
 
@@ -623,6 +627,7 @@ impl Windows {
             versions.store = generations.list;
             versions.search = generations.search;
             versions.appearance = generations.appearance;
+            versions.account_health += 1;
             versions.restores += 1;
         });
     }
@@ -651,6 +656,19 @@ impl Windows {
     /// The health changes so far, where a health subscription starts.
     pub(crate) fn health_changes(&self) -> u64 {
         self.versions.borrow().health
+    }
+
+    /// The account-health surface changed: wake its subscriptions
+    /// (plan M2.7b2). Signal only; every writer that changed what the
+    /// query reads calls it.
+    pub(crate) fn account_health_moved(&self) {
+        self.versions
+            .send_modify(|versions| versions.account_health += 1);
+    }
+
+    /// The account-health changes so far, where its subscription starts.
+    pub(crate) fn account_health_changes(&self) -> u64 {
+        self.versions.borrow().account_health
     }
 
     /// The engine is shutting down: end every waiting `next`.
@@ -1434,7 +1452,10 @@ mod subscribe;
 pub use search::{SearchSort, SearchSpec, SearchStatus};
 pub use selections::{SelectionId, SelectionInput, SelectionSnapshot};
 
-pub use subscribe::{AppearanceSubscription, HealthSubscription, Subscription, WindowEvent};
+pub use subscribe::{
+    AccountHealthSubscription, AppearanceSubscription, HealthSubscription, Subscription,
+    WindowEvent,
+};
 
 #[cfg(test)]
 mod tests;

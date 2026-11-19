@@ -25,6 +25,7 @@ use sb_resources::{
 use tokio::sync::{Notify, watch};
 
 use crate::Engine;
+use crate::account_health::{LiveCondition, LiveStatus};
 use crate::engine::{Spawn, Worker};
 use crate::policy::Policy;
 use crate::threads::{ThreadRebuilds, schedule_threads};
@@ -305,6 +306,8 @@ pub(crate) fn start_account(
     let id = account_id.clone();
     let spawned = spawner.spawn_worker(move |worker| async move {
         run_account(&worker, &id, stop, &threads).await;
+        // A stopped or refused account has no live status (plan M2.7b2).
+        worker.statuses().clear(&id);
         owner.release(&id);
     });
     if spawned.is_err() {
@@ -350,6 +353,29 @@ enum Recovery {
 enum SetupFailure {
     Secret(SecretError),
     UnusableSecret,
+}
+
+/// Record the worker's next attempt and why (spec/04's table):
+/// offline while Bridge isn't running, not answering for another
+/// failure. `wait` is the transport's delay before the next attempt.
+fn record_reconnect(worker: &Worker, account_id: &str, cause: &ImapError, wait: Duration) {
+    let now_ms = worker.resources().now().as_millis();
+    let next_retry_ms = now_ms + wait.as_millis() as i64;
+    let last_sync_ms = worker
+        .statuses()
+        .get(account_id)
+        .and_then(|status| status.last_sync_ms);
+    let condition = match retrying_pause(cause) {
+        Some(ConnectionPause::BridgeNotRunning) => LiveCondition::Offline { next_retry_ms },
+        _ => LiveCondition::NotAnswering { next_retry_ms },
+    };
+    worker.statuses().set(
+        account_id,
+        LiveStatus {
+            last_sync_ms,
+            condition,
+        },
+    );
 }
 
 async fn run_account(
@@ -462,6 +488,7 @@ async fn run_account(
             } => {
                 let wait = sessions.after_failure(completed_a_pass);
                 if !wait.is_zero() {
+                    record_reconnect(worker, account_id, &error, wait);
                     tokio::select! {
                         () = tokio::time::sleep(wait) => {}
                         () = stopped(stop.clone()) => return,
@@ -561,7 +588,18 @@ async fn serve(
         // and a refusal means shutdown began.
         schedule_threads(worker, carried.threads);
         match passed {
-            Ok(()) => completed_a_pass = true,
+            Ok(()) => {
+                completed_a_pass = true;
+                // A successful pass moves the last sync time and clears
+                // any retry condition (plan M2.7b2).
+                worker.statuses().set(
+                    account_id,
+                    LiveStatus {
+                        last_sync_ms: Some(worker.resources().now().as_millis()),
+                        condition: LiveCondition::Synced,
+                    },
+                );
+            }
             Err(pass::PassError::Session(error)) => {
                 return Served::Failed {
                     error,
@@ -635,6 +673,7 @@ async fn recover(
             connector,
             stopped(stop.clone()),
             |wait: ReconnectWait<'_>| {
+                record_reconnect(worker, account_id, wait.cause, wait.delay);
                 if let Some(next) = retrying_pause(wait.cause) {
                     pause.send_if_modified(|current| {
                         let changed = *current != Some(next);
@@ -736,6 +775,8 @@ async fn record(worker: &Worker, account_id: &str, transition: Transition) {
             Transition::Credential(pause) => pause_for_credential(tx, &id, pause),
         })
         .await;
+    // The account's state changed: its health row did too (plan M2.7b2).
+    worker.statuses().rows_changed();
 }
 
 /// Resolves once the worker is told to stop, or its registry entry is

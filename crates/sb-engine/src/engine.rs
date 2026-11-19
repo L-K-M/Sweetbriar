@@ -80,6 +80,9 @@ pub struct Engine {
     backup_copies: Arc<crate::backups::BackupCopies>,
     /// One sync worker per syncable IMAP account (spec/04).
     accounts: Arc<crate::account_sync::AccountJobs>,
+    /// The sync workers' live status per account, bumped into the
+    /// account-health generation on every change (plan M2.7b2).
+    worker_statuses: Arc<crate::account_health::WorkerStatuses>,
     /// The in-memory Proton sign-in conversations and their idempotency
     /// keys (spec/07): at most ten minutes, nothing durable before
     /// `Complete`.
@@ -287,6 +290,8 @@ pub(crate) struct Worker {
     resources: Arc<Resources>,
     index: Arc<IndexJobs>,
     received: Arc<ReceivedJobs>,
+    /// The per-account worker statuses this task updates (plan M2.7b2).
+    statuses: Arc<crate::account_health::WorkerStatuses>,
     running: Arc<Running>,
     blocking: Arc<BlockingWork>,
     handle: Handle,
@@ -299,6 +304,12 @@ impl Worker {
 
     pub(crate) fn indexer(&self) -> &Arc<IndexJobs> {
         &self.index
+    }
+
+    /// The per-account worker statuses (plan M2.7b2); the sync workers
+    /// record their last sync and retry condition here.
+    pub(crate) fn statuses(&self) -> &Arc<crate::account_health::WorkerStatuses> {
+        &self.statuses
     }
 
     pub(crate) fn resources(&self) -> &Resources {
@@ -351,6 +362,7 @@ impl Spawn for Engine {
             self.resources(),
             &self.index,
             &self.received,
+            &self.worker_statuses,
             &self.blocking,
             self.runtime.handle(),
             body,
@@ -368,6 +380,7 @@ impl Spawn for Worker {
             &self.resources,
             &self.index,
             &self.received,
+            &self.statuses,
             &self.blocking,
             &self.handle,
             body,
@@ -379,6 +392,7 @@ fn spawn<F, Fut>(
     resources: &Arc<Resources>,
     index: &Arc<IndexJobs>,
     received: &Arc<ReceivedJobs>,
+    statuses: &Arc<crate::account_health::WorkerStatuses>,
     blocking: &Arc<BlockingWork>,
     handle: &Handle,
     body: F,
@@ -391,6 +405,7 @@ where
         resources: Arc::clone(resources),
         index: Arc::clone(index),
         received: Arc::clone(received),
+        statuses: Arc::clone(statuses),
         running: Arc::new(blocking.start()?),
         blocking: Arc::clone(blocking),
         handle: handle.clone(),
@@ -617,11 +632,15 @@ impl Engine {
             let engine = open(&data_root)
                 .map_err(EngineError::from)
                 .and_then(|resources| {
+                    let windows = Arc::new(Windows::new());
                     Ok(Self {
                         resources: Some(Arc::new(resources)),
                         blocking: Arc::default(),
                         runtime,
-                        windows: Arc::new(Windows::new()),
+                        worker_statuses: Arc::new(crate::account_health::WorkerStatuses::new(
+                            Arc::clone(&windows),
+                        )),
+                        windows,
                         imports: Arc::default(),
                         index: Arc::default(),
                         received: Arc::default(),
@@ -678,6 +697,12 @@ impl Engine {
     /// implement its share of `Engine`.
     pub(crate) fn windows(&self) -> &Arc<Windows> {
         &self.windows
+    }
+
+    /// The per-account worker statuses behind `account_health()`;
+    /// crate-visible for the sync workers and commands (plan M2.7b2).
+    pub(crate) fn worker_statuses(&self) -> &Arc<crate::account_health::WorkerStatuses> {
+        &self.worker_statuses
     }
 
     /// The runtime's handle, for work a subscription dispatches after

@@ -9,6 +9,8 @@
 //! one query (`settings()`), end to end.
 #![forbid(unsafe_code)]
 
+mod account_health;
+pub use account_health::{AccountBreakerEvent, AccountCondition, AccountHealth};
 mod account_sync;
 mod accounts;
 mod appearance;
@@ -113,9 +115,9 @@ pub use settings::Setting;
 pub use tags::MessageSelection;
 pub use views::SavedViewParams;
 pub use windows::{
-    Anchor, AppearanceSubscription, Count, Cursor, HealthSubscription, ListRow, SearchSort,
-    SearchSpec, SearchStatus, SelectionId, SelectionInput, SelectionSnapshot, Subscription, Window,
-    WindowEvent, WindowId, WindowIds, WindowSpec,
+    AccountHealthSubscription, Anchor, AppearanceSubscription, Count, Cursor, HealthSubscription,
+    ListRow, SearchSort, SearchSpec, SearchStatus, SelectionId, SelectionInput, SelectionSnapshot,
+    Subscription, Window, WindowEvent, WindowId, WindowIds, WindowSpec,
 };
 
 pub use sb_resources::{

@@ -343,6 +343,7 @@ impl Engine {
         let key = idempotency_key.to_owned();
         let id = account_id.to_owned();
         let sessions = Arc::clone(&self.proton_sessions);
+        let statuses = Arc::clone(self.worker_statuses());
         self.command(move |worker| async move {
             // A repeated key answers its stored receipt before any
             // contact or secret work (spec/07).
@@ -400,6 +401,7 @@ impl Engine {
                             pause_for_credential(tx, &id, pause)
                         })
                         .await;
+                    statuses.rows_changed();
                     return Err(EngineError::unavailable(format!(
                         "the credential store could not delete the account's secret: {error}"
                     )));
@@ -427,7 +429,13 @@ impl Engine {
                     .logout_proton_session(&restored.session)
                     .await;
             }
-            disconnected.map_err(EngineError::from)
+            let receipt = disconnected.map_err(EngineError::from);
+            if receipt.is_ok() {
+                // The account is disconnected now: its health row
+                // changed (plan M2.7b2).
+                statuses.rows_changed();
+            }
+            receipt
         })
         .await
     }
@@ -594,6 +602,7 @@ pub(crate) async fn mark_session_refused(worker: &Worker, account_id: &str) {
         .resources()
         .write(WritePriority::Sync, move |tx| pause_for_session(tx, &id))
         .await;
+    worker.statuses().rows_changed();
 }
 
 /// A secret-store failure pauses the account (spec/10), never deletes.
@@ -606,6 +615,7 @@ async fn pause_for_secret_error(worker: &Worker, account_id: &str, error: Secret
             pause_for_credential(tx, &id, pause)
         })
         .await;
+    worker.statuses().rows_changed();
 }
 
 /// Drops conversations past their ten minutes.
@@ -708,6 +718,7 @@ async fn complete_conversation(
             key_passphrase,
         },
     );
+    worker.statuses().rows_changed();
     Ok(completed)
 }
 
