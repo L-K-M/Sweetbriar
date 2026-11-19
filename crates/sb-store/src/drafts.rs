@@ -92,7 +92,7 @@ pub enum AttemptState {
 }
 
 impl AttemptState {
-    fn from_stored(name: &str) -> Result<Self, StoreError> {
+    pub(crate) fn from_stored(name: &str) -> Result<Self, StoreError> {
         match name {
             "held" => Ok(Self::Held),
             "queued" => Ok(Self::Queued),

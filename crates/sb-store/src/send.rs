@@ -5,14 +5,14 @@
 //! transaction where it writes. The schema is migration 1's with
 //! migration 34's Proton columns.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
-use rusqlite::{OptionalExtension, Transaction, params};
+use rusqlite::{OptionalExtension, Transaction, params, params_from_iter};
 use sb_types::time::Timestamp;
 
 use crate::StoreError;
 use crate::accounts::IdentitySendable;
-use crate::drafts::{DraftRecipient, DraftState};
+use crate::drafts::{AttemptState, DraftRecipient, DraftState};
 use crate::identities::account_kind;
 use crate::objects::{PublishedObject, ReservationRelease, release_reservation};
 use crate::query::AddressOperand;
@@ -665,6 +665,336 @@ pub fn reply_source_account(
         .map_err(err)?
         .ok_or_else(|| StoreError::not_found(format!("occurrence {occurrence_id}")))?;
     Ok((account_id, account_kind(&kind)?))
+}
+
+/// The `sent_copy` column's words (spec/02 "Sending"): how the
+/// account's Sent copy is produced. Proton saves it itself at insert;
+/// a generic account's is `pending` until it is filed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SentCopy {
+    ServerSaves,
+    Pending,
+    Filed,
+    Failed,
+}
+
+impl SentCopy {
+    fn from_stored(name: &str) -> Result<Self, StoreError> {
+        match name {
+            "server_saves" => Ok(Self::ServerSaves),
+            "pending" => Ok(Self::Pending),
+            "filed" => Ok(Self::Filed),
+            "failed" => Ok(Self::Failed),
+            _ => Err(StoreError::corrupt(format!(
+                "a send attempt's sent_copy is '{name}'"
+            ))),
+        }
+    }
+
+    /// The stored word.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::ServerSaves => "server_saves",
+            Self::Pending => "pending",
+            Self::Filed => "filed",
+            Self::Failed => "failed",
+        }
+    }
+}
+
+/// A recipient's address field (spec/02 `send_recipients.kind`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RecipientKind {
+    To,
+    Cc,
+    Bcc,
+}
+
+impl RecipientKind {
+    fn from_stored(name: &str) -> Result<Self, StoreError> {
+        match name {
+            "to" => Ok(Self::To),
+            "cc" => Ok(Self::Cc),
+            "bcc" => Ok(Self::Bcc),
+            _ => Err(StoreError::corrupt(format!(
+                "a send recipient's kind is '{name}'"
+            ))),
+        }
+    }
+
+    /// The stored word.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::To => "to",
+            Self::Cc => "cc",
+            Self::Bcc => "bcc",
+        }
+    }
+}
+
+/// A recipient's stored state (spec/02 `send_recipients.state`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RecipientState {
+    Pending,
+    RcptAccepted,
+    RejectedPermanent,
+    RejectedTransient,
+    Sent,
+    Unsent,
+    Unknown,
+}
+
+impl RecipientState {
+    fn from_stored(name: &str) -> Result<Self, StoreError> {
+        match name {
+            "pending" => Ok(Self::Pending),
+            "rcpt_accepted" => Ok(Self::RcptAccepted),
+            "rejected_permanent" => Ok(Self::RejectedPermanent),
+            "rejected_transient" => Ok(Self::RejectedTransient),
+            "sent" => Ok(Self::Sent),
+            "unsent" => Ok(Self::Unsent),
+            "unknown" => Ok(Self::Unknown),
+            _ => Err(StoreError::corrupt(format!(
+                "a send recipient's state is '{name}'"
+            ))),
+        }
+    }
+
+    /// The stored word.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::RcptAccepted => "rcpt_accepted",
+            Self::RejectedPermanent => "rejected_permanent",
+            Self::RejectedTransient => "rejected_transient",
+            Self::Sent => "sent",
+            Self::Unsent => "unsent",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+/// One recipient on an Out Box row (spec/07): the address as first
+/// written, its field and its stored state.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OutBoxRecipient {
+    pub address: String,
+    pub kind: RecipientKind,
+    pub state: RecipientState,
+}
+
+/// One Out Box row (spec/07 `out_box()`): the attempt's frozen
+/// revision subject, its recipients, state and stored times. The
+/// Proton evidence is not stored, so it is the engine's row, not this
+/// one, that carries it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OutBoxRow {
+    pub attempt_id: String,
+    pub draft_id: String,
+    pub account_id: String,
+    pub identity_id: String,
+    pub subject: String,
+    pub recipients: Vec<OutBoxRecipient>,
+    pub state: AttemptState,
+    pub created_at: Timestamp,
+    pub updated_at: Timestamp,
+    pub hold_until: Option<Timestamp>,
+    pub resolved_at: Option<Timestamp>,
+    pub send_requested_at: Option<Timestamp>,
+    /// The Proton draft the attempt created, which becomes the sent
+    /// message (spec/02, 05 "Drafts on the server").
+    pub proton_draft_id: Option<String>,
+    /// Proton's final reply, code and message (spec/02, 05).
+    pub final_reply: Option<String>,
+    pub resolution: Option<UnknownResolution>,
+    pub sent_copy: SentCopy,
+    /// A `queued` attempt whose `config_generation` differs from its
+    /// account's current one waits for `confirm_send_route`
+    /// (spec/05 step 3).
+    pub waits_for_confirmation: bool,
+}
+
+/// The Out Box (spec/07 `out_box()`): every live attempt, then the
+/// last 30 days' history, each newest first.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OutBox {
+    pub live: Vec<OutBoxRow>,
+    pub history: Vec<OutBoxRow>,
+}
+
+/// The history part's window, in days (spec/07).
+const OUT_BOX_HISTORY_DAYS: i64 = 30;
+const MILLIS_PER_DAY: i64 = 24 * 60 * 60 * 1000;
+/// Recipients are read in bounded parameter chunks, well under
+/// SQLite's host-parameter limit.
+const OUT_BOX_RECIPIENT_CHUNK: usize = 400;
+
+/// `out_box()` (spec/07): the live part (every `held`, `queued`,
+/// `submitting` and unresolved `outcome_unknown` attempt, and every
+/// `failed` one whose draft has no newer attempt) and the history part
+/// (the last 30 days by `updated_at`: `accepted`, `cancelled`,
+/// resolved `outcome_unknown`, and `failed` ones a newer attempt
+/// replaced). Each part is newest first by `updated_at`, ties broken
+/// by `attempt_id`. `now` is the read's clock, so the cut is a
+/// parameter rather than a host read. "Newer attempt" means a later
+/// attempt for the same draft by `created_at`, ties broken by
+/// `attempt_id`.
+pub fn out_box(tx: &Transaction, now: Timestamp) -> Result<OutBox, StoreError> {
+    let err = |e| classify(e, "read the out box");
+    let cutoff = now
+        .as_millis()
+        .checked_sub(OUT_BOX_HISTORY_DAYS * MILLIS_PER_DAY)
+        .ok_or_else(|| StoreError::internal("the out box's history cutoff overflows"))?;
+    let mut statement = tx
+        .prepare(
+            "WITH candidates AS (
+                SELECT s.attempt_id, s.draft_id, s.account_id, s.identity_id, r.subject,
+                       s.state, s.created_at, s.updated_at, s.hold_until, s.resolved_at,
+                       s.send_requested_at, s.proton_draft_id, s.final_reply, s.resolution,
+                       s.sent_copy, s.config_generation, a.config_generation AS account_generation,
+                       (SELECT count(*) FROM send_attempts n
+                        WHERE n.draft_id = s.draft_id
+                          AND (n.created_at > s.created_at
+                               OR (n.created_at = s.created_at AND n.attempt_id > s.attempt_id)))
+                           AS newer_attempts
+                FROM send_attempts s
+                JOIN draft_revisions r
+                  ON r.revision_id = s.revision_id AND r.draft_id = s.draft_id
+                JOIN accounts a ON a.account_id = s.account_id
+             )
+             SELECT attempt_id, draft_id, account_id, identity_id, subject, state,
+                    created_at, updated_at, hold_until, resolved_at, send_requested_at,
+                    proton_draft_id, final_reply, resolution, sent_copy, newer_attempts,
+                    config_generation, account_generation
+             FROM candidates
+             WHERE state IN ('held','queued','submitting')
+                OR (state = 'outcome_unknown' AND resolution IS NULL)
+                OR (state = 'failed' AND newer_attempts = 0)
+                OR (updated_at >= ?1 AND (
+                     state IN ('accepted','cancelled')
+                     OR (state = 'outcome_unknown' AND resolution IS NOT NULL)
+                     OR (state = 'failed' AND newer_attempts > 0)))",
+        )
+        .map_err(err)?;
+    let mut rows = statement.query(params![cutoff]).map_err(err)?;
+    let mut candidates: Vec<(bool, OutBoxRow)> = Vec::new();
+    while let Some(row) = rows.next().map_err(err)? {
+        let attempt_id: String = row.get(0).map_err(err)?;
+        let state: String = row.get(5).map_err(err)?;
+        let resolution: Option<String> = row.get(13).map_err(err)?;
+        let newer_attempts: i64 = row.get(15).map_err(err)?;
+        let config_generation: i64 = row.get(16).map_err(err)?;
+        let account_generation: i64 = row.get(17).map_err(err)?;
+        let state = AttemptState::from_stored(&state)?;
+        let resolution = match resolution {
+            Some(word) => Some(UnknownResolution::from_stored(&word)?),
+            None => None,
+        };
+        let live = match state {
+            AttemptState::Held | AttemptState::Queued | AttemptState::Submitting => true,
+            AttemptState::OutcomeUnknown => resolution.is_none(),
+            AttemptState::Failed => newer_attempts == 0,
+            AttemptState::Accepted | AttemptState::Cancelled => false,
+        };
+        let sent_copy: String = row.get(14).map_err(err)?;
+        candidates.push((
+            live,
+            OutBoxRow {
+                recipients: Vec::new(),
+                attempt_id,
+                draft_id: row.get(1).map_err(err)?,
+                account_id: row.get(2).map_err(err)?,
+                identity_id: row.get(3).map_err(err)?,
+                subject: row.get(4).map_err(err)?,
+                state,
+                created_at: Timestamp::from_millis(row.get(6).map_err(err)?),
+                updated_at: Timestamp::from_millis(row.get(7).map_err(err)?),
+                hold_until: row
+                    .get::<_, Option<i64>>(8)
+                    .map_err(err)?
+                    .map(Timestamp::from_millis),
+                resolved_at: row
+                    .get::<_, Option<i64>>(9)
+                    .map_err(err)?
+                    .map(Timestamp::from_millis),
+                send_requested_at: row
+                    .get::<_, Option<i64>>(10)
+                    .map_err(err)?
+                    .map(Timestamp::from_millis),
+                proton_draft_id: row.get(11).map_err(err)?,
+                final_reply: row.get(12).map_err(err)?,
+                resolution,
+                sent_copy: SentCopy::from_stored(&sent_copy)?,
+                waits_for_confirmation: state == AttemptState::Queued
+                    && config_generation != account_generation,
+            },
+        ));
+    }
+    let recipients = out_box_recipients(tx, &candidates)?;
+    for (_, row) in &mut candidates {
+        let attempt_id = row.attempt_id.clone();
+        row.recipients = recipients.get(&attempt_id).cloned().unwrap_or_default();
+    }
+    let mut live: Vec<OutBoxRow> = Vec::new();
+    let mut history: Vec<OutBoxRow> = Vec::new();
+    for (is_live, row) in candidates {
+        if is_live {
+            live.push(row);
+        } else {
+            history.push(row);
+        }
+    }
+    let by_newest = |a: &OutBoxRow, b: &OutBoxRow| {
+        b.updated_at
+            .cmp(&a.updated_at)
+            .then_with(|| b.attempt_id.cmp(&a.attempt_id))
+    };
+    live.sort_by(by_newest);
+    history.sort_by(by_newest);
+    Ok(OutBox { live, history })
+}
+
+/// Read the recipients of every candidate attempt, grouped by
+/// attempt, in canonical order. The chunked `IN` keeps the host
+/// parameter count bounded however large the Out Box grows.
+fn out_box_recipients(
+    tx: &Transaction,
+    candidates: &[(bool, OutBoxRow)],
+) -> Result<HashMap<String, Vec<OutBoxRecipient>>, StoreError> {
+    let err = |e| classify(e, "read the out box's recipients");
+    let mut by_attempt: HashMap<String, Vec<OutBoxRecipient>> = HashMap::new();
+    let attempt_ids: Vec<String> = candidates
+        .iter()
+        .map(|(_, row)| row.attempt_id.clone())
+        .collect();
+    for chunk in attempt_ids.chunks(OUT_BOX_RECIPIENT_CHUNK) {
+        let placeholders = vec!["?"; chunk.len()].join(",");
+        let sql = format!(
+            "SELECT attempt_id, address, kind, state FROM send_recipients
+             WHERE attempt_id IN ({placeholders}) ORDER BY attempt_id, canonical"
+        );
+        let mut statement = tx.prepare(&sql).map_err(err)?;
+        let rows = statement
+            .query_map(params_from_iter(chunk), |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                ))
+            })
+            .map_err(err)?;
+        for row in rows {
+            let (attempt_id, address, kind, state) = row.map_err(err)?;
+            let recipient = OutBoxRecipient {
+                address,
+                kind: RecipientKind::from_stored(&kind)?,
+                state: RecipientState::from_stored(&state)?,
+            };
+            by_attempt.entry(attempt_id).or_default().push(recipient);
+        }
+    }
+    Ok(by_attempt)
 }
 
 #[cfg(test)]
