@@ -216,13 +216,22 @@ impl ProtonError {
             ApiCode::RefreshTokenInvalid => Self::RefreshRefused {
                 message: message.to_owned(),
             },
-            // Every other code (`auth-session.md` §§2, 3, 7, 9:
-            // 2064/5001/5002/5003 this app's identity, 2028 an
-            // anti-abuse block, 9002 device verification, 9101
-            // insufficient scope, 10004 the paid-plan gate, 2001 an
-            // invalid value) is a refusal carrying its numeric code,
-            // which the sync worker records (spec/04, 10).
-            code => Self::Refused {
+            // Refusals carrying their numeric code, which the sync
+            // worker records (spec/04, 10): `auth-session.md` §2
+            // 2064/5001/5002/5003 this app's identity, §9 2028 an
+            // anti-abuse block, §9 9002 device verification and §7 9101
+            // insufficient scope, `policy-risk.md` §8 10004 the
+            // paid-plan gate, §3 2001 an invalid value. Listed, not a
+            // wildcard, so a new code chooses its mapping.
+            code @ (ApiCode::ProductInvalid
+            | ApiCode::AppVersionMissing
+            | ApiCode::AppVersionMissingDev
+            | ApiCode::AppVersionUnsupported
+            | ApiCode::AntiAbuse
+            | ApiCode::DeviceVerificationRequired
+            | ApiCode::InsufficientScope
+            | ApiCode::PaidPlanRequired
+            | ApiCode::InvalidValue) => Self::Refused {
                 code,
                 message: message.to_owned(),
             },
