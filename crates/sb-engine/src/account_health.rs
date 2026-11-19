@@ -183,7 +183,7 @@ impl Engine {
             let sessions = self.proton_sessions.lock().await;
             sessions
                 .iter()
-                .map(|(id, restored)| (id.clone(), unlocked_addresses(restored.keys.as_ref())))
+                .map(|(id, restored)| (id.clone(), locked_addresses(restored.keys.as_ref())))
                 .collect::<HashMap<_, _>>()
         };
         let mut health = Vec::with_capacity(accounts.len());
@@ -230,7 +230,7 @@ impl Engine {
 }
 
 /// The addresses whose keys didn't unlock (spec/04 "Keys").
-fn unlocked_addresses(keys: &dyn sb_resources::KeyStore) -> Vec<String> {
+fn locked_addresses(keys: &dyn sb_resources::KeyStore) -> Vec<String> {
     keys.identities()
         .iter()
         .filter(|identity| !identity.unlocked_key)
