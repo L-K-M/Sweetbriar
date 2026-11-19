@@ -261,6 +261,13 @@ inspectable Out Box. Unknown outcomes are never retried automatically.
   timeout after the request began, an external recipient with keys,
   a definite failure, R1 accepted with R2 saved or queued, and no Sent
   copy uploaded.
+- **Split (2026-11-19):** a survey measured about 3,740 changed lines,
+  so the step lands as three PRs that follow one another: M4.3e1 the
+  store transitions and the `held` to `queued` move (about 1,250);
+  M4.3e2 recipient keys, the draft, the in-memory backoff and
+  `needs_attention` on the worker (about 1,300); M4.3e3 the uploads,
+  the send, the reply interpretation, the sent-to counts and Sent
+  reconciliation (about 1,300).
 
 #### M4.3f Recovery, evidence and crash cuts — linux
 
