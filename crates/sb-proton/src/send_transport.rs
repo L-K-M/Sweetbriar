@@ -809,7 +809,10 @@ mod tests {
             sender,
             &[SendRecipient {
                 address: EXTERNAL.to_owned(),
-                keys: None,
+                keys: crate::RecipientKeys {
+                    keys: Vec::new(),
+                    recipient_type: crate::RECIPIENT_TYPE_EXTERNAL,
+                },
             }],
             &[SendBody {
                 mime_type: "text/plain",
@@ -871,7 +874,7 @@ mod tests {
             &sender,
             &[SendRecipient {
                 address: INTERNAL.to_owned(),
-                keys: Some(keys),
+                keys,
             }],
             &[SendBody {
                 mime_type: "text/plain",
