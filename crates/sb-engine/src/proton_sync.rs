@@ -16,6 +16,10 @@ use crate::account_sync::AccountJobs;
 use crate::engine::{Engine, Spawn, Worker};
 use crate::policy::proton_api;
 use crate::proton::{Sessions, mark_session_refused, restore_proton_account};
+use sb_resources::proton_bodies::{
+    BodyFailure, MAX_PENDING_BODIES, PendingBody, acquire_proton_body, bump_key_generation,
+    pending_proton_bodies, record_body_failure,
+};
 use sb_resources::proton_sync::{
     BreakerResolution, EventChunk, ListedPage, ProtonChange, ProtonListingState, anchor,
     apply_event_chunk, begin_listing, checkpoint, commit_listed_page, finish_listing,
@@ -23,13 +27,15 @@ use sb_resources::proton_sync::{
     withhold_unlisted,
 };
 use sb_resources::{
-    EventAction, EventBatch, EventId, ListingAnchor, PROTON_MAX_PAGE_SIZE, ProtonClient,
+    EventAction, EventBatch, EventId, KeyStore, ListingAnchor, PROTON_MAX_PAGE_SIZE, ProtonClient,
     ProtonError, Secret, Session, StoreError, Transaction, WritePriority, proton_account,
     proton_identities,
 };
 
+use std::collections::{BTreeSet, HashSet};
 use std::future::Future;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tokio::sync::watch;
@@ -51,6 +57,38 @@ const POLL_INTERVAL: Duration = Duration::from_secs(2 * 60);
 /// cursor moving with the last; each change carries the message's full
 /// state, so replaying a chunk after a crash is harmless.
 const CHANGES_PER_WRITE: usize = PAGE_SIZE as usize;
+/// Bodies per queue round: small enough that an event poll follows
+/// promptly (spec/04 "Sync loop" step 3: events stay timely).
+const BODY_BATCH: usize = 20;
+
+/// The provider keys the user opened, per Proton account, most recent
+/// first and bounded (spec/04 "Acquire bodies": opened first, then
+/// newest). In memory only.
+#[derive(Default)]
+pub(crate) struct ProtonOpened {
+    state: Mutex<std::collections::HashMap<String, Vec<String>>>,
+}
+
+impl ProtonOpened {
+    /// Note an open, making `provider_key` the account's most recent.
+    pub(crate) fn note(&self, account_id: &str, provider_key: String) {
+        let mut state = self.state.lock().expect("the opened-body lock poisoned");
+        let opened = state.entry(account_id.to_owned()).or_default();
+        opened.retain(|key| key != &provider_key);
+        opened.insert(0, provider_key);
+        opened.truncate(MAX_PENDING_BODIES);
+    }
+
+    /// The account's opened keys, most recent first.
+    pub(crate) fn keys(&self, account_id: &str) -> Vec<String> {
+        self.state
+            .lock()
+            .expect("the opened-body lock poisoned")
+            .get(account_id)
+            .cloned()
+            .unwrap_or_default()
+    }
+}
 
 /// Why an attempt stopped short of finishing the listing.
 #[derive(Debug)]
@@ -74,14 +112,39 @@ impl From<StoreError> for Halt {
     }
 }
 
+/// Why a body's fetch stopped (spec/04 "Sync loop" step 3).
+enum FetchError {
+    /// The response named another message than the one requested.
+    UnexpectedMessage,
+    /// An attachment data packet exceeded the transport's bound.
+    AttachmentTooLarge,
+    /// The account has no session any more.
+    Ended,
+    /// Proton or the network refused; the attempt retries.
+    Retry,
+}
+
+/// The identities' address ids and the failed key ids, which a key
+/// change is a change to (spec/02 `key_generation`).
+fn key_state(keys: &dyn KeyStore) -> (BTreeSet<String>, BTreeSet<String>) {
+    (
+        keys.identities()
+            .iter()
+            .map(|identity| identity.id.clone())
+            .collect(),
+        keys.failed().iter().cloned().collect(),
+    )
+}
+
 impl Engine {
     /// Start a worker for every Proton account with a session: after
     /// open's restore, or after a backup restore resumes the workers.
     pub(crate) fn schedule_proton_sync(&self) {
         let jobs = Arc::clone(self.account_jobs());
         let sessions = Arc::clone(&self.proton_sessions);
+        let opened = Arc::clone(&self.proton_opened);
         let _ = self.spawn_worker(move |worker| async move {
-            start_all(&worker, &jobs, &sessions).await;
+            start_all(&worker, &jobs, &sessions, &opened).await;
         });
     }
 }
@@ -140,10 +203,11 @@ pub(crate) async fn start_all(
     spawner: &impl Spawn,
     jobs: &Arc<AccountJobs>,
     sessions: &Arc<Sessions>,
+    opened: &Arc<ProtonOpened>,
 ) {
     let accounts: Vec<String> = sessions.lock().await.keys().cloned().collect();
     for account_id in accounts {
-        start(spawner, jobs, sessions, account_id);
+        start(spawner, jobs, sessions, opened, account_id);
     }
 }
 
@@ -152,6 +216,7 @@ pub(crate) fn start(
     spawner: &impl Spawn,
     jobs: &Arc<AccountJobs>,
     sessions: &Arc<Sessions>,
+    opened: &Arc<ProtonOpened>,
     account_id: String,
 ) {
     let Some(stop) = jobs.claim(&account_id) else {
@@ -159,10 +224,11 @@ pub(crate) fn start(
     };
     let owner = Arc::clone(jobs);
     let sessions = Arc::clone(sessions);
+    let opened = Arc::clone(opened);
     let id = account_id.clone();
     let poll = jobs.poll_signal();
     let spawned = spawner.spawn_worker(move |worker| async move {
-        run(&worker, &sessions, &id, stop, poll).await;
+        run(&worker, &sessions, &opened, &id, stop, poll).await;
         owner.release(&id);
     });
     if spawned.is_err() {
@@ -173,6 +239,7 @@ pub(crate) fn start(
 async fn run(
     worker: &Worker,
     sessions: &Sessions,
+    opened: &ProtonOpened,
     account_id: &str,
     stop: watch::Receiver<bool>,
     poll: watch::Receiver<()>,
@@ -181,15 +248,20 @@ async fn run(
         return;
     };
     let mut delay = FIRST_RETRY_DELAY;
+    // The messages this run refused as another message's response
+    // (spec/04 step 3); a restart re-reads them once.
+    let mut skipped = HashSet::new();
     loop {
-        let attempt = Attempt {
+        let mut attempt = Attempt {
             worker,
             sessions,
+            opened,
             client: &client,
             account_id,
             stop: &stop,
             poll: poll.clone(),
             advanced: AtomicBool::new(false),
+            skipped: &mut skipped,
         };
         // A stop doesn't wait for a request in flight: a write already
         // submitted commits or not as a whole, and the next attempt
@@ -227,17 +299,20 @@ async fn stopped(stop: &mut watch::Receiver<bool>) {
 struct Attempt<'a> {
     worker: &'a Worker,
     sessions: &'a Sessions,
+    opened: &'a ProtonOpened,
     client: &'a ProtonClient,
     account_id: &'a str,
     stop: &'a watch::Receiver<bool>,
     poll: watch::Receiver<()>,
     /// Set once an events response is applied.
     advanced: AtomicBool,
+    /// Provider keys this run refused as another message's response.
+    skipped: &'a mut HashSet<String>,
 }
 
 impl Attempt<'_> {
     /// Bootstrap, then follow the events, until something halts it.
-    async fn sync(&self) -> Halt {
+    async fn sync(&mut self) -> Halt {
         loop {
             let halt = match self.bootstrap().await {
                 Ok(()) => self.follow().await,
@@ -381,10 +456,13 @@ impl Attempt<'_> {
             .await
     }
 
-    /// spec/04-sync-proton "Sync loop" step 2: poll the cursor, apply
-    /// each response with its new cursor, fetch again while `More`,
-    /// then wait for the next poll. Returns only to halt.
-    async fn follow(&self) -> Halt {
+    /// spec/04-sync-proton "Sync loop" steps 2 and 3: poll the
+    /// cursor, apply each response with its new cursor and fetch again
+    /// while `More`, then drain a small batch of bodies before the next
+    /// wait. Bodies between event polls keep an opened message prompt
+    /// and events timely; the events run first, so a message the queue
+    /// is about to fetch has its delete applied already.
+    async fn follow(&mut self) -> Halt {
         let mut poll = self.poll.clone();
         poll.mark_unchanged();
         loop {
@@ -392,6 +470,9 @@ impl Attempt<'_> {
                 Ok(true) => continue,
                 Ok(false) => {}
                 Err(halt) => return halt,
+            }
+            if let Err(halt) = self.drain_bodies().await {
+                return halt;
             }
             tokio::select! {
                 () = tokio::time::sleep(POLL_INTERVAL) => {}
@@ -402,6 +483,178 @@ impl Attempt<'_> {
                 }
             }
         }
+    }
+
+    /// spec/04 "Acquire bodies": one small batch from the store's
+    /// queue, opened keys first, then newest. A content failure is
+    /// recorded and the queue moves on; a transport failure halts the
+    /// attempt for a retry.
+    async fn drain_bodies(&mut self) -> Result<(), Halt> {
+        let id = self.account_id.to_owned();
+        let account = self
+            .worker
+            .blocking({
+                let id = id.clone();
+                move |resources| resources.read(|tx| proton_account(tx, &id))
+            })
+            .await
+            .map_err(|_| Halt::Stopped)??
+            .ok_or(Halt::Ended)?;
+        if account.listing_state != ProtonListingState::Complete {
+            return Ok(());
+        }
+        let opened = self.opened.keys(&id);
+        // Skipped messages stay in the store's queue, so ask for that
+        // many more: a run of them ahead can't fill every batch.
+        let limit = (BODY_BATCH + self.skipped.len()).min(MAX_PENDING_BODIES);
+        let pending = self
+            .worker
+            .blocking({
+                let id = self.account_id.to_owned();
+                move |resources| resources.read(|tx| pending_proton_bodies(tx, &id, &opened, limit))
+            })
+            .await
+            .map_err(|_| Halt::Stopped)??;
+        for body in pending {
+            if *self.stop.borrow() {
+                return Err(Halt::Stopped);
+            }
+            if self.skipped.contains(&body.provider_key) {
+                continue;
+            }
+            self.acquire_one(&body, account.key_generation).await?;
+        }
+        Ok(())
+    }
+
+    /// Fetch, decrypt and commit one pending body. A failure is
+    /// recorded and the queue moves on; a transport failure is the
+    /// caller's `Halt`.
+    async fn acquire_one(&mut self, body: &PendingBody, key_generation: i64) -> Result<(), Halt> {
+        let fetched = match self
+            .call_classified(|client, session| async move {
+                client.message(&session, &body.provider_key).await
+            })
+            .await
+        {
+            Ok(fetched) => fetched,
+            // spec/04 step 3: the id in the response must equal
+            // provider_key. Nothing is written; the metadata re-read the
+            // spec asks for needs a listing filter this transport
+            // version doesn't expose, so the run skips the message.
+            Err(FetchError::UnexpectedMessage) => {
+                self.skipped.insert(body.provider_key.clone());
+                return Ok(());
+            }
+            Err(FetchError::Ended) => return Err(Halt::Ended),
+            Err(_) => return Err(Halt::Retry),
+        };
+        let body_bytes = match self
+            .with_keys(|keys| keys.decrypt_body(fetched.body.as_bytes()))
+            .await?
+        {
+            Ok(bytes) => bytes,
+            Err(failure) => {
+                self.record_failure(body.message_id, failure.into(), key_generation)
+                    .await?;
+                return Ok(());
+            }
+        };
+        let mut attachments = Vec::new();
+        for attachment in &fetched.attachments {
+            let packet = match self
+                .call_classified({
+                    let id = attachment.id.clone();
+                    move |client, session| {
+                        let id = id.clone();
+                        async move { client.attachment(&session, &id).await }
+                    }
+                })
+                .await
+            {
+                Ok(packet) => packet,
+                Err(FetchError::AttachmentTooLarge) => {
+                    self.record_failure(body.message_id, BodyFailure::TooLarge, key_generation)
+                        .await?;
+                    return Ok(());
+                }
+                Err(FetchError::Ended) => return Err(Halt::Ended),
+                Err(_) => return Err(Halt::Retry),
+            };
+            let data = match self
+                .with_keys(|keys| keys.decrypt_attachment(&attachment.key_packets, &packet))
+                .await?
+            {
+                Ok(data) => data,
+                Err(_) => {
+                    self.record_failure(body.message_id, BodyFailure::Attachment, key_generation)
+                        .await?;
+                    return Ok(());
+                }
+            };
+            attachments.push((attachment.clone(), data));
+        }
+        let now = self.worker.resources().now();
+        let account_id = self.account_id.to_owned();
+        let committed = self
+            .worker
+            .blocking(move |resources| {
+                acquire_proton_body(
+                    resources,
+                    &account_id,
+                    &fetched,
+                    body_bytes,
+                    attachments,
+                    now,
+                )
+            })
+            .await
+            .map_err(|_| Halt::Stopped)?;
+        match committed {
+            Ok(_) => Ok(()),
+            Err(failure) => match failure.reason() {
+                Some(_) => {
+                    self.record_failure(body.message_id, failure, key_generation)
+                        .await?;
+                    Ok(())
+                }
+                // A store failure is the caller's retry, never a
+                // recorded message failure.
+                None => Err(Halt::Retry),
+            },
+        }
+    }
+
+    /// Record one body failure at the account's current key generation;
+    /// the store's queue excludes the message until the generation
+    /// moves (spec/02 `proton_body_failures`).
+    async fn record_failure(
+        &self,
+        message_id: i64,
+        failure: BodyFailure,
+        key_generation: i64,
+    ) -> Result<(), Halt> {
+        let reason = failure.reason().expect("a recorded failure names a reason");
+        let detail = failure.detail();
+        let now = self.worker.resources().now();
+        self.write(move |tx| {
+            record_body_failure(tx, message_id, reason, detail, key_generation, now).map(drop)
+        })
+        .await
+    }
+
+    /// Run `decrypt` with the account's current keys, copied out of the
+    /// session map under the lock only for the copy (spec/10: the lock
+    /// is never held across an await or a decrypt).
+    async fn with_keys<T>(&self, decrypt: impl FnOnce(&dyn KeyStore) -> T) -> Result<T, Halt> {
+        let keys = {
+            let sessions = self.sessions.lock().await;
+            sessions
+                .get(self.account_id)
+                .map(|restored| Arc::clone(&restored.keys))
+                .ok_or(Halt::Ended)?
+        };
+        Ok(decrypt(keys.as_ref()))
     }
 
     /// Fetch and apply one events response; whether more follow.
@@ -501,10 +754,13 @@ impl Attempt<'_> {
     /// passphrase no longer unlocks, as after a password change, leave
     /// the account needing the owner to sign in again.
     async fn refresh_keys(&self) -> Result<(), Halt> {
-        let passphrase = {
+        let (passphrase, before) = {
             let sessions = self.sessions.lock().await;
             let restored = sessions.get(self.account_id).ok_or(Halt::Ended)?;
-            Arc::clone(&restored.key_passphrase)
+            (
+                Arc::clone(&restored.key_passphrase),
+                key_state(restored.keys.as_ref()),
+            )
         };
         let unlocked = self
             .call(|client, session| {
@@ -541,11 +797,22 @@ impl Attempt<'_> {
             return Ok(());
         }
         let identities = proton_identities(keys.as_ref());
+        // Key unlocking that changed what it unlocked (the identities'
+        // address ids or the failed key ids) moves the generation, so
+        // bodies that failed under the old keys are tried again
+        // (spec/02 `key_generation`).
+        let changed_keys = key_state(keys.as_ref()) != before;
         let id = self.account_id.to_owned();
-        self.write(move |tx| refresh_proton_identities(tx, &id, &identities).map(drop))
-            .await?;
+        self.write(move |tx| -> Result<(), StoreError> {
+            refresh_proton_identities(tx, &id, &identities)?;
+            if changed_keys {
+                bump_key_generation(tx, &id)?;
+            }
+            Ok(())
+        })
+        .await?;
         if let Some(restored) = sessions.get_mut(self.account_id) {
-            restored.keys = keys;
+            restored.keys = Arc::from(keys);
         }
         Ok(())
     }
@@ -560,15 +827,38 @@ impl Attempt<'_> {
         F: Fn(&'c ProtonClient, Session) -> Fut,
         Fut: Future<Output = Result<T, ProtonError>>,
     {
-        let session = self.session().await?;
+        self.call_classified(request)
+            .await
+            .map_err(|error| match error {
+                FetchError::Ended => Halt::Ended,
+                _ => Halt::Retry,
+            })
+    }
+
+    /// [`Attempt::call`], keeping the typed failures a body's fetch
+    /// distinguishes: a response naming another message and an
+    /// attachment past its bound (spec/04 step 3).
+    async fn call_classified<'c, T, F, Fut>(&'c self, request: F) -> Result<T, FetchError>
+    where
+        F: Fn(&'c ProtonClient, Session) -> Fut,
+        Fut: Future<Output = Result<T, ProtonError>>,
+    {
+        let session = self.session().await.map_err(|_| FetchError::Ended)?;
         match request(self.client, session.clone()).await {
             Ok(value) => return Ok(value),
+            Err(ProtonError::UnexpectedMessage) => return Err(FetchError::UnexpectedMessage),
+            Err(ProtonError::AttachmentTooLarge) => return Err(FetchError::AttachmentTooLarge),
             Err(ProtonError::Unauthorized) => {}
-            Err(_) => return Err(Halt::Retry),
+            Err(_) => return Err(FetchError::Retry),
         }
         self.refresh(&session).await;
-        let session = self.session().await?;
-        request(self.client, session).await.map_err(|_| Halt::Retry)
+        let session = self.session().await.map_err(|_| FetchError::Ended)?;
+        match request(self.client, session).await {
+            Ok(value) => Ok(value),
+            Err(ProtonError::UnexpectedMessage) => Err(FetchError::UnexpectedMessage),
+            Err(ProtonError::AttachmentTooLarge) => Err(FetchError::AttachmentTooLarge),
+            Err(_) => Err(FetchError::Retry),
+        }
     }
 
     async fn session(&self) -> Result<Session, Halt> {

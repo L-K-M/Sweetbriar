@@ -56,7 +56,7 @@ pub struct PublishedAttachment {
     pub files: RenditionFiles,
 }
 
-fn unavailable(reason: impl Into<String>) -> StoreError {
+pub(crate) fn unavailable(reason: impl Into<String>) -> StoreError {
     StoreError::Unavailable {
         reason: reason.into(),
         io_kind: None,
@@ -69,14 +69,14 @@ fn path_text(path: &Path) -> Result<String, StoreError> {
         .ok_or_else(|| unavailable("rendition paths must be valid UTF-8"))
 }
 
-fn cache_error(e: RenditionError) -> StoreError {
+pub(crate) fn cache_error(e: RenditionError) -> StoreError {
     unavailable(e.to_string())
 }
 
 /// `path` with its existing part resolved through symlinks and the
 /// missing rest appended, so roots compare before either is created and
 /// a rejected open creates no cache inside the data tree.
-fn resolved(fs: &dyn Fs, path: &Path) -> std::io::Result<PathBuf> {
+pub(crate) fn resolved(fs: &dyn Fs, path: &Path) -> std::io::Result<PathBuf> {
     if fs.metadata(path)?.is_some() {
         return fs.canonicalize(path);
     }

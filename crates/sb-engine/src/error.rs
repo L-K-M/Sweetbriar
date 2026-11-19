@@ -33,6 +33,10 @@ pub enum EngineError {
     /// to `generation` (`CoreError::ResetRequired`). The caller
     /// rebuilds on the same handle: its id index, then its pages.
     ResetRequired { generation: u64 },
+    /// A Proton message's body could not be decrypted (spec/04 "Sync
+    /// loop" step 3): the account's keys don't unlock it. Distinguished
+    /// from a body that simply isn't acquired yet.
+    BodyUndecryptable,
     /// An internal invariant broke (`CoreError::Internal`).
     Internal { detail: String },
     /// The checked query's half-open UTF-8 span and stable code (spec/06).
@@ -143,6 +147,7 @@ impl fmt::Display for EngineError {
                     "the window moved on to generation {generation}; rebuild it"
                 )
             }
+            Self::BodyUndecryptable => f.write_str("the message's body couldn't be decrypted"),
             Self::Internal { detail } => write!(f, "internal error: {detail}"),
             Self::SearchParse { start, end, code } => {
                 write!(f, "search {} at bytes [{start},{end})", code.as_str())

@@ -642,7 +642,11 @@ the provider policies (`proton_bridge`, `generic_imap`) live in
   stored header block, search queueing, `proton_body_failures` and
   the queue's order (opened first, then newest); **M2.16c** the
   worker's body queue, decryption failures and their retry on key
-  change (the last three checks).
+  change (the last three checks); **M2.16d** the metadata re-read
+  after a refused response (spec/04 step 3), which needs a by-id
+  metadata read whose wire shape research `mail-sync.md` §3 leaves
+  unverified. Until M2.16d, the worker refuses such a response,
+  writes nothing and skips the message for the rest of its run.
 - **Acceptance:** the same parts always give the same bytes (proptest);
   each fixture shape reconstructs and parses back to the same structure;
   a message in three labels is fetched once (request log); a wrong id

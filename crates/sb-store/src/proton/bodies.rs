@@ -182,6 +182,46 @@ pub struct PendingBody {
     pub provider_key: String,
 }
 
+/// What an open of a not-yet-acquired message needs to know (plan
+/// M2.16c): its Proton account and provider key, and whether a body
+/// failure at or beyond the account's `key_generation` still blocks
+/// the queue. `None` for a message that isn't an unacquired Proton
+/// message.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProtonOpenState {
+    pub account_id: String,
+    pub provider_key: Option<String>,
+    pub current_failure: bool,
+}
+
+/// The message's Proton open state, or `None` when it isn't a Proton
+/// message or already has an acquisition.
+pub fn proton_open_state(
+    tx: &Transaction,
+    message_id: i64,
+) -> Result<Option<ProtonOpenState>, StoreError> {
+    tx.query_row(
+        "SELECT a.account_id, lm.provider_key,
+                EXISTS (SELECT 1 FROM proton_body_failures f
+                        WHERE f.message_id = lm.message_id
+                          AND f.key_generation >= p.key_generation)
+         FROM logical_messages lm
+         JOIN accounts a ON a.account_id = lm.account_id
+         JOIN proton_accounts p ON p.account_id = a.account_id
+         WHERE lm.message_id = ?1 AND lm.acquisition_id IS NULL",
+        params![message_id],
+        |row| {
+            Ok(ProtonOpenState {
+                account_id: row.get(0)?,
+                provider_key: row.get(1)?,
+                current_failure: row.get(2)?,
+            })
+        },
+    )
+    .optional()
+    .map_err(|e| classify(e, "read the message's Proton open state"))
+}
+
 /// The account's bodies to fetch (spec/04 "Acquire bodies"): the
 /// opened `first` keys that still qualify, in the given order, then the
 /// newest qualifying messages. A message qualifies while it has no

@@ -207,7 +207,7 @@ mod tests {
         /// One engine failure and the check that its mapped value is
         /// the matching `CoreError` variant.
         type Case = (EngineError, fn(&CoreError));
-        let cases: [Case; 10] = [
+        let cases: [Case; 11] = [
             (
                 EngineError::NotFound {
                     what: "w".to_owned(),
@@ -250,6 +250,11 @@ mod tests {
             ),
             (EngineError::ResetRequired { generation: 7 }, |e| {
                 assert!(matches!(e, CoreError::ResetRequired { generation: 7 }))
+            }),
+            (EngineError::BodyUndecryptable, |e| {
+                assert!(
+                    matches!(e, CoreError::Unavailable { reason } if reason == "Couldn't decrypt this message")
+                )
             }),
             (
                 EngineError::Internal {

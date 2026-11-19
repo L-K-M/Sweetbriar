@@ -52,8 +52,10 @@ async fn setup(accounts: Vec<TestAccount>) -> Harness {
     let clock = Arc::new(MovableClock::new(1_000_000));
     let scratch = ScratchDir::new("service-proton-sign-in");
     let root = scratch.path().join("store");
-    let engine = Engine::open_with_proton(
+    let cache = scratch.path().join("cache");
+    let engine = Engine::open_with_proton_and_cache(
         &root,
+        &cache,
         secrets.clone(),
         server.base_url().to_owned(),
         vec![cert_der()],
@@ -116,8 +118,9 @@ async fn reopen(
     server: &FakeProtonServer,
     clock: &Arc<MovableClock>,
 ) -> Core {
-    let engine = Engine::open_with_proton(
+    let engine = Engine::open_with_proton_and_cache(
         &scratch.path().join("store"),
+        &scratch.path().join("cache"),
         secrets.clone(),
         server.base_url().to_owned(),
         vec![cert_der()],
@@ -943,6 +946,7 @@ async fn a_refused_access_token_refreshes_once_and_the_listing_goes_on() {
     assert_eq!(account(&h.core, &id).await.state, AccountState::Active);
 }
 
+mod bodies;
 mod breaker;
 mod events;
 mod identities;
