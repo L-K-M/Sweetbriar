@@ -114,7 +114,19 @@ fn send_queues_cancels_and_freezes_the_mime() {
     let (scratch, engine) = scratch_engine("engine-send-queue");
     seed(&engine);
     let draft = create(&engine);
-    let saved = save(&engine, draft.draft_id(), None);
+    // A Bcc recipient, so the header exclusion below can fail.
+    let mut with_bcc = content("hello");
+    with_bcc.bcc = vec![DraftRecipient {
+        address: "hidden@example.test".to_owned(),
+        name: Some("Hidden".to_owned()),
+    }];
+    let saved = block_on(engine.save_draft(
+        &engine.new_idempotency_key(),
+        draft.draft_id(),
+        None,
+        with_bcc,
+    ))
+    .unwrap();
     let revision = saved.revision_id().to_owned();
 
     let queued = send(&engine, draft.draft_id(), &revision).unwrap();
@@ -167,6 +179,19 @@ fn send_queues_cancels_and_freezes_the_mime() {
         "{text}"
     );
     assert!(!text.contains("Bcc:"), "{text}");
+    assert!(!text.contains("hidden@example.test"), "{text}");
+    // The Bcc recipient is still on the envelope.
+    assert_eq!(
+        count(
+            &engine,
+            &format!(
+                "SELECT count(*) FROM send_recipients
+                 WHERE attempt_id = '{}' AND address = 'hidden@example.test'",
+                queued.attempt_id()
+            )
+        ),
+        1
+    );
 
     let receipt = cancel(&engine, queued.attempt_id()).unwrap();
     assert_eq!(receipt.command(), "cancel_send");
@@ -207,9 +232,10 @@ fn send_conflicts_on_a_non_current_live_or_terminal_revision() {
     let error = send(&engine, &draft_id, second.revision_id()).unwrap_err();
     assert!(matches!(error, EngineError::Conflict { .. }), "{error:?}");
     assert_eq!(count(&engine, "SELECT count(*) FROM send_attempts"), 1);
-    let _ = queued;
 
-    // Terminal: a sent or discarded draft refuses.
+    // Terminal: with no live attempt left, a sent or discarded draft
+    // refuses on its state alone.
+    cancel(&engine, queued.attempt_id()).unwrap();
     for state in ["sent", "discarded"] {
         sql(
             &engine,
