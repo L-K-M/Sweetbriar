@@ -165,7 +165,16 @@ fn validate(input: &ComposeInput<'_>) -> Result<(), ComposeError> {
     if input.message_id.is_empty() {
         return Err(ComposeError::InvalidInput("message_id must not be empty"));
     }
-    reject_crlf(input.message_id)?;
+    // Written verbatim inside `<>`, like an address.
+    if input
+        .message_id
+        .chars()
+        .any(|c| c.is_whitespace() || c.is_control() || matches!(c, '<' | '>'))
+    {
+        return Err(ComposeError::InvalidInput(
+            "message_id must not contain whitespace or <>",
+        ));
+    }
     reject_crlf(input.subject)?;
     reject_crlf(input.user_agent)?;
     if let Some(in_reply_to) = input.in_reply_to {
@@ -199,6 +208,9 @@ fn validate(input: &ComposeInput<'_>) -> Result<(), ComposeError> {
 fn validate_address(address: &ComposeAddress<'_>) -> Result<(), ComposeError> {
     // mail-builder quotes and escapes the display name but writes the address
     // verbatim inside `<>`, so a delimiter there could add recipients.
+    if address.address.is_empty() {
+        return Err(ComposeError::InvalidInput("an address must not be empty"));
+    }
     if address.address.chars().any(|c| {
         c.is_whitespace() || c.is_control() || matches!(c, '<' | '>' | ',' | ';' | '"' | '\\')
     }) {
@@ -259,7 +271,7 @@ fn flowed(body: &str) -> String {
                 } else {
                     line.trim_end_matches(' ')
                 };
-                push_flowed_line(&mut out, line);
+                push_flowed_line(&mut out, line, Line::Fixed);
             }
         } else {
             let joined = block
@@ -268,7 +280,7 @@ fn flowed(body: &str) -> String {
                 .collect::<Vec<_>>()
                 .join(" ");
             for line in wrap_paragraph(&joined) {
-                push_flowed_line(&mut out, &line);
+                push_flowed_line(&mut out, &line, Line::Wrapped);
             }
         }
     }
@@ -303,9 +315,23 @@ fn is_ordered_marker(line: &str) -> bool {
     rest.starts_with(". ") || rest.starts_with(") ")
 }
 
-fn push_flowed_line(out: &mut String, line: &str) {
-    // RFC 3676 section 4.4 space-stuffing.
-    if line.starts_with(' ') || line.starts_with("From ") || line.starts_with('>') {
+/// Where a flowed line came from, which decides how a leading `>` reads.
+#[derive(Clone, Copy, PartialEq)]
+enum Line {
+    /// Kept as written: a leading `>` is the writer's quote indicator.
+    Fixed,
+    /// Produced by rewrapping: a `>` at its start is literal text.
+    Wrapped,
+}
+
+fn push_flowed_line(out: &mut String, line: &str, origin: Line) {
+    // RFC 3676 section 4.4 space-stuffing. An unstuffed `>` marks a quote
+    // (section 4.5), so only a `>` the wrapping moved to a line start is
+    // stuffed.
+    if line.starts_with(' ')
+        || line.starts_with("From ")
+        || (origin == Line::Wrapped && line.starts_with('>'))
+    {
         out.push(' ');
     }
     out.push_str(line);

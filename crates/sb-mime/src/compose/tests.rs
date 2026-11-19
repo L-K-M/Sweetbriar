@@ -221,7 +221,8 @@ fn bcc_recipients_produce_no_bcc_header() {
     let text = String::from_utf8_lossy(&composed.bytes);
     let headers = text.split("\r\n\r\n").next().unwrap_or(&text);
     assert!(!headers.contains("Bcc:"), "{headers}");
-    assert!(!headers.contains("secret@example.org"), "{headers}");
+    // Nowhere in the message, not just the header block.
+    assert!(!text.contains("secret@example.org"), "{text}");
     assert!(
         !headers.contains("Cc:"),
         "an empty Cc is left out: {headers}"
@@ -236,12 +237,23 @@ fn bcc_recipients_produce_no_bcc_header() {
 fn crlf_in_header_inputs_is_refused() {
     let plain = || base_input("Hello.\n", ComposeFormat::Plain { literal: false });
     let (mut subject, mut name, mut injected, mut empty_id) = (plain(), plain(), plain(), plain());
+    let (mut empty_address, mut bracketed_id) = (plain(), plain());
     subject.subject = "bad\r\nBcc: victim@example.org";
     name.from.name = Some("Ada\nLovelace");
     // A delimiter in the address itself would add a recipient.
     injected.from.address = "a@example.org> , victim@example.org";
     empty_id.message_id = "";
-    for input in [subject, name, injected, empty_id] {
+    empty_address.from.address = "";
+    // The Message-ID is written inside `<>` too.
+    bracketed_id.message_id = "a>b@example.org";
+    for input in [
+        subject,
+        name,
+        injected,
+        empty_id,
+        empty_address,
+        bracketed_id,
+    ] {
         assert!(matches!(
             compose(&input),
             Err(ComposeError::InvalidInput(_))
@@ -262,6 +274,32 @@ fn loose_lists_and_fixed_lines_stay_intact_when_flowed() {
     assert!(plain.lines().all(|line| !line.ends_with(' ')), "{plain:?}");
     // Only a space marks a flowed line, so a trailing tab stays.
     assert!(plain.contains("indent\t\n"), "{plain:?}");
+}
+
+#[test]
+fn quote_lines_keep_their_quote_indicator() {
+    // RFC 3676 4.5: an unstuffed `>` is the quote indicator, so quoted
+    // lines go out as quotes; a leading space and "From " are stuffed.
+    let plain = compose(&base_input(
+        "> quoted\n>> deeper\n\n From here\n\nFrom me\n",
+        ComposeFormat::Plain { literal: false },
+    ))
+    .unwrap()
+    .plain_text;
+    assert_eq!(plain, "> quoted\n>> deeper\n\n  From here\n\n From me\n");
+    let markdown = compose(&base_input("> quoted text\n", ComposeFormat::Markdown))
+        .unwrap()
+        .plain_text;
+    assert!(markdown.starts_with("> quoted text\n"), "{markdown:?}");
+    // A `>` that wrapping moves to a line start is text, not a quote.
+    let long = format!("{} > not a quote\n", "a".repeat(71));
+    let wrapped = compose(&base_input(
+        Box::leak(long.into_boxed_str()),
+        ComposeFormat::Plain { literal: false },
+    ))
+    .unwrap()
+    .plain_text;
+    assert!(wrapped.contains("\n > not a quote\n"), "{wrapped:?}");
 }
 
 // ---- limits ----
