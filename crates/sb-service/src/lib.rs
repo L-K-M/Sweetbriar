@@ -28,6 +28,7 @@ mod drafts;
 mod error;
 mod exports;
 mod health;
+mod identities;
 mod imports;
 mod messages;
 mod reading;
@@ -51,6 +52,7 @@ pub use drafts::{
 pub use error::{CoreError, SearchParseCode};
 pub use exports::{ExportFormat, ExportJob, ExportJobState, ExportScopeInput, ExportStarted};
 pub use health::{Health, HealthSubscription, Integrity};
+pub use identities::IdentityParams;
 pub use imports::{
     ImportJob, ImportJobState, ImportProblem, ImportProblemKind, ImportReport, ImportSource,
     ImportSourceKind, ImportStarted, ImportTarget, ImportTotals, MboxVariant,

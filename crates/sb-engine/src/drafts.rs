@@ -482,7 +482,7 @@ fn finish_validation(
 /// `{"<field>":"<id>"}`: the receipt's body (spec/07). The id is
 /// encoded as JSON, never pasted into a template — a caller-supplied
 /// draft id can hold anything.
-fn encode_receipt_id(field: &str, id: &str) -> String {
+pub(crate) fn encode_receipt_id(field: &str, id: &str) -> String {
     let mut body = serde_json::Map::new();
     body.insert(field.to_owned(), id.into());
     serde_json::Value::Object(body).to_string()

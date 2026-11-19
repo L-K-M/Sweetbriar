@@ -30,6 +30,7 @@ mod error;
 mod health;
 #[cfg(test)]
 mod idempotency_tests;
+mod identity;
 mod import;
 mod index;
 #[cfg(test)]
@@ -82,6 +83,7 @@ pub use drafts::{DraftContent, DraftCreated, DraftSaved};
 pub use engine::{Engine, PreparedRestore, RestoreError, Restored};
 pub use error::EngineError;
 pub use health::{Health, Integrity};
+pub use identity::IdentityParams;
 pub use import::{
     ExportJobStatus, ExportScopeInput, ExportStarted, ImportJobStatus, ImportReport,
     ImportSourceStatus, ImportStarted,
