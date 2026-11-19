@@ -4,7 +4,11 @@
 
 use serde_json::Value;
 
-use sb_test_support::{ScratchDir, block_on, execute_sql};
+use std::sync::Arc;
+
+use sb_test_support::{
+    FakeProtonServer, FakeSecrets, ScratchDir, block_on, cert_der, execute_sql, system_clock,
+};
 
 use super::*;
 use crate::{CoreConfig, open_core};
@@ -33,6 +37,26 @@ fn config(scratch: &ScratchDir) -> CoreConfig {
 
 fn open(scratch: &ScratchDir) -> Core {
     block_on(open_core(config(scratch))).unwrap()
+}
+
+/// The core over an in-memory secret store, so the seeded Proton
+/// account's restore sees "no session" on every host. The system store
+/// answers `Unavailable` on Linux CI, and that pause would replace the
+/// seeded refusal reason. The fake server is never called.
+async fn open_with_fake_secrets(scratch: &ScratchDir) -> Core {
+    let server = FakeProtonServer::serve(Vec::new()).await.unwrap();
+    let engine = sb_engine::Engine::open_with_proton_and_cache(
+        &scratch.path().join("store"),
+        &scratch.path().join("cache"),
+        Arc::new(FakeSecrets::new()),
+        server.base_url().to_owned(),
+        vec![cert_der()],
+        server.verifier(),
+        system_clock(),
+    )
+    .await
+    .unwrap();
+    Core::around(engine)
 }
 
 #[test]
@@ -97,11 +121,11 @@ fn the_document_holds_exactly_the_listed_top_level_fields() {
     block_on(core.shutdown());
 }
 
-#[test]
-fn the_log_scan_finds_no_seeded_secret_address_name_or_subject() {
+#[tokio::test]
+async fn the_log_scan_finds_no_seeded_secret_address_name_or_subject() {
     let scratch = ScratchDir::new("service-diagnostics-log-scan");
-    let core = open(&scratch);
-    block_on(core.shutdown());
+    let core = open_core(config(&scratch)).await.unwrap();
+    core.shutdown().await;
 
     execute_sql(
         &scratch.path().join("store/state.sqlite"),
@@ -142,8 +166,11 @@ fn the_log_scan_finds_no_seeded_secret_address_name_or_subject() {
         ),
     );
 
-    let core = open(&scratch);
-    let text = block_on(core.diagnostics_package("app-test", "os-test")).unwrap();
+    let core = open_with_fake_secrets(&scratch).await;
+    let text = core
+        .diagnostics_package("app-test", "os-test")
+        .await
+        .unwrap();
 
     for forbidden in [
         SECRET_DISPLAY_NAME,
@@ -199,5 +226,5 @@ fn the_log_scan_finds_no_seeded_secret_address_name_or_subject() {
         })
     );
 
-    block_on(core.shutdown());
+    core.shutdown().await;
 }
