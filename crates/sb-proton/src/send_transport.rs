@@ -76,7 +76,11 @@ impl SendRefusal {
 /// body text, key material or credentials (spec/10).
 #[derive(Debug)]
 pub enum SendTransportError {
-    /// Proton refused the call; its code and text are kept.
+    /// Proton answered with a numeric code other than success; its
+    /// code and text are kept for the Out Box (`final_reply`). On the
+    /// send call this alone proves nothing: only a qualified
+    /// pre-submission class is `failed`, and the worker treats every
+    /// other reply as an unknown outcome (spec/05 step 5).
     Refused(SendRefusal),
     /// The connection was never established (refused, DNS, connect
     /// timeout, failed TLS handshake): nothing was sent, so the
@@ -101,9 +105,10 @@ pub enum SendTransportError {
 }
 
 impl SendTransportError {
-    /// Maps the client's classified failure. A 5xx reply and a lost
-    /// connection both mean the request reached Proton, so they are
-    /// unknown outcomes; a connect failure and a rate limit are not.
+    /// Maps the client's classified failure. A 5xx the client gave up
+    /// on and a lost connection both mean the request reached Proton,
+    /// so they are unknown outcomes; a connect failure and a rate limit
+    /// are not. A reply returned to `classify_reply` is typed there.
     fn from_transport(failure: TransportFailure) -> Self {
         match failure {
             TransportFailure::NeverEstablished { message } => Self::NeverEstablished { message },
@@ -527,7 +532,14 @@ fn classify_reply(status: StatusCode, body: Bytes) -> Result<Bytes, SendTranspor
 /// the request reached Proton, so nothing from it is applied.
 fn decode_reply<T: DeserializeOwned>(path: &str, bytes: &[u8]) -> Result<T, SendTransportError> {
     serde_json::from_slice(bytes).map_err(|error| SendTransportError::OutcomeUnknown {
-        message: format!("the {path} response didn't decode: {error}"),
+        // serde's text can quote a reply's values, so only its
+        // category and position are kept (spec/10).
+        message: format!(
+            "the {path} response didn't decode ({:?} at line {}, column {})",
+            error.classify(),
+            error.line(),
+            error.column()
+        ),
     })
 }
 
@@ -1296,6 +1308,23 @@ mod tests {
         assert!(
             !debug.contains("attachment"),
             "the packets are redacted: {debug}"
+        );
+        // The ciphertext never holds the ASCII plaintext, so check the
+        // byte fields' own renderings and the session key's too.
+        for bytes in [
+            &encrypted.key_packets,
+            &encrypted.data_packet,
+            &encrypted.signature,
+        ] {
+            assert!(
+                !debug.contains(&format!("{bytes:?}")),
+                "a packet's bytes are printed: {debug}"
+            );
+        }
+        assert_eq!(
+            debug.matches("[redacted]").count(),
+            4,
+            "three packets and the session key are redacted: {debug}"
         );
     }
 }

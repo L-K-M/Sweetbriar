@@ -184,6 +184,7 @@ fn form_decode(value: &str) -> String {
         let escaped = (bytes[i] == b'%')
             .then(|| bytes.get(i + 1..i + 3))
             .flatten()
+            .filter(|hex| hex.iter().all(u8::is_ascii_hexdigit))
             .and_then(|hex| std::str::from_utf8(hex).ok())
             .and_then(|hex| u8::from_str_radix(hex, 16).ok());
         match (bytes[i], escaped) {
@@ -736,6 +737,12 @@ mod tests {
     use crate::{FakeProtonServer, Fault, TestAccount};
 
     use super::{CLEAR_SCHEME, INTERNAL_SCHEME};
+
+    #[test]
+    fn form_decoding_keeps_an_escape_that_is_not_two_hex_digits() {
+        assert_eq!(super::form_decode("a%2Bb+c"), "a+b c");
+        assert_eq!(super::form_decode("%+F%zz%4"), "% F%zz%4");
+    }
 
     const USER: &str = "owner@example.org";
     const INTERNAL: &str = "owner@example.test";

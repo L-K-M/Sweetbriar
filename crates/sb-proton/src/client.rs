@@ -353,11 +353,9 @@ impl Client {
                         || status == StatusCode::SERVICE_UNAVAILABLE
                     {
                         let retry_after = clamp_retry_after(response.headers().get("retry-after"));
-                        let (_, body) = read_body(response).await.map_err(|error| {
-                            TransportFailure::OutcomeUnknown {
-                                message: error.to_string(),
-                            }
-                        })?;
+                        let (_, body) = read_body(response)
+                            .await
+                            .map_err(TransportFailure::from_proton)?;
                         if rate_attempt >= MAX_RATE_RETRIES {
                             return Err(TransportFailure::RateLimited {
                                 message: error_message(&body),
@@ -376,11 +374,9 @@ impl Client {
                         continue;
                     }
                     if status.is_server_error() {
-                        let (_, body) = read_body(response).await.map_err(|error| {
-                            TransportFailure::OutcomeUnknown {
-                                message: error.to_string(),
-                            }
-                        })?;
+                        let (_, body) = read_body(response)
+                            .await
+                            .map_err(TransportFailure::from_proton)?;
                         // A server error answered a request that reached
                         // Proton, so only an idempotent one is sent again.
                         if !may_retry(&method, true) || network_attempt >= MAX_NETWORK_RETRIES {
@@ -824,6 +820,25 @@ mod tests {
     fn test_client(server: &FakeProtonServer) -> Client {
         let config = Config::new(server.base_url(), "15.1", Trust::Roots(vec![cert_der()]));
         Client::new(config).expect("the test client configures")
+    }
+
+    /// A body read after a 429 or 5xx keeps its error's class: a stall
+    /// past the deadline is still `Timeout` to `send`'s callers, and a
+    /// failed read is `Unavailable`, as before the classification.
+    #[test]
+    fn a_failed_body_read_keeps_its_public_error() {
+        let stalled = TransportFailure::from_proton(ProtonError::Timeout);
+        assert!(matches!(stalled, TransportFailure::Timeout));
+        assert!(matches!(stalled.into_proton(), ProtonError::Timeout));
+
+        let lost = TransportFailure::from_proton(ProtonError::Unavailable {
+            message: "the body didn't read".to_owned(),
+        });
+        assert!(matches!(lost, TransportFailure::OutcomeUnknown { .. }));
+        assert!(matches!(
+            lost.into_proton(),
+            ProtonError::Unavailable { .. }
+        ));
     }
 
     #[tokio::test]
