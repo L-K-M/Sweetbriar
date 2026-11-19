@@ -80,10 +80,3 @@ public struct RecoveryPage: Sendable, Equatable {
         )
     }
 }
-
-/// Where a Recovery page starts: the top, or rows strictly older than
-/// the cursor's row.
-public enum RecoveryAnchor: Sendable, Equatable {
-    case top
-    case after(cursor: String)
-}

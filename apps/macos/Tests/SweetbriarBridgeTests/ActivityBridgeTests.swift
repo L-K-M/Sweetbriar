@@ -56,7 +56,7 @@ func aFreshCoreAnswersEmptyActivitySurfaces() async throws {
     let health = try await bridge.accountHealth()
     // The store's one account is the local archive; a fresh store has
     // no Proton account and no warnings or open events.
-    #expect(health.count <= 1)
+    #expect(health.count == 1)
     #expect(health.allSatisfy { $0.breakerEvents.isEmpty && $0.warnings.isEmpty })
     #expect(
         health.allSatisfy { row in accounts.contains { $0.accountId == row.accountId } })

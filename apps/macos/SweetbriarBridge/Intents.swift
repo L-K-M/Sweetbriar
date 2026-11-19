@@ -175,10 +175,3 @@ public struct IntentPage: Sendable, Equatable {
         )
     }
 }
-
-/// Where an intent page starts: the top, or rows after the cursor's
-/// row in the oldest-first order.
-public enum IntentAnchor: Sendable, Equatable {
-    case top
-    case after(cursor: String)
-}

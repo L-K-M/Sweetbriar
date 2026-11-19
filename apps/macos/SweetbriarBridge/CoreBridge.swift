@@ -585,10 +585,8 @@ public final class CoreBridge: Sendable {
     /// `set_app_active` (spec/07 "Account management"): a lifecycle
     /// signal, not a command — no key, no receipt, nothing stored.
     public func setAppActive(_ active: Bool) async throws {
-        let token = SweetbriarCore.CancelToken()
-        try await Self.withCancellation(token: token) {
-            try await self.core.setAppActive(active: active)
-        }
+        // The core call takes no cancel token: it only records a flag.
+        try await core.setAppActive(active: active)
     }
 
     /// Take a generation under a caller-made key. Once begun, cancellation
