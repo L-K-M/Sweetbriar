@@ -168,7 +168,10 @@ fn a_fresh_target_preserves_large_rows_and_quarantines_real_backup_state() {
         1
     );
     for sql in [
-        "SELECT count(*) FROM accounts WHERE state<>'paused'",
+        "SELECT count(*) FROM accounts
+         WHERE provider <> 'local_archive' AND state<>'paused'",
+        "SELECT count(*) FROM accounts
+         WHERE provider <> 'local_archive' AND restore_pending <> 1",
         "SELECT count(*) FROM verifier_scratch",
         "SELECT count(*) FROM object_pins WHERE pin_kind IN ('reservation','backup_in_progress')",
         "SELECT count(*) FROM backup_cleanup_pending",

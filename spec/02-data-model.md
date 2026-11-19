@@ -82,7 +82,9 @@ CREATE TABLE accounts (
   config_generation INTEGER NOT NULL DEFAULT 1,       -- bumped when server, credentials or identity change
   sort_order        INTEGER NOT NULL,
   created_at        INTEGER NOT NULL,
-  revision          INTEGER NOT NULL DEFAULT 1
+  revision          INTEGER NOT NULL DEFAULT 1,
+  restore_pending   INTEGER NOT NULL DEFAULT 0 CHECK (restore_pending IN (0,1)) -- restored, not yet reconciled (03, M2.7)
+                    CHECK (restore_pending = 0 OR state <> 'active')            -- reconciling is what makes it active
 ) STRICT;
 CREATE UNIQUE INDEX accounts_one_local_archive ON accounts(provider)
   WHERE provider = 'local_archive';
@@ -246,6 +248,10 @@ body's `proton_fetch` source (`<message ID>#r<reconstruction version>`)
 is recorded once per account, so a replay finds it without a scan and a
 second row for the same reconstruction is refused (04-sync-proton
 "Reconstruction").
+Migration 33 adds `accounts.restore_pending`, whose checks are column
+constraints because `ALTER TABLE ADD COLUMN` can't add a table
+constraint: a restore marks its accounts until each reconciles
+(03 "Restore", M2.7).
 
 **New tables:**
 
@@ -263,7 +269,7 @@ CREATE TABLE proton_accounts (                        -- one per Proton API acco
   listing_state      TEXT NOT NULL CHECK (listing_state IN ('none','listing','complete')),
   listing_checkpoint TEXT,                            -- last committed page's position while listing
   refresh_count      INTEGER NOT NULL DEFAULT 0,      -- Proton refreshes applied
-  diagnostics_json   TEXT,                            -- last refusal code and message, redacted (10)
+  diagnostics_json   TEXT,                            -- last refusal: {"v":1,"code":n,"message":"…","at":ms}, redacted (10)
   revision           INTEGER NOT NULL DEFAULT 1,
   CHECK ((listing_state = 'listing') = (pending_cursor IS NOT NULL)),
   CHECK (listing_checkpoint IS NULL OR listing_state = 'listing')
@@ -1329,6 +1335,7 @@ extend:
 | Key | Values | Default |
 |---|---|---|
 | `appearance.compose_cue` | `standard`, `strong` (08 Strong mode) | `standard` |
+| `notifications.previews` | `off`, `on`: whether new-mail notifications show sender and subject (10, M2.7) | `off` |
 | `backups.destination` | Empty for the default, or an absolute directory path without NUL (M1.8j1b) | Empty: the data root's `backups/` |
 | `reader.reading_view_senders` | The senders whose messages open in the Reading view (08, M6.3b2): lowercase addresses, each with one `@` and at most 254 bytes, sorted, unique, joined by newlines; at most 1,000 | Empty: every message opens in sender layout |
 

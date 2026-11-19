@@ -598,7 +598,7 @@ the provider policies (`proton_bridge`, `generic_imap`) live in
   and deletes applied with the cursor (long responses in chunks), the
   `Refresh` bit running the bootstrap again, and the worker following
   the events after it. Until M2.15c2 a delete only withholds the
-  message's occurrences as `vanish_pending`, and until M2.7 reports the
+  message's occurrences as `vanish_pending`, and until M2.7b reports the
   app's activity the worker polls at the 2-minute cadence;
   **M2.15c2** the breaker: Proton's classes for deletes, the
   thresholds and `breaker_events`, the pause, Accept, Keep and
@@ -663,34 +663,91 @@ the provider policies (`proton_bridge`, `generic_imap`) live in
   nightly job; the documented differences from production.
 - **Acceptance:** the lane runs green and records a dated artifact.
 
-### M2.7 Account health and the Activity window — M, linux + macos-ci
+### M2.7 Account health and the Activity window — L, linux + macos-ci
 
 - **Goal:** accounts can be managed and repaired, and their health is
   visible in the app.
-- **Spec:** 04-sync-proton (Account states and health), 07 (Accounts
-  commands), 08 (Activity / account health window), 10 (diagnostics,
-  notifications).
+- **Spec:** 04-sync-proton (Account states and health, the breaker's
+  Recovery note), 07 (Account management, `account_health`, `intents`,
+  `recovery`, `diagnostics_package`, `subscribe_new_mail`), 08
+  (Activity / account health window, Settings), 10 (diagnostics,
+  notifications), 02 (`accounts.restore_pending`,
+  `notifications.previews`), 03 (Restore steps 4 and 5).
 - **Depends on:** M2.16 (revised 2026-11-15; was M2.6).
-- **Deliverables:**
-  - `health()`;
-  - `update_account` (display name; Proton accounts sign in again
-    through 07's conversation, keeping the account UUID and bumping
-    `config_generation`), `pause_account`,
-    `resume_account` and `disconnect_account`, tested through the public
-    API, including resuming after a restore;
-  - the diagnostics package (redacted, previewed, saved by the user; 10),
-    used by M2.Q item 3;
-  - new-mail notifications through `UNUserNotificationCenter`, naming the
-    account in text, with previews only if enabled (10);
-  - the macOS Activity window: per account state, coverage, breaker
-    events with Accept and Keep, parked and quarantined intents with
-    actions, and the Recovery list.
-- **Acceptance:**
-  - breaker Accept and Keep work end to end (UI test with the fake),
-    leaving the event `accepted` or `kept`; an event whose messages
-    reappear becomes `cleared`;
-  - signing in again keeps the account's UUID and data;
-  - the diagnostics package contains no secret (log-scan test).
+- **Split (2026-11-18):** a survey of the code measured the step at
+  about 4,500 to 5,500 changed lines, so it lands as five PRs in this
+  order; M2.7d and M2.7e may run in parallel once their cores merge.
+  The plan's earlier `health()` deliverable is `account_health()`:
+  spec/07's `health()` is the store's integrity, delivered by M1.8h5b2.
+  Intent actions (`release_intents`, `cancel_intents`) stay with M3.1;
+  `retarget_intent` is needed only by IMAP epoch changes (later).
+
+#### M2.7a Account commands — linux
+
+- **Deliverables:** `update_account`, `pause_account`, `resume_account`
+  and `disconnect_account` with idempotency keys and receipts (07),
+  through store, engine, service and FFI with regenerated bindings;
+  per-account worker stop and start; launch skips paused accounts; and
+  the reconcile `restore_pending` triggers when the account next
+  becomes active, by resume or by signing in again (03 step 5; a
+  Proton account restarts with the bootstrap). The migration adding
+  `restore_pending`, set by a restore on every account other than the
+  local archive (pausing only `active` ones), lands with the spec PR,
+  since the spec's schema and the migrated one must agree.
+- **Acceptance:** pausing stops the account's requests to the fake
+  before the receipt and survives a reopen; resuming a restored IMAP
+  account clears its cursors and a restored Proton account
+  bootstraps without losing tags, notes or bodies; repeated keys answer
+  the stored receipt; signing in again keeps the account's UUID and
+  data.
+
+#### M2.7b Account health core — linux
+
+- **Deliverables:** `account_health()` and `subscribe_account_health()`
+  (state, condition by 04-sync-proton's table, retry times from the
+  worker, open breaker events, coverage, last sync time);
+  `resolve_breaker_event` with a key and receipt, exported over FFI;
+  `set_app_active` and the 30-second active cadence it selects
+  (M2.15c1); the worker recording refusals in `diagnostics_json` with
+  Proton's numeric code, and setting `needs_attention` for human
+  verification and refused app identity.
+- **Acceptance:** each row of 04-sync-proton's table is produced by a
+  fake fault; Accept and Keep leave the event `accepted` or `kept`
+  through the FFI surface, and an event whose messages reappear becomes
+  `cleared`; the active signal changes the poll interval.
+
+#### M2.7c Intents, Recovery and diagnostics core — linux
+
+- **Deliverables:** `intents(filter)`, `recovery(account_id?)` and
+  `diagnostics_package()` through service and FFI; the package's
+  content and redaction (10); `subscribe_new_mail` fed by the event
+  loop's Inbox arrivals only; the `notifications.previews` setting.
+- **Acceptance:** the diagnostics package contains no secret, address
+  or subject (log-scan test, 10); a bootstrap and a resumed account's
+  resync emit no new mail; the Recovery list holds a message whose last
+  occurrence vanished and drops it when the message reappears.
+
+#### M2.7d Activity window — macos-ci
+
+- **Deliverables:** the Activity window (08): per-account state and
+  condition with "Sign in again", coverage, breaker events with Accept
+  and Keep, parked and quarantined intents (read only until M3.1), the
+  Recovery list; the Window menu item; the sidebar's health row
+  (`SidebarViewController`); `set_app_active` from the app's
+  activation notifications.
+- **Acceptance:** breaker Accept and Keep work end to end (UI test with
+  the fake), leaving the event `accepted` or `kept`.
+
+#### M2.7e Account settings, diagnostics and notifications — macos-ci
+
+- **Deliverables:** Settings → Accounts (rename, pause and resume,
+  disconnect with confirmation, sign in again, notification previews);
+  diagnostics preview and save through a save panel; new-mail
+  notifications through `UNUserNotificationCenter`, naming the account
+  in text, with sender and subject only when previews are on.
+- **Acceptance:** UI tests rename and pause an account and show the
+  diagnostics preview; a notification's text without previews holds no
+  sender or subject (unit test on the formatter).
 
 ### M2.8 Real-Bridge CI lane — cancelled 2026-11-15 (replaced by M2.17)
 

@@ -1241,6 +1241,50 @@ fn migration_28_checks_accept_new_values_and_reject_unknown() {
     });
 }
 
+/// Migration 33's `restore_pending` defaults to 0 on every existing
+/// account, admits only 0 and 1, and never 1 on an active account
+/// (spec/02 "Accounts and identities").
+#[test]
+fn migration_33_restore_pending_defaults_and_is_checked() {
+    let (_scratch, paths) = scratch_paths("schema-restore-pending");
+    let store = crate::open(&paths, &test_seams(real_fs())).unwrap();
+    writing(&store, |tx| {
+        let value: i64 = tx
+            .query_row(
+                "SELECT restore_pending FROM accounts WHERE provider = 'local_archive'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(value, 0, "an existing account is not restore-pending");
+        // A control write proves this handle can write, so the
+        // rejections below come from the CHECKs.
+        tx.execute(
+            "UPDATE accounts SET restore_pending = 0
+             WHERE provider = 'local_archive'",
+            [],
+        )
+        .expect("the control write");
+        // The local archive is active, so even 1 is refused there.
+        for rejected in [2, -1, 1] {
+            let result = tx.execute(
+                "UPDATE accounts SET restore_pending = ?1
+                 WHERE provider = 'local_archive'",
+                [rejected],
+            );
+            assert!(result.is_err(), "restore_pending {rejected} was admitted");
+        }
+        // A paused account may be restore-pending.
+        tx.execute(
+            "UPDATE accounts SET state = 'paused', restore_pending = 1
+             WHERE provider = 'local_archive'",
+            [],
+        )
+        .expect("a paused account is restore-pending");
+        Ok(())
+    });
+}
+
 /// Appending a migration must not reinterpret an existing store version.
 #[test]
 fn historical_migration_ids_are_pinned() {

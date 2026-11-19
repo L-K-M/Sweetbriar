@@ -280,7 +280,9 @@ fn audit(
         return Err(StoreError::corrupt("quarantined incarnation changed"));
     }
     for sql in [
-        "SELECT 1 FROM accounts NOT INDEXED WHERE state IS NOT 'paused' LIMIT 1",
+        "SELECT 1 FROM accounts NOT INDEXED
+         WHERE provider <> 'local_archive' AND (state = 'active' OR restore_pending = 0)
+         LIMIT 1",
         "SELECT 1 FROM import_jobs NOT INDEXED WHERE state IN ('inventory','awaiting_confirmation','running') LIMIT 1",
         "SELECT 1 FROM intents NOT INDEXED WHERE state IN ('pending','in_flight','parked') LIMIT 1",
         "SELECT 1 FROM send_attempts NOT INDEXED WHERE state IN ('held','queued','submitting') LIMIT 1",
