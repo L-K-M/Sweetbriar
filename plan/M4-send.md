@@ -228,8 +228,8 @@ inspectable Out Box. Unknown outcomes are never retried automatically.
 
 #### M4.3e Submission on the account worker — linux
 
-- **Deliverables:** the `held` to `queued` move, the
-  `config_generation` gate, the claim, submission steps 1 to 5 between
+- **Deliverables:** the `held` to `queued` move, at the worker's
+  ticks and at startup, the `config_generation` gate, the claim, submission steps 1 to 5 between
   the worker's sync steps, the reply interpretation with the (empty)
   qualified pre-submission list, failures before `send_requested_at`
   with the in-memory backoff, `needs_attention` on an identity or
@@ -245,8 +245,8 @@ inspectable Out Box. Unknown outcomes are never retried automatically.
 #### M4.3f Recovery, evidence and crash cuts — linux
 
 - **Deliverables:** startup recovery of Proton `submitting` attempts
-  by `send_requested_at` and of `held` attempts whose window passed;
-  the evidence check (05); the crash-cut suite over every transition.
+  by `send_requested_at` (M4.3e queues the `held` ones); the evidence
+  check (05); the crash-cut suite over every transition.
 - **Acceptance:** zero duplicate sends across 200 seeds; a dropped
   send the fake applied becomes `accepted` by evidence without a second
   send; the restore test turns pending attempts into

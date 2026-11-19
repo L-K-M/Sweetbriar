@@ -688,13 +688,15 @@ a receipt or file-export command; Service/FFI exposure remains M1.7e/f.
     its `hold_until`, `queued` with whether it waits for
     `confirm_send_route`, `submitting`, unresolved `outcome_unknown`)
     and every `failed` one whose draft has no newer attempt, then the
-    last 30 days' history (`accepted`, `cancelled`, resolved), newest
-    first within each part. Each holds the attempt and draft ids,
+    last 30 days' history (`accepted`, `cancelled`, resolved
+    `outcome_unknown`, and `failed` ones a newer attempt replaced),
+    newest first within each part. Each holds the attempt and draft ids,
     account, identity, the frozen subject and recipients with each
     recipient's state, the attempt's state, times, Proton's code and
     message (`final_reply`), its resolution, the Proton evidence
-    observed since launch (05; kept in memory) and, after `accepted`, whether the Sent copy has
-    appeared (05 "The Sent copy").
+    observed since launch (05; kept in memory, so a relaunch shows
+    none until the worker's next check) and, after `accepted`, whether
+    the Sent copy has appeared (05 "The Sent copy").
   - `drafts()` → local drafts with state, route, subject, recipients,
     update time and any live attempt's state (the sidebar's Drafts
     (local), 08);

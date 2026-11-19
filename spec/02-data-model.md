@@ -674,9 +674,11 @@ from discarded drafts. It is listed in the backup.
 - **Sent-to counts (M4.3):** when an attempt becomes `accepted`, or
   is resolved `marked_sent`, each of its recipients that becomes `sent`
   adds one to its canonical row's `times_sent_to` (inserting the row,
-  with `email` its spelling and `last_seen_at` now, when absent), and
-  sets `last_account_id` to the attempt's account, in the same
-  transaction. A recipient is counted once per attempt.
+  with `email` the recipient's spelling on the attempt and
+  `last_seen_at` now, when absent), and sets `last_account_id` to the
+  attempt's account, in the same transaction. An existing row keeps
+  its `email`, `display_name` and `last_seen_at`: sending isn't an
+  observation of the address. A recipient is counted once per attempt.
 - Migration 7 adds the kept ledger. WITHOUT ROWID stores its canonical key once
   rather than duplicating the composite primary key, within the per-key budget.
 
