@@ -13,7 +13,7 @@ pub use auth::{
     AUTH_INFO_PATH, Challenge, FinishedSignIn, HumanVerification, PasswordMode, Session, SignIn,
     SignInComplete, SignInStep,
 };
-pub use client::{Client, Config, Priority, Trust};
+pub use client::{BackoffKind, BackoffObserver, Client, Config, Priority, Trust};
 pub use error::{ApiCode, InvalidField, ProtonError};
 pub use keys::{
     ADDRESS_STATUS_ENABLED, ADDRESSES_PATH, Address, DecryptError, Identity, KEY_SALTS_PATH,

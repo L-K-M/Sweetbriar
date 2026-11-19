@@ -255,6 +255,50 @@ impl HealthSubscription {
     }
 }
 
+/// Tells when `account_health()` changed (spec/07): a worker's status
+/// or a stored-row write. The pull contract of [`HealthSubscription`],
+/// except an event names nothing: re-read `account_health()`.
+pub struct AccountHealthSubscription {
+    windows: Arc<Windows>,
+    /// The account-health changes this subscription has answered.
+    answered: AtomicU64,
+    waiting: AtomicBool,
+}
+
+impl Windows {
+    /// `subscribe_account_health` (spec/07), starting at the changes so
+    /// far: subscribe first, then read `account_health()`, and no change
+    /// is missed. In-memory only.
+    pub(crate) fn subscribe_account_health(self: &Arc<Self>) -> AccountHealthSubscription {
+        AccountHealthSubscription {
+            windows: Arc::clone(self),
+            answered: AtomicU64::new(self.account_health_changes()),
+            waiting: AtomicBool::new(false),
+        }
+    }
+}
+
+impl AccountHealthSubscription {
+    /// Wait until the account health changed since this subscription's
+    /// last answer; several changes are one answer. One call at a
+    /// time; a cancelled call moves nothing; shutdown ends a wait with
+    /// `Unavailable`.
+    pub async fn next(&self) -> Result<(), EngineError> {
+        let _waiting = Waiting::claim(&self.waiting)?;
+        let mut versions = self.windows.versions.subscribe();
+        loop {
+            let seen = *versions.borrow_and_update();
+            if seen.shut {
+                return Err(shut_down());
+            }
+            if self.answered.swap(seen.account_health, Ordering::AcqRel) != seen.account_health {
+                return Ok(());
+            }
+            versions.changed().await.map_err(|_| shut_down())?;
+        }
+    }
+}
+
 /// Whether a store swap happened since this subscription last
 /// answered one, recording that it now has. The swapped-in store's
 /// generations may be lower than the mark, so a swap is never compared
@@ -272,16 +316,16 @@ fn source_generation(spec: &WindowSpec, versions: Versions) -> u64 {
     }
 }
 
-fn shut_down() -> EngineError {
+pub(crate) fn shut_down() -> EngineError {
     EngineError::unavailable("the engine is shutting down")
 }
 
 /// The one `next` in flight; dropping it, as a cancelled `next` does,
 /// frees the subscription for the next call.
-struct Waiting<'a>(&'a AtomicBool);
+pub(crate) struct Waiting<'a>(&'a AtomicBool);
 
 impl<'a> Waiting<'a> {
-    fn claim(flag: &'a AtomicBool) -> Result<Self, EngineError> {
+    pub(crate) fn claim(flag: &'a AtomicBool) -> Result<Self, EngineError> {
         if flag.swap(true, Ordering::AcqRel) {
             return Err(EngineError::invalid_input(
                 "next",

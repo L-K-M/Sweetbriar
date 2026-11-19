@@ -71,6 +71,7 @@ impl Engine {
         if added.needs_attention.is_none() {
             self.start_account(added.account_id.clone());
         }
+        self.worker_statuses().rows_changed();
         Ok(added)
     }
 }
@@ -121,6 +122,7 @@ impl Engine {
         let sessions = Arc::clone(&self.proton_sessions);
         let opened = Arc::clone(self.proton_opened());
         let threads = Arc::clone(self.imports().threads());
+        let statuses = Arc::clone(self.worker_statuses());
         let (key, id) = (idempotency_key.to_owned(), account_id.to_owned());
         self.command(move |worker| async move {
             let _lifecycle = jobs.lifecycle().await;
@@ -174,7 +176,13 @@ impl Engine {
                 jobs.unpause(&id);
                 start_worker(&worker, &jobs, &sessions, &opened, &threads, kind, id).await;
             }
-            result.map_err(EngineError::from)
+            let receipt = result.map_err(EngineError::from);
+            if receipt.is_ok() {
+                // The account's state changed: its health row did too
+                // (plan M2.7b2).
+                statuses.rows_changed();
+            }
+            receipt
         })
         .await
     }
@@ -196,6 +204,7 @@ impl Engine {
         let sessions = Arc::clone(&self.proton_sessions);
         let opened = Arc::clone(self.proton_opened());
         let threads = Arc::clone(self.imports().threads());
+        let statuses = Arc::clone(self.worker_statuses());
         let (key, id) = (idempotency_key.to_owned(), account_id.to_owned());
         self.command(move |worker| async move {
             let _lifecycle = jobs.lifecycle().await;
@@ -245,6 +254,7 @@ impl Engine {
             }
             jobs.unpause(&id);
             start_worker(&worker, &jobs, &sessions, &opened, &threads, kind, id).await;
+            statuses.rows_changed();
             Ok(receipt)
         })
         .await

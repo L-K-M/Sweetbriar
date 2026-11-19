@@ -831,6 +831,28 @@ pub fn record_refusal(
     set_diagnostics(tx, account_id, Some(&json), account.revision)
 }
 
+/// The recorded refusal's message for the account health surface
+/// (spec/07 `account_health`), or `None` when the account has no
+/// diagnostics or they carry no message. A value this version can't
+/// parse is absent rather than a corruption: the health query still
+/// answers with the rest of the account's state.
+pub fn diagnostics_message(
+    tx: &Transaction,
+    account_id: &str,
+) -> Result<Option<String>, StoreError> {
+    let account = match proton_account(tx, account_id)? {
+        Some(account) => account,
+        None => return Ok(None),
+    };
+    let Some(raw) = account.diagnostics_json.as_deref() else {
+        return Ok(None);
+    };
+    Ok(serde_json::from_str::<serde_json::Value>(raw)
+        .ok()
+        .and_then(|value| value.get("message").cloned())
+        .and_then(|value| value.as_str().map(str::to_owned)))
+}
+
 /// Mask anything shaped like an email address as `<address>`
 /// (spec/10): a refusal message may quote one. The local part is a
 /// nonempty run of address characters before `@`; the domain a run
@@ -1059,7 +1081,9 @@ pub use bodies::{
     MAX_PENDING_BODIES, PendingBody, ProtonBody, ProtonBodyCommit, ProtonOpenState,
     commit_proton_body, pending_proton_bodies, proton_open_state,
 };
-pub use breaker::{BreakerResolution, Classified, resolve_breaker_event};
+pub use breaker::{
+    BreakerResolution, Classified, StoredBreakerEvent, open_breaker_events, resolve_breaker_event,
+};
 pub use events::{
     AppliedEvents, EventChunk, ProtonChange, RereadMessage, apply_event_chunk, apply_reread_message,
 };

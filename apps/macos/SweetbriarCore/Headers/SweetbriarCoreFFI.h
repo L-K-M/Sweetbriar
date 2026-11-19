@@ -243,6 +243,21 @@ typedef void (*UniffiForeignFutureCompleteVoid)(uint64_t, UniffiForeignFutureRes
     );
 
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_CLONE_ACCOUNTHEALTHSUBSCRIPTION
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_CLONE_ACCOUNTHEALTHSUBSCRIPTION
+uint64_t uniffi_sb_ffi_fn_clone_accounthealthsubscription(uint64_t handle, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_FREE_ACCOUNTHEALTHSUBSCRIPTION
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_FREE_ACCOUNTHEALTHSUBSCRIPTION
+void uniffi_sb_ffi_fn_free_accounthealthsubscription(uint64_t handle, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_ACCOUNTHEALTHSUBSCRIPTION_NEXT
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_ACCOUNTHEALTHSUBSCRIPTION_NEXT
+uint64_t uniffi_sb_ffi_fn_method_accounthealthsubscription_next(uint64_t ptr, uint64_t token
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_CLONE_CORE
 #define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_CLONE_CORE
 uint64_t uniffi_sb_ffi_fn_clone_core(uint64_t handle, RustCallStatus *_Nonnull out_status
@@ -251,6 +266,16 @@ uint64_t uniffi_sb_ffi_fn_clone_core(uint64_t handle, RustCallStatus *_Nonnull o
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_FREE_CORE
 #define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_FREE_CORE
 void uniffi_sb_ffi_fn_free_core(uint64_t handle, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_ACCOUNT_HEALTH
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_ACCOUNT_HEALTH
+uint64_t uniffi_sb_ffi_fn_method_core_account_health(uint64_t ptr, uint64_t token
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_SUBSCRIBE_ACCOUNT_HEALTH
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_SUBSCRIBE_ACCOUNT_HEALTH
+uint64_t uniffi_sb_ffi_fn_method_core_subscribe_account_health(uint64_t ptr, uint64_t token
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_ADD_BRIDGE_ACCOUNT
@@ -992,6 +1017,24 @@ uint16_t uniffi_sb_ffi_checksum_func_platform_default_config(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_FUNC_PALETTE
 #define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_FUNC_PALETTE
 uint16_t uniffi_sb_ffi_checksum_func_palette(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_ACCOUNTHEALTHSUBSCRIPTION_NEXT
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_ACCOUNTHEALTHSUBSCRIPTION_NEXT
+uint16_t uniffi_sb_ffi_checksum_method_accounthealthsubscription_next(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_ACCOUNT_HEALTH
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_ACCOUNT_HEALTH
+uint16_t uniffi_sb_ffi_checksum_method_core_account_health(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_SUBSCRIBE_ACCOUNT_HEALTH
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_SUBSCRIBE_ACCOUNT_HEALTH
+uint16_t uniffi_sb_ffi_checksum_method_core_subscribe_account_health(void
     
 );
 #endif

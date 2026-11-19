@@ -51,6 +51,24 @@ pub const MAX_NETWORK_RETRIES: u32 = 5;
 /// How many times a request waits out a 429/503.
 pub const MAX_RATE_RETRIES: u32 = 3;
 
+/// What made the client wait most recently (spec/04's table); cleared
+/// at the start of every send, so it describes the finished request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BackoffKind {
+    /// A 429 or 503 carried `Retry-After` and the client waited it.
+    RateLimit,
+    /// A 5xx answer was retried with the exponential backoff.
+    ServerError,
+    /// A connect failure, drop or timeout was retried with the
+    /// exponential backoff.
+    Network,
+}
+
+/// Told before each retry sleep, so the sync worker can show the
+/// account's condition and next attempt while the wait runs (spec/07
+/// `account_health`).
+pub type BackoffObserver = Arc<dyn Fn(BackoffKind, Duration) + Send + Sync>;
+
 /// How a request is queued. Interactive requests (opening a message) go
 /// first: they skip the background rate limit; background requests are
 /// paced to four per second.
@@ -184,6 +202,11 @@ pub struct Client {
     pub(crate) config: Arc<Config>,
     semaphore: Arc<Semaphore>,
     rate: Arc<tokio::sync::Mutex<RateState>>,
+    /// What the last send waited for; read by the worker after a
+    /// failure to classify the retry.
+    last_backoff: Arc<std::sync::Mutex<Option<BackoffKind>>>,
+    /// Told before each retry sleep.
+    backoff_observer: Arc<std::sync::Mutex<Option<BackoffObserver>>>,
 }
 
 impl fmt::Debug for Client {
@@ -201,6 +224,8 @@ impl Clone for Client {
             config: self.config.clone(),
             semaphore: self.semaphore.clone(),
             rate: self.rate.clone(),
+            last_backoff: Arc::clone(&self.last_backoff),
+            backoff_observer: Arc::clone(&self.backoff_observer),
         }
     }
 }
@@ -221,7 +246,24 @@ impl Client {
             config: Arc::new(config),
             semaphore: Arc::new(Semaphore::new(MAX_IN_FLIGHT)),
             rate: Arc::new(tokio::sync::Mutex::new(RateState::default())),
+            last_backoff: Arc::new(std::sync::Mutex::new(None)),
+            backoff_observer: Arc::new(std::sync::Mutex::new(None)),
         })
+    }
+
+    /// Replace the retry observer (spec/07 `account_health`); one
+    /// client belongs to one account's worker, which sets it once.
+    pub fn set_backoff_observer(&self, observer: Option<BackoffObserver>) {
+        *self
+            .backoff_observer
+            .lock()
+            .expect("the backoff observer lock poisoned") = observer;
+    }
+
+    /// What the last send waited for, or `None` when it never waited
+    /// (or succeeded at once). The worker classifies its retry from it.
+    pub fn last_backoff(&self) -> Option<BackoffKind> {
+        *self.last_backoff.lock().expect("the backoff lock poisoned")
     }
 
     /// `GET /tests/ping`: the reachability probe (research
@@ -264,6 +306,8 @@ impl Client {
             })?;
 
         let request = self.build_request(&method, path, body, auth, extra)?;
+        // The classification describes this send only.
+        *self.last_backoff.lock().expect("the backoff lock poisoned") = None;
         let mut network_attempt = 0;
         let mut rate_attempt = 0;
         loop {
@@ -288,6 +332,7 @@ impl Client {
                             rate_attempt,
                             MAX_RATE_RETRIES
                         );
+                        self.wait_backoff(BackoffKind::RateLimit, retry_after);
                         tokio::time::sleep(retry_after).await;
                         continue;
                     }
@@ -302,6 +347,7 @@ impl Client {
                         }
                         network_attempt += 1;
                         let delay = backoff_delay(network_attempt);
+                        self.wait_backoff(BackoffKind::ServerError, delay);
                         log::debug!(
                             "Proton returned {}; backing off {:?} (retry {}/{})",
                             status,
@@ -326,16 +372,34 @@ impl Client {
                         });
                     }
                     network_attempt += 1;
-                    tokio::time::sleep(backoff_delay(network_attempt)).await;
+                    let delay = backoff_delay(network_attempt);
+                    self.wait_backoff(BackoffKind::Network, delay);
+                    tokio::time::sleep(delay).await;
                 }
                 Err(_) => {
                     if !may_retry(&method, true) || network_attempt >= MAX_NETWORK_RETRIES {
                         return Err(ProtonError::Timeout);
                     }
                     network_attempt += 1;
-                    tokio::time::sleep(backoff_delay(network_attempt)).await;
+                    let delay = backoff_delay(network_attempt);
+                    self.wait_backoff(BackoffKind::Network, delay);
+                    tokio::time::sleep(delay).await;
                 }
             }
+        }
+    }
+
+    /// Record the wait and tell the observer, before sleeping (spec/07
+    /// `account_health`).
+    fn wait_backoff(&self, kind: BackoffKind, delay: Duration) {
+        *self.last_backoff.lock().expect("the backoff lock poisoned") = Some(kind);
+        let observer = self
+            .backoff_observer
+            .lock()
+            .expect("the backoff observer lock poisoned")
+            .clone();
+        if let Some(observer) = observer {
+            observer(kind, delay);
         }
     }
 
@@ -695,6 +759,42 @@ mod tests {
             .await;
         assert!(matches!(result, Err(ProtonError::Unavailable { .. })));
         assert_eq!(server.requests().len(), 1, "the POST went out once");
+    }
+
+    // Real time: a paused clock can auto-advance past the request
+    // deadline while the fake server's task waits.
+    #[tokio::test]
+    async fn a_retry_is_observable_before_the_wait() {
+        let server = FakeProtonServer::serve(Vec::new()).await.expect("serve");
+        server.set_fault(Some(Fault::RateLimit {
+            status: 429,
+            retry_after: Some(1),
+        }));
+        let client = test_client(&server);
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let recorded = Arc::clone(&seen);
+        client.set_backoff_observer(Some(Arc::new(move |kind, delay| {
+            recorded
+                .lock()
+                .expect("the observed waits lock poisoned")
+                .push((kind, delay));
+        })));
+        let _ = client
+            .send(
+                Method::GET,
+                "/tests/ping",
+                None,
+                Priority::Interactive,
+                None,
+                &[],
+            )
+            .await;
+        let seen = seen.lock().expect("the observed waits lock poisoned");
+        assert_eq!(seen.len(), 3, "three waits, then the refusal");
+        assert!(seen.iter().all(
+            |(kind, delay)| *kind == BackoffKind::RateLimit && *delay == Duration::from_secs(1)
+        ));
+        assert_eq!(client.last_backoff(), Some(BackoffKind::RateLimit));
     }
 
     #[test]

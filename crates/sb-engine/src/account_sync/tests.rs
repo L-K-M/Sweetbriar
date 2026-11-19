@@ -1023,3 +1023,36 @@ fn concurrent_stops_each_end_with_their_own_worker() {
             .unwrap();
     });
 }
+
+/// A retried failure's condition follows what failed (spec/04's
+/// table): any I/O failure, a timeout included, is offline; a server
+/// that answered with something unusable is not answering.
+#[test]
+fn a_retried_failure_shows_offline_for_io_and_not_answering_otherwise() {
+    use std::io::ErrorKind;
+
+    use sb_resources::ImapError;
+
+    use crate::account_health::LiveCondition;
+
+    for kind in [
+        ErrorKind::ConnectionRefused,
+        ErrorKind::TimedOut,
+        ErrorKind::ConnectionReset,
+        ErrorKind::NetworkUnreachable,
+    ] {
+        let cause = ImapError::Io {
+            kind,
+            message: "synthetic".to_owned(),
+        };
+        assert_eq!(
+            super::reconnect_condition(&cause, 7),
+            LiveCondition::Offline { next_retry_ms: 7 },
+            "{kind:?}"
+        );
+    }
+    assert_eq!(
+        super::reconnect_condition(&ImapError::Malformed, 7),
+        LiveCondition::NotAnswering { next_retry_ms: 7 }
+    );
+}

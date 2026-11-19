@@ -161,3 +161,32 @@ fn shutdown_ends_a_waiting_next_and_later_calls() {
         Err(CoreError::Unavailable { .. })
     ));
 }
+
+#[test]
+fn account_health_query_and_subscription_cross_the_boundary() {
+    let core = open(&ScratchDir::new("ffi-account-health"));
+
+    let all = block_on(core.account_health(token())).expect("the health query");
+    assert_eq!(all.len(), 1, "a fresh core holds its local archive");
+    let row = &all[0];
+    assert_eq!(row.state, crate::sidebar::AccountState::Active);
+    assert_eq!(
+        row.condition,
+        crate::account_health::AccountCondition::Healthy
+    );
+    assert_eq!(row.breaker_events, vec![]);
+    assert_eq!(row.last_sync_ms, None);
+    assert_eq!(row.coverage.total_messages, 0);
+
+    let changes = block_on(core.subscribe_account_health(token())).expect("subscribe");
+    let mut next = pin!(changes.next(token()));
+    assert!(
+        next.as_mut()
+            .poll(&mut Context::from_waker(Waker::noop()))
+            .is_pending(),
+        "nothing changed since subscribing"
+    );
+
+    block_on(core.shutdown());
+    assert!(matches!(finish(next), Err(CoreError::Unavailable { .. })));
+}
