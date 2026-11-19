@@ -47,7 +47,11 @@ proton-crypto-account = { version = "=0.20.1", default-features = false, feature
 # Signing the fake server's test modulus with a test key.
 pgp = "=0.21.1"
 rand = "=0.8.6"
-hyper = { version = "=1.12.0", default-features = false, features = ["server", "http1"] }
+hyper = { version = "=1.12.0", default-features = false, features = [
+    "server",
+    "client",
+    "http1",
+] }
 hyper-util = { version = "=0.1.21", default-features = false, features = [
     "server",
     "http1",

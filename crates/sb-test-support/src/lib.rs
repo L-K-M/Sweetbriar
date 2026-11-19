@@ -37,9 +37,10 @@ pub use imap::{Expect, FakeImapServer, ReceivedCommand, Reply, Script, Step};
 pub use imap_cert::{CERT_PEM, KEY_PEM, TlsIo, cert_der, client_stream, client_stream_with};
 pub use imap_profile::{Profile, RAW_UTF8_ENVELOPE};
 pub use proton::{
-    ATTACHMENT_PLAINTEXT, FakeAttachment, FakeLabel, FakeMessage, FakeProtonServer, Fault,
-    KeyFault, MESSAGE_PLAINTEXT, MODULUS_B64, ModulusSignatureVerifier, ModulusVerifyError,
-    RecordedRequest, TestAccount,
+    ATTACHMENT_PLAINTEXT, CLEAR_SCHEME, FakeAttachment, FakeLabel, FakeMessage, FakeProtonServer,
+    Fault, INTERNAL_SCHEME, KeyFault, MESSAGE_PLAINTEXT, MODULUS_B64, ModulusSignatureVerifier,
+    ModulusVerifyError, RecipientKey, RecordedPackage, RecordedRecipient, RecordedRequest,
+    RecordedSend, RecordedSessionKey, TestAccount,
 };
 pub use secret::{FakeSecrets, SecretOp};
 pub use sim::SimFs;
