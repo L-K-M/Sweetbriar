@@ -485,8 +485,8 @@ impl Attempt<'_> {
         }
     }
 
-    /// Move this account's due `held` attempts to `queued` before the
-    /// tick's other work (spec/05 step 2). A write failure is a retry,
+    /// Move due `held` attempts to `queued` at the start of a sync and
+    /// after each poll (spec/05 step 2). A write failure is a retry,
     /// like any other sync write.
     async fn queue_due_held(&self) -> Result<(), Halt> {
         let now = self.worker.resources().now();
@@ -661,6 +661,11 @@ impl Attempt<'_> {
                 Ok(true) => continue,
                 Ok(false) => {}
                 Err(halt) => return halt,
+            }
+            // Each poll also ends the undo windows that passed since
+            // the last one (spec/05 step 2).
+            if let Err(halt) = self.queue_due_held().await {
+                return halt;
             }
             if let Err(halt) = self.drain_bodies().await {
                 return halt;
