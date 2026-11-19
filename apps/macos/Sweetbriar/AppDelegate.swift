@@ -175,6 +175,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         activityWindow?.window?.makeKeyAndOrderFront(nil)
     }
 
+    /// The Activity window holds the old core's model and bridge, so a
+    /// restore or close drops it; Window → Activity builds a new one.
+    private func retireActivityWindow() {
+        activityWindow?.close()
+        activityWindow = nil
+    }
+
     /// spec/07 "Lifecycle": report the app's active state to the core's
     /// workers. A failure is logged, never shown.
     private func observeAppActive() {
@@ -374,6 +381,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// All old-context handles must finish before any replacement pane opens.
     private func archiveRestored() async {
         settingsWindow?.retireEditor()
+        retireActivityWindow()
         await composeCues?.reset()
         await prototypeController?.closeAndAwaitModel()
         prototypeController = nil
@@ -384,6 +392,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func archiveClosed() async {
         settingsWindow?.retireEditor()
+        retireActivityWindow()
         await composeCues?.stopAndWait()
         await prototypeController?.closeAndAwaitModel()
         prototypeController = nil
