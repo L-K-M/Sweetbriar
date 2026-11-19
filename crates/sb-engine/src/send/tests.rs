@@ -109,6 +109,316 @@ fn one(engine: &Engine, statement: &str) -> String {
         .unwrap()
 }
 
+/// Move an attempt to `state`, optionally moving its recipients too.
+fn force(engine: &Engine, attempt_id: &str, state: &str, recipient_state: Option<&str>) {
+    match recipient_state {
+        Some(recipient_state) => sql(
+            engine,
+            &format!(
+                "UPDATE send_attempts SET state = '{state}' WHERE attempt_id = '{attempt_id}';
+                 UPDATE send_recipients SET state = '{recipient_state}'
+                 WHERE attempt_id = '{attempt_id}';"
+            ),
+        ),
+        None => sql(
+            engine,
+            &format!(
+                "UPDATE send_attempts SET state = '{state}' WHERE attempt_id = '{attempt_id}';"
+            ),
+        ),
+    }
+}
+
+#[test]
+fn resolutions_are_exactly_once_and_survive_a_restart() {
+    let (scratch, engine) = scratch_engine("engine-resolve-restart");
+    seed(&engine);
+    let draft = create(&engine);
+    let saved = save(&engine, draft.draft_id(), None);
+    let queued = send(&engine, draft.draft_id(), saved.revision_id()).unwrap();
+    let attempt_id = queued.attempt_id().to_owned();
+    force(&engine, &attempt_id, "outcome_unknown", Some("unknown"));
+    assert_eq!(
+        count(
+            &engine,
+            &format!(
+                "SELECT count(*) FROM send_recipients WHERE attempt_id='{attempt_id}' AND state='unknown'"
+            )
+        ),
+        1
+    );
+    let key = engine.new_idempotency_key();
+    let resolved =
+        block_on(engine.resolve_unknown_send(&key, &attempt_id, UnknownResolution::MarkedSent))
+            .unwrap();
+    assert_eq!(resolved.resolution(), UnknownResolution::MarkedSent);
+    assert_eq!(resolved.receipt().command(), "resolve_unknown_send");
+    assert_eq!(
+        block_on(engine.draft(draft.draft_id())).unwrap().state,
+        DraftState::Sent
+    );
+    assert_eq!(
+        count(
+            &engine,
+            &format!(
+                "SELECT count(*) FROM send_recipients WHERE attempt_id='{attempt_id}' AND state='sent'"
+            )
+        ),
+        1
+    );
+    let error = block_on(engine.resolve_unknown_send(
+        &engine.new_idempotency_key(),
+        &attempt_id,
+        UnknownResolution::KeptAsDraft,
+    ))
+    .unwrap_err();
+    assert!(matches!(error, EngineError::Conflict { .. }), "{error:?}");
+    block_on(engine.shutdown()).unwrap();
+    let engine = block_on(Engine::open(scratch.path().join("store"))).unwrap();
+    let replayed =
+        block_on(engine.resolve_unknown_send(&key, &attempt_id, UnknownResolution::KeptAsDraft))
+            .unwrap();
+    assert_eq!(replayed.resolution(), UnknownResolution::MarkedSent);
+    assert_eq!(
+        replayed.receipt().result_json(),
+        resolved.receipt().result_json()
+    );
+    assert_eq!(count(&engine, "SELECT count(*) FROM send_attempts"), 1);
+    block_on(engine.shutdown()).unwrap();
+}
+
+#[test]
+fn send_again_reuses_the_frozen_bytes_and_blocks_discard() {
+    let (_scratch, engine) = scratch_engine("engine-send-again");
+    seed(&engine);
+    let draft = create(&engine);
+    let saved = save(&engine, draft.draft_id(), None);
+    let draft_id = draft.draft_id().to_owned();
+    let queued = send(&engine, &draft_id, saved.revision_id()).unwrap();
+    let attempt_id = queued.attempt_id().to_owned();
+    force(&engine, &attempt_id, "outcome_unknown", Some("unknown"));
+    let key = engine.new_idempotency_key();
+    let resolved =
+        block_on(engine.resolve_unknown_send(&key, &attempt_id, UnknownResolution::SendAgain))
+            .unwrap();
+    let new_attempt = resolved
+        .new_attempt_id()
+        .expect("send again names its attempt")
+        .to_owned();
+    assert_eq!(
+        count(
+            &engine,
+            &format!(
+                "SELECT count(*) FROM send_attempts o JOIN send_attempts n
+            ON n.attempt_id='{new_attempt}' WHERE o.attempt_id='{attempt_id}'
+            AND o.mime_sha256=n.mime_sha256 AND o.message_id_header=n.message_id_header"
+            )
+        ),
+        1
+    );
+    assert_eq!(
+        block_on(engine.draft(&draft_id)).unwrap().state,
+        DraftState::Queued
+    );
+    let error =
+        block_on(engine.discard_draft(&engine.new_idempotency_key(), &draft_id)).unwrap_err();
+    assert!(matches!(error, EngineError::Conflict { .. }), "{error:?}");
+    cancel(&engine, &new_attempt).unwrap();
+    block_on(engine.discard_draft(&engine.new_idempotency_key(), &draft_id)).unwrap();
+    let replayed =
+        block_on(engine.resolve_unknown_send(&key, &attempt_id, UnknownResolution::MarkedSent))
+            .unwrap();
+    assert_eq!(replayed.resolution(), UnknownResolution::SendAgain);
+    assert_eq!(replayed.new_attempt_id(), Some(new_attempt.as_str()));
+    block_on(engine.shutdown()).unwrap();
+}
+
+#[test]
+fn keep_as_draft_returns_the_draft_and_allows_a_discard() {
+    let (_scratch, engine) = scratch_engine("engine-keep-as-draft");
+    seed(&engine);
+    let draft = create(&engine);
+    let saved = save(&engine, draft.draft_id(), None);
+    let draft_id = draft.draft_id().to_owned();
+    let queued = send(&engine, &draft_id, saved.revision_id()).unwrap();
+    force(
+        &engine,
+        queued.attempt_id(),
+        "outcome_unknown",
+        Some("unknown"),
+    );
+    block_on(engine.resolve_unknown_send(
+        &engine.new_idempotency_key(),
+        queued.attempt_id(),
+        UnknownResolution::KeptAsDraft,
+    ))
+    .unwrap();
+    assert_eq!(
+        block_on(engine.draft(&draft_id)).unwrap().state,
+        DraftState::Editing
+    );
+    block_on(engine.discard_draft(&engine.new_idempotency_key(), &draft_id)).unwrap();
+    block_on(engine.shutdown()).unwrap();
+}
+
+/// Queue R1, force its unknown outcome, then save and queue R2.
+fn queued_r2() -> (ScratchDir, Engine, String, String, String) {
+    let (scratch, engine) = scratch_engine("engine-resolve-r2");
+    seed(&engine);
+    let draft = create(&engine);
+    let draft_id = draft.draft_id().to_owned();
+    let r1 = save(&engine, &draft_id, None);
+    let queued = send(&engine, &draft_id, r1.revision_id()).unwrap();
+    let r1_attempt = queued.attempt_id().to_owned();
+    force(&engine, &r1_attempt, "outcome_unknown", Some("unknown"));
+    let r2 = save(&engine, &draft_id, Some(r1.revision_id()));
+    let queued2 = send(&engine, &draft_id, r2.revision_id()).unwrap();
+    (
+        scratch,
+        engine,
+        draft_id,
+        r1_attempt,
+        queued2.attempt_id().to_owned(),
+    )
+}
+
+#[test]
+fn a_queued_newer_revision_is_untouched_by_every_resolution() {
+    for resolution in [
+        UnknownResolution::MarkedSent,
+        UnknownResolution::KeptAsDraft,
+        UnknownResolution::SendAgain,
+    ] {
+        let (_scratch, engine, draft_id, r1_attempt, r2_attempt) = queued_r2();
+        let resolved = block_on(engine.resolve_unknown_send(
+            &engine.new_idempotency_key(),
+            &r1_attempt,
+            resolution,
+        ))
+        .unwrap();
+        assert_eq!(
+            one(
+                &engine,
+                &format!("SELECT state FROM send_attempts WHERE attempt_id='{r2_attempt}'")
+            ),
+            "held",
+            "{resolution:?} must leave R2 alone"
+        );
+        assert_eq!(
+            block_on(engine.draft(&draft_id)).unwrap().state,
+            DraftState::Queued
+        );
+        assert_eq!(
+            resolved.new_attempt_id().is_some(),
+            resolution == UnknownResolution::SendAgain
+        );
+        block_on(engine.shutdown()).unwrap();
+    }
+}
+
+#[test]
+fn cross_account_ack_is_required_and_bound_to_the_revision() {
+    let (_scratch, engine) = scratch_engine("engine-cross-account");
+    seed(&engine);
+    sql(
+        &engine,
+        r#"INSERT INTO accounts (account_id, kind, provider, display_name, state, sort_order, created_at) VALUES ('acct-2', 'proton', 'proton_api', 'Other', 'active', 2, 0);
+         INSERT INTO identities (identity_id, account_id, email, display_name, is_default, sendable) VALUES ('ident-2', 'acct-2', 'other@example.test', 'Other', 1, 'validated');
+         INSERT INTO mailboxes (mailbox_id, account_id, remote_name, kind, selectable, sync_state) VALUES (7, 'acct-2', 'Inbox', 'folder', 1, 'synced');
+         INSERT INTO logical_messages (message_id, account_id, created_at) VALUES (9, 'acct-2', 0);
+         INSERT INTO occurrences (occurrence_id, account_id, mailbox_id, message_id, first_seen_at, last_seen_at, state) VALUES (11, 'acct-2', 7, 9, 0, 0, 'present');"#,
+    );
+    let draft = block_on(engine.create_draft(
+        &engine.new_idempotency_key(),
+        DraftSource::Reply { occurrence_id: 11 },
+    ))
+    .unwrap();
+    let draft_id = draft.draft_id().to_owned();
+    let saved = save(&engine, &draft_id, None);
+    let revision = saved.revision_id().to_owned();
+    let base = content("hello");
+    let ack = crate::cross_account_ack("ident-1", &base.to, &base.cc, &base.bcc);
+    let error =
+        block_on(engine.send_draft(&engine.new_idempotency_key(), &draft_id, &revision, &[]))
+            .unwrap_err();
+    assert!(
+        matches!(&error, EngineError::Conflict { detail } if detail.contains("cross_account")),
+        "{error:?}"
+    );
+    block_on(engine.send_draft(
+        &engine.new_idempotency_key(),
+        &draft_id,
+        &revision,
+        std::slice::from_ref(&ack),
+    ))
+    .unwrap();
+    let mut edited = content("hello again");
+    edited.to.push(DraftRecipient {
+        address: "second@example.test".to_owned(),
+        name: None,
+    });
+    let edited_ack = crate::cross_account_ack("ident-1", &edited.to, &edited.cc, &edited.bcc);
+    let saved2 = block_on(engine.save_draft(
+        &engine.new_idempotency_key(),
+        &draft_id,
+        Some(&revision),
+        edited,
+    ))
+    .unwrap();
+    let revision2 = saved2.revision_id().to_owned();
+    let error = block_on(engine.send_draft(
+        &engine.new_idempotency_key(),
+        &draft_id,
+        &revision2,
+        std::slice::from_ref(&ack),
+    ))
+    .unwrap_err();
+    assert!(matches!(error, EngineError::Conflict { .. }), "{error:?}");
+    block_on(engine.send_draft(
+        &engine.new_idempotency_key(),
+        &draft_id,
+        &revision2,
+        std::slice::from_ref(&edited_ack),
+    ))
+    .unwrap();
+    block_on(engine.shutdown()).unwrap();
+}
+
+#[test]
+fn confirm_send_route_and_retry_conflict() {
+    let (_scratch, engine) = scratch_engine("engine-confirm-route");
+    seed(&engine);
+    let draft = create(&engine);
+    let saved = save(&engine, draft.draft_id(), None);
+    let queued = send(&engine, draft.draft_id(), saved.revision_id()).unwrap();
+    let attempt_id = queued.attempt_id().to_owned();
+    force(&engine, &attempt_id, "queued", None);
+    sql(
+        &engine,
+        "UPDATE accounts SET config_generation = 2 WHERE account_id = 'acct-1';",
+    );
+    block_on(engine.confirm_send_route(&engine.new_idempotency_key(), &attempt_id)).unwrap();
+    assert_eq!(
+        count(
+            &engine,
+            &format!("SELECT config_generation FROM send_attempts WHERE attempt_id='{attempt_id}'")
+        ),
+        2
+    );
+    sql(
+        &engine,
+        "UPDATE identities SET sendable = 'unavailable' WHERE identity_id = 'ident-1';",
+    );
+    let error = block_on(engine.confirm_send_route(&engine.new_idempotency_key(), &attempt_id))
+        .unwrap_err();
+    assert!(matches!(error, EngineError::Conflict { .. }), "{error:?}");
+    let error =
+        block_on(engine.retry_rejected_recipients(&engine.new_idempotency_key(), &attempt_id))
+            .unwrap_err();
+    assert!(matches!(error, EngineError::Conflict { .. }), "{error:?}");
+    assert_eq!(count(&engine, "SELECT count(*) FROM send_attempts"), 1);
+    block_on(engine.shutdown()).unwrap();
+}
 #[test]
 fn send_queues_cancels_and_freezes_the_mime() {
     let (scratch, engine) = scratch_engine("engine-send-queue");

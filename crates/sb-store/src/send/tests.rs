@@ -451,3 +451,284 @@ fn the_route_snapshot_refusal_is_the_schema() {
         .is_err());
     raw.close().unwrap();
 }
+/// Queue the seed revision as attempt `a1`.
+fn queue(store: &Store) {
+    let object = publish(store);
+    let queued = attempt(&object);
+    let published = Arc::clone(&object);
+    writing(store, move |tx| {
+        send_draft(tx, &queued, &published, 7, now())
+    });
+}
+
+/// Move an attempt to `state`, optionally moving its recipients too.
+fn force(store: &Store, attempt: &str, state: &str, recipient_state: Option<&str>) {
+    let statement = match recipient_state {
+        Some(recipient_state) => format!(
+            "UPDATE send_attempts SET state = '{state}' WHERE attempt_id = '{attempt}';
+             UPDATE send_recipients SET state = '{recipient_state}' WHERE attempt_id = '{attempt}';"
+        ),
+        None => {
+            format!("UPDATE send_attempts SET state = '{state}' WHERE attempt_id = '{attempt}';")
+        }
+    };
+    writing(store, move |tx| {
+        tx.execute_batch(&statement)
+            .map_err(|e| StoreError::internal(e.to_string()))?;
+        Ok(())
+    });
+}
+
+fn one(store: &Store, statement: &str) -> String {
+    let statement = statement.to_owned();
+    reading(store, move |tx| {
+        tx.query_row(&statement, [], |row| row.get(0))
+            .map_err(|e| StoreError::internal(e.to_string()))
+    })
+}
+
+fn one_i64(store: &Store, statement: &str) -> i64 {
+    let statement = statement.to_owned();
+    reading(store, move |tx| {
+        tx.query_row(&statement, [], |row| row.get(0))
+            .map_err(|e| StoreError::internal(e.to_string()))
+    })
+}
+
+#[test]
+fn marked_sent_moves_unknown_recipients_and_counts_them_once() {
+    let (_scratch, _paths, store) = scratch();
+    seed(&store);
+    writing(&store, |tx| {
+        tx.execute(
+            "INSERT INTO seen_addresses (canonical, email, display_name, last_seen_at,
+                times_sent_to, times_received, last_account_id)
+             VALUES ('a@x.net', 'old@x.net', 'Old', 5, 4, 2, NULL)",
+            [],
+        )
+        .map_err(|e| StoreError::internal(e.to_string()))?;
+        Ok(())
+    });
+    queue(&store);
+    force(&store, "a1", "outcome_unknown", Some("unknown"));
+    writing(&store, |tx| {
+        resolve_unknown_send(tx, "a1", UnknownResolution::MarkedSent, None, 0, now())
+    });
+    assert_eq!(
+        one(
+            &store,
+            "SELECT resolution FROM send_attempts WHERE attempt_id = 'a1'"
+        ),
+        "marked_sent"
+    );
+    assert_eq!(
+        one(&store, "SELECT state FROM drafts WHERE draft_id = 'd1'"),
+        "sent"
+    );
+    assert_eq!(
+        one_i64(
+            &store,
+            "SELECT count(*) FROM send_recipients WHERE attempt_id = 'a1' AND state = 'sent'"
+        ),
+        2
+    );
+    assert_eq!(
+        one_i64(
+            &store,
+            "SELECT count(*) FROM send_recipients WHERE attempt_id = 'a1' AND state = 'unknown'"
+        ),
+        0
+    );
+    assert_eq!(
+        one(
+            &store,
+            "SELECT email || '|' || coalesce(display_name, '') || '|' || last_seen_at || '|' || times_sent_to || '|' || last_account_id FROM seen_addresses WHERE canonical = 'a@x.net'"
+        ),
+        "old@x.net|Old|5|5|acct"
+    );
+    assert_eq!(
+        one(
+            &store,
+            "SELECT email || '|' || coalesce(display_name, '') || '|' || last_seen_at || '|' || times_sent_to || '|' || last_account_id FROM seen_addresses WHERE canonical = 'b@y.net'"
+        ),
+        format!("b@Y.NET||{}|1|acct", now().as_millis())
+    );
+    let error = block_on(store.write(WritePriority::User, |tx| {
+        resolve_unknown_send(tx, "a1", UnknownResolution::KeptAsDraft, None, 0, now())
+    }))
+    .unwrap_err();
+    assert!(matches!(error, StoreError::Conflict { .. }), "{error:?}");
+    store.close().unwrap();
+}
+
+#[test]
+fn kept_as_draft_and_send_again_move_the_draft() {
+    let (_scratch, _paths, store) = scratch();
+    seed(&store);
+    queue(&store);
+    force(&store, "a1", "outcome_unknown", Some("unknown"));
+    writing(&store, |tx| {
+        resolve_unknown_send(tx, "a1", UnknownResolution::KeptAsDraft, None, 0, now())
+    });
+    assert_eq!(
+        one(&store, "SELECT state FROM drafts WHERE draft_id = 'd1'"),
+        "editing"
+    );
+    store.close().unwrap();
+
+    let (_scratch, _paths, store) = scratch();
+    seed(&store);
+    queue(&store);
+    force(&store, "a1", "outcome_unknown", Some("unknown"));
+    writing(&store, |tx| {
+        let created =
+            resolve_unknown_send(tx, "a1", UnknownResolution::SendAgain, Some("a2"), 7, now());
+        assert_eq!(created?.as_deref(), Some("a2"));
+        Ok(())
+    });
+    assert_eq!(
+        one(
+            &store,
+            "SELECT state FROM send_attempts WHERE attempt_id = 'a2'"
+        ),
+        "held"
+    );
+    assert_eq!(
+        one_i64(
+            &store,
+            "SELECT hold_until FROM send_attempts WHERE attempt_id = 'a2'"
+        ),
+        now().as_millis() + 7_000
+    );
+    assert_eq!(
+        one(
+            &store,
+            "SELECT resolution FROM send_attempts WHERE attempt_id = 'a1'"
+        ),
+        "send_again"
+    );
+    assert_eq!(
+        one(&store, "SELECT state FROM drafts WHERE draft_id = 'd1'"),
+        "queued"
+    );
+    assert_eq!(
+        one_i64(
+            &store,
+            "SELECT count(*) FROM send_attempts o JOIN send_attempts n
+            ON n.attempt_id = 'a2' WHERE o.attempt_id = 'a1'
+            AND o.mime_sha256 = n.mime_sha256 AND o.message_id_header = n.message_id_header"
+        ),
+        1
+    );
+    assert_eq!(
+        one(
+            &store,
+            "SELECT group_concat(canonical || '|' || address || '|' || state, ',') FROM (SELECT canonical, address, state FROM send_recipients WHERE attempt_id = 'a2' ORDER BY canonical)"
+        ),
+        "a@x.net|a@X.NET|pending,b@y.net|b@Y.NET|pending"
+    );
+    store.close().unwrap();
+}
+
+#[test]
+fn a_resolution_changes_only_the_current_revision() {
+    let (_scratch, _paths, store) = scratch();
+    seed(&store);
+    queue(&store);
+    force(&store, "a1", "outcome_unknown", Some("unknown"));
+    save_second_revision(&store);
+    let object = publish(&store);
+    let queued = SendAttempt {
+        attempt_id: "a2".to_owned(),
+        revision_id: "r2".to_owned(),
+        ..attempt(&object)
+    };
+    let published = Arc::clone(&object);
+    writing(&store, move |tx| {
+        send_draft(tx, &queued, &published, 7, now())
+    });
+    writing(&store, |tx| {
+        resolve_unknown_send(tx, "a1", UnknownResolution::MarkedSent, None, 0, now())
+    });
+    assert_eq!(
+        one(
+            &store,
+            "SELECT state FROM send_attempts WHERE attempt_id = 'a2'"
+        ),
+        "held"
+    );
+    assert_eq!(
+        one(&store, "SELECT state FROM drafts WHERE draft_id = 'd1'"),
+        "queued"
+    );
+    assert_eq!(
+        one(
+            &store,
+            "SELECT resolution FROM send_attempts WHERE attempt_id = 'a1'"
+        ),
+        "marked_sent"
+    );
+    store.close().unwrap();
+}
+
+#[test]
+fn confirm_send_route_adopts_the_generation_and_refuses_unsendable() {
+    let (_scratch, _paths, store) = scratch();
+    seed(&store);
+    queue(&store);
+    let error = block_on(store.write(WritePriority::User, |tx| {
+        confirm_send_route(tx, "a1", now())
+    }))
+    .unwrap_err();
+    assert!(matches!(error, StoreError::Conflict { .. }), "{error:?}");
+    force(&store, "a1", "queued", None);
+    writing(&store, |tx| {
+        tx.execute(
+            "UPDATE accounts SET config_generation = 2 WHERE account_id = 'acct'",
+            [],
+        )
+        .map_err(|e| StoreError::internal(e.to_string()))?;
+        Ok(())
+    });
+    writing(&store, |tx| confirm_send_route(tx, "a1", now()));
+    assert_eq!(
+        one_i64(
+            &store,
+            "SELECT config_generation FROM send_attempts WHERE attempt_id = 'a1'"
+        ),
+        2
+    );
+    writing(&store, |tx| {
+        tx.execute(
+            "UPDATE identities SET sendable = 'unavailable' WHERE identity_id = 'id'",
+            [],
+        )
+        .map_err(|e| StoreError::internal(e.to_string()))?;
+        Ok(())
+    });
+    let error = block_on(store.write(WritePriority::User, |tx| {
+        confirm_send_route(tx, "a1", now())
+    }))
+    .unwrap_err();
+    assert!(matches!(error, StoreError::Conflict { .. }), "{error:?}");
+    let error = block_on(store.write(WritePriority::User, |tx| {
+        confirm_send_route(tx, "missing", now())
+    }))
+    .unwrap_err();
+    assert!(matches!(error, StoreError::NotFound { .. }), "{error:?}");
+    store.close().unwrap();
+}
+
+#[test]
+fn retry_rejected_recipients_conflicts_for_proton() {
+    let (_scratch, _paths, store) = scratch();
+    seed(&store);
+    queue(&store);
+    let error = block_on(store.write(WritePriority::User, |tx| {
+        retry_rejected_recipients(tx, "a1")
+    }))
+    .unwrap_err();
+    assert!(matches!(error, StoreError::Conflict { .. }), "{error:?}");
+    assert_eq!(one_i64(&store, "SELECT count(*) FROM send_attempts"), 1);
+    store.close().unwrap();
+}

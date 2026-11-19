@@ -103,6 +103,7 @@ pub use import::{
 pub use rebuild::SearchRebuildStarted;
 pub use sb_resources::ParseCode as SearchParseCode;
 pub use sb_resources::QualifiedStage;
+pub use sb_resources::UnknownResolution;
 pub use sb_resources::{
     BackupGeneration, BackupGenerationState, FAILED_GENERATIONS_LISTED, GenerationVerdict,
     GenerationVerification,
@@ -114,7 +115,7 @@ pub use sb_resources::{
 pub use sb_resources::{ExportFormat, ExportJobState};
 pub use sb_resources::{RestoreArtifact, RestoreArtifactKind};
 pub use search::SearchScope;
-pub use send::SendQueued;
+pub use send::{ResolvedUnknown, SendQueued};
 pub use settings::Setting;
 pub use tags::MessageSelection;
 pub use views::SavedViewParams;

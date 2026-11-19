@@ -206,6 +206,10 @@ inspectable Out Box. Unknown outcomes are never retried automatically.
   recipients `unknown` then `sent`, the cross-account ack, "Send
   again"'s frozen bytes, `confirm_send_route`, a reconfiguration
   keeping the attempt `queued`, and `retry_rejected_recipients`.
+- **Split (2026-11-19):** everything but `out_box()` measured 1,441
+  changed lines, so it lands as two PRs. M4.3b1 is the resolutions,
+  the route confirmation, the retry refusal and the cross-account ack;
+  M4.3b2 adds `out_box()` with the reconfiguration bullet.
 
 #### M4.3c Fake server send calls — linux
 

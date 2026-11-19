@@ -108,7 +108,10 @@ pub use receipts::{
     Receipt, encode_job_receipt, receipt_generation_id, receipt_job_id, replay, run_once,
 };
 pub use restore_artifacts::{RestoreArtifact, RestoreArtifactKind};
-pub use send::{SendAttempt, cancel_send, reply_headers, send_draft};
+pub use send::{
+    SendAttempt, UnknownResolution, cancel_send, confirm_send_route, reply_headers,
+    reply_source_account, resolve_unknown_send, retry_rejected_recipients, send_draft,
+};
 pub use settings::{StoredSetting, read_all, upsert};
 pub use source_snapshots::{ImportSourceCapture, ImportSourceSnapshot};
 pub use store::SwapRestoreError;

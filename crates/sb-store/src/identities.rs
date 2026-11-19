@@ -351,7 +351,7 @@ fn require_account(tx: &Transaction, account_id: &str) -> Result<(), StoreError>
     }
 }
 
-fn account_kind(kind: &str) -> Result<AccountKind, StoreError> {
+pub(crate) fn account_kind(kind: &str) -> Result<AccountKind, StoreError> {
     match kind {
         "local" => Ok(AccountKind::Local),
         "imap" => Ok(AccountKind::Imap),

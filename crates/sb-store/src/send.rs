@@ -1,7 +1,9 @@
-//! Sending (spec/02 "Sending", spec/05 "Outbox state machine"):
-//! the `send_draft` queue insert and the `cancel_send` transition,
-//! each in one transaction, plus the reply headers a compose reads.
-//! The schema is migration 1's with migration 34's Proton columns.
+//! Sending (spec/02 "Sending", spec/05 "Outbox state machine",
+//! spec/07 "Commands"): the `send_draft` queue insert, the
+//! `cancel_send` transition, the `outcome_unknown` resolutions, the
+//! route confirmation and the cross-account source read, each in one
+//! transaction where it writes. The schema is migration 1's with
+//! migration 34's Proton columns.
 
 use std::collections::HashSet;
 
@@ -9,10 +11,44 @@ use rusqlite::{OptionalExtension, Transaction, params};
 use sb_types::time::Timestamp;
 
 use crate::StoreError;
+use crate::accounts::IdentitySendable;
 use crate::drafts::{DraftRecipient, DraftState};
+use crate::identities::account_kind;
 use crate::objects::{PublishedObject, ReservationRelease, release_reservation};
 use crate::query::AddressOperand;
 use crate::schema::classify;
+use crate::sidebar::AccountKind;
+
+/// The user's answer to an `outcome_unknown` attempt (spec/05 step 6).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UnknownResolution {
+    MarkedSent,
+    SendAgain,
+    KeptAsDraft,
+}
+
+impl UnknownResolution {
+    /// The stored word (spec/02 `send_attempts.resolution`).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::MarkedSent => "marked_sent",
+            Self::SendAgain => "send_again",
+            Self::KeptAsDraft => "kept_as_draft",
+        }
+    }
+
+    /// Parse a stored resolution word.
+    pub fn from_stored(name: &str) -> Result<Self, StoreError> {
+        match name {
+            "marked_sent" => Ok(Self::MarkedSent),
+            "send_again" => Ok(Self::SendAgain),
+            "kept_as_draft" => Ok(Self::KeptAsDraft),
+            _ => Err(StoreError::corrupt(format!(
+                "a send attempt's resolution is '{name}'"
+            ))),
+        }
+    }
+}
 
 /// One `send_draft`'s frozen attempt: the route and envelope the
 /// engine composed, and the recipients exactly as the revision stored
@@ -309,6 +345,326 @@ pub fn cancel_send(tx: &Transaction, attempt_id: &str, now: Timestamp) -> Result
     )
     .map_err(|e| classify(e, "return a draft to editing"))?;
     Ok(())
+}
+
+/// Move a draft's state only while the attempt's revision is still its
+/// current one (spec/02, 05): a newer revision keeps its own state.
+fn set_draft_state(
+    tx: &Transaction,
+    draft_id: &str,
+    revision_id: &str,
+    state: &str,
+    now_ms: i64,
+) -> Result<(), StoreError> {
+    tx.execute(
+        "UPDATE drafts SET state = ?3, updated_at = ?4
+         WHERE draft_id = ?1 AND current_revision_id = ?2",
+        params![draft_id, revision_id, state, now_ms],
+    )
+    .map_err(|e| classify(e, "move a draft's state"))?;
+    Ok(())
+}
+
+/// Count each recipient that becomes `sent` in `seen_addresses`
+/// (spec/02): insert the canonical row with the attempt's spelling and
+/// now when absent, otherwise add one and keep the stored observation.
+fn add_sent_to_counts(
+    tx: &Transaction,
+    recipients: &[(String, String)],
+    account_id: &str,
+    now_ms: i64,
+) -> Result<(), StoreError> {
+    for (canonical, address) in recipients {
+        tx.execute(
+            "INSERT INTO seen_addresses
+               (canonical, email, display_name, last_seen_at, times_sent_to,
+                times_received, last_account_id)
+             VALUES (?1, ?2, NULL, ?3, 1, 0, ?4)
+             ON CONFLICT(canonical) DO UPDATE SET
+               times_sent_to = times_sent_to + 1,
+               last_account_id = excluded.last_account_id",
+            params![canonical, address, now_ms, account_id],
+        )
+        .map_err(|e| classify(e, "count a sent-to address"))?;
+    }
+    Ok(())
+}
+
+/// `resolve_unknown_send(attempt_id, resolution)` (spec/05 step 6):
+/// record the user's answer on an unresolved `outcome_unknown`
+/// attempt, exactly once. `marked_sent` moves its `unknown`
+/// recipients to `sent`, counts them and sets the draft `sent`;
+/// `kept_as_draft` returns the draft to `editing`; `send_again`
+/// re-queues the frozen bytes. A second resolution is `Conflict`.
+pub fn resolve_unknown_send(
+    tx: &Transaction,
+    attempt_id: &str,
+    resolution: UnknownResolution,
+    new_attempt_id: Option<&str>,
+    undo_seconds: i64,
+    now: Timestamp,
+) -> Result<Option<String>, StoreError> {
+    let err = |e| classify(e, "resolve an unknown send");
+    let row = tx
+        .query_row(
+            "SELECT draft_id, revision_id, account_id, identity_id, mime_sha256,
+                    message_id_header, envelope_from, state, resolution
+             FROM send_attempts WHERE attempt_id = ?1",
+            params![attempt_id],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, String>(5)?,
+                    row.get::<_, String>(6)?,
+                    row.get::<_, String>(7)?,
+                    row.get::<_, Option<String>>(8)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(err)?
+        .ok_or_else(|| StoreError::not_found(format!("send attempt {attempt_id}")))?;
+    let (
+        draft_id,
+        revision_id,
+        account_id,
+        identity_id,
+        mime_sha256,
+        message_id_header,
+        envelope_from,
+        state,
+        stored_resolution,
+    ) = row;
+    if state != "outcome_unknown" {
+        return Err(StoreError::conflict(format!(
+            "a send attempt in state {state} has no unknown outcome to resolve"
+        )));
+    }
+    if stored_resolution.is_some() {
+        return Err(StoreError::conflict(format!(
+            "send attempt {attempt_id} is already resolved"
+        )));
+    }
+    let now_ms = now.as_millis();
+    // The resolution commits first: the attempt becomes history even
+    // when a newer revision keeps the draft's state.
+    let resolved = tx
+        .execute(
+            "UPDATE send_attempts SET resolution = ?2, resolved_at = ?3, updated_at = ?3
+             WHERE attempt_id = ?1 AND state = 'outcome_unknown' AND resolution IS NULL",
+            params![attempt_id, resolution.as_str(), now_ms],
+        )
+        .map_err(err)?;
+    if resolved == 0 {
+        return Err(StoreError::conflict(format!(
+            "send attempt {attempt_id} is no longer unresolved"
+        )));
+    }
+    let created = match resolution {
+        UnknownResolution::MarkedSent => {
+            let unknown: Vec<(String, String)> = {
+                let mut statement = tx
+                    .prepare(
+                        "SELECT canonical, address FROM send_recipients
+                         WHERE attempt_id = ?1 AND state = 'unknown'",
+                    )
+                    .map_err(err)?;
+                let rows = statement
+                    .query_map(params![attempt_id], |row| Ok((row.get(0)?, row.get(1)?)))
+                    .map_err(err)?;
+                rows.collect::<Result<_, _>>().map_err(err)?
+            };
+            tx.execute(
+                "UPDATE send_recipients SET state = 'sent'
+                 WHERE attempt_id = ?1 AND state = 'unknown'",
+                params![attempt_id],
+            )
+            .map_err(err)?;
+            add_sent_to_counts(tx, &unknown, &account_id, now_ms)?;
+            set_draft_state(tx, &draft_id, &revision_id, "sent", now_ms)?;
+            None
+        }
+        UnknownResolution::KeptAsDraft => {
+            set_draft_state(tx, &draft_id, &revision_id, "editing", now_ms)?;
+            None
+        }
+        UnknownResolution::SendAgain => {
+            let new_attempt_id = new_attempt_id.ok_or_else(|| {
+                StoreError::internal("resolving as send again needs a new attempt id")
+            })?;
+            if undo_seconds <= 0 {
+                return Err(StoreError::InvalidInput {
+                    message: "the undo-send window must be positive".to_owned(),
+                });
+            }
+            let (provider, config_generation): (String, i64) = tx
+                .query_row(
+                    "SELECT provider, config_generation FROM accounts WHERE account_id = ?1",
+                    params![account_id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .map_err(err)?;
+            let sent_copy = if provider == "proton_api" {
+                "server_saves"
+            } else {
+                "pending"
+            };
+            let hold_until = now_ms
+                .checked_add(
+                    undo_seconds
+                        .checked_mul(1000)
+                        .ok_or_else(|| StoreError::internal("the undo-send window overflows"))?,
+                )
+                .ok_or_else(|| StoreError::internal("the hold_until timestamp overflows"))?;
+            tx.execute(
+                "INSERT INTO send_attempts (attempt_id, draft_id, revision_id, account_id,
+                    config_generation, identity_id, mime_sha256, message_id_header,
+                    envelope_from, state, hold_until, sent_copy, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'held', ?10, ?11, ?12, ?12)",
+                params![
+                    new_attempt_id,
+                    draft_id,
+                    revision_id,
+                    account_id,
+                    config_generation,
+                    identity_id,
+                    mime_sha256,
+                    message_id_header,
+                    envelope_from,
+                    hold_until,
+                    sent_copy,
+                    now_ms
+                ],
+            )
+            .map_err(err)?;
+            // The frozen recipients start over as pending; the old
+            // attempt's rows stay as its history.
+            tx.execute(
+                "INSERT INTO send_recipients (attempt_id, canonical, address, kind, state)
+                 SELECT ?1, canonical, address, kind, 'pending'
+                 FROM send_recipients WHERE attempt_id = ?2",
+                params![new_attempt_id, attempt_id],
+            )
+            .map_err(err)?;
+            set_draft_state(tx, &draft_id, &revision_id, "queued", now_ms)?;
+            Some(new_attempt_id.to_owned())
+        }
+    };
+    Ok(created)
+}
+
+/// `confirm_send_route(attempt_id)` (spec/05 step 3): a `queued`
+/// attempt adopts the account's current generation; an unsendable
+/// identity or any other state is `Conflict`.
+pub fn confirm_send_route(
+    tx: &Transaction,
+    attempt_id: &str,
+    now: Timestamp,
+) -> Result<(), StoreError> {
+    let err = |e| classify(e, "confirm a send route");
+    let (account_id, identity_id, state): (String, String, String) = tx
+        .query_row(
+            "SELECT account_id, identity_id, state FROM send_attempts WHERE attempt_id = ?1",
+            params![attempt_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .optional()
+        .map_err(err)?
+        .ok_or_else(|| StoreError::not_found(format!("send attempt {attempt_id}")))?;
+    if state != "queued" {
+        return Err(StoreError::conflict(format!(
+            "a send attempt in state {state} waits for no route confirmation"
+        )));
+    }
+    let (sendable, kind): (String, String) = tx
+        .query_row(
+            "SELECT i.sendable, a.kind FROM identities i
+             JOIN accounts a ON a.account_id = i.account_id
+             WHERE i.identity_id = ?1 AND i.account_id = ?2",
+            params![identity_id, account_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()
+        .map_err(err)?
+        .ok_or_else(|| StoreError::not_found(format!("identity {identity_id}")))?;
+    if account_kind(&kind)? == AccountKind::Local
+        || !IdentitySendable::from_stored(&sendable)?.can_send()
+    {
+        return Err(StoreError::conflict(format!(
+            "identity {identity_id} can no longer send"
+        )));
+    }
+    let config_generation: i64 = tx
+        .query_row(
+            "SELECT config_generation FROM accounts WHERE account_id = ?1",
+            params![account_id],
+            |row| row.get(0),
+        )
+        .map_err(err)?;
+    let confirmed = tx
+        .execute(
+            "UPDATE send_attempts SET config_generation = ?2, updated_at = ?3
+             WHERE attempt_id = ?1 AND state = 'queued'",
+            params![attempt_id, config_generation, now.as_millis()],
+        )
+        .map_err(err)?;
+    if confirmed == 0 {
+        return Err(StoreError::conflict(format!(
+            "send attempt {attempt_id} is no longer queued"
+        )));
+    }
+    Ok(())
+}
+
+/// `retry_rejected_recipients(attempt_id)` (spec/05 step 5): Proton
+/// sends a whole message, so there is no partial acceptance to retry.
+/// An unknown attempt is `NotFound`.
+pub fn retry_rejected_recipients(tx: &Transaction, attempt_id: &str) -> Result<(), StoreError> {
+    let err = |e| classify(e, "retry rejected recipients");
+    let provider: String = tx
+        .query_row(
+            "SELECT a.provider FROM send_attempts s
+             JOIN accounts a ON a.account_id = s.account_id
+             WHERE s.attempt_id = ?1",
+            params![attempt_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(err)?
+        .ok_or_else(|| StoreError::not_found(format!("send attempt {attempt_id}")))?;
+    if provider == "proton_api" {
+        return Err(StoreError::conflict(
+            "a Proton attempt has no partially accepted recipients to retry",
+        ));
+    }
+    Err(StoreError::conflict(
+        "retrying rejected recipients is not supported for this account yet",
+    ))
+}
+
+/// The account and kind of a reply's receiving occurrence (spec/05
+/// "Cross-account check"); a missing row is `NotFound`.
+pub fn reply_source_account(
+    tx: &Transaction,
+    occurrence_id: i64,
+) -> Result<(String, AccountKind), StoreError> {
+    let err = |e| classify(e, "read a reply's source account");
+    let (account_id, kind): (String, String) = tx
+        .query_row(
+            "SELECT o.account_id, a.kind FROM occurrences o
+             JOIN accounts a ON a.account_id = o.account_id
+             WHERE o.occurrence_id = ?1",
+            params![occurrence_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()
+        .map_err(err)?
+        .ok_or_else(|| StoreError::not_found(format!("occurrence {occurrence_id}")))?;
+    Ok((account_id, account_kind(&kind)?))
 }
 
 #[cfg(test)]
