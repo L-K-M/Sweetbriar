@@ -299,13 +299,24 @@ impl fmt::Debug for PackageRecipient {
 /// An attachment's upload packets (research `keys-crypto.md` §3): the
 /// key packets and data packet the draft's sender key decrypts, the
 /// detached signature over the raw bytes, and the session key the send
-/// packages carry.
-#[derive(Debug, Clone)]
+/// packages carry. `Debug` redacts the packets (spec/10).
+#[derive(Clone)]
 pub struct EncryptedAttachment {
     pub key_packets: Vec<u8>,
     pub data_packet: Vec<u8>,
     pub signature: Vec<u8>,
     pub session_key: SessionKey,
+}
+
+impl fmt::Debug for EncryptedAttachment {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("EncryptedAttachment")
+            .field("key_packets", &"[redacted]")
+            .field("data_packet", &"[redacted]")
+            .field("signature", &"[redacted]")
+            .field("session_key", &self.session_key)
+            .finish()
+    }
 }
 
 /// Encrypts and signs a draft body to the sender's address key

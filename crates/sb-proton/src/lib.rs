@@ -9,6 +9,7 @@ mod error;
 mod keys;
 mod mail;
 mod send;
+mod send_transport;
 
 pub use auth::{
     AUTH_INFO_PATH, Challenge, FinishedSignIn, HumanVerification, PasswordMode, Session, SignIn,
@@ -32,6 +33,10 @@ pub use send::{
     RECIPIENT_TYPE_INTERNAL, RecipientKeys, RecipientPublicKey, SIGNATURE_DETACHED, SendAttachment,
     SendBody, SendError, SendPackage, SendPackages, SendRecipient, SessionKey, build_packages,
     encrypt_attachment, encrypt_draft_body,
+};
+pub use send_transport::{
+    AttachmentUpload, Draft, DraftAction, DraftAddress, DraftCreate, DraftTemplate, KEYS_PATH,
+    RefusalKind, SendRefusal, SendTransportError, SentMessage, UploadedAttachment,
 };
 // Trust types the layers above name for their transport seam (spec/01
 // rule 3).

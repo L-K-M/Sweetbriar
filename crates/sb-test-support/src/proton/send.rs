@@ -5,7 +5,7 @@
 //! (`keys-crypto.md` §4-5, `mail-sync.md` §4, §7); no Proton or Bridge
 //! code.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::io::{self, Cursor};
 use std::sync::{Arc, Mutex};
 
@@ -61,12 +61,16 @@ pub struct RecordedSessionKey {
     pub algorithm: String,
 }
 
-/// One recipient's entry in a package: its scheme and body key packet.
+/// One recipient's entry in a package: its scheme, body key packet
+/// and attachment key packets (research `keys-crypto.md` §4).
 #[derive(Debug, Clone)]
 pub struct RecordedRecipient {
     pub address: String,
     pub scheme: u8,
     pub body_key_packet: Vec<u8>,
+    /// The attachments' session keys encrypted to the recipient's
+    /// key, by attachment id.
+    pub attachment_key_packets: BTreeMap<String, Vec<u8>>,
 }
 
 /// An internal recipient's unlocked address key, for tests that
@@ -511,6 +515,21 @@ fn record_package(package: &Value) -> RecordedPackage {
                             .and_then(Value::as_str)
                             .unwrap_or_default(),
                     ),
+                    attachment_key_packets: value
+                        .get("AttachmentKeyPackets")
+                        .and_then(Value::as_object)
+                        .map(|packets| {
+                            packets
+                                .iter()
+                                .map(|(id, packet)| {
+                                    (
+                                        id.clone(),
+                                        decode_base64(packet.as_str().unwrap_or_default()),
+                                    )
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default(),
                 })
                 .collect()
         })
