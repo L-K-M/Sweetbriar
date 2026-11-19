@@ -48,6 +48,13 @@ use tokio_rustls::TlsAcceptor;
 use crate::SeededRandom;
 use crate::imap_cert::server_config;
 
+mod send;
+
+pub use send::{
+    CLEAR_SCHEME, INTERNAL_SCHEME, RecipientKey, RecordedPackage, RecordedRecipient, RecordedSend,
+    RecordedSessionKey,
+};
+
 /// Encrypts a message body to the account's primary address key.
 type EncryptBody = Arc<dyn Fn(&[u8]) -> Vec<u8> + Send + Sync>;
 /// Encrypts an attachment, returning its key packets and data packet.
@@ -156,6 +163,9 @@ struct FakeAddress {
     status: u8,
     order: u32,
     keys: Vec<LockedKey>,
+    /// Armored public keys `GET /core/v4/keys` serves for the address
+    /// (research `keys-crypto.md` §5).
+    public_keys: Vec<String>,
 }
 
 /// A label the fake serves (research `mail-sync.md` §1). `kind` is
@@ -264,6 +274,15 @@ pub struct FakeMessage {
     attachments: Vec<FakeAttachment>,
     encrypted_body: Option<String>,
     encrypted_attachments: Vec<(String, Vec<u8>, Vec<u8>)>,
+    /// The subject, sender and recipient lists a server-created draft
+    /// carries (M4.3c); the fixtures keep the defaults below.
+    subject: String,
+    sender: Value,
+    to_list: Vec<Value>,
+    cc_list: Vec<Value>,
+    bcc_list: Vec<Value>,
+    flags: u32,
+    address_id: String,
 }
 
 impl FakeMessage {
@@ -280,6 +299,13 @@ impl FakeMessage {
             attachments: Vec::new(),
             encrypted_body: None,
             encrypted_attachments: Vec::new(),
+            subject: format!("synthetic subject {}", id),
+            sender: json!({"Name": "Sender", "Address": "sender@example.test"}),
+            to_list: Vec::new(),
+            cc_list: Vec::new(),
+            bcc_list: Vec::new(),
+            flags: 1,
+            address_id: "owner-primary".to_owned(),
         }
     }
 
@@ -320,19 +346,19 @@ impl FakeMessage {
     fn to_json(&self) -> Value {
         json!({
             "ID": self.id,
-            "AddressID": "owner-primary",
+            "AddressID": self.address_id,
             "LabelIDs": self.label_ids,
             "ExternalID": format!("<{}@example.test>", self.id),
-            "Subject": format!("synthetic subject {}", self.id),
-            "Sender": {"Name": "Sender", "Address": "sender@example.test"},
-            "ToList": [],
-            "CCList": [],
-            "BCCList": [],
+            "Subject": self.subject,
+            "Sender": self.sender,
+            "ToList": self.to_list,
+            "CCList": self.cc_list,
+            "BCCList": self.bcc_list,
             "ReplyTos": [],
             "Time": self.time,
             "Size": self.body.len(),
             "Unread": self.unread,
-            "Flags": 1,
+            "Flags": self.flags,
             "NumAttachments": self.attachments.len(),
         })
     }
@@ -494,6 +520,9 @@ struct Account {
     /// Encrypts an attachment to the primary address key, returning the
     /// key packets and the data packet.
     encrypt_attachment: EncryptAttachment,
+    /// Unlocked address keys by email, for tests that decrypt as an
+    /// internal recipient (spec/11 M4.3c).
+    recipient_keys: HashMap<String, Arc<dyn send::RecipientKey>>,
     labels: Vec<FakeLabel>,
     messages: Vec<FakeMessage>,
     events: Vec<FakeEvent>,
@@ -567,6 +596,11 @@ struct State {
     counter: u64,
     signed_modulus: String,
     public_key: SignedPublicKey,
+    /// Armored public keys registered for external addresses, so a
+    /// client's "external with keys" refusal can be tested (M4.3c).
+    external_keys: HashMap<String, Vec<String>>,
+    /// Every applied send, in order, with the packages it carried.
+    recorded_sends: Vec<send::RecordedSend>,
     /// The fake's own page-size cap; the transport clamps to the same
     /// 150 (research `mail-sync.md` §3).
     max_page_size: u32,
@@ -608,6 +642,8 @@ impl FakeProtonServer {
             counter: 0,
             signed_modulus,
             public_key,
+            external_keys: HashMap::new(),
+            recorded_sends: Vec::new(),
             max_page_size: 150,
             max_events_per_response: 0,
             stale: false,
@@ -715,6 +751,9 @@ impl FakeProtonServer {
                 )
                 .expect("the disabled address key unlocks");
             let mut disabled = address_locked_key(&format!("{local}-disabled-key"), disabled_local);
+            let primary_public = public_key_armor(&provider, &primary_unlocked.public_key);
+            let alias_public = public_key_armor(&provider, &legacy_unlocked.public_key);
+            let disabled_public = public_key_armor(&provider, &disabled_unlocked.public_key);
             if spec.key_fault != KeyFault::None {
                 mislock_key(&provider, &mut legacy, &legacy_unlocked);
             }
@@ -734,27 +773,44 @@ impl FakeProtonServer {
                 status: 1,
                 order: 1,
                 keys: vec![primary],
+                public_keys: vec![primary_public.clone()],
             });
             addresses.push(FakeAddress {
                 id: format!("{local}-alias"),
-                email: alias_email,
+                email: alias_email.clone(),
                 display_name: format!("{local} alias"),
                 send: false,
                 receive: true,
                 status: 1,
                 order: 2,
                 keys: vec![legacy],
+                public_keys: vec![alias_public.clone()],
             });
             addresses.push(FakeAddress {
                 id: format!("{local}-disabled"),
-                email: disabled_email,
+                email: disabled_email.clone(),
                 display_name: format!("{local} disabled"),
                 send: true,
                 receive: true,
                 status: 0,
                 order: 3,
                 keys: vec![disabled],
+                public_keys: vec![disabled_public.clone()],
             });
+            let recipient_keys = HashMap::from([
+                (
+                    primary_email,
+                    send::recipient_key(&provider, primary_public, &primary_unlocked.private_key),
+                ),
+                (
+                    alias_email,
+                    send::recipient_key(&provider, alias_public, &legacy_unlocked.private_key),
+                ),
+                (
+                    disabled_email,
+                    send::recipient_key(&provider, disabled_public, &disabled_unlocked.private_key),
+                ),
+            ]);
 
             // Every message and attachment body is encrypted to the
             // primary address key when it is added (M2.16a).
@@ -807,6 +863,7 @@ impl FakeProtonServer {
                     }],
                     user_keys,
                     addresses,
+                    recipient_keys,
                     deleted_addresses: Vec::new(),
                     message_body,
                     damaged_body,
@@ -1316,19 +1373,29 @@ async fn dispatch(
         ("GET", "/core/v4/users") => handle_user(state, headers),
         ("GET", "/core/v4/addresses") => handle_addresses(state, headers),
         ("GET", "/core/v4/labels") => handle_labels(state, headers, query),
+        ("GET", "/core/v4/keys") => send::handle_keys(state, headers, query),
         ("GET", "/mail/v4/messages") => handle_messages(state, headers, query),
         ("GET", "/mail/v4/messages/count") => handle_message_counts(state, headers),
+        ("POST", "/mail/v4/messages") => send::handle_draft_write(state, headers, None, &body),
+        ("POST", "/mail/v4/attachments") => send::handle_upload_attachment(state, headers, &body),
         ("GET", "/core/v4/events/latest") => handle_latest_event(state, headers),
         ("GET", "/tests/ping") => Ok(json_response(200, json!({"Code": 1000}))),
         _ => {
-            if method.as_str() != "GET" {
-                return Ok(json_response(
+            if let Some(id) = path.strip_prefix("/mail/v4/messages/") {
+                match method.as_str() {
+                    "PUT" => send::handle_draft_write(state, headers, Some(id), &body),
+                    "POST" => send::handle_send(state, headers, id, &body),
+                    "GET" => handle_message(state, headers, id),
+                    _ => Ok(json_response(
+                        404,
+                        json!({"Code": 2001, "Error": "not found"}),
+                    )),
+                }
+            } else if method.as_str() != "GET" {
+                Ok(json_response(
                     404,
                     json!({"Code": 2001, "Error": "not found"}),
-                ));
-            }
-            if let Some(id) = path.strip_prefix("/mail/v4/messages/") {
-                handle_message(state, headers, id)
+                ))
             } else if let Some(id) = path.strip_prefix("/mail/v4/attachments/") {
                 handle_attachment(state, headers, id)
             } else if let Some(id) = path.strip_prefix("/core/v4/events/") {
@@ -2010,26 +2077,10 @@ fn handle_message(
             json!({"Code": 2001, "Error": "message not found"}),
         ));
     };
-    let mut value = stored.to_json();
-    value["Header"] = json!(&stored.header);
-    let body = if account.damaged_bodies.contains(id) {
-        &account.damaged_body
-    } else {
-        stored
-            .encrypted_body
-            .as_ref()
-            .expect("the body is encrypted")
-    };
-    value["Body"] = json!(body);
-    value["MIMEType"] = json!(&stored.mime_type);
-    value["Attachments"] = Value::Array(
-        stored
-            .attachments
-            .iter()
-            .zip(&stored.encrypted_attachments)
-            .map(|(a, (id, key_packets, _))| attachment_json(id, a, key_packets))
-            .collect(),
-    );
+    let mut value = message_body_json(stored);
+    if account.damaged_bodies.contains(id) {
+        value["Body"] = json!(&account.damaged_body);
+    }
     if account.wrong_message_id {
         let other = account
             .messages
@@ -2154,6 +2205,38 @@ fn handle_events(
         response["User"] = user;
     }
     Ok(json_response(200, response))
+}
+
+/// Exports a public key armored, as `GET /core/v4/keys` serves it.
+fn public_key_armor<P: PGPProviderSync>(provider: &P, key: &P::PublicKey) -> String {
+    let armored = provider
+        .public_key_export(key, DataEncoding::Armor)
+        .expect("the public key exports");
+    String::from_utf8(armored.as_ref().to_vec()).expect("the armored public key is ASCII")
+}
+
+/// The full-message JSON shared by a read and a send reply: metadata
+/// plus header, body, MIME type and attachments (research
+/// `mail-sync.md` §4).
+fn message_body_json(stored: &FakeMessage) -> Value {
+    let mut value = stored.to_json();
+    value["Header"] = json!(&stored.header);
+    value["Body"] = json!(
+        stored
+            .encrypted_body
+            .as_ref()
+            .expect("the body is encrypted")
+    );
+    value["MIMEType"] = json!(&stored.mime_type);
+    value["Attachments"] = Value::Array(
+        stored
+            .attachments
+            .iter()
+            .zip(&stored.encrypted_attachments)
+            .map(|(a, (id, key_packets, _))| attachment_json(id, a, key_packets))
+            .collect(),
+    );
+    value
 }
 
 /// The per-account encryptors: an armored, signed message body and a
