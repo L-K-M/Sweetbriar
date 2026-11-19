@@ -35,6 +35,8 @@ mod import;
 mod index;
 #[cfg(test)]
 mod index_tests;
+mod intents;
+pub use intents::{IntentAnchor, IntentPage};
 mod maintenance;
 mod messages;
 // Nothing calls the policies yet; the account worker (the next M2.4
@@ -74,8 +76,9 @@ pub use sb_resources::{
 pub use sb_resources::{
     AccountColor, AccountKind, AccountState, AppearanceAssignment, ExportSelection,
     ImportJobCheckpoint, ImportJobState, ImportProblem, ImportProblemKind, ImportTotals,
-    MailboxKind, MailboxList, MailboxRole, MboxQuoting, MboxVariant, Receipt, SourceInventory,
-    SourceKind, SourcePosition, StoredAccount, StoredMailbox, Timestamp, default_cache_root,
+    IntentEffect, IntentFilter, IntentKind, IntentState, MailboxKind, MailboxList, MailboxRole,
+    MboxQuoting, MboxVariant, QuarantineReason, Receipt, SourceInventory, SourceKind,
+    SourcePosition, StoredAccount, StoredIntent, StoredMailbox, Timestamp, default_cache_root,
     default_data_root,
 };
 

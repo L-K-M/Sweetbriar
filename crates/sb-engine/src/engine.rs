@@ -427,6 +427,20 @@ impl Drop for Running {
 /// not a validation rule.
 pub(crate) const MAX_IDEMPOTENCY_KEY_BYTES: usize = 128;
 
+/// The largest keyset page (spec/07: 1–1,000 rows).
+pub(crate) const MAX_PAGE_LIMIT: u32 = 1_000;
+
+/// Reject a `limit` outside `1..=1000` (spec/07), naming the query.
+pub(crate) fn check_page_limit(limit: u32, what: &str) -> Result<(), EngineError> {
+    if !(1..=MAX_PAGE_LIMIT).contains(&limit) {
+        return Err(EngineError::invalid_input(
+            "limit",
+            format!("{what} is 1–{MAX_PAGE_LIMIT} rows"),
+        ));
+    }
+    Ok(())
+}
+
 /// Reject an empty or overlong idempotency key before a command
 /// submits anything (spec/07 "Commands"): two calls with `""` would
 /// share one receipt slot and replay each other's effect.

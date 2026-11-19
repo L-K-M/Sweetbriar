@@ -146,7 +146,7 @@ impl ListScope {
 }
 
 /// Named parameters in the shape rusqlite binds.
-fn bound<'a>(params: &'a [(&'static str, Value)]) -> Vec<(&'static str, &'a dyn ToSql)> {
+pub(crate) fn bound<'a>(params: &'a [(&'static str, Value)]) -> Vec<(&'static str, &'a dyn ToSql)> {
     params
         .iter()
         .map(|(name, value)| (*name, value as &dyn ToSql))

@@ -24,14 +24,11 @@ use sb_resources::{
     StoredListRow, list_generation, list_ids, read_list_page,
 };
 
-use crate::engine::Detached;
+use crate::engine::{Detached, check_page_limit};
 use crate::{Engine, EngineError};
 
 /// The largest synthetic fill (spec/07: `count` is 0–1,000,000).
 const MAX_FILL: u32 = 1_000_000;
-
-/// The largest page a window answers (spec/07: `limit` is 1–1,000).
-const MAX_LIMIT: u32 = 1_000;
 
 /// The `sort_date` of rank 0 (plan M0.10, pinned): 2026-10-01T00:00:00Z
 /// in epoch milliseconds.
@@ -696,7 +693,7 @@ impl Windows {
     /// source, register the window and answer its first page. A bad
     /// anchor fails the open without registering anything.
     fn open(&self, spec: WindowSpec, anchor: &Anchor, limit: u32) -> Result<Window, EngineError> {
-        check_limit(limit)?;
+        check_page_limit(limit, "a window page")?;
         let mut inner = self.lock();
         let source = inner.synthetic;
         let range = resolve(&spec, anchor, source.generation, source.count, limit)?;
@@ -725,7 +722,7 @@ impl Windows {
         anchor: &Anchor,
         limit: u32,
     ) -> Result<Window, EngineError> {
-        check_limit(limit)?;
+        check_page_limit(limit, "a window page")?;
         let mut inner = self.lock();
         let source = inner.synthetic;
         let open = inner
@@ -995,18 +992,6 @@ fn list_row(row: StoredListRow) -> ListRow {
     }
 }
 
-/// Reject a `limit` outside `1..=1000` (spec/07), checked before
-/// anything else in an open or a read.
-fn check_limit(limit: u32) -> Result<(), EngineError> {
-    if !(1..=MAX_LIMIT).contains(&limit) {
-        return Err(EngineError::invalid_input(
-            "limit",
-            format!("a window page is 1–{MAX_LIMIT} rows"),
-        ));
-    }
-    Ok(())
-}
-
 /// The rank range `[start, end)` `anchor` picks out of `n` rows at
 /// `generation` (spec/07 "Paging"). Window order is ascending rank —
 /// the newest first — so a `Before` page lists its rows in the same
@@ -1221,7 +1206,7 @@ impl Engine {
         anchor: Anchor,
         limit: u32,
     ) -> Result<Window, EngineError> {
-        check_limit(limit)?;
+        check_page_limit(limit, "a window page")?;
         let spec = match spec {
             WindowSpec::Search(search) => {
                 return self.open_search_window(search, anchor, limit).await;
@@ -1239,7 +1224,7 @@ impl Engine {
         if let WindowSource::List(scope) = spec.source() {
             // The first page is read before the window exists, so a
             // failed read registers nothing.
-            check_limit(limit)?;
+            check_page_limit(limit, "a window page")?;
             let (store, minted) = store_anchor(&spec, &anchor)?;
             let read = self
                 .read_through(move |resources| {
@@ -1282,7 +1267,7 @@ impl Engine {
         limit: u32,
     ) -> Result<Window, EngineError> {
         // A bad limit is reported before the window is looked up.
-        check_limit(limit)?;
+        check_page_limit(limit, "a window page")?;
         let windows = Arc::clone(self.windows());
         let lookup = Arc::clone(&windows);
         // The lookup and a store read are separate tasks, so a close in

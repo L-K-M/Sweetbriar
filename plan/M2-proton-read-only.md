@@ -733,6 +733,19 @@ the provider policies (`proton_bridge`, `generic_imap`) live in
   or subject (log-scan test, 10); a bootstrap and a resumed account's
   resync emit no new mail; the Recovery list holds a message whose last
   occurrence vanished and drops it when the message reappears.
+- **Split (2026-11-19):** `intents` and `recovery` through store,
+  engine, service and FFI measured 2,752 changed lines, so the step
+  lands as four PRs:
+  - M2.7c1: `intents(filter)` through store, engine and service,
+    with spec/02's payload shapes (about 1,300 lines);
+  - M2.7c2: `recovery(account_id?)` through the same layers (about
+    930);
+  - M2.7c3: both queries' FFI exports and regenerated bindings
+    (about 530);
+  - M2.7c4: `diagnostics_package()`, `subscribe_new_mail` and the
+    `notifications.previews` setting.
+  The PRs follow one another in order. M2.7c2 carries the Recovery
+  acceptance and M2.7c4 the diagnostics and new-mail ones.
 
 #### M2.7d Activity window — macos-ci
 

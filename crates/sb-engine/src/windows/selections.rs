@@ -13,8 +13,8 @@ use std::sync::Arc;
 
 use sb_resources::Scoped;
 
-use super::{MAX_LIMIT, WindowId, WindowSource, Windows};
-use crate::engine::Detached;
+use super::{WindowId, WindowSource, Windows};
+use crate::engine::{Detached, check_page_limit};
 use crate::{Engine, EngineError};
 
 /// The most occurrences an explicit `Ids` selection names (spec/07).
@@ -266,12 +266,7 @@ impl Engine {
         from_ordinal: u64,
         limit: u32,
     ) -> Result<Vec<i64>, EngineError> {
-        if !(1..=MAX_LIMIT).contains(&limit) {
-            return Err(EngineError::invalid_input(
-                "limit",
-                format!("a selection page is 1–{MAX_LIMIT} ids"),
-            ));
-        }
+        check_page_limit(limit, "a selection page")?;
         let windows = Arc::clone(self.windows());
         self.compute(move || windows.selection_page(&id, from_ordinal, limit))
             .await

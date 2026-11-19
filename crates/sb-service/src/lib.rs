@@ -30,6 +30,11 @@ mod exports;
 mod health;
 mod identities;
 mod imports;
+mod intents;
+pub use intents::{
+    Intent, IntentAnchor, IntentEffect, IntentFilter, IntentKind, IntentPage, IntentState,
+    QuarantineReason,
+};
 mod messages;
 mod reading;
 mod rebuild;
