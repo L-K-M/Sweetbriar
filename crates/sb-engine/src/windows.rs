@@ -15,7 +15,7 @@
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, Weak};
 
 use tokio::sync::watch;
 
@@ -456,6 +456,10 @@ pub(crate) struct Windows {
     /// What subscriptions wait on (spec/07 "Subscriptions"): any change
     /// wakes every waiting `next`, which checks its own window.
     versions: watch::Sender<Versions>,
+    /// The live new-mail subscriptions, each with its own queue
+    /// (spec/07 `subscribe_new_mail`). Weak: a dropped subscription
+    /// stops receiving and is pruned on the next arrival.
+    new_mail: Mutex<Vec<Weak<crate::new_mail::Subscriber>>>,
 }
 
 /// The sources' generations, plus what ends a wait: a close or the
@@ -479,6 +483,9 @@ struct Versions {
     /// worker's in-memory status, or a write to the accounts,
     /// diagnostics or breaker rows the query reads.
     account_health: u64,
+    /// New-mail arrivals so far (plan M2.7c4): the Proton event loop
+    /// recording a new logical message in an account's Inbox.
+    new_mail: u64,
     shut: bool,
 }
 
@@ -572,6 +579,7 @@ impl Windows {
         Self {
             inner: Mutex::new(WindowsInner::default()),
             versions: watch::Sender::new(Versions::default()),
+            new_mail: Mutex::new(Vec::new()),
         }
     }
 
@@ -669,6 +677,36 @@ impl Windows {
     /// The account-health changes so far, where its subscription starts.
     pub(crate) fn account_health_changes(&self) -> u64 {
         self.versions.borrow().account_health
+    }
+
+    /// A new-mail arrival (plan M2.7c4): hand it to every live
+    /// subscription, each keeping its own queue, and wake them. The
+    /// Proton event loop calls it; a bootstrap, a resync and imports
+    /// never do (spec/10 "Notifications").
+    pub(crate) fn new_mail_arrived(&self, account_id: &str, message_ids: Vec<i64>) {
+        if message_ids.is_empty() {
+            return;
+        }
+        let mut subscribers = self
+            .new_mail
+            .lock()
+            .expect("the new-mail subscriber lock poisoned");
+        subscribers.retain(|weak| weak.strong_count() > 0);
+        for subscriber in subscribers.iter().filter_map(Weak::upgrade) {
+            subscriber.push(account_id, &message_ids);
+        }
+        drop(subscribers);
+        self.new_mail_moved();
+    }
+
+    /// A new-mail arrival moved the source: wake its subscriptions.
+    pub(crate) fn new_mail_moved(&self) {
+        self.versions.send_modify(|versions| versions.new_mail += 1);
+    }
+
+    /// The new-mail changes so far, where its subscription starts.
+    pub(crate) fn new_mail_changes(&self) -> u64 {
+        self.versions.borrow().new_mail
     }
 
     /// The engine is shutting down: end every waiting `next`.
@@ -1453,8 +1491,8 @@ pub use search::{SearchSort, SearchSpec, SearchStatus};
 pub use selections::{SelectionId, SelectionInput, SelectionSnapshot};
 
 pub use subscribe::{
-    AccountHealthSubscription, AppearanceSubscription, HealthSubscription, Subscription,
-    WindowEvent,
+    AccountHealthSubscription, AppearanceSubscription, HealthSubscription, NewMailSubscription,
+    Subscription, WindowEvent,
 };
 
 #[cfg(test)]

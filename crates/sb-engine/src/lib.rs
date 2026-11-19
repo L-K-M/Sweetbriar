@@ -41,6 +41,7 @@ mod intents;
 pub use intents::{IntentAnchor, IntentPage};
 mod maintenance;
 mod messages;
+mod new_mail;
 // Nothing calls the policies yet; the account worker (the next M2.4
 // slice) is their caller.
 #[cfg_attr(not(test), allow(dead_code))]
@@ -100,6 +101,7 @@ pub use import::{
     ExportJobStatus, ExportScopeInput, ExportStarted, ImportJobStatus, ImportReport,
     ImportSourceStatus, ImportStarted,
 };
+pub use new_mail::NewMail;
 pub use rebuild::SearchRebuildStarted;
 pub use sb_resources::ParseCode as SearchParseCode;
 pub use sb_resources::QualifiedStage;
@@ -120,8 +122,9 @@ pub use tags::MessageSelection;
 pub use views::SavedViewParams;
 pub use windows::{
     AccountHealthSubscription, Anchor, AppearanceSubscription, Count, Cursor, HealthSubscription,
-    ListRow, SearchSort, SearchSpec, SearchStatus, SelectionId, SelectionInput, SelectionSnapshot,
-    Subscription, Window, WindowEvent, WindowId, WindowIds, WindowSpec,
+    ListRow, NewMailSubscription, SearchSort, SearchSpec, SearchStatus, SelectionId,
+    SelectionInput, SelectionSnapshot, Subscription, Window, WindowEvent, WindowId, WindowIds,
+    WindowSpec,
 };
 
 pub use sb_resources::{

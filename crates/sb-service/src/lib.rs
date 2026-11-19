@@ -40,6 +40,7 @@ pub use intents::{
     QuarantineReason,
 };
 mod messages;
+mod new_mail;
 mod reading;
 mod rebuild;
 mod recovery;
@@ -94,3 +95,4 @@ pub use messages::{
     BodyAvailability, MessageSelection, ReaderAddress, ReaderHeaders, ReaderMessage,
     ReaderOccurrence, ReaderTag,
 };
+pub use new_mail::{NewMail, NewMailSubscription};

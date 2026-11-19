@@ -292,6 +292,9 @@ pub(crate) struct Worker {
     received: Arc<ReceivedJobs>,
     /// The per-account worker statuses this task updates (plan M2.7b2).
     statuses: Arc<crate::account_health::WorkerStatuses>,
+    /// The window table and subscription sources (spec/07); the
+    /// Proton event loop records new-mail arrivals here (plan M2.7c4).
+    windows: Arc<Windows>,
     running: Arc<Running>,
     blocking: Arc<BlockingWork>,
     handle: Handle,
@@ -310,6 +313,12 @@ impl Worker {
     /// record their last sync and retry condition here.
     pub(crate) fn statuses(&self) -> &Arc<crate::account_health::WorkerStatuses> {
         &self.statuses
+    }
+
+    /// The window table and subscription sources (spec/07); the
+    /// Proton event loop records new-mail arrivals here (plan M2.7c4).
+    pub(crate) fn windows(&self) -> &Arc<Windows> {
+        &self.windows
     }
 
     pub(crate) fn resources(&self) -> &Resources {
@@ -363,6 +372,7 @@ impl Spawn for Engine {
             &self.index,
             &self.received,
             &self.worker_statuses,
+            self.windows(),
             &self.blocking,
             self.runtime.handle(),
             body,
@@ -381,6 +391,7 @@ impl Spawn for Worker {
             &self.index,
             &self.received,
             &self.statuses,
+            &self.windows,
             &self.blocking,
             &self.handle,
             body,
@@ -388,11 +399,13 @@ impl Spawn for Worker {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn spawn<F, Fut>(
     resources: &Arc<Resources>,
     index: &Arc<IndexJobs>,
     received: &Arc<ReceivedJobs>,
     statuses: &Arc<crate::account_health::WorkerStatuses>,
+    windows: &Arc<Windows>,
     blocking: &Arc<BlockingWork>,
     handle: &Handle,
     body: F,
@@ -406,6 +419,7 @@ where
         index: Arc::clone(index),
         received: Arc::clone(received),
         statuses: Arc::clone(statuses),
+        windows: Arc::clone(windows),
         running: Arc::new(blocking.start()?),
         blocking: Arc::clone(blocking),
         handle: handle.clone(),

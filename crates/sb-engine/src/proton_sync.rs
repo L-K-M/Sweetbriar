@@ -930,22 +930,31 @@ impl Attempt<'_> {
             let next = (index == last).then(|| batch.event_id.as_str().to_owned());
             let labels = labels.take();
             let now = self.worker.resources().now();
-            self.write(move |tx| {
-                apply_event_chunk(
-                    tx,
-                    &EventChunk {
-                        account_id: &id,
-                        from_cursor: &from,
-                        labels: labels.as_deref(),
-                        changes: &chunk,
-                        next_cursor: next.as_deref(),
-                        expected_revision: revision,
-                    },
-                    now,
-                )
-                .map(drop)
-            })
-            .await?;
+            let applied = self
+                .write(move |tx| {
+                    apply_event_chunk(
+                        tx,
+                        &EventChunk {
+                            account_id: &id,
+                            from_cursor: &from,
+                            labels: labels.as_deref(),
+                            changes: &chunk,
+                            next_cursor: next.as_deref(),
+                            expected_revision: revision,
+                        },
+                        now,
+                    )
+                })
+                .await?;
+            // A new logical message in the account's Inbox role
+            // mailbox is the only arrival that feeds new mail
+            // (spec/10 "Notifications"); a bootstrap and a resync
+            // report none.
+            if !applied.new_inbox.is_empty() {
+                self.worker
+                    .windows()
+                    .new_mail_arrived(self.account_id, applied.new_inbox);
+            }
         }
         Ok(())
     }

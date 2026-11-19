@@ -40,6 +40,7 @@ pub use intents::{
     QuarantineReason,
 };
 mod messages;
+mod new_mail;
 mod recovery;
 pub use recovery::{Recovery, RecoveryAnchor, RecoveryPage, RecoveryState};
 mod restore;
@@ -97,3 +98,4 @@ pub use messages::{
     ReadingPreformatted, ReadingQuote, ReadingSupport, ReadingText, RenderWarning,
     RenderWarningCode,
 };
+pub use new_mail::{NewMail, NewMailSubscription};

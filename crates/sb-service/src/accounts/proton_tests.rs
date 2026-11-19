@@ -1146,3 +1146,4 @@ mod events;
 mod health;
 mod identities;
 mod lane;
+mod new_mail;
