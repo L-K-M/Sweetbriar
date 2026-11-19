@@ -767,6 +767,16 @@ the provider policies (`proton_bridge`, `generic_imap`) live in
   activation notifications.
 - **Acceptance:** breaker Accept and Keep work end to end (UI test with
   the fake), leaving the event `accepted` or `kept`.
+- **Split (2026-11-19):** the bridge and model halves alone measured
+  1,597 changed lines, so the step lands as three PRs:
+  - M2.7d1a: the bridge's account-health, intents and Recovery types
+    and their `CoreBridge` calls, with a real-core test of breaker
+    Accept and Keep over FFI (about 640 lines);
+  - M2.7d1b: the Activity model and its spec/04 strings over a fake
+    source (about 960);
+  - M2.7d2: the window, its Window menu item, the sidebar's health
+    row, `set_app_active` and the UI acceptance.
+  The PRs follow one another in order.
 
 #### M2.7e Account settings, diagnostics and notifications — macos-ci
 

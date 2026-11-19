@@ -514,6 +514,81 @@ public final class CoreBridge: Sendable {
         return HealthSubscription(subscription)
     }
 
+    /// `account_health()` (spec/07 "Queries"): every account's state,
+    /// condition, warnings, open breaker events, coverage and last
+    /// sync time, in `accounts()` order.
+    public func accountHealth() async throws -> [AccountHealth] {
+        let token = SweetbriarCore.CancelToken()
+        let values = try await Self.withCancellation(token: token) {
+            try await self.core.accountHealth(token: token)
+        }
+        return values.map(AccountHealth.init)
+    }
+
+    /// `subscribe_account_health` (spec/07 "Subscriptions"): changes
+    /// of `account_health()` from now on. Subscribe first, then read
+    /// `account_health()`, and none is missed.
+    public func subscribeAccountHealth() async throws -> AccountHealthSubscription {
+        let token = SweetbriarCore.CancelToken()
+        let subscription = try await Self.withCancellation(token: token) {
+            try await self.core.subscribeAccountHealth(token: token)
+        }
+        return AccountHealthSubscription(subscription)
+    }
+
+    /// `intents(filter)` (spec/07 "Queries"): one page of parked and
+    /// quarantined intents, oldest first; a nil `after` is the top.
+    public func intents(
+        filter: IntentFilter, after: String?, limit: UInt32
+    ) async throws -> IntentPage {
+        let token = SweetbriarCore.CancelToken()
+        let anchor = after.map { SweetbriarCore.IntentAnchor.after(cursor: $0) } ?? .top
+        let page = try await Self.withCancellation(token: token) {
+            try await self.core.intents(
+                token: token, filter: filter.generated, anchor: anchor, limit: limit
+            )
+        }
+        return IntentPage(page)
+    }
+
+    /// `recovery(account_id?)` (spec/07 "Queries"): one page of the
+    /// Recovery list, newest first; a nil `after` is the top.
+    public func recovery(
+        accountId: String?, after: String?, limit: UInt32
+    ) async throws -> RecoveryPage {
+        let token = SweetbriarCore.CancelToken()
+        let anchor = after.map { SweetbriarCore.RecoveryAnchor.after(cursor: $0) } ?? .top
+        let page = try await Self.withCancellation(token: token) {
+            try await self.core.recovery(
+                token: token, accountId: accountId, anchor: anchor, limit: limit
+            )
+        }
+        return RecoveryPage(page)
+    }
+
+    /// `resolve_breaker_event` (spec/07 "Safety") under a shell-made
+    /// key: Accept applies the disappearances, Keep leaves them
+    /// withheld. A repeated key answers its stored receipt.
+    public func resolveBreakerEvent(
+        idempotencyKey: String, eventId: String, resolution: BreakerResolution
+    ) async throws -> Receipt {
+        let token = SweetbriarCore.CancelToken()
+        let receipt = try await Self.withCancellation(token: token) {
+            try await self.core.resolveBreakerEvent(
+                token: token, idempotencyKey: idempotencyKey,
+                eventId: eventId, resolution: resolution.generated
+            )
+        }
+        return Receipt(receipt)
+    }
+
+    /// `set_app_active` (spec/07 "Account management"): a lifecycle
+    /// signal, not a command — no key, no receipt, nothing stored.
+    public func setAppActive(_ active: Bool) async throws {
+        // The core call takes no cancel token: it only records a flag.
+        try await core.setAppActive(active: active)
+    }
+
     /// Take a generation under a caller-made key. Once begun, cancellation
     /// cannot hide its receipt. Await the optional copy handle separately.
     public func startBackup(idempotencyKey: String) async throws -> BackupStarted {
@@ -829,6 +904,28 @@ public final class HealthSubscription: Sendable {
     /// Returns once `health()` changed since this subscription's last
     /// answer; read `health()` again then. Several changes are one
     /// answer. A second concurrent call is `invalidInput`.
+    public func next() async throws {
+        let token = SweetbriarCore.CancelToken()
+        try await CoreBridge.withCancellation(token: token) {
+            try await self.subscription.next(token: token)
+        }
+    }
+}
+
+/// The account-health stream (spec/07): one in-flight `next` at a
+/// time, in-memory only. Cancelling the calling task cancels the call,
+/// and a pending call ends with `unavailable` once the core shuts down.
+public final class AccountHealthSubscription: Sendable {
+    private let subscription: SweetbriarCore.AccountHealthSubscription
+
+    fileprivate init(_ subscription: SweetbriarCore.AccountHealthSubscription) {
+        self.subscription = subscription
+    }
+
+    /// Returns once `account_health()` changed since this
+    /// subscription's last answer; read `account_health()` again
+    /// then. Several changes are one answer. A second concurrent call
+    /// is `invalidInput`.
     public func next() async throws {
         let token = SweetbriarCore.CancelToken()
         try await CoreBridge.withCancellation(token: token) {
