@@ -473,8 +473,12 @@ pub struct RecordedRequest {
 
 /// A fault knob. `Drop` closes the connection; `Stall` delays every
 /// response; `RateLimit` answers 429/503 with an optional
-/// `Retry-After`; `Code` answers a status and Proton code; a bad server
-/// proof makes `/auth/v4` return a proof that cannot match.
+/// `Retry-After`; `Code` answers a status and Proton code;
+/// `DropAfterApply` applies a send call then drops the reply;
+/// `RefuseConnection` closes the next accepted connection before any
+/// TLS byte; `StallHandshake` sends nothing for a duration before the
+/// TLS handshake; a bad server proof makes `/auth/v4` return a proof
+/// that cannot match.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Fault {
     Drop,
@@ -496,6 +500,42 @@ pub enum Fault {
         path: String,
         fault: Box<Fault>,
     },
+    /// Applies a draft creation, attachment upload or send, then drops
+    /// the reply: the effect stays, the client sees a lost reply
+    /// (05's `outcome_unknown`). One-shot through [`Fault::Once`].
+    DropAfterApply,
+    /// Closes the next accepted TCP connection before any TLS byte, so
+    /// a client's handshake fails: it can tell the connection was never
+    /// established from one lost after the request began. One-shot.
+    RefuseConnection,
+    /// Accepts the next TCP connection and sends nothing for `Duration`
+    /// before the TLS handshake, so a client with a deadline sees a
+    /// connect timeout. One-shot.
+    StallHandshake(Duration),
+}
+
+/// Takes a connection-level fault ([`Fault::RefuseConnection`] or
+/// [`Fault::StallHandshake`]), including one wrapped in
+/// [`Fault::Once`], so the accept loop can act before the TLS
+/// handshake. Other faults stay in the slot for the request handlers.
+fn take_connection_fault(faults: &Mutex<Option<Fault>>) -> Option<Fault> {
+    let mut slot = faults.lock().unwrap_or_else(|e| e.into_inner());
+    match slot.take()? {
+        Fault::RefuseConnection => Some(Fault::RefuseConnection),
+        fault @ Fault::StallHandshake(_) => Some(fault),
+        Fault::Once(inner) => match *inner {
+            Fault::RefuseConnection => Some(Fault::RefuseConnection),
+            fault @ Fault::StallHandshake(_) => Some(fault),
+            other => {
+                *slot = Some(Fault::Once(Box::new(other)));
+                None
+            }
+        },
+        other => {
+            *slot = Some(other);
+            None
+        }
+    }
 }
 
 struct Account {
@@ -905,6 +945,7 @@ impl FakeProtonServer {
                         Ok(accepted) => accepted,
                         Err(_) => break,
                     };
+                    let connection_fault = take_connection_fault(&faults);
                     let acceptor = acceptor.clone();
                     let state = Arc::clone(&state);
                     let log = Arc::clone(&log);
@@ -912,6 +953,19 @@ impl FakeProtonServer {
                     let in_flight = Arc::clone(&in_flight);
                     let max_in_flight = Arc::clone(&max_in_flight);
                     tokio::spawn(async move {
+                        match connection_fault {
+                            None => {}
+                            // Dropping `tcp` closes the connection before
+                            // any TLS byte, so the client's handshake
+                            // fails as a connect error.
+                            Some(Fault::RefuseConnection) => return,
+                            Some(Fault::StallHandshake(delay)) => {
+                                tokio::time::sleep(delay).await;
+                            }
+                            // `take_connection_fault` only returns the
+                            // two connection faults.
+                            Some(_) => {}
+                        }
                         let tls = match acceptor.accept(tcp).await {
                             Ok(tls) => tls,
                             Err(_) => return,
@@ -1325,11 +1379,13 @@ async fn dispatch(
             }
         }
     };
+    let mut drop_reply_after_apply = false;
     if let Some(fault) = fault {
         match fault {
             Fault::Drop => {
                 return Err(io::Error::new(io::ErrorKind::ConnectionAborted, "drop"));
             }
+            Fault::DropAfterApply => drop_reply_after_apply = true,
             Fault::Stall(delay) => tokio::time::sleep(delay).await,
             Fault::RateLimit {
                 status,
@@ -1351,6 +1407,10 @@ async fn dispatch(
                 ));
             }
             Fault::BadServerProof => {}
+            // Connection-level faults are consumed by the accept loop
+            // before the handshake; if one reaches here it was never
+            // triggered, so let the request through.
+            Fault::RefuseConnection | Fault::StallHandshake(_) => {}
             // One-shot faults are unwrapped into their inner fault
             // before the match.
             Fault::Once(_) | Fault::OnceAt { .. } => {}
@@ -1363,7 +1423,7 @@ async fn dispatch(
         .await
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?
         .to_bytes();
-    match (method.as_str(), path) {
+    let outcome = match (method.as_str(), path) {
         ("POST", "/auth/v4/info") => handle_info(&body, state),
         ("POST", "/auth/v4") => handle_auth(&body, state, headers, faults),
         ("POST", "/auth/v4/2fa") => handle_2fa(&body, state, headers),
@@ -1407,7 +1467,31 @@ async fn dispatch(
                 ))
             }
         }
+    };
+    if drop_reply_after_apply
+        && is_apply_call(method.as_str(), path)
+        && outcome
+            .as_ref()
+            .map(|response| response.status().is_success())
+            .unwrap_or(false)
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::ConnectionAborted,
+            "drop after apply",
+        ));
     }
+    outcome
+}
+
+/// Whether a call is one whose effect [`Fault::DropAfterApply`] covers:
+/// a draft creation, an attachment upload or a send.
+fn is_apply_call(method: &str, path: &str) -> bool {
+    if method != "POST" {
+        return false;
+    }
+    path == "/mail/v4/messages"
+        || path == "/mail/v4/attachments"
+        || path.starts_with("/mail/v4/messages/")
 }
 
 fn handle_info(body: &[u8], state: &Arc<Mutex<State>>) -> Result<Response<Full<Bytes>>, io::Error> {
