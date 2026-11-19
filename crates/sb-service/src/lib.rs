@@ -42,6 +42,7 @@ mod recovery;
 pub use recovery::{Recovery, RecoveryAnchor, RecoveryPage, RecoveryState};
 mod restore;
 mod search;
+mod send;
 mod sidebar;
 mod views;
 mod windows;
@@ -78,6 +79,7 @@ pub use search::{
     Coverage, ParseContext, SearchIndexState, SearchIoCode, SearchLimitation, SearchRebuildPhase,
     SearchRebuildProgress, SearchScope, SearchSort, SearchSpec, SearchStatus,
 };
+pub use send::SendQueued;
 pub use sidebar::{Account, AccountKind, AccountState, Mailbox, MailboxKind, Mailboxes};
 pub use views::{SavedView, SavedViewParams, SavedViewSort};
 pub use windows::{

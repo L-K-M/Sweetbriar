@@ -57,6 +57,7 @@ pub use recovery::{RecoveryAnchor, RecoveryPage};
 #[cfg(test)]
 mod received_tests;
 mod search;
+mod send;
 mod settings;
 mod sidebar;
 mod tags;
@@ -111,6 +112,7 @@ pub use sb_resources::{
 pub use sb_resources::{ExportFormat, ExportJobState};
 pub use sb_resources::{RestoreArtifact, RestoreArtifactKind};
 pub use search::SearchScope;
+pub use send::SendQueued;
 pub use settings::Setting;
 pub use tags::MessageSelection;
 pub use views::SavedViewParams;

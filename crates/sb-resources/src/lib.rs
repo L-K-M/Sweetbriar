@@ -10,12 +10,15 @@
 //! settings helpers, receipts, a new idempotency-key UUID, import
 //! source inventory and the platform's default roots.
 
+use std::io::Read as _;
 use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use sb_platform::{OsRandom, PlatformSecrets, RealFs, SystemClock};
+pub use sb_store::ObjectId;
 use sb_store::StorePaths;
+use sb_store::{ObjectStore, read_error_as_store_error};
 
 mod accounts;
 pub use accounts::{
@@ -128,6 +131,11 @@ pub use sb_mime::{
     Block, DOCUMENT_VERSION, DocumentSupport, HeadingLevel, ImageReference, Inline, MailDocument,
     MboxQuoting, MboxVariant,
 };
+// The outgoing-MIME items an account's send path composes with
+// (spec/01 rule 3). `ComposeFormat` names the draft's stored format
+// above, so the MIME one keeps its module's qualifier.
+pub use sb_mime::ComposeFormat as MimeComposeFormat;
+pub use sb_mime::{ComposeAddress, ComposeAttachment, ComposeError, ComposeInput, compose};
 pub use sb_platform::{default_cache_root, default_data_root};
 pub use sb_store::ACCOUNT_PALETTE_V1;
 pub use sb_store::appearance::{
@@ -194,6 +202,7 @@ pub use sb_store::recovery::{
     MAX_RECOVERY_PAGE_ROWS, RecoveryAnchor, RecoveryKey, RecoveryPage, RecoveryState,
     StoredRecovery, recovery,
 };
+pub use sb_store::send::{SendAttempt, cancel_send, reply_headers, send_draft};
 pub use sb_store::settings::{StoredSetting, read_all, upsert};
 pub use sb_store::sidebar::{
     AccountKind, AccountState, MailboxKind, MailboxList, StoredAccount, StoredMailbox, accounts,
@@ -620,6 +629,29 @@ impl Resources {
     /// waits for its blocking tasks before closing.
     pub fn close(self) -> Result<(), StoreError> {
         self.store.close()
+    }
+
+    /// Read one published object's exact bytes after EOF verifies the
+    /// hash (spec/03). Blocking I/O; run on a blocking thread.
+    pub fn read_object(&self, id: &ObjectId) -> Result<Vec<u8>, StoreError> {
+        let mut reader = self.store.objects().open(id)?;
+        let mut bytes = Vec::with_capacity(usize::try_from(id.byte_length()).unwrap_or(0));
+        reader.read_to_end(&mut bytes).map_err(|error| {
+            read_error_as_store_error(&error)
+                .cloned()
+                .unwrap_or_else(|| StoreError::Unavailable {
+                    reason: format!("cannot read the object: {error}"),
+                    io_kind: None,
+                })
+        })?;
+        Ok(bytes)
+    }
+
+    /// Publish one frozen message's bytes to the object store
+    /// (spec/03). The returned [`PublishedObject`] carries the
+    /// one-shot reservation the send transaction spends.
+    pub fn publish_object(&self, bytes: Vec<u8>) -> Result<PublishedObject, StoreError> {
+        self.store.objects().publish(bytes.as_slice())
     }
 
     /// The clock's "now", for command receipts and settings rows: the
