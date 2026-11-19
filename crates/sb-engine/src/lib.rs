@@ -115,7 +115,7 @@ pub use sb_resources::{
 pub use sb_resources::{ExportFormat, ExportJobState};
 pub use sb_resources::{RestoreArtifact, RestoreArtifactKind};
 pub use search::SearchScope;
-pub use send::{ResolvedUnknown, SendQueued};
+pub use send::{OutBox, OutBoxRow, ResolvedUnknown, SendQueued};
 pub use settings::Setting;
 pub use tags::MessageSelection;
 pub use views::SavedViewParams;
@@ -127,8 +127,8 @@ pub use windows::{
 
 pub use sb_resources::{
     AttachmentRef, AttemptState, ComposeFormat, DraftAttachment, DraftRecipient, DraftSource,
-    DraftState, DraftSummary, LiveAttempt, PublishedObject, SavedView, StoredDraft, StoredRevision,
-    ViewSort,
+    DraftState, DraftSummary, LiveAttempt, OutBoxRecipient, PublishedObject, RecipientKind,
+    RecipientState, SavedView, SentCopy, StoredDraft, StoredRevision, ViewSort,
 };
 pub use sb_resources::{
     Block, BodyAvailability, DOCUMENT_VERSION, DocumentSupport, HeadingLevel, ImageReference,

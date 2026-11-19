@@ -8,8 +8,8 @@ use sb_test_support::{ScratchDir, block_on};
 
 use super::*;
 use crate::{
-    ComposeFormat, DraftContent, DraftRecipient, DraftSource, DraftState, Engine, EngineError,
-    Receipt,
+    AttemptState, ComposeFormat, DraftContent, DraftRecipient, DraftSource, DraftState, Engine,
+    EngineError, Receipt, RecipientState,
 };
 
 /// An engine over a fresh scratch data root, with its scratch dir
@@ -717,5 +717,89 @@ fn a_replayed_send_key_answers_the_first_attempt() {
         .expect("a replayed key answers its first result");
     assert_eq!(replayed.attempt_id(), first.attempt_id());
     assert_eq!(count(&engine, "SELECT COUNT(*) FROM send_attempts"), 1);
+    block_on(engine.shutdown()).unwrap();
+}
+
+#[test]
+fn a_reconfigured_account_keeps_the_attempt_waiting_until_confirmed() {
+    let (_scratch, engine) = scratch_engine("engine-outbox-reconfig");
+    seed(&engine);
+    let draft = create(&engine);
+    let saved = save(&engine, draft.draft_id(), None);
+    let queued = send(&engine, draft.draft_id(), saved.revision_id()).unwrap();
+    let attempt_id = queued.attempt_id().to_owned();
+    force(&engine, &attempt_id, "queued", None);
+
+    // Matching generations: queued, not waiting.
+    let out_box = block_on(engine.out_box()).unwrap();
+    let row = out_box
+        .live
+        .iter()
+        .find(|row| row.attempt_id == attempt_id)
+        .unwrap();
+    assert_eq!(row.state, AttemptState::Queued);
+    assert!(!row.waits_for_confirmation);
+    assert!(row.evidence.is_empty(), "M4.3f fills the evidence");
+    assert_eq!(row.subject, "hello");
+    assert_eq!(row.recipients.len(), 1);
+    assert_eq!(row.recipients[0].address, "a@X.NET");
+    assert_eq!(row.recipients[0].state, RecipientState::Pending);
+
+    // The account is reconfigured: the attempt stays queued and waits.
+    sql(
+        &engine,
+        "UPDATE accounts SET config_generation = config_generation + 1
+         WHERE account_id = 'acct-1';",
+    );
+    let out_box = block_on(engine.out_box()).unwrap();
+    let row = out_box
+        .live
+        .iter()
+        .find(|row| row.attempt_id == attempt_id)
+        .unwrap();
+    assert_eq!(row.state, AttemptState::Queued);
+    assert!(row.waits_for_confirmation);
+
+    // Cancelling works while it waits.
+    cancel(&engine, &attempt_id).unwrap();
+    let out_box = block_on(engine.out_box()).unwrap();
+    assert!(out_box.live.iter().all(|row| row.attempt_id != attempt_id));
+    let row = out_box
+        .history
+        .iter()
+        .find(|row| row.attempt_id == attempt_id)
+        .unwrap();
+    assert_eq!(row.state, AttemptState::Cancelled);
+
+    // A fresh queued attempt confirms the new generation and no longer
+    // waits.
+    let draft2 = create(&engine);
+    let saved2 = save(&engine, draft2.draft_id(), None);
+    let queued2 = send(&engine, draft2.draft_id(), saved2.revision_id()).unwrap();
+    let attempt2 = queued2.attempt_id().to_owned();
+    force(&engine, &attempt2, "queued", None);
+    sql(
+        &engine,
+        "UPDATE accounts SET config_generation = config_generation + 1
+         WHERE account_id = 'acct-1';",
+    );
+    let out_box = block_on(engine.out_box()).unwrap();
+    assert!(
+        out_box
+            .live
+            .iter()
+            .find(|row| row.attempt_id == attempt2)
+            .unwrap()
+            .waits_for_confirmation
+    );
+    block_on(engine.confirm_send_route(&engine.new_idempotency_key(), &attempt2)).unwrap();
+    let out_box = block_on(engine.out_box()).unwrap();
+    let row = out_box
+        .live
+        .iter()
+        .find(|row| row.attempt_id == attempt2)
+        .unwrap();
+    assert_eq!(row.state, AttemptState::Queued);
+    assert!(!row.waits_for_confirmation);
     block_on(engine.shutdown()).unwrap();
 }

@@ -10,12 +10,13 @@
 use std::sync::Arc;
 
 use sb_resources::{
-    AccountKind, ComposeAddress, ComposeAttachment, ComposeError, ComposeFormat, ComposeIdentity,
-    ComposeInput, DraftState, IdentityRoute, MimeComposeFormat, PublishedObject, Receipt,
-    Resources, SendAttempt, SourceIdentityInputs, SourceMessageHeaders, StoreError, StoredRevision,
-    Timestamp, Transaction, UnknownResolution, WritePriority, cancel_send, compose,
-    compose_catalog, confirm_send_route, draft, replay, resolve_unknown_send,
-    retry_rejected_recipients, run_once, send_draft,
+    AccountKind, AttemptState, ComposeAddress, ComposeAttachment, ComposeError, ComposeFormat,
+    ComposeIdentity, ComposeInput, DraftState, IdentityRoute, MimeComposeFormat, OutBoxRecipient,
+    PublishedObject, Receipt, Resources, SendAttempt, SentCopy, SourceIdentityInputs,
+    SourceMessageHeaders, StoreError, StoredRevision, Timestamp, Transaction, UnknownResolution,
+    WritePriority, cancel_send, compose, compose_catalog, confirm_send_route, draft,
+    out_box as stored_out_box, replay, resolve_unknown_send, retry_rejected_recipients, run_once,
+    send_draft,
 };
 
 use crate::drafts::{encode_receipt_id, receipt_id};
@@ -421,6 +422,29 @@ impl Engine {
         .await
     }
 
+    /// `out_box()` (spec/07): every live attempt, then the last 30
+    /// days' history, each newest first by update time. The Proton
+    /// evidence is in-memory and not yet produced (M4.3f), so every
+    /// row's evidence is empty for now.
+    pub async fn out_box(&self) -> Result<OutBox, EngineError> {
+        let now = self.resources().now();
+        let stored = self
+            .read_through(move |resources| resources.read(move |tx| stored_out_box(tx, now)))
+            .await?;
+        Ok(OutBox {
+            live: stored
+                .live
+                .into_iter()
+                .map(|row| OutBoxRow::from_stored(row, Vec::new()))
+                .collect(),
+            history: stored
+                .history
+                .into_iter()
+                .map(|row| OutBoxRow::from_stored(row, Vec::new()))
+                .collect(),
+        })
+    }
+
     /// Run a counted attempt command under `command`.
     async fn attempt_command(
         &self,
@@ -451,6 +475,74 @@ impl Engine {
         receipt_id(&receipt, "attempt_id")?;
         Ok(receipt)
     }
+}
+
+/// One Out Box row as the engine returns it (spec/07): the stored
+/// attempt's fields, plus the Proton evidence observed since launch.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OutBoxRow {
+    pub attempt_id: String,
+    pub draft_id: String,
+    pub account_id: String,
+    pub identity_id: String,
+    pub subject: String,
+    pub recipients: Vec<OutBoxRecipient>,
+    pub state: AttemptState,
+    pub created_at: Timestamp,
+    pub updated_at: Timestamp,
+    pub hold_until: Option<Timestamp>,
+    pub resolved_at: Option<Timestamp>,
+    pub send_requested_at: Option<Timestamp>,
+    /// The Proton draft the attempt created, which becomes the sent
+    /// message (spec/02, 05 "Drafts on the server").
+    pub proton_draft_id: Option<String>,
+    /// Proton's final reply, code and message (spec/02, 05).
+    pub final_reply: Option<String>,
+    pub resolution: Option<UnknownResolution>,
+    pub sent_copy: SentCopy,
+    /// A `queued` attempt whose `config_generation` differs from its
+    /// account's current one waits for `confirm_send_route`
+    /// (spec/05 step 3).
+    pub waits_for_confirmation: bool,
+    /// The Proton evidence observed since launch (spec/05 step 6,
+    /// spec/07). Kept in the account worker's memory, so a relaunch
+    /// shows none until its next check. M4.3f fills this from those
+    /// observations; it is empty until then.
+    pub evidence: Vec<String>,
+}
+
+impl OutBoxRow {
+    /// Copy a stored row, attaching the evidence the worker observed.
+    fn from_stored(row: sb_resources::OutBoxRow, evidence: Vec<String>) -> Self {
+        Self {
+            attempt_id: row.attempt_id,
+            draft_id: row.draft_id,
+            account_id: row.account_id,
+            identity_id: row.identity_id,
+            subject: row.subject,
+            recipients: row.recipients,
+            state: row.state,
+            created_at: row.created_at,
+            updated_at: row.updated_at,
+            hold_until: row.hold_until,
+            resolved_at: row.resolved_at,
+            send_requested_at: row.send_requested_at,
+            proton_draft_id: row.proton_draft_id,
+            final_reply: row.final_reply,
+            resolution: row.resolution,
+            sent_copy: row.sent_copy,
+            waits_for_confirmation: row.waits_for_confirmation,
+            evidence,
+        }
+    }
+}
+
+/// The Out Box (spec/07): live attempts, then history, each newest
+/// first.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OutBox {
+    pub live: Vec<OutBoxRow>,
+    pub history: Vec<OutBoxRow>,
 }
 
 /// The resolution receipt's body: the attempt, the resolution and,

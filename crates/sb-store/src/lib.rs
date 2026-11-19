@@ -109,7 +109,8 @@ pub use receipts::{
 };
 pub use restore_artifacts::{RestoreArtifact, RestoreArtifactKind};
 pub use send::{
-    SendAttempt, UnknownResolution, cancel_send, confirm_send_route, reply_headers,
+    OutBox, OutBoxRecipient, OutBoxRow, RecipientKind, RecipientState, SendAttempt, SentCopy,
+    UnknownResolution, cancel_send, confirm_send_route, out_box, reply_headers,
     reply_source_account, resolve_unknown_send, retry_rejected_recipients, send_draft,
 };
 pub use settings::{StoredSetting, read_all, upsert};

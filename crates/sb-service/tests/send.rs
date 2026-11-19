@@ -184,3 +184,64 @@ fn confirm_route_and_retry_cross_service_dtos() {
     assert!(matches!(error, CoreError::Conflict { .. }), "{error:?}");
     block_on(core.shutdown());
 }
+
+#[test]
+fn out_box_cross_service_dtos() {
+    let scratch = ScratchDir::new("service-outbox-dtos");
+    let core = open(&scratch);
+    seed(&state_db(&scratch));
+    let draft = create(&core);
+    let saved = save(&core, &draft.draft_id, None);
+    let queued = send(&core, &draft.draft_id, &saved.revision_id).unwrap();
+    let attempt_id = queued.attempt_id.clone();
+    execute_sql(
+        &state_db(&scratch),
+        &format!(
+            "UPDATE send_attempts SET state = 'outcome_unknown', final_reply = '1000 OK',
+                proton_draft_id = 'pd', send_requested_at = 1234
+             WHERE attempt_id = '{attempt_id}';
+             UPDATE send_recipients SET state = 'unknown' WHERE attempt_id = '{attempt_id}';"
+        ),
+    );
+
+    let out_box = block_on(core.out_box()).unwrap();
+    assert!(out_box.history.is_empty());
+    let row = &out_box.live[0];
+    assert_eq!(row.attempt_id, attempt_id);
+    assert_eq!(row.draft_id, draft.draft_id);
+    assert_eq!(row.account_id, "acct-1");
+    assert_eq!(row.identity_id, "ident-1");
+    assert_eq!(row.subject, "hello");
+    assert_eq!(row.state, AttemptState::OutcomeUnknown);
+    assert_eq!(row.resolution, None);
+    assert_eq!(row.sent_copy, SentCopy::ServerSaves);
+    assert!(!row.waits_for_confirmation);
+    assert_eq!(row.proton_draft_id.as_deref(), Some("pd"));
+    assert_eq!(row.send_requested_at_ms, Some(1234));
+    assert_eq!(row.final_reply.as_deref(), Some("1000 OK"));
+    assert!(row.evidence.is_empty(), "M4.3f fills the evidence");
+    assert!(row.created_at_ms > 0);
+    assert!(row.updated_at_ms > 0);
+    assert!(row.hold_until_ms.is_some());
+    assert_eq!(row.recipients.len(), 1);
+    assert_eq!(row.recipients[0].address, "a@X.NET");
+    assert_eq!(row.recipients[0].kind, RecipientKind::To);
+    assert_eq!(row.recipients[0].state, RecipientState::Unknown);
+
+    // A cancelled attempt is history, with its DTO fields converted.
+    let draft2 = create(&core);
+    let saved2 = save(&core, &draft2.draft_id, None);
+    let queued2 = send(&core, &draft2.draft_id, &saved2.revision_id).unwrap();
+    let receipt =
+        block_on(core.cancel_send(&core.new_idempotency_key(), &queued2.attempt_id)).unwrap();
+    assert_eq!(receipt.command, "cancel_send");
+    let out_box = block_on(core.out_box()).unwrap();
+    let cancelled = out_box
+        .history
+        .iter()
+        .find(|row| row.attempt_id == queued2.attempt_id)
+        .unwrap();
+    assert_eq!(cancelled.state, AttemptState::Cancelled);
+    assert_eq!(cancelled.subject, "hello");
+    block_on(core.shutdown());
+}

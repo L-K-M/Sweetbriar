@@ -92,7 +92,7 @@ pub enum AttemptState {
 }
 
 impl AttemptState {
-    fn from_engine(state: sb_engine::AttemptState) -> Self {
+    pub(crate) fn from_engine(state: sb_engine::AttemptState) -> Self {
         match state {
             sb_engine::AttemptState::Held => Self::Held,
             sb_engine::AttemptState::Queued => Self::Queued,

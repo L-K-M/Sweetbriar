@@ -732,3 +732,439 @@ fn retry_rejected_recipients_conflicts_for_proton() {
     assert_eq!(one_i64(&store, "SELECT count(*) FROM send_attempts"), 1);
     store.close().unwrap();
 }
+
+/// One directly inserted Out Box attempt: the fields `out_box()`
+/// reads, with explicit times so ordering and the 30-day cut are
+/// observable.
+struct SeedAttempt {
+    attempt_id: &'static str,
+    draft_id: &'static str,
+    revision_id: &'static str,
+    state: &'static str,
+    config_generation: i64,
+    created_at: i64,
+    updated_at: i64,
+    resolution: Option<&'static str>,
+    resolved_at: Option<i64>,
+    final_reply: Option<&'static str>,
+    hold_until: Option<i64>,
+    send_requested_at: Option<i64>,
+}
+
+fn insert_draft(store: &Store, draft_id: &str) {
+    let draft_id = draft_id.to_owned();
+    writing(store, move |tx| {
+        tx.execute(
+            "INSERT INTO drafts (draft_id, state, current_revision_id, created_at, updated_at)
+             VALUES (?1, 'editing', NULL, 0, 0)",
+            params![draft_id],
+        )
+        .map_err(|e| StoreError::internal(e.to_string()))?;
+        Ok(())
+    });
+}
+
+fn insert_revision(store: &Store, draft_id: &str, revision_id: &str, subject: &str) {
+    let (draft_id, revision_id, subject) = (
+        draft_id.to_owned(),
+        revision_id.to_owned(),
+        subject.to_owned(),
+    );
+    writing(store, move |tx| {
+        tx.execute(
+            "INSERT INTO draft_revisions
+             (revision_id, draft_id, seq, account_id, identity_id, compose_format, plain_flowed,
+              subject, to_json, cc_json, bcc_json, body_source, attachments_json, created_at)
+             VALUES (?1, ?2,
+                     (SELECT COALESCE(MAX(seq), 0) + 1 FROM draft_revisions WHERE draft_id = ?2),
+                     'acct', 'id', 'plain', 1, ?3, '[]', '[]', '[]', 'b', '[]', 0)",
+            params![revision_id, draft_id, subject],
+        )
+        .map_err(|e| StoreError::internal(e.to_string()))?;
+        Ok(())
+    });
+}
+
+fn insert_attempt(store: &Store, attempt: SeedAttempt) {
+    let SeedAttempt {
+        attempt_id,
+        draft_id,
+        revision_id,
+        state,
+        config_generation,
+        created_at,
+        updated_at,
+        resolution,
+        resolved_at,
+        final_reply,
+        hold_until,
+        send_requested_at,
+    } = attempt;
+    let proton_draft_id = send_requested_at.map(|_| "pd");
+    writing(store, move |tx| {
+        tx.execute(
+            "INSERT INTO send_attempts
+             (attempt_id, draft_id, revision_id, account_id, config_generation, identity_id,
+              mime_sha256, message_id_header, envelope_from, state, hold_until, final_reply,
+              sent_copy, resolution, resolved_at, created_at, updated_at,
+              proton_draft_id, send_requested_at)
+             VALUES (?1, ?2, ?3, 'acct', ?4, 'id', 'sha', 'm', 'me@example.test',
+                     ?5, ?6, ?7, 'server_saves', ?8, ?9, ?10, ?11, ?12, ?13)",
+            params![
+                attempt_id,
+                draft_id,
+                revision_id,
+                config_generation,
+                state,
+                hold_until,
+                final_reply,
+                resolution,
+                resolved_at,
+                created_at,
+                updated_at,
+                proton_draft_id,
+                send_requested_at,
+            ],
+        )
+        .map_err(|e| StoreError::internal(e.to_string()))?;
+        Ok(())
+    });
+}
+
+fn insert_recipient(
+    store: &Store,
+    attempt_id: &str,
+    canonical: &str,
+    address: &str,
+    kind: &str,
+    state: &str,
+) {
+    let (attempt_id, canonical, address, kind, state) = (
+        attempt_id.to_owned(),
+        canonical.to_owned(),
+        address.to_owned(),
+        kind.to_owned(),
+        state.to_owned(),
+    );
+    writing(store, move |tx| {
+        tx.execute(
+            "INSERT INTO send_recipients (attempt_id, canonical, address, kind, state)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![attempt_id, canonical, address, kind, state],
+        )
+        .map_err(|e| StoreError::internal(e.to_string()))?;
+        Ok(())
+    });
+}
+
+fn read_out_box(store: &Store, now_ms: i64) -> OutBox {
+    reading(store, |tx| out_box(tx, Timestamp::from_millis(now_ms)))
+}
+
+fn attempt_ids(rows: &[OutBoxRow]) -> Vec<&str> {
+    rows.iter().map(|row| row.attempt_id.as_str()).collect()
+}
+
+#[test]
+fn out_box_splits_live_and_history_orders_each_and_cuts_at_30_days() {
+    let (_scratch, _paths, store) = scratch();
+    seed(&store);
+    let now_ms = 10_000_000_000_i64;
+    let cutoff = now_ms - 30 * 24 * 60 * 60 * 1000;
+    for draft_id in ["d2", "d3", "d4", "d5"] {
+        insert_draft(&store, draft_id);
+    }
+    // d1's seed revision is r1; the rest are inserted with subjects.
+    for (draft_id, revision_id, subject) in [
+        ("d1", "r2", "queued ok"),
+        ("d1", "r3", "queued wait"),
+        ("d1", "r4", "submitting"),
+        ("d1", "r5", "unknown"),
+        ("d1", "r7", "accepted"),
+        ("d1", "r8", "cancelled"),
+        ("d1", "r9", "resolved"),
+        ("d1", "r12", "old accepted"),
+        ("d2", "ra", "failed old"),
+        ("d2", "rb", "failed new"),
+        ("d3", "rc", "failed only"),
+        ("d4", "rd1", "tie b"),
+        ("d4", "rd2", "tie a"),
+        ("d4", "rd3", "cutoff"),
+        ("d5", "rf", "failed live"),
+    ] {
+        insert_revision(&store, draft_id, revision_id, subject);
+    }
+    let base = 8_000_000_000_i64;
+    let seed_attempt = |attempt_id: &'static str,
+                        draft_id: &'static str,
+                        revision_id: &'static str,
+                        state: &'static str,
+                        updated_at: i64| {
+        insert_attempt(
+            &store,
+            SeedAttempt {
+                attempt_id,
+                draft_id,
+                revision_id,
+                state,
+                config_generation: 1,
+                created_at: updated_at,
+                updated_at,
+                resolution: None,
+                resolved_at: None,
+                final_reply: None,
+                hold_until: None,
+                send_requested_at: None,
+            },
+        );
+    };
+    seed_attempt("a_held", "d1", "r1", "held", base + 1);
+    seed_attempt("a_queued_ok", "d1", "r2", "queued", base + 11);
+    seed_attempt("a_queued_wait", "d1", "r3", "queued", base + 21);
+    seed_attempt("a_submitting", "d1", "r4", "submitting", base + 31);
+    seed_attempt("a_unknown", "d1", "r5", "outcome_unknown", base + 41);
+    seed_attempt("a_failed_live", "d5", "rf", "failed", base + 51);
+    seed_attempt("a_accepted", "d1", "r7", "accepted", base + 61);
+    seed_attempt("a_cancelled", "d1", "r8", "cancelled", base + 71);
+    seed_attempt("a_resolved", "d1", "r9", "outcome_unknown", base + 81);
+    seed_attempt("a_failed_old", "d2", "ra", "failed", base + 91);
+    seed_attempt("a_failed_new", "d2", "rb", "failed", base + 101);
+    seed_attempt("a_failed_only", "d3", "rc", "failed", base + 111);
+    seed_attempt("a_tie_b", "d4", "rd1", "held", base + 200);
+    seed_attempt("a_tie_a", "d4", "rd2", "held", base + 200);
+    // A reconfiguration and a resolution, then the boundary row.
+    writing(&store, move |tx| {
+        tx.execute(
+            "UPDATE send_attempts SET config_generation = 2 WHERE attempt_id = 'a_queued_wait'",
+            [],
+        )
+        .map_err(|e| StoreError::internal(e.to_string()))?;
+        tx.execute(
+            "UPDATE send_attempts SET resolution = 'marked_sent', resolved_at = 8000000081
+             WHERE attempt_id = 'a_resolved'",
+            [],
+        )
+        .map_err(|e| StoreError::internal(e.to_string()))?;
+        tx.execute(
+            "UPDATE send_attempts SET final_reply = '1000 OK' WHERE attempt_id = 'a_accepted'",
+            [],
+        )
+        .map_err(|e| StoreError::internal(e.to_string()))?;
+        tx.execute(
+            "UPDATE send_attempts SET final_reply = '550 no' WHERE attempt_id = 'a_failed_live'",
+            [],
+        )
+        .map_err(|e| StoreError::internal(e.to_string()))?;
+        tx.execute(
+            "UPDATE send_attempts SET send_requested_at = 8000000030,
+                proton_draft_id = 'pd' WHERE attempt_id = 'a_submitting'",
+            [],
+        )
+        .map_err(|e| StoreError::internal(e.to_string()))?;
+        tx.execute(
+            "UPDATE send_attempts SET hold_until = 8000000002 WHERE attempt_id = 'a_held'",
+            [],
+        )
+        .map_err(|e| StoreError::internal(e.to_string()))?;
+        tx.execute(
+            "UPDATE send_attempts SET updated_at = 7000000001, created_at = 7000000000
+             WHERE attempt_id = 'a_old_accepted'",
+            [],
+        )
+        .map_err(|e| StoreError::internal(e.to_string()))?;
+        tx.execute(
+            "INSERT INTO send_attempts
+             (attempt_id, draft_id, revision_id, account_id, config_generation, identity_id,
+              mime_sha256, message_id_header, envelope_from, state, sent_copy, created_at, updated_at)
+             VALUES ('a_old_accepted', 'd1', 'r12', 'acct', 1, 'id', 'sha', 'm',
+                     'me@example.test', 'accepted', 'server_saves', 7000000000, 7000000001)",
+            [],
+        )
+        .map_err(|e| StoreError::internal(e.to_string()))?;
+        tx.execute(
+            "INSERT INTO send_attempts
+             (attempt_id, draft_id, revision_id, account_id, config_generation, identity_id,
+              mime_sha256, message_id_header, envelope_from, state, sent_copy, created_at, updated_at)
+             VALUES ('a_cutoff', 'd4', 'rd3', 'acct', 1, 'id', 'sha', 'm',
+                     'me@example.test', 'accepted', 'server_saves', ?1, ?1)",
+            params![cutoff],
+        )
+        .map_err(|e| StoreError::internal(e.to_string()))?;
+        Ok(())
+    });
+    insert_recipient(&store, "a_held", "a@x.net", "a@X.NET", "to", "pending");
+    insert_recipient(&store, "a_held", "b@y.net", "b@Y.NET", "bcc", "pending");
+    insert_recipient(&store, "a_accepted", "a@x.net", "a@X.NET", "to", "sent");
+    insert_recipient(&store, "a_accepted", "b@y.net", "b@Y.NET", "bcc", "sent");
+    insert_recipient(&store, "a_unknown", "a@x.net", "a@X.NET", "to", "unknown");
+    insert_recipient(
+        &store,
+        "a_failed_live",
+        "a@x.net",
+        "a@X.NET",
+        "to",
+        "unsent",
+    );
+
+    let out_box = read_out_box(&store, now_ms);
+    assert_eq!(
+        attempt_ids(&out_box.live),
+        vec![
+            "a_tie_b",
+            "a_tie_a",
+            "a_failed_only",
+            "a_failed_new",
+            "a_failed_live",
+            "a_unknown",
+            "a_submitting",
+            "a_queued_wait",
+            "a_queued_ok",
+            "a_held",
+        ]
+    );
+    assert_eq!(
+        attempt_ids(&out_box.history),
+        vec![
+            "a_failed_old",
+            "a_resolved",
+            "a_cancelled",
+            "a_accepted",
+            "a_cutoff",
+        ]
+    );
+    let row = |id: &str| {
+        out_box
+            .live
+            .iter()
+            .chain(out_box.history.iter())
+            .find(|row| row.attempt_id == id)
+            .unwrap_or_else(|| panic!("{id} is in the out box"))
+    };
+    let held = row("a_held");
+    assert_eq!(held.state, AttemptState::Held);
+    assert_eq!(held.subject, "s");
+    assert_eq!(held.hold_until, Some(Timestamp::from_millis(base + 2)));
+    assert_eq!(held.sent_copy, SentCopy::ServerSaves);
+    assert!(!held.waits_for_confirmation);
+    assert_eq!(
+        held.recipients,
+        vec![
+            OutBoxRecipient {
+                address: "a@X.NET".to_owned(),
+                kind: RecipientKind::To,
+                state: RecipientState::Pending,
+            },
+            OutBoxRecipient {
+                address: "b@Y.NET".to_owned(),
+                kind: RecipientKind::Bcc,
+                state: RecipientState::Pending,
+            },
+        ]
+    );
+    assert!(!row("a_queued_ok").waits_for_confirmation);
+    assert!(row("a_queued_wait").waits_for_confirmation);
+    let submitting = row("a_submitting");
+    assert_eq!(
+        submitting.send_requested_at,
+        Some(Timestamp::from_millis(base + 30))
+    );
+    assert_eq!(submitting.proton_draft_id.as_deref(), Some("pd"));
+    let unknown = row("a_unknown");
+    assert_eq!(unknown.state, AttemptState::OutcomeUnknown);
+    assert_eq!(unknown.resolution, None);
+    assert_eq!(
+        unknown.recipients,
+        vec![OutBoxRecipient {
+            address: "a@X.NET".to_owned(),
+            kind: RecipientKind::To,
+            state: RecipientState::Unknown,
+        }]
+    );
+    let failed = row("a_failed_live");
+    assert_eq!(failed.state, AttemptState::Failed);
+    assert_eq!(failed.final_reply.as_deref(), Some("550 no"));
+    assert_eq!(
+        failed.recipients,
+        vec![OutBoxRecipient {
+            address: "a@X.NET".to_owned(),
+            kind: RecipientKind::To,
+            state: RecipientState::Unsent,
+        }]
+    );
+    let accepted = row("a_accepted");
+    assert_eq!(accepted.state, AttemptState::Accepted);
+    assert_eq!(accepted.final_reply.as_deref(), Some("1000 OK"));
+    assert_eq!(
+        accepted.recipients,
+        vec![
+            OutBoxRecipient {
+                address: "a@X.NET".to_owned(),
+                kind: RecipientKind::To,
+                state: RecipientState::Sent,
+            },
+            OutBoxRecipient {
+                address: "b@Y.NET".to_owned(),
+                kind: RecipientKind::Bcc,
+                state: RecipientState::Sent,
+            },
+        ]
+    );
+    let resolved = row("a_resolved");
+    assert_eq!(resolved.resolution, Some(UnknownResolution::MarkedSent));
+    assert_eq!(
+        resolved.resolved_at,
+        Some(Timestamp::from_millis(base + 81))
+    );
+    assert_eq!(row("a_cutoff").updated_at, Timestamp::from_millis(cutoff));
+    store.close().unwrap();
+}
+
+#[test]
+fn a_failed_attempt_is_live_until_a_newer_attempt_replaces_it() {
+    let (_scratch, _paths, store) = scratch();
+    seed(&store);
+    insert_attempt(
+        &store,
+        SeedAttempt {
+            attempt_id: "a1",
+            draft_id: "d1",
+            revision_id: "r1",
+            state: "failed",
+            config_generation: 1,
+            created_at: 1_000,
+            updated_at: 1_000,
+            resolution: None,
+            resolved_at: None,
+            final_reply: None,
+            hold_until: None,
+            send_requested_at: None,
+        },
+    );
+    let out_box = read_out_box(&store, 2_000);
+    assert_eq!(attempt_ids(&out_box.live), vec!["a1"]);
+    assert!(out_box.history.is_empty());
+
+    // A newer attempt for the same draft replaces it into history.
+    insert_revision(&store, "d1", "r2", "second");
+    insert_attempt(
+        &store,
+        SeedAttempt {
+            attempt_id: "a2",
+            draft_id: "d1",
+            revision_id: "r2",
+            state: "held",
+            config_generation: 1,
+            created_at: 2_000,
+            updated_at: 2_000,
+            resolution: None,
+            resolved_at: None,
+            final_reply: None,
+            hold_until: None,
+            send_requested_at: None,
+        },
+    );
+    let out_box = read_out_box(&store, 3_000);
+    assert_eq!(attempt_ids(&out_box.live), vec!["a2"]);
+    assert_eq!(attempt_ids(&out_box.history), vec!["a1"]);
+    store.close().unwrap();
+}
