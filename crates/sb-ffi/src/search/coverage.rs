@@ -38,7 +38,7 @@ pub struct Coverage {
 }
 
 impl Coverage {
-    pub(super) fn from_service(value: &sb_service::Coverage) -> Self {
+    pub(crate) fn from_service(value: &sb_service::Coverage) -> Self {
         Self {
             generation: value.generation,
             extractor_version: value.extractor_version,

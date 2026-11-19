@@ -18,6 +18,10 @@
 //! UniFFI's scaffolding expands to `unsafe extern "C"` shims. It
 //! contains no hand-written `unsafe`.
 
+mod account_health;
+pub use account_health::{
+    AccountBreakerEvent, AccountCondition, AccountHealth, AccountHealthSubscription,
+};
 mod accounts;
 mod api;
 mod appearance;

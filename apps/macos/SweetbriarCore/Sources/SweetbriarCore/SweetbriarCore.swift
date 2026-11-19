@@ -634,6 +634,150 @@ fileprivate struct FfiConverterData: FfiConverterRustBuffer {
 
 
 /**
+ * The account-health stream (spec/07): one in-flight `next` at a
+ * time, in-memory only.
+ */
+public protocol AccountHealthSubscriptionProtocol: AnyObject, Sendable {
+    
+    /**
+     * Wait until `account_health()` changed since the last answer;
+     * the shell then reads it again. One call at a time: a second is
+     * `InvalidInput`. A cancelled call answers `Cancelled` and moves
+     * nothing; shutdown ends a wait with `Unavailable`.
+     */
+    func next(token: CancelToken) async throws 
+    
+}
+/**
+ * The account-health stream (spec/07): one in-flight `next` at a
+ * time, in-memory only.
+ */
+open class AccountHealthSubscription: AccountHealthSubscriptionProtocol, @unchecked Sendable {
+    fileprivate let handle: UInt64
+
+    /// Used to instantiate a [FFIObject] without an actual handle, for fakes in tests, mostly.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public struct NoHandle {
+        public init() {}
+    }
+
+    // TODO: We'd like this to be `private` but for Swifty reasons,
+    // we can't implement `FfiConverter` without making this `required` and we can't
+    // make it `required` without making it `public`.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    required public init(unsafeFromHandle handle: UInt64) {
+        self.handle = handle
+    }
+
+    // This constructor can be used to instantiate a fake object.
+    // - Parameter noHandle: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
+    //
+    // - Warning:
+    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing handle the FFI lower functions will crash.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public init(noHandle: NoHandle) {
+        self.handle = 0
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public func uniffiCloneHandle() -> UInt64 {
+        return try! rustCall { uniffi_sb_ffi_fn_clone_accounthealthsubscription(self.handle, $0) }
+    }
+    // No primary constructor declared for this class.
+
+    deinit {
+        if handle == 0 {
+            // Mock objects have handle=0 don't try to free them
+            return
+        }
+
+        try! rustCall { uniffi_sb_ffi_fn_free_accounthealthsubscription(handle, $0) }
+    }
+
+    
+
+    
+    /**
+     * Wait until `account_health()` changed since the last answer;
+     * the shell then reads it again. One call at a time: a second is
+     * `InvalidInput`. A cancelled call answers `Cancelled` and moves
+     * nothing; shutdown ends a wait with `Unavailable`.
+     */
+open func next(token: CancelToken)async throws   {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_sb_ffi_fn_method_accounthealthsubscription_next(
+                        self.uniffiCloneHandle(),FfiConverterTypeCancelToken_lower(token)
+                )
+            },
+            pollFunc: ffi_sb_ffi_rust_future_poll_void,
+            completeFunc: ffi_sb_ffi_rust_future_complete_void,
+            freeFunc: ffi_sb_ffi_rust_future_free_void,
+            liftFunc: { $0 },
+            errorHandler: FfiConverterTypeCoreError_lift
+        )
+}
+    
+
+    
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeAccountHealthSubscription: FfiConverter {
+    typealias FfiType = UInt64
+    typealias SwiftType = AccountHealthSubscription
+
+    public static func lift(_ handle: UInt64) throws -> AccountHealthSubscription {
+        return AccountHealthSubscription(unsafeFromHandle: handle)
+    }
+
+    public static func lower(_ value: AccountHealthSubscription) -> UInt64 {
+        return value.uniffiCloneHandle()
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> AccountHealthSubscription {
+        let handle: UInt64 = try readInt(&buf)
+        return try lift(handle)
+    }
+
+    public static func write(_ value: AccountHealthSubscription, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeAccountHealthSubscription_lift(_ handle: UInt64) throws -> AccountHealthSubscription {
+    return try FfiConverterTypeAccountHealthSubscription.lift(handle)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeAccountHealthSubscription_lower(_ value: AccountHealthSubscription) -> UInt64 {
+    return FfiConverterTypeAccountHealthSubscription.lower(value)
+}
+
+
+
+
+
+
+/**
  * The appearance stream (spec/07 "Subscriptions"): one in-flight
  * `next` at a time, in-memory only.
  */
@@ -1093,6 +1237,20 @@ public func FfiConverterTypeCancelToken_lower(_ value: CancelToken) -> UInt64 {
  * lock futures are all that is needed here.
  */
 public protocol CoreProtocol: AnyObject, Sendable {
+    
+    /**
+     * `account_health()` (spec/07 "Queries"): every account, in
+     * `accounts()` order, with its condition and the rest. A query:
+     * the token races the core's lock.
+     */
+    func accountHealth(token: CancelToken) async throws  -> [AccountHealth]
+    
+    /**
+     * `subscribe_account_health` (spec/07 "Subscriptions"): changes
+     * of `account_health()` from now on. Subscribe first, then read
+     * it, and none is missed.
+     */
+    func subscribeAccountHealth(token: CancelToken) async throws  -> AccountHealthSubscription
     
     /**
      * `add_bridge_account(params)` (spec/07) under an idempotency key
@@ -1649,6 +1807,48 @@ open class Core: CoreProtocol, @unchecked Sendable {
 
     
 
+    
+    /**
+     * `account_health()` (spec/07 "Queries"): every account, in
+     * `accounts()` order, with its condition and the rest. A query:
+     * the token races the core's lock.
+     */
+open func accountHealth(token: CancelToken)async throws  -> [AccountHealth]  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_sb_ffi_fn_method_core_account_health(
+                        self.uniffiCloneHandle(),FfiConverterTypeCancelToken_lower(token)
+                )
+            },
+            pollFunc: ffi_sb_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_sb_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_sb_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterSequenceTypeAccountHealth.lift,
+            errorHandler: FfiConverterTypeCoreError_lift
+        )
+}
+    
+    /**
+     * `subscribe_account_health` (spec/07 "Subscriptions"): changes
+     * of `account_health()` from now on. Subscribe first, then read
+     * it, and none is missed.
+     */
+open func subscribeAccountHealth(token: CancelToken)async throws  -> AccountHealthSubscription  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_sb_ffi_fn_method_core_subscribe_account_health(
+                        self.uniffiCloneHandle(),FfiConverterTypeCancelToken_lower(token)
+                )
+            },
+            pollFunc: ffi_sb_ffi_rust_future_poll_u64,
+            completeFunc: ffi_sb_ffi_rust_future_complete_u64,
+            freeFunc: ffi_sb_ffi_rust_future_free_u64,
+            liftFunc: FfiConverterTypeAccountHealthSubscription_lift,
+            errorHandler: FfiConverterTypeCoreError_lift
+        )
+}
     
     /**
      * `add_bridge_account(params)` (spec/07) under an idempotency key
@@ -3836,6 +4036,152 @@ public func FfiConverterTypeAccountAppearanceChange_lift(_ buf: RustBuffer) thro
 #endif
 public func FfiConverterTypeAccountAppearanceChange_lower(_ value: AccountAppearanceChange) -> RustBuffer {
     return FfiConverterTypeAccountAppearanceChange.lower(value)
+}
+
+
+/**
+ * One open breaker event as the health surface lists it.
+ */
+public struct AccountBreakerEvent: Equatable, Hashable {
+    public var eventId: String
+    public var mailboxId: Int64?
+    public var disappeared: UInt64
+    public var detectedAtMs: Int64
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(eventId: String, mailboxId: Int64?, disappeared: UInt64, detectedAtMs: Int64) {
+        self.eventId = eventId
+        self.mailboxId = mailboxId
+        self.disappeared = disappeared
+        self.detectedAtMs = detectedAtMs
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension AccountBreakerEvent: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeAccountBreakerEvent: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> AccountBreakerEvent {
+        return
+            try AccountBreakerEvent(
+                eventId: FfiConverterString.read(from: &buf), 
+                mailboxId: FfiConverterOptionInt64.read(from: &buf), 
+                disappeared: FfiConverterUInt64.read(from: &buf), 
+                detectedAtMs: FfiConverterInt64.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: AccountBreakerEvent, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.eventId, into: &buf)
+        FfiConverterOptionInt64.write(value.mailboxId, into: &buf)
+        FfiConverterUInt64.write(value.disappeared, into: &buf)
+        FfiConverterInt64.write(value.detectedAtMs, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeAccountBreakerEvent_lift(_ buf: RustBuffer) throws -> AccountBreakerEvent {
+    return try FfiConverterTypeAccountBreakerEvent.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeAccountBreakerEvent_lower(_ value: AccountBreakerEvent) -> RustBuffer {
+    return FfiConverterTypeAccountBreakerEvent.lower(value)
+}
+
+
+/**
+ * One account's health (spec/07 `account_health`).
+ */
+public struct AccountHealth: Equatable, Hashable {
+    public var accountId: String
+    public var state: AccountState
+    public var stateReason: String?
+    public var condition: AccountCondition
+    public var warnings: [String]
+    public var breakerEvents: [AccountBreakerEvent]
+    public var coverage: Coverage
+    public var lastSyncMs: Int64?
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(accountId: String, state: AccountState, stateReason: String?, condition: AccountCondition, warnings: [String], breakerEvents: [AccountBreakerEvent], coverage: Coverage, lastSyncMs: Int64?) {
+        self.accountId = accountId
+        self.state = state
+        self.stateReason = stateReason
+        self.condition = condition
+        self.warnings = warnings
+        self.breakerEvents = breakerEvents
+        self.coverage = coverage
+        self.lastSyncMs = lastSyncMs
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension AccountHealth: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeAccountHealth: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> AccountHealth {
+        return
+            try AccountHealth(
+                accountId: FfiConverterString.read(from: &buf), 
+                state: FfiConverterTypeAccountState.read(from: &buf), 
+                stateReason: FfiConverterOptionString.read(from: &buf), 
+                condition: FfiConverterTypeAccountCondition.read(from: &buf), 
+                warnings: FfiConverterSequenceString.read(from: &buf), 
+                breakerEvents: FfiConverterSequenceTypeAccountBreakerEvent.read(from: &buf), 
+                coverage: FfiConverterTypeCoverage.read(from: &buf), 
+                lastSyncMs: FfiConverterOptionInt64.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: AccountHealth, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.accountId, into: &buf)
+        FfiConverterTypeAccountState.write(value.state, into: &buf)
+        FfiConverterOptionString.write(value.stateReason, into: &buf)
+        FfiConverterTypeAccountCondition.write(value.condition, into: &buf)
+        FfiConverterSequenceString.write(value.warnings, into: &buf)
+        FfiConverterSequenceTypeAccountBreakerEvent.write(value.breakerEvents, into: &buf)
+        FfiConverterTypeCoverage.write(value.coverage, into: &buf)
+        FfiConverterOptionInt64.write(value.lastSyncMs, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeAccountHealth_lift(_ buf: RustBuffer) throws -> AccountHealth {
+    return try FfiConverterTypeAccountHealth.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeAccountHealth_lower(_ value: AccountHealth) -> RustBuffer {
+    return FfiConverterTypeAccountHealth.lower(value)
 }
 
 
@@ -8819,6 +9165,147 @@ public func FfiConverterTypeAccountColor_lower(_ value: AccountColor) -> RustBuf
 
 
 /**
+ * One account's condition (spec/04's "Account states and health"
+ * table).
+ */
+
+public enum AccountCondition: Equatable, Hashable {
+    
+    case paused
+    case disconnected
+    case signInAgain
+    case verify
+    case versionRefused(message: String
+    )
+    case secretStore(reason: String
+    )
+    case offline(nextRetryMs: Int64
+    )
+    case notAnswering(nextRetryMs: Int64
+    )
+    case rateLimited(untilMs: Int64
+    )
+    case healthy
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension AccountCondition: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeAccountCondition: FfiConverterRustBuffer {
+    typealias SwiftType = AccountCondition
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> AccountCondition {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .paused
+        
+        case 2: return .disconnected
+        
+        case 3: return .signInAgain
+        
+        case 4: return .verify
+        
+        case 5: return .versionRefused(message: try FfiConverterString.read(from: &buf)
+        )
+        
+        case 6: return .secretStore(reason: try FfiConverterString.read(from: &buf)
+        )
+        
+        case 7: return .offline(nextRetryMs: try FfiConverterInt64.read(from: &buf)
+        )
+        
+        case 8: return .notAnswering(nextRetryMs: try FfiConverterInt64.read(from: &buf)
+        )
+        
+        case 9: return .rateLimited(untilMs: try FfiConverterInt64.read(from: &buf)
+        )
+        
+        case 10: return .healthy
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: AccountCondition, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .paused:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .disconnected:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .signInAgain:
+            writeInt(&buf, Int32(3))
+        
+        
+        case .verify:
+            writeInt(&buf, Int32(4))
+        
+        
+        case let .versionRefused(message):
+            writeInt(&buf, Int32(5))
+            FfiConverterString.write(message, into: &buf)
+            
+        
+        case let .secretStore(reason):
+            writeInt(&buf, Int32(6))
+            FfiConverterString.write(reason, into: &buf)
+            
+        
+        case let .offline(nextRetryMs):
+            writeInt(&buf, Int32(7))
+            FfiConverterInt64.write(nextRetryMs, into: &buf)
+            
+        
+        case let .notAnswering(nextRetryMs):
+            writeInt(&buf, Int32(8))
+            FfiConverterInt64.write(nextRetryMs, into: &buf)
+            
+        
+        case let .rateLimited(untilMs):
+            writeInt(&buf, Int32(9))
+            FfiConverterInt64.write(untilMs, into: &buf)
+            
+        
+        case .healthy:
+            writeInt(&buf, Int32(10))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeAccountCondition_lift(_ buf: RustBuffer) throws -> AccountCondition {
+    return try FfiConverterTypeAccountCondition.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeAccountCondition_lower(_ value: AccountCondition) -> RustBuffer {
+    return FfiConverterTypeAccountCondition.lower(value)
+}
+
+
+
+/**
  * How an account reaches its mail.
  */
 
@@ -13772,6 +14259,56 @@ fileprivate struct FfiConverterSequenceTypeAccountAppearance: FfiConverterRustBu
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterSequenceTypeAccountBreakerEvent: FfiConverterRustBuffer {
+    typealias SwiftType = [AccountBreakerEvent]
+
+    public static func write(_ value: [AccountBreakerEvent], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeAccountBreakerEvent.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [AccountBreakerEvent] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [AccountBreakerEvent]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeAccountBreakerEvent.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeAccountHealth: FfiConverterRustBuffer {
+    typealias SwiftType = [AccountHealth]
+
+    public static func write(_ value: [AccountHealth], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeAccountHealth.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [AccountHealth] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [AccountHealth]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeAccountHealth.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterSequenceTypeBackupGeneration: FfiConverterRustBuffer {
     typealias SwiftType = [BackupGeneration]
 
@@ -14528,6 +15065,15 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sb_ffi_checksum_func_palette() != 26715) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sb_ffi_checksum_method_accounthealthsubscription_next() != 23582) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sb_ffi_checksum_method_core_account_health() != 4891) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sb_ffi_checksum_method_core_subscribe_account_health() != 58218) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sb_ffi_checksum_method_core_add_bridge_account() != 847) {
