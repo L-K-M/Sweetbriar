@@ -28,7 +28,25 @@ pub struct NewMail {
 /// coalesced, oldest first. Each subscription has its own, so one
 /// consumer's backlog is its own.
 pub(crate) struct Subscriber {
-    pending: Mutex<VecDeque<(String, VecDeque<i64>)>>,
+    pending: Mutex<VecDeque<Batch>>,
+}
+
+/// One account's pending arrivals: all of them counted, only the
+/// newest 20 ids kept, so a slow consumer's backlog stays bounded.
+struct Batch {
+    account_id: String,
+    count: u32,
+    ids: VecDeque<i64>,
+}
+
+impl Batch {
+    fn add(&mut self, message_ids: &[i64]) {
+        let added = u32::try_from(message_ids.len()).unwrap_or(u32::MAX);
+        self.count = self.count.saturating_add(added);
+        self.ids.extend(message_ids.iter().copied());
+        let excess = self.ids.len().saturating_sub(MAX_MESSAGE_IDS);
+        self.ids.drain(..excess);
+    }
 }
 
 impl Subscriber {
@@ -45,11 +63,16 @@ impl Subscriber {
             .pending
             .lock()
             .expect("the new-mail queue lock poisoned");
-        match pending.iter_mut().find(|(id, _)| id == account_id) {
-            Some((_, ids)) => ids.extend(message_ids.iter().copied()),
+        match pending.iter_mut().find(|b| b.account_id == account_id) {
+            Some(batch) => batch.add(message_ids),
             None => {
-                let ids = message_ids.iter().copied().collect();
-                pending.push_back((account_id.to_owned(), ids));
+                let mut batch = Batch {
+                    account_id: account_id.to_owned(),
+                    count: 0,
+                    ids: VecDeque::new(),
+                };
+                batch.add(message_ids);
+                pending.push_back(batch);
             }
         }
     }
@@ -61,19 +84,11 @@ impl Subscriber {
             .pending
             .lock()
             .expect("the new-mail queue lock poisoned");
-        let (account_id, mut ids) = pending.pop_front()?;
-        let count = u32::try_from(ids.len()).unwrap_or(u32::MAX);
-        let message_ids = if ids.len() > MAX_MESSAGE_IDS {
-            ids.split_off(ids.len() - MAX_MESSAGE_IDS)
-                .into_iter()
-                .collect()
-        } else {
-            ids.into_iter().collect()
-        };
+        let batch = pending.pop_front()?;
         Some(NewMail {
-            account_id,
-            count,
-            message_ids,
+            account_id: batch.account_id,
+            count: batch.count,
+            message_ids: batch.ids.into(),
         })
     }
 }
@@ -94,6 +109,26 @@ mod tests {
     use std::sync::Arc;
 
     use crate::windows::Windows;
+
+    #[test]
+    fn one_accounts_arrivals_coalesce_into_one_answer() {
+        let subscriber = super::Subscriber::new();
+        subscriber.push("a", &(1..=15).collect::<Vec<_>>());
+        subscriber.push("b", &[100]);
+        subscriber.push("a", &(16..=25).collect::<Vec<_>>());
+
+        // Both of a's pushes are one answer: every arrival counted, the
+        // newest 20 named, and b's batch keeps its place behind it.
+        let first = subscriber.pop().expect("a answers");
+        assert_eq!((first.account_id.as_str(), first.count), ("a", 25));
+        assert_eq!(first.message_ids, (6..=25).collect::<Vec<_>>());
+        let second = subscriber.pop().expect("b answers");
+        assert_eq!(
+            (second.account_id.as_str(), second.count, second.message_ids),
+            ("b", 1, vec![100])
+        );
+        assert!(subscriber.pop().is_none(), "nothing else is pending");
+    }
 
     #[test]
     fn two_accounts_arrivals_answer_one_after_the_other() {

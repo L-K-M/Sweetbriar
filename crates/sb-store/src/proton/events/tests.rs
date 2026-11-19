@@ -441,6 +441,23 @@ fn new_inbox_arrivals_are_reported_and_other_mailboxes_are_not() {
 }
 
 #[test]
+fn a_new_message_repeated_or_replayed_is_one_arrival() {
+    let (_scratch, store) = complete_store("proton-events-new-mail-replay");
+    let upsert = || ProtonChange::Upsert(Box::new(message("m2", &["0"], true)));
+
+    // Named twice in one chunk: its first change is the arrival.
+    let first = apply(&store, "event-0", None, vec![upsert(), upsert()], None, 4).unwrap();
+    assert_eq!(first.new_inbox.len(), 1);
+
+    // The same chunk replayed after a crash announces nothing again.
+    let replay = apply(&store, "event-0", None, vec![upsert()], Some("event-1"), 4).unwrap();
+    assert!(
+        replay.new_inbox.is_empty(),
+        "a replayed arrival is not new mail"
+    );
+}
+
+#[test]
 fn a_delete_is_withheld_and_a_replayed_chunk_changes_nothing() {
     let (_scratch, store) = complete_store("proton-events-delete");
     let changes = vec![
