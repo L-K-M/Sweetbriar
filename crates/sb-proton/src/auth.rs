@@ -444,7 +444,9 @@ impl Client {
             .await;
         let response = match result {
             Ok(response) => response,
-            Err(ProtonError::Unavailable { .. }) | Err(ProtonError::Timeout) => return Ok(()),
+            Err(ProtonError::Unavailable { .. })
+            | Err(ProtonError::Refused { .. })
+            | Err(ProtonError::Timeout) => return Ok(()),
             Err(error) => return Err(error),
         };
         let outcome = match read_response(response).await {
@@ -453,7 +455,10 @@ impl Client {
         };
         match outcome {
             Err(
-                ProtonError::Unauthorized | ProtonError::Unavailable { .. } | ProtonError::Timeout,
+                ProtonError::Unauthorized
+                | ProtonError::Unavailable { .. }
+                | ProtonError::Refused { .. }
+                | ProtonError::Timeout,
             ) => Ok(()),
             other => other,
         }

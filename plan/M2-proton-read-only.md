@@ -722,6 +722,13 @@ the provider policies (`proton_bridge`, `generic_imap`) live in
   fake fault; Accept and Keep leave the event `accepted` or `kept`
   through the FFI surface, and an event whose messages reappear becomes
   `cleared`; the active signal changes the poll interval.
+- **Split (2026-11-19):** the step lands as M2.7b1, the signals the
+  health query reads: `resolve_breaker_event`'s key and FFI export,
+  `set_app_active` and its cadence, and the worker's refusal
+  diagnostics and `needs_attention` (about 1,120 changed lines without
+  the generated bindings); and M2.7b2, `account_health()` and
+  `subscribe_account_health()` over them, with the table's rows from
+  fake faults. Together they were estimated past the 1,450-line limit.
 
 #### M2.7c Intents, Recovery and diagnostics core — linux
 

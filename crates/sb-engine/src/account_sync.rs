@@ -88,6 +88,14 @@ pub(crate) struct AccountJobs {
     /// Raised to make every waiting worker sync now rather than at its
     /// next poll (spec/04-sync-proton "Sync loop" step 2).
     poll: watch::Sender<()>,
+    /// Whether the app is active, for the Proton event poll's cadence
+    /// (spec/04 "Sync loop" step 2, spec/07 `set_app_active`). It
+    /// starts inactive, the slower cadence.
+    app_active: watch::Sender<bool>,
+    /// Woken to re-read the clock between Proton event polls, so a test
+    /// driving the injected clock moves a wait (the maintenance
+    /// scheduler's own wake, spec/11).
+    poll_wait: Arc<Notify>,
     /// Notified when a worker's registry entry goes, so a per-account
     /// stop can wait for the worker to end.
     stopped: Notify,
@@ -149,6 +157,28 @@ impl AccountJobs {
     /// What a worker waits on between polls, besides its timer.
     pub(crate) fn poll_signal(&self) -> watch::Receiver<()> {
         self.poll.subscribe()
+    }
+
+    /// `set_app_active(active)` (spec/07): a lifecycle signal, not a
+    /// command. Nothing is stored; a Proton worker waiting between
+    /// polls recomputes its deadline from the poll's start, so a switch
+    /// takes effect without waiting out a running 2-min wait.
+    pub(crate) fn set_app_active(&self, active: bool) {
+        self.app_active.send_if_modified(|current| {
+            let changed = *current != active;
+            *current = active;
+            changed
+        });
+    }
+
+    /// The app-active signal a Proton worker waits on.
+    pub(crate) fn app_active(&self) -> watch::Receiver<bool> {
+        self.app_active.subscribe()
+    }
+
+    /// The wake a Proton poll wait selects on beside its timer.
+    pub(crate) fn poll_wait(&self) -> Arc<Notify> {
+        Arc::clone(&self.poll_wait)
     }
 
     /// Whether a worker runs for the account.

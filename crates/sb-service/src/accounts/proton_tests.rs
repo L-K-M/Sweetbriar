@@ -1142,5 +1142,6 @@ async fn a_refused_access_token_refreshes_once_and_the_listing_goes_on() {
 mod bodies;
 mod breaker;
 mod events;
+mod health;
 mod identities;
 mod lane;

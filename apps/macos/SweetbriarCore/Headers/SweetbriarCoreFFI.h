@@ -288,9 +288,19 @@ uint64_t uniffi_sb_ffi_fn_method_core_disconnect_account(uint64_t ptr, uint64_t 
 uint64_t uniffi_sb_ffi_fn_method_core_pause_account(uint64_t ptr, uint64_t token, RustBuffer idempotency_key, RustBuffer account_id
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_RESOLVE_BREAKER_EVENT
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_RESOLVE_BREAKER_EVENT
+uint64_t uniffi_sb_ffi_fn_method_core_resolve_breaker_event(uint64_t ptr, uint64_t token, RustBuffer idempotency_key, RustBuffer event_id, RustBuffer resolution
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_RESUME_ACCOUNT
 #define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_RESUME_ACCOUNT
 uint64_t uniffi_sb_ffi_fn_method_core_resume_account(uint64_t ptr, uint64_t token, RustBuffer idempotency_key, RustBuffer account_id
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_SET_APP_ACTIVE
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_SET_APP_ACTIVE
+uint64_t uniffi_sb_ffi_fn_method_core_set_app_active(uint64_t ptr, int8_t active
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_UPDATE_ACCOUNT
@@ -1027,9 +1037,21 @@ uint16_t uniffi_sb_ffi_checksum_method_core_pause_account(void
     
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_RESOLVE_BREAKER_EVENT
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_RESOLVE_BREAKER_EVENT
+uint16_t uniffi_sb_ffi_checksum_method_core_resolve_breaker_event(void
+    
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_RESUME_ACCOUNT
 #define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_RESUME_ACCOUNT
 uint16_t uniffi_sb_ffi_checksum_method_core_resume_account(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_SET_APP_ACTIVE
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_SET_APP_ACTIVE
+uint16_t uniffi_sb_ffi_checksum_method_core_set_app_active(void
     
 );
 #endif

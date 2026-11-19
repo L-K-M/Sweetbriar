@@ -470,25 +470,38 @@ impl Core {
         Ok(Receipt::from_engine(&receipt))
     }
 
-    /// `resolve_breaker_event(id, resolution)` (spec/07 "Safety",
-    /// 04-sync-proton "The breaker"): Accept applies the event's
-    /// disappearances and leaves it `accepted`; Keep leaves its messages
-    /// withheld and the event `kept`. Either lifts the account's pause.
-    /// Keep needs an `open` event and Accept an `open` or `kept` one,
-    /// else `Conflict`; an unknown id is `NotFound`.
+    /// `resolve_breaker_event(key, id, resolution)` (spec/07 "Safety",
+    /// 04-sync-proton "The breaker") under an idempotency key: Accept
+    /// applies the event's disappearances and leaves it `accepted`; Keep
+    /// leaves its messages withheld and the event `kept`. Either lifts
+    /// the account's pause. A repeated key answers its stored receipt
+    /// and resolves nothing again. Keep needs an `open` event and
+    /// Accept an `open` or `kept` one, else `Conflict`; an unknown id is
+    /// `NotFound`.
     pub async fn resolve_breaker_event(
         &self,
+        idempotency_key: &str,
         event_id: &str,
         resolution: BreakerResolution,
-    ) -> Result<(), CoreError> {
+    ) -> Result<Receipt, CoreError> {
         let resolution = match resolution {
             BreakerResolution::Accept => sb_engine::BreakerResolution::Accept,
             BreakerResolution::Keep => sb_engine::BreakerResolution::Keep,
         };
-        self.engine()
-            .resolve_breaker_event(event_id, resolution)
+        let receipt = self
+            .engine()
+            .resolve_breaker_event(idempotency_key, event_id, resolution)
             .await?;
-        Ok(())
+        Ok(Receipt::from_engine(&receipt))
+    }
+
+    /// `set_app_active(active)` (spec/07 "Account management"): a
+    /// lifecycle signal, not a command — no key, no receipt, nothing
+    /// stored. A Proton worker waits 30 s between event polls while
+    /// the app is active and 2 min otherwise (spec/04 "Sync loop" step
+    /// 2); it starts inactive.
+    pub fn set_app_active(&self, active: bool) {
+        self.engine().set_app_active(active);
     }
 }
 

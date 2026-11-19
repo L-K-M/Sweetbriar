@@ -39,9 +39,9 @@ mod views;
 mod windows;
 
 pub use accounts::{
-    AddressMode, BeginProtonSignIn, BridgeAccountAdded, BridgeAccountParams, BridgeIdentity,
-    CredentialPause, EndpointSecurity, IdentitySendable, ProtonSignInParams, ProtonSignInState,
-    ProtonSignInStep, certificate_fingerprint_from_pem,
+    AddressMode, BeginProtonSignIn, BreakerResolution, BridgeAccountAdded, BridgeAccountParams,
+    BridgeIdentity, CredentialPause, EndpointSecurity, IdentitySendable, ProtonSignInParams,
+    ProtonSignInState, ProtonSignInStep, certificate_fingerprint_from_pem,
 };
 pub use api::{Core, CoreConfig, Receipt, Setting, open_core, platform_default_config};
 pub use appearance::{
