@@ -28,6 +28,11 @@ mod api;
 mod backups;
 mod compose;
 pub use compose::{ComposeCatalog, ComposeIdentity};
+mod diagnostics;
+pub use diagnostics::{
+    DiagnosticsAccount, DiagnosticsCoverage, DiagnosticsIntegrity, DiagnosticsPackage,
+    DiagnosticsProton, DiagnosticsRefusal, ProtonListingState,
+};
 mod drafts;
 mod error;
 mod exports;

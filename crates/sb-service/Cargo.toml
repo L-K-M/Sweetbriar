@@ -8,6 +8,9 @@ rust-version.workspace = true
 
 [dependencies]
 sb-engine = { version = "0.0.1", path = "../sb-engine" }
+# The diagnostics package's one JSON document (spec/10); already pinned
+# workspace-wide.
+serde_json = "=1.0.154"
 
 [features]
 # Test-only writes for the layer above, as sb-engine's `test-seams`
@@ -21,7 +24,6 @@ sb-test-support = { version = "0.0.1", path = "../sb-test-support" }
 # server's PEM certificate, and Proton's production SRP modulus
 # verifier, all already pinned workspace-wide.
 serde = { version = "=1.0.229", features = ["derive"] }
-serde_json = "=1.0.154"
 rustls = { version = "=0.23.46", default-features = false, features = [
     "ring",
     "std",

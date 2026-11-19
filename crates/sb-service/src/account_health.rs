@@ -43,7 +43,7 @@ pub struct AccountHealth {
 }
 
 impl AccountCondition {
-    fn from_engine(condition: sb_engine::AccountCondition) -> Self {
+    pub(crate) fn from_engine(condition: sb_engine::AccountCondition) -> Self {
         match condition {
             sb_engine::AccountCondition::Paused => Self::Paused,
             sb_engine::AccountCondition::Disconnected => Self::Disconnected,

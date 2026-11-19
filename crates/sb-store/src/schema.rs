@@ -332,6 +332,12 @@ pub(crate) fn read_user_version(conn: &Connection) -> Result<i64, StoreError> {
         .map_err(step_err)
 }
 
+/// The store's schema version (spec/02 "Migrations"): the migrated
+/// `PRAGMA user_version`. The diagnostics package reports it (spec/10).
+pub fn schema_version(conn: &Connection) -> Result<i64, StoreError> {
+    read_user_version(conn)
+}
+
 /// The store's schema version, after the checks spec/02 runs before
 /// writing anything: a negative `user_version` is `Corrupt`; one above
 /// `latest` is `NewerStore`, naming `last_migrated_by` (`unknown` if
