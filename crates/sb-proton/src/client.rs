@@ -50,6 +50,12 @@ pub const BACKOFF_MAX: Duration = Duration::from_secs(300);
 pub const MAX_NETWORK_RETRIES: u32 = 5;
 /// How many times a request waits out a 429/503.
 pub const MAX_RATE_RETRIES: u32 = 3;
+/// The connect-phase deadline (spec/05 step 5: a connect timeout
+/// proves the connection was never established, unlike a timeout
+/// after the request began). It sits well inside the 30 s request
+/// deadline, so a stalled TCP connect or TLS handshake is reported
+/// as a connect failure before the request deadline.
+pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// What made the client wait most recently (spec/04's table); cleared
 /// at the start of every send, so it describes the finished request.
@@ -295,17 +301,38 @@ impl Client {
         auth: Option<(&str, &str)>,
         extra: &[(HeaderName, HeaderValue)],
     ) -> Result<Answer, ProtonError> {
+        self.send_classified(method, path, body, priority, auth, extra)
+            .await
+            .map_err(TransportFailure::into_proton)
+    }
+
+    /// The send loop, keeping the failure classes the send transport
+    /// needs (spec/05 step 5): a connection that was never established
+    /// from one lost after the request began, and a pre-request
+    /// failure from an unknown outcome. [`Client::send`] maps them to
+    /// the public [`ProtonError`] as before.
+    pub(crate) async fn send_classified(
+        &self,
+        method: Method,
+        path: &str,
+        body: Option<Bytes>,
+        priority: Priority,
+        auth: Option<(&str, &str)>,
+        extra: &[(HeaderName, HeaderValue)],
+    ) -> Result<Answer, TransportFailure> {
         if priority == Priority::Background {
             self.wait_background_slot().await;
         }
         let permit = Arc::clone(&self.semaphore)
             .acquire_owned()
             .await
-            .map_err(|_| ProtonError::Unavailable {
+            .map_err(|_| TransportFailure::Closed {
                 message: "the client is closed".to_owned(),
             })?;
 
-        let request = self.build_request(&method, path, body, auth, extra)?;
+        let request = self
+            .build_request(&method, path, body, auth, extra)
+            .map_err(TransportFailure::from_proton)?;
         // The classification describes this send only.
         *self.last_backoff.lock().expect("the backoff lock poisoned") = None;
         let mut network_attempt = 0;
@@ -318,9 +345,13 @@ impl Client {
                         || status == StatusCode::SERVICE_UNAVAILABLE
                     {
                         let retry_after = clamp_retry_after(response.headers().get("retry-after"));
-                        let (_, body) = read_body(response).await?;
+                        let (_, body) = read_body(response).await.map_err(|error| {
+                            TransportFailure::OutcomeUnknown {
+                                message: error.to_string(),
+                            }
+                        })?;
                         if rate_attempt >= MAX_RATE_RETRIES {
-                            return Err(ProtonError::Unavailable {
+                            return Err(TransportFailure::RateLimited {
                                 message: error_message(&body),
                             });
                         }
@@ -337,11 +368,16 @@ impl Client {
                         continue;
                     }
                     if status.is_server_error() {
-                        let (_, body) = read_body(response).await?;
+                        let (_, body) = read_body(response).await.map_err(|error| {
+                            TransportFailure::OutcomeUnknown {
+                                message: error.to_string(),
+                            }
+                        })?;
                         // A server error answered a request that reached
                         // Proton, so only an idempotent one is sent again.
                         if !may_retry(&method, true) || network_attempt >= MAX_NETWORK_RETRIES {
-                            return Err(ProtonError::Unavailable {
+                            return Err(TransportFailure::ServerRefused {
+                                status,
                                 message: error_message(&body),
                             });
                         }
@@ -367,8 +403,14 @@ impl Client {
                     if !may_retry(&method, !error.is_connect())
                         || network_attempt >= MAX_NETWORK_RETRIES
                     {
-                        return Err(ProtonError::Unavailable {
-                            message: error.to_string(),
+                        return Err(if error.is_connect() {
+                            TransportFailure::NeverEstablished {
+                                message: error.to_string(),
+                            }
+                        } else {
+                            TransportFailure::OutcomeUnknown {
+                                message: error.to_string(),
+                            }
                         });
                     }
                     network_attempt += 1;
@@ -378,7 +420,7 @@ impl Client {
                 }
                 Err(_) => {
                     if !may_retry(&method, true) || network_attempt >= MAX_NETWORK_RETRIES {
-                        return Err(ProtonError::Timeout);
+                        return Err(TransportFailure::Timeout);
                     }
                     network_attempt += 1;
                     let delay = backoff_delay(network_attempt);
@@ -440,7 +482,13 @@ impl Client {
             .uri(uri)
             .header("x-pm-appversion", APP_VERSION)
             .header("user-agent", self.config.user_agent());
-        if body.is_some() {
+        // A caller-supplied content type (the attachment upload's
+        // multipart header) replaces the JSON default rather than
+        // appending a second value.
+        let has_content_type = extra
+            .iter()
+            .any(|(name, _)| *name == hyper::header::CONTENT_TYPE);
+        if body.is_some() && !has_content_type {
             builder = builder.header("content-type", "application/json");
         }
         if let Some((uid, access_token)) = auth {
@@ -526,6 +574,59 @@ pub(crate) struct Answer {
 /// lost answer never replays a sign-in or refresh.
 fn may_retry(method: &Method, may_have_reached: bool) -> bool {
     !may_have_reached || method.is_idempotent()
+}
+
+/// A request failure before it is mapped to [`ProtonError`], keeping
+/// the distinction the send transport needs (spec/05 step 5): a
+/// connection that was never established proves nothing was sent,
+/// while a connection lost or a deadline after the request began
+/// leaves the outcome unknown.
+#[derive(Debug)]
+pub(crate) enum TransportFailure {
+    /// The connection was never established (refused, DNS, connect
+    /// timeout, failed TLS handshake).
+    NeverEstablished { message: String },
+    /// The connection was lost or the reply didn't read after the
+    /// request began; the outcome is unknown.
+    OutcomeUnknown { message: String },
+    /// 429/503 with the backoff exhausted: nothing was sent, retry
+    /// later (spec/04).
+    RateLimited { message: String },
+    /// A 5xx reply: Proton answered, so the request reached it.
+    ServerRefused { status: StatusCode, message: String },
+    /// The request deadline elapsed after the request began.
+    Timeout,
+    /// The request could not be built.
+    Malformed { message: String },
+    /// The client is closed.
+    Closed { message: String },
+}
+
+impl TransportFailure {
+    fn from_proton(error: ProtonError) -> Self {
+        match error {
+            ProtonError::Timeout => Self::Timeout,
+            ProtonError::Malformed { message } => Self::Malformed { message },
+            other => Self::OutcomeUnknown {
+                message: other.to_string(),
+            },
+        }
+    }
+
+    /// The public mapping, unchanged from the send loop's original
+    /// errors: a connect failure and a rate limit are both
+    /// `Unavailable`, and a deadline is `Timeout`.
+    fn into_proton(self) -> ProtonError {
+        match self {
+            Self::NeverEstablished { message }
+            | Self::OutcomeUnknown { message }
+            | Self::RateLimited { message }
+            | Self::ServerRefused { message, .. }
+            | Self::Closed { message } => ProtonError::Unavailable { message },
+            Self::Timeout => ProtonError::Timeout,
+            Self::Malformed { message } => ProtonError::Malformed { message },
+        }
+    }
 }
 
 /// Reads a body within the request deadline, so a stalled body can't
@@ -630,13 +731,29 @@ impl Service<Uri> for HttpsConnector {
         Box::pin(async move {
             let host = uri.host().ok_or("the URI has no host")?.to_string();
             let port = uri.port_u16().unwrap_or(443);
-            let tcp = TcpStream::connect((host.as_str(), port)).await?;
+            // DNS, TCP and the TLS handshake share the connect-phase
+            // deadline, so a stalled handshake is a connect failure
+            // (never established), not a request timeout (spec/05
+            // step 5).
+            let connecting = TcpStream::connect((host.as_str(), port));
+            let tcp = tokio::time::timeout(CONNECT_TIMEOUT, connecting)
+                .await
+                .map_err(|_| connect_timeout("the connection timed out"))??;
             let _ = tcp.set_nodelay(true);
             let name = ServerName::try_from(host)?;
-            let stream = tls.connect(name, tcp).await?;
+            let handshake = tls.connect(name, tcp);
+            let stream = tokio::time::timeout(CONNECT_TIMEOUT, handshake)
+                .await
+                .map_err(|_| connect_timeout("the TLS handshake timed out"))??;
             Ok(TlsConn(TokioIo::new(stream)))
         })
     }
+}
+
+/// A connect-phase deadline elapse: a connect timeout, which proves
+/// the connection was never established (spec/05 step 5).
+fn connect_timeout(message: &'static str) -> std::io::Error {
+    std::io::Error::new(std::io::ErrorKind::TimedOut, message)
 }
 
 /// A TLS stream that hyper's legacy client can pool.

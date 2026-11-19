@@ -314,7 +314,7 @@ fn validate_query_id(id: &str, what: &str) -> Result<(), ProtonError> {
 /// A message or attachment id must be one non-empty path segment: no empty
 /// id, no control character, and none of `/ \ ? # %`, which would change the
 /// request's path or query.
-fn validate_path_id(id: &str) -> Result<(), ProtonError> {
+pub(crate) fn validate_path_id(id: &str) -> Result<(), ProtonError> {
     // `.` and `..` are dot segments a proxy may resolve to another path,
     // and some servers read `\` as `/`.
     let path_safe = !matches!(id, "" | "." | "..")
