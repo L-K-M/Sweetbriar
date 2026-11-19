@@ -22,7 +22,7 @@ pub enum DraftState {
 }
 
 impl DraftState {
-    fn from_stored(name: &str) -> Result<Self, StoreError> {
+    pub(crate) fn from_stored(name: &str) -> Result<Self, StoreError> {
         match name {
             "editing" => Ok(Self::Editing),
             "queued" => Ok(Self::Queued),

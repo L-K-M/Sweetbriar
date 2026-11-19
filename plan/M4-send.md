@@ -186,6 +186,13 @@ inspectable Out Box. Unknown outcomes are never retried automatically.
   `a@X.NET` and `a@x.net`, the route-snapshot schema refusal,
   `discard_draft` while an attempt is live, and queue R1, save R2
   (R1's cancellation leaves R2 intact).
+- **Split (2026-11-19):** the finished step measured 1,902 changed
+  lines, so it lands as two PRs. M4.3a1 (about 930 lines) is the store
+  layer: migration 34, the `send_draft` and `cancel_send` transactions
+  and their schema-refusal tests. M4.3a2 (about 980 lines) follows it
+  with the `sending.undo_seconds` setting, the engine's compose,
+  publish and replay, and the service commands, carrying the
+  acceptance bullets that need a draft saved through the engine.
 
 #### M4.3b Resolution, route and Out Box — linux
 

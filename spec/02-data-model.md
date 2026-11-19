@@ -1276,6 +1276,9 @@ CREATE TABLE send_attempts (
   resolved_at       INTEGER,
   created_at        INTEGER NOT NULL,
   updated_at        INTEGER NOT NULL,
+  proton_draft_id   TEXT,                          -- the draft Proton created, which becomes the sent message (migration 34, 05)
+  proton_uploads_json TEXT,                        -- the attachments uploaded so far, in the frozen MIME's order (migration 34, 05)
+  send_requested_at INTEGER CHECK (send_requested_at IS NULL OR proton_draft_id IS NOT NULL), -- Proton only, committed just before the send request (migration 34, 05)
   CHECK (resolution IS NULL OR state = 'outcome_unknown'),
   CHECK ((resolution IS NULL) = (resolved_at IS NULL)),
   FOREIGN KEY (revision_id, draft_id, account_id, identity_id)
@@ -1284,6 +1287,8 @@ CREATE TABLE send_attempts (
 -- At most one live attempt per revision; resolved unknown attempts are history.
 CREATE UNIQUE INDEX send_attempts_live ON send_attempts(revision_id)
   WHERE state IN ('held','queued','submitting') OR (state = 'outcome_unknown' AND resolution IS NULL);
+-- The account worker's runnable scan (05, M4.3).
+CREATE INDEX send_attempts_runnable ON send_attempts(account_id, state);
 
 CREATE TABLE send_recipients (
   attempt_id   TEXT NOT NULL REFERENCES send_attempts(attempt_id),
@@ -1301,17 +1306,18 @@ CREATE TABLE send_recipients (
   `RCPT TO`): `a@X.NET` in To and `a@x.net` in Cc are one row. `kind` records the most visible field it appeared
   in (`to` > `cc` > `bcc`); the frozen MIME keeps the headers as written.
 - The state machine and its rules are in [05-send](05-send.md).
-- **Proton submission (M4, 05):** a migration adds to `send_attempts`
-  `proton_draft_id TEXT` (the draft Proton created, which becomes the
-  sent message), `proton_uploads_json TEXT` (`{"v":1,"attachments":[…]}`:
-  the attachments uploaded so far, in the frozen MIME's order, each
-  `{"id","name","mime_type","size"}` with Proton's attachment id and
-  the name, type and size the draft reports, 05's retry match) and
-  `send_requested_at INTEGER` (Proton only, committed just before the
-  send request), with `CHECK (send_requested_at IS NULL OR
-  proton_draft_id IS NOT NULL)`; generic attempts (*later*) never set
-  it. For Proton attempts `final_reply` holds Proton's code and
-  message when a reply arrived (redacted, 10), and
+- **Proton submission (M4, 05):** migration 34 adds to
+  `send_attempts` `proton_draft_id TEXT` (the draft Proton created,
+  which becomes the sent message), `proton_uploads_json TEXT`
+  (`{"v":1,"attachments":[…]}`: the attachments uploaded so far, in
+  the frozen MIME's order, each `{"id","name","mime_type","size"}`
+  with Proton's attachment id and the name, type and size the draft
+  reports, 05's retry match) and `send_requested_at INTEGER` (Proton
+  only, committed just before the send request), with
+  `CHECK (send_requested_at IS NULL OR proton_draft_id IS NOT NULL)`;
+  generic attempts (*later*) never set it. For Proton attempts
+  `final_reply` holds Proton's code and message when a reply arrived
+  (redacted, 10), and
   `send_recipients.rcpt_reply` the reason a recipient was refused
   before submission; both are NULL otherwise.
 

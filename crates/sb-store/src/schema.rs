@@ -59,7 +59,8 @@ const FOREIGN_KEYS_OFF_MIGRATIONS: &[u32] = &[28];
 /// records Proton deletes for the breaker; version 31 records what a
 /// Proton listing listed and the disappearances a listing alone saw;
 /// version 32 indexes a fetched body's source once per account; version
-/// 33 adds `accounts.restore_pending` (02, 03 "Restore").
+/// 33 adds `accounts.restore_pending` (02, 03 "Restore"); version 34
+/// adds the Proton send columns and the runnable index (02, 05).
 pub(crate) const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 1,
@@ -192,6 +193,10 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 33,
         run: migration_33,
+    },
+    Migration {
+        version: 34,
+        run: migration_34,
     },
 ];
 
@@ -1085,6 +1090,22 @@ fn migration_33(tx: &Transaction, _seams: &Seams) -> Result<(), StoreError> {
         "ALTER TABLE accounts
            ADD COLUMN restore_pending INTEGER NOT NULL DEFAULT 0 CHECK (restore_pending IN (0,1))
            CHECK (restore_pending = 0 OR state <> 'active');",
+    )
+    .map_err(bug)
+}
+
+/// Version 34 (spec/02 "Sending", spec/05 "Outbox state machine"):
+/// the Proton submission columns on `send_attempts` and the index the
+/// account worker's runnable scan walks. Additive only: `ALTER TABLE`
+/// can't add a table constraint, so the `send_requested_at` guard is a
+/// column CHECK.
+fn migration_34(tx: &Transaction, _seams: &Seams) -> Result<(), StoreError> {
+    tx.execute_batch(
+        "ALTER TABLE send_attempts ADD COLUMN proton_draft_id TEXT;
+         ALTER TABLE send_attempts ADD COLUMN proton_uploads_json TEXT;
+         ALTER TABLE send_attempts ADD COLUMN send_requested_at INTEGER
+           CHECK (send_requested_at IS NULL OR proton_draft_id IS NOT NULL);
+         CREATE INDEX send_attempts_runnable ON send_attempts(account_id, state);",
     )
     .map_err(bug)
 }

@@ -1298,6 +1298,102 @@ fn migration_33_restore_pending_defaults_and_is_checked() {
     });
 }
 
+/// A store at version 33 with a routed draft revision and a held
+/// attempt, so migration 34's columns land on real rows.
+fn store_at_33(label: &str) -> (ScratchDir, StorePaths, Seams) {
+    let (scratch, paths) = scratch_paths(label);
+    let seams = test_seams(real_fs());
+    let store = crate::store::open_with(
+        &paths,
+        &seams,
+        WRITER_PRAGMAS,
+        crate::store::READER_PRAGMAS,
+        &PINNED_SQLITE,
+        &MIGRATIONS[..33],
+    )
+    .unwrap();
+    writing(&store, |tx| {
+        tx.execute_batch(
+            "INSERT INTO accounts
+             (account_id, kind, provider, display_name, state, sort_order, created_at)
+             VALUES ('acct', 'proton', 'proton_api', 'P', 'active', 1, 0);
+             INSERT INTO identities
+             (identity_id, account_id, email, display_name, is_default, sendable)
+             VALUES ('id', 'acct', 'a@example.test', 'A', 1, 'validated');
+             INSERT INTO drafts (draft_id, state, current_revision_id, created_at, updated_at)
+             VALUES ('d', 'editing', 'r', 0, 0);
+             INSERT INTO draft_revisions
+             (revision_id, draft_id, seq, account_id, identity_id, compose_format, plain_flowed,
+              subject, to_json, cc_json, bcc_json, body_source, attachments_json, created_at)
+             VALUES ('r', 'd', 1, 'acct', 'id', 'plain', 1, '', '[]', '[]', '[]', '', '[]', 0);
+             INSERT INTO send_attempts
+             (attempt_id, draft_id, revision_id, account_id, config_generation, identity_id,
+              mime_sha256, message_id_header, envelope_from, state, sent_copy, created_at, updated_at)
+             VALUES ('a', 'd', 'r', 'acct', 1, 'id', 'sha', 'm', 'a@example.test',
+                     'held', 'server_saves', 0, 0);",
+        )
+        .map_err(bug)?;
+        Ok(())
+    });
+    store.close().unwrap();
+    (scratch, paths, seams)
+}
+
+/// Migration 34 applies on a v33 store, adds the three Proton columns
+/// and the runnable index, and its CHECK refuses a `send_requested_at`
+/// with no `proton_draft_id` (spec/02 "Sending").
+#[test]
+fn migration_34_adds_the_proton_send_columns_and_checks_the_request_time() {
+    let (_scratch, paths, seams) = store_at_33("schema-send-migration");
+    let store = crate::open(&paths, &seams).unwrap();
+    writing(&store, |tx| {
+        assert_eq!(
+            one_int(tx, "PRAGMA user_version"),
+            i64::from(LATEST_SCHEMA_VERSION)
+        );
+        for column in [
+            "proton_draft_id",
+            "proton_uploads_json",
+            "send_requested_at",
+        ] {
+            assert_eq!(
+                one_int(
+                    tx,
+                    &format!(
+                        "SELECT count(*) FROM pragma_table_info('send_attempts') WHERE name='{column}'"
+                    )
+                ),
+                1,
+                "{column} is missing"
+            );
+        }
+        assert_eq!(
+            one_int(
+                tx,
+                "SELECT count(*) FROM sqlite_schema
+                 WHERE type = 'index' AND name = 'send_attempts_runnable'"
+            ),
+            1
+        );
+        let refused = tx.execute(
+            "UPDATE send_attempts SET send_requested_at = 1 WHERE attempt_id = 'a'",
+            [],
+        );
+        assert!(
+            refused.is_err(),
+            "send_requested_at without proton_draft_id was admitted"
+        );
+        tx.execute(
+            "UPDATE send_attempts
+             SET proton_draft_id = 'pd', send_requested_at = 1 WHERE attempt_id = 'a'",
+            [],
+        )
+        .map_err(bug)?;
+        Ok(())
+    });
+    store.close().unwrap();
+}
+
 /// Appending a migration must not reinterpret an existing store version.
 #[test]
 fn historical_migration_ids_are_pinned() {
