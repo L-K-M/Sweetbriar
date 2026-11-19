@@ -113,8 +113,11 @@ impl DiagnosticsPackage {
         }
     }
 
-    /// The canonical v1 JSON document (spec/10). Field order is fixed;
-    /// absent values are omitted rather than written null.
+    /// The canonical v1 JSON document (spec/10). Keys come out sorted
+    /// (`serde_json`'s map without `preserve_order`), so equal packages
+    /// render byte-for-byte alike. An absent optional field is omitted;
+    /// the integrity time and a breaker event's mailbox are written
+    /// null instead, so their keys are always present.
     fn to_json(&self) -> String {
         let mut root = Map::new();
         root.insert("core_version".to_owned(), self.core_version.clone().into());
@@ -368,7 +371,7 @@ fn listing_str(state: ProtonListingState) -> &'static str {
     }
 }
 
-/// A JSON object from `(key, value)` pairs, in order.
+/// A JSON object from `(key, value)` pairs.
 fn object<'a>(fields: impl IntoIterator<Item = (&'a str, Value)>) -> Value {
     Value::Object(Map::from_iter(
         fields

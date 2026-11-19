@@ -681,9 +681,11 @@ a receipt or file-export command; Service/FFI exposure remains M1.7e/f.
     each with its last occurrence's mailbox, state (`vanished`,
     `epoch_stale` or `superseded`) and time, newest first, keyset
     paged like a window. Nothing in it is deleted.
-  - `diagnostics_package()` (M2.7, 10) → the package's text, for the
-    shell to preview and, only if the user saves it, to write where the
-    user chooses. The core writes no file.
+  - `diagnostics_package(app_version, os_version)` (M2.7, 10) → the
+    package's text, for the shell to preview and, only if the user
+    saves it, to write where the user chooses. The shell passes the
+    app's and the OS's versions, which the core does not know; the
+    core adds its own. The core writes no file.
   - `out_box()` (M4.3) → the Out Box: every live attempt (`held` with
     its `hold_until`, `queued` with whether it waits for
     `confirm_send_route`, `submitting`, unresolved `outcome_unknown`)
