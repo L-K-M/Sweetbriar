@@ -174,6 +174,32 @@ impl<P: PGPProviderSync> RecipientKey for RecipientKeyImpl<P> {
     }
 }
 
+/// Decodes a form-encoded query value; an invalid escape is kept as
+/// written.
+fn form_decode(value: &str) -> String {
+    let bytes = value.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let escaped = (bytes[i] == b'%')
+            .then(|| bytes.get(i + 1..i + 3))
+            .flatten()
+            .and_then(|hex| std::str::from_utf8(hex).ok())
+            .and_then(|hex| u8::from_str_radix(hex, 16).ok());
+        match (bytes[i], escaped) {
+            (_, Some(byte)) => {
+                decoded.push(byte);
+                i += 3;
+                continue;
+            }
+            (b'+', None) => decoded.push(b' '),
+            (byte, None) => decoded.push(byte),
+        }
+        i += 1;
+    }
+    String::from_utf8_lossy(&decoded).into_owned()
+}
+
 /// `GET /core/v4/keys?Email=`: an internal address answers 1 with its
 /// public keys; an external address answers 2, with keys only when a
 /// test registered them (research `keys-crypto.md` §5).
@@ -186,7 +212,9 @@ pub(super) fn handle_keys(
     let Some(username) = authenticated(&mut state, headers) else {
         return Ok(unauthorized());
     };
-    let email = query_value(query, "Email").unwrap_or_default();
+    // Decoded the way Proton's server reads a query (Go's
+    // `url.ParseQuery`): `%XX` escapes, and `+` as a space.
+    let email = form_decode(&query_value(query, "Email").unwrap_or_default());
     let internal = state
         .accounts
         .get(&username)

@@ -18,7 +18,9 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
 use crate::auth::Session;
-use crate::client::{Client, Priority, TransportFailure, code_of, error_message, read_response};
+use crate::client::{
+    Client, Priority, Replies, TransportFailure, code_of, error_message, read_response,
+};
 use crate::error::ProtonError;
 use crate::mail::{ATTACHMENT_PATH, MESSAGES_PATH, validate_path_id};
 use crate::send::{EncryptedAttachment, RecipientKeys, SendPackages};
@@ -321,6 +323,7 @@ impl Client {
         body: Option<Bytes>,
         content_type: Option<String>,
         session: &Session,
+        replies: Replies,
     ) -> Result<Bytes, SendTransportError> {
         let extra = match content_type {
             Some(value) => {
@@ -341,6 +344,7 @@ impl Client {
                 Priority::Background,
                 Some((session.uid(), session.expose_access_token())),
                 &extra,
+                replies,
             )
             .await
             .map_err(SendTransportError::from_transport)?;
@@ -364,9 +368,9 @@ impl Client {
         email: &str,
     ) -> Result<RecipientKeys, SendTransportError> {
         validate_query_email(email)?;
-        let path = format!("{KEYS_PATH}?Email={email}");
+        let path = format!("{KEYS_PATH}?Email={}", encode_query_value(email));
         let bytes = self
-            .send_request(Method::GET, &path, None, None, session)
+            .send_request(Method::GET, &path, None, None, session, Replies::Retry)
             .await?;
         // `RecipientKeys` reads the `Keys` and `RecipientType` fields
         // and ignores the response's `Code`.
@@ -393,6 +397,7 @@ impl Client {
                 Some(Bytes::from(body)),
                 None,
                 session,
+                Replies::Retry,
             )
             .await?;
         let response: DraftResponse = decode_reply(MESSAGES_PATH, &bytes)?;
@@ -418,7 +423,14 @@ impl Client {
             .expect("a draft serializes");
         let path = format!("{MESSAGES_PATH}/{draft_id}");
         let bytes = self
-            .send_request(Method::PUT, &path, Some(Bytes::from(body)), None, session)
+            .send_request(
+                Method::PUT,
+                &path,
+                Some(Bytes::from(body)),
+                None,
+                session,
+                Replies::Retry,
+            )
             .await?;
         let response: DraftResponse = decode_reply(&path, &bytes)?;
         Ok(Draft {
@@ -449,6 +461,7 @@ impl Client {
                 Some(Bytes::from(body)),
                 Some(content_type),
                 session,
+                Replies::Retry,
             )
             .await?;
         let response: UploadResponse = decode_reply(ATTACHMENT_PATH, &bytes)?;
@@ -469,8 +482,18 @@ impl Client {
         })?;
         let body = serde_json::to_vec(packages).expect("the packages serialize");
         let path = format!("{MESSAGES_PATH}/{draft_id}");
+        // Every reply, a 429 or 503 included, is returned for the
+        // worker to interpret (spec/05 step 5): waiting one out and
+        // sending again would replay the send.
         let bytes = self
-            .send_request(Method::POST, &path, Some(Bytes::from(body)), None, session)
+            .send_request(
+                Method::POST,
+                &path,
+                Some(Bytes::from(body)),
+                None,
+                session,
+                Replies::Return,
+            )
             .await?;
         let response: SendResponse = decode_reply(&path, &bytes)?;
         Ok(response.sent)
@@ -508,20 +531,32 @@ fn decode_reply<T: DeserializeOwned>(path: &str, bytes: &[u8]) -> Result<T, Send
     })
 }
 
-/// An address in a query must be one token: no `&`, `=`, `#`, `?`,
-/// `/` or `\`, which would change the query's shape. `%` is left
-/// alone: the fake reads the raw value (no form decoding), and `+`
-/// and `%` are valid in a local part.
+/// An address in a query must be one printable token: no whitespace
+/// or control characters. Its other characters are percent-encoded
+/// ([`encode_query_value`]), so `+`, `&` or `%` in a local part reach
+/// Proton as written.
 fn validate_query_email(email: &str) -> Result<(), SendTransportError> {
-    let token = !email.is_empty()
-        && email.bytes().all(|byte| {
-            byte.is_ascii_graphic() && !matches!(byte, b'&' | b'=' | b'#' | b'?' | b'/' | b'\\')
-        });
+    let token = !email.is_empty() && !email.chars().any(|c| c.is_whitespace() || c.is_control());
     token
         .then_some(())
         .ok_or_else(|| SendTransportError::InvalidInput {
             message: "a recipient address must be one query token".to_owned(),
         })
+}
+
+/// Percent-encodes a query value (RFC 3986 section 2): every byte
+/// outside the unreserved set, so a form decoder reads `+` as `+`, not
+/// a space.
+fn encode_query_value(value: &str) -> String {
+    let mut encoded = String::with_capacity(value.len());
+    for byte in value.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
+            encoded.push(char::from(byte));
+        } else {
+            encoded.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    encoded
 }
 
 /// A multipart boundary no attachment byte stream is expected to
@@ -917,6 +952,25 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn an_address_with_a_plus_is_looked_up_as_written() {
+        let server = server().await;
+        let client = test_client(&server);
+        let session = session(&client).await;
+        let recipient = server
+            .recipient_key(USER, INTERNAL)
+            .expect("a fake key to register");
+        // A form decoder reads an unescaped `+` as a space, which would
+        // look up another address.
+        server.add_external_key("ext+tag@example.test", recipient.public_key());
+        let keys = client
+            .recipient_keys(&session, "ext+tag@example.test")
+            .await
+            .expect("the keys");
+        assert_eq!(keys.recipient_type, RECIPIENT_TYPE_EXTERNAL);
+        assert_eq!(keys.keys.len(), 1, "the registered key came back");
+    }
+
+    #[tokio::test]
     async fn an_external_recipient_without_keys_gets_the_clear_scheme() {
         let server = server().await;
         let client = test_client(&server);
@@ -985,6 +1039,44 @@ mod tests {
             .filter(|request| request.method == "POST" && request.path == send_path)
             .count();
         assert_eq!(send_requests, 1, "the send POST went out once");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_rate_limited_send_is_not_waited_out_and_replayed() {
+        let server = server().await;
+        let client = test_client(&server);
+        let session = session(&client).await;
+        let provider = ProtonPGP::new_rust_sync();
+        let sender = sender_key(&provider);
+        let draft = create_draft(&client, &session, &provider, &sender).await;
+        let packages = clear_packages(&provider, &sender);
+
+        // Once `send_requested_at` is committed, any reply is the
+        // worker's to interpret (spec/05 step 5): waiting out a 429 and
+        // sending again would replay the POST.
+        server.set_fault(Some(Fault::Once(Box::new(Fault::RateLimit {
+            status: 429,
+            retry_after: Some(1),
+        }))));
+        let error = client
+            .send_packages(&session, &draft.id, &packages)
+            .await
+            .expect_err("the 429 is returned, not waited out");
+        assert!(
+            matches!(
+                &error,
+                SendTransportError::Refused(SendRefusal { code: 2028, .. })
+            ),
+            "{error:?}"
+        );
+        let send_path = format!("{MESSAGES_PATH}/{}", draft.id);
+        let send_requests = server
+            .requests()
+            .into_iter()
+            .filter(|request| request.method == "POST" && request.path == send_path)
+            .count();
+        assert_eq!(send_requests, 1, "the send POST went out once");
+        assert_eq!(server.sends(), 0);
     }
 
     #[tokio::test]
@@ -1164,7 +1256,7 @@ mod tests {
 
     #[test]
     fn a_query_email_must_be_one_token() {
-        for bad in ["", "a&b", "a=b", "a#b", "a?b", "a/b", "a\\b", "a b"] {
+        for bad in ["", "a b", "a\tb", "a\u{7f}b"] {
             assert!(
                 matches!(
                     validate_query_email(bad),
@@ -1175,6 +1267,10 @@ mod tests {
         }
         assert!(validate_query_email("a+b@example.test").is_ok());
         assert!(validate_query_email("a%b@example.test").is_ok());
+        assert_eq!(
+            encode_query_value("a+b&c=d%e@example.test"),
+            "a%2Bb%26c%3Dd%25e%40example.test"
+        );
     }
 
     #[test]

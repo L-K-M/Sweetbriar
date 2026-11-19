@@ -301,7 +301,7 @@ impl Client {
         auth: Option<(&str, &str)>,
         extra: &[(HeaderName, HeaderValue)],
     ) -> Result<Answer, ProtonError> {
-        self.send_classified(method, path, body, priority, auth, extra)
+        self.send_classified(method, path, body, priority, auth, extra, Replies::Retry)
             .await
             .map_err(TransportFailure::into_proton)
     }
@@ -319,6 +319,7 @@ impl Client {
         priority: Priority,
         auth: Option<(&str, &str)>,
         extra: &[(HeaderName, HeaderValue)],
+        replies: Replies,
     ) -> Result<Answer, TransportFailure> {
         if priority == Priority::Background {
             self.wait_background_slot().await;
@@ -341,6 +342,12 @@ impl Client {
             match tokio::time::timeout(REQUEST_TIMEOUT, self.inner.request(request.clone())).await {
                 Ok(Ok(response)) => {
                     let status = response.status();
+                    if replies == Replies::Return {
+                        return Ok(Answer {
+                            response,
+                            _permit: permit,
+                        });
+                    }
                     if status == StatusCode::TOO_MANY_REQUESTS
                         || status == StatusCode::SERVICE_UNAVAILABLE
                     {
@@ -576,6 +583,18 @@ fn may_retry(method: &Method, may_have_reached: bool) -> bool {
     !may_have_reached || method.is_idempotent()
 }
 
+/// What the send loop does with a 429, 503 or other 5xx reply.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Replies {
+    /// Wait out a rate limit and retry a server error where the method
+    /// allows it (spec/04 "Backoff").
+    Retry,
+    /// Return every reply as it came: the send request, whose replies
+    /// the send worker interprets once `send_requested_at` is committed
+    /// (spec/05 step 5), so sending it again would replay the POST.
+    Return,
+}
+
 /// A request failure before it is mapped to [`ProtonError`], keeping
 /// the distinction the send transport needs (spec/05 step 5): a
 /// connection that was never established proves nothing was sent,
@@ -731,8 +750,8 @@ impl Service<Uri> for HttpsConnector {
         Box::pin(async move {
             let host = uri.host().ok_or("the URI has no host")?.to_string();
             let port = uri.port_u16().unwrap_or(443);
-            // DNS, TCP and the TLS handshake share the connect-phase
-            // deadline, so a stalled handshake is a connect failure
+            // DNS with TCP, then the TLS handshake, each have the
+            // connect-phase deadline, so a stalled one is a connect failure
             // (never established), not a request timeout (spec/05
             // step 5).
             let connecting = TcpStream::connect((host.as_str(), port));
