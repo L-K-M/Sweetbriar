@@ -30,7 +30,14 @@ mod drafts;
 mod error;
 mod health;
 mod imports;
+mod intents;
+pub use intents::{
+    Intent, IntentAnchor, IntentEffect, IntentFilter, IntentKind, IntentPage, IntentState,
+    QuarantineReason,
+};
 mod messages;
+mod recovery;
+pub use recovery::{Recovery, RecoveryAnchor, RecoveryPage, RecoveryState};
 mod restore;
 mod search;
 mod sidebar;

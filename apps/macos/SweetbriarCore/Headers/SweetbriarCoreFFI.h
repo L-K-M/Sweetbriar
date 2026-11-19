@@ -448,6 +448,11 @@ uint64_t uniffi_sb_ffi_fn_method_core_import_report(uint64_t ptr, uint64_t token
 uint64_t uniffi_sb_ffi_fn_method_core_start_import(uint64_t ptr, uint64_t token, RustBuffer idempotency_key, RustBuffer paths, RustBuffer target
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_INTENTS
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_INTENTS
+uint64_t uniffi_sb_ffi_fn_method_core_intents(uint64_t ptr, uint64_t token, RustBuffer filter, RustBuffer anchor, uint32_t limit
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_ADD_TAG
 #define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_ADD_TAG
 uint64_t uniffi_sb_ffi_fn_method_core_add_tag(uint64_t ptr, uint64_t token, RustBuffer idempotency_key, RustBuffer selection, RustBuffer tag
@@ -491,6 +496,11 @@ uint64_t uniffi_sb_ffi_fn_method_core_remove_tag(uint64_t ptr, uint64_t token, R
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_SET_NOTE
 #define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_SET_NOTE
 uint64_t uniffi_sb_ffi_fn_method_core_set_note(uint64_t ptr, uint64_t token, RustBuffer idempotency_key, int64_t message_id, RustBuffer text
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_RECOVERY
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_RECOVERY
+uint64_t uniffi_sb_ffi_fn_method_core_recovery(uint64_t ptr, uint64_t token, RustBuffer account_id, RustBuffer anchor, uint32_t limit
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_START_RESTORE
@@ -1229,6 +1239,12 @@ uint16_t uniffi_sb_ffi_checksum_method_core_start_import(void
     
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_INTENTS
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_INTENTS
+uint16_t uniffi_sb_ffi_checksum_method_core_intents(void
+    
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_ADD_TAG
 #define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_ADD_TAG
 uint16_t uniffi_sb_ffi_checksum_method_core_add_tag(void
@@ -1280,6 +1296,12 @@ uint16_t uniffi_sb_ffi_checksum_method_core_remove_tag(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_SET_NOTE
 #define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_SET_NOTE
 uint16_t uniffi_sb_ffi_checksum_method_core_set_note(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_RECOVERY
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_RECOVERY
+uint16_t uniffi_sb_ffi_checksum_method_core_recovery(void
     
 );
 #endif
