@@ -83,7 +83,7 @@ pub use search::{
     Coverage, ParseContext, SearchIndexState, SearchIoCode, SearchLimitation, SearchRebuildPhase,
     SearchRebuildProgress, SearchScope, SearchSort, SearchSpec, SearchStatus,
 };
-pub use send::SendQueued;
+pub use send::{ResolvedUnknown, SendQueued, UnknownResolution};
 pub use sidebar::{Account, AccountKind, AccountState, Mailbox, MailboxKind, Mailboxes};
 pub use views::{SavedView, SavedViewParams, SavedViewSort};
 pub use windows::{

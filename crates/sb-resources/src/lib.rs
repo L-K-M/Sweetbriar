@@ -204,7 +204,10 @@ pub use sb_store::recovery::{
     MAX_RECOVERY_PAGE_ROWS, RecoveryAnchor, RecoveryKey, RecoveryPage, RecoveryState,
     StoredRecovery, recovery,
 };
-pub use sb_store::send::{SendAttempt, cancel_send, reply_headers, send_draft};
+pub use sb_store::send::{
+    SendAttempt, UnknownResolution, cancel_send, confirm_send_route, reply_headers,
+    reply_source_account, resolve_unknown_send, retry_rejected_recipients, send_draft,
+};
 pub use sb_store::settings::{StoredSetting, read_all, upsert};
 pub use sb_store::sidebar::{
     AccountKind, AccountState, MailboxKind, MailboxList, StoredAccount, StoredMailbox, accounts,

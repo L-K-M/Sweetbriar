@@ -123,3 +123,64 @@ fn send_conflicts_and_collapses_recipients() {
     );
     block_on(core.shutdown());
 }
+
+#[test]
+fn resolve_cross_service_dtos() {
+    let scratch = ScratchDir::new("service-resolve-outbox");
+    let core = open(&scratch);
+    seed(&state_db(&scratch));
+    let draft = create(&core);
+    let saved = save(&core, &draft.draft_id, None);
+    let queued = send(&core, &draft.draft_id, &saved.revision_id).unwrap();
+    let attempt_id = queued.attempt_id.clone();
+    execute_sql(
+        &state_db(&scratch),
+        &format!(
+            "UPDATE send_attempts SET state = 'outcome_unknown' WHERE attempt_id = '{attempt_id}';
+             UPDATE send_recipients SET state = 'unknown' WHERE attempt_id = '{attempt_id}';"
+        ),
+    );
+
+    let key = core.new_idempotency_key();
+    let resolved =
+        block_on(core.resolve_unknown_send(&key, &attempt_id, UnknownResolution::MarkedSent))
+            .unwrap();
+    assert_eq!(resolved.receipt.command, "resolve_unknown_send");
+    assert_eq!(resolved.resolution, UnknownResolution::MarkedSent);
+    assert_eq!(resolved.new_attempt_id, None);
+    assert_eq!(
+        block_on(core.draft(&draft.draft_id)).unwrap().state,
+        DraftState::Sent
+    );
+
+    let replayed =
+        block_on(core.resolve_unknown_send(&key, &attempt_id, UnknownResolution::KeptAsDraft))
+            .unwrap();
+    assert_eq!(replayed.resolution, UnknownResolution::MarkedSent);
+    block_on(core.shutdown());
+}
+
+#[test]
+fn confirm_route_and_retry_cross_service_dtos() {
+    let scratch = ScratchDir::new("service-confirm-retry");
+    let core = open(&scratch);
+    seed(&state_db(&scratch));
+    let draft = create(&core);
+    let saved = save(&core, &draft.draft_id, None);
+    let queued = send(&core, &draft.draft_id, &saved.revision_id).unwrap();
+    let attempt_id = queued.attempt_id.clone();
+    execute_sql(
+        &state_db(&scratch),
+        &format!(
+            "UPDATE send_attempts SET state = 'queued' WHERE attempt_id = '{attempt_id}';
+             UPDATE accounts SET config_generation = 2 WHERE account_id = 'acct-1';"
+        ),
+    );
+    let receipt =
+        block_on(core.confirm_send_route(&core.new_idempotency_key(), &attempt_id)).unwrap();
+    assert_eq!(receipt.command, "confirm_send_route");
+    let error = block_on(core.retry_rejected_recipients(&core.new_idempotency_key(), &attempt_id))
+        .unwrap_err();
+    assert!(matches!(error, CoreError::Conflict { .. }), "{error:?}");
+    block_on(core.shutdown());
+}

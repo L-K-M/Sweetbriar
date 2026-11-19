@@ -1,27 +1,35 @@
-//! Sending (spec/05 "Outbox state machine", spec/07 "Commands"): the
-//! `send_draft` and `cancel_send` commands. `send_draft` composes the
-//! frozen MIME outside any transaction, publishes it, then queues the
-//! `held` attempt and its recipients in one store transaction;
-//! `cancel_send` moves a `held` or `queued` attempt to `cancelled`.
-//! The cross-account acknowledgement is M4.3b's check.
+//! Sending (spec/05 "Outbox state machine", spec/07 "Commands"):
+//! the `send_draft` and `cancel_send` commands, the `outcome_unknown`
+//! resolutions, `confirm_send_route` and `retry_rejected_recipients`.
+//! `send_draft` composes the frozen MIME outside any transaction,
+//! publishes it, then queues the `held` attempt and its recipients in
+//! one store transaction; `cancel_send` moves a `held` or `queued`
+//! attempt to `cancelled`. A resolution records the user's answer and,
+//! for `send_again`, re-queues the frozen bytes under a new attempt.
 
 use std::sync::Arc;
 
 use sb_resources::{
     AccountKind, ComposeAddress, ComposeAttachment, ComposeError, ComposeFormat, ComposeIdentity,
-    ComposeInput, DraftState, MimeComposeFormat, PublishedObject, Receipt, Resources, SendAttempt,
-    StoredRevision, Timestamp, WritePriority, cancel_send, compose, compose_catalog, draft, replay,
-    run_once, send_draft,
+    ComposeInput, DraftState, IdentityRoute, MimeComposeFormat, PublishedObject, Receipt,
+    Resources, SendAttempt, SourceIdentityInputs, SourceMessageHeaders, StoreError, StoredRevision,
+    Timestamp, Transaction, UnknownResolution, WritePriority, cancel_send, compose,
+    compose_catalog, confirm_send_route, draft, replay, resolve_unknown_send,
+    retry_rejected_recipients, run_once, send_draft,
 };
 
 use crate::drafts::{encode_receipt_id, receipt_id};
 use crate::engine::validate_idempotency_key;
+use crate::identity::{ComposeContext, cross_account_acknowledged, cross_account_warning};
 use crate::settings::{Setting, UNDO_SECONDS_KEY};
 use crate::{Engine, EngineError};
 
 /// The commands' names in `command_receipts` (spec/07).
 const SEND_DRAFT: &str = "send_draft";
 const CANCEL_SEND: &str = "cancel_send";
+const RESOLVE_UNKNOWN_SEND: &str = "resolve_unknown_send";
+const CONFIRM_SEND_ROUTE: &str = "confirm_send_route";
+const RETRY_REJECTED_RECIPIENTS: &str = "retry_rejected_recipients";
 
 /// The `User-Agent` header's value (spec/05).
 const USER_AGENT: &str = concat!("Sweetbriar/", env!("CARGO_PKG_VERSION"));
@@ -46,17 +54,38 @@ impl SendQueued {
     }
 }
 
+/// What `resolve_unknown_send` answers.
+#[derive(Debug, Clone)]
+pub struct ResolvedUnknown {
+    receipt: Receipt,
+    resolution: UnknownResolution,
+    new_attempt_id: Option<String>,
+}
+
+impl ResolvedUnknown {
+    /// The durable receipt.
+    pub fn receipt(&self) -> &Receipt {
+        &self.receipt
+    }
+
+    /// The recorded resolution.
+    pub fn resolution(&self) -> UnknownResolution {
+        self.resolution
+    }
+
+    /// The new attempt's id for `send_again`, else `None`.
+    pub fn new_attempt_id(&self) -> Option<&str> {
+        self.new_attempt_id.as_deref()
+    }
+}
+
 impl Engine {
     /// `send_draft(draft_id, revision_id, acks)` (spec/05, 07): queue
-    /// the draft's current revision as a `held` attempt. `revision_id`
-    /// must be the draft's current revision and the draft `editing`,
-    /// else `Conflict`; a revision with a live attempt, or one already
-    /// `accepted` or resolved `marked_sent`, is `Conflict` too. The
-    /// frozen MIME is composed and published first; the store
-    /// transaction then re-checks and inserts the attempt, its
-    /// recipients and the draft's `queued` state, spending the
-    /// publication's reservation. `acks` is accepted and carried for
-    /// M4.3b's acknowledgement check; none is checked here.
+    /// the draft's current revision as a `held` attempt. A
+    /// non-current revision, a non-`editing` draft, a live or
+    /// already-sent attempt are `Conflict`. `acks` must carry the
+    /// cross-account acknowledgement for the reply's identity and
+    /// recipients; a missing one is `Conflict` naming it.
     pub async fn send_draft(
         &self,
         idempotency_key: &str,
@@ -77,7 +106,6 @@ impl Engine {
                 "a revision id is required",
             ));
         }
-        let _ = acks;
         // A replayed key answers its first attempt before the checks
         // below, which that attempt's `queued` draft would now fail,
         // and before composing bytes nothing would reference (07).
@@ -139,6 +167,58 @@ impl Engine {
                 "the revision has no identity that can send",
             ));
         }
+        let account_id = revision.account_id.clone().ok_or_else(|| {
+            EngineError::internal("the revision's route disappeared while sending")
+        })?;
+        // The cross-account check (spec/05): a reply whose identity's
+        // account differs from the receiving occurrence's needs the
+        // acknowledgement for this revision's identity and recipients.
+        // Local-archive sources are exempt; the store's own rule
+        // handles them here.
+        let source_account = match stored.reply_to_occurrence_id {
+            Some(occurrence_id) => Some(
+                self.read_through(move |resources| {
+                    resources.read(|tx| sb_resources::reply_source_account(tx, occurrence_id))
+                })
+                .await?,
+            ),
+            None => None,
+        };
+        let context = if stored.reply_to_occurrence_id.is_some() {
+            ComposeContext::Reply
+        } else if stored.forward_of_message_id.is_some() {
+            ComposeContext::Forward
+        } else {
+            ComposeContext::New
+        };
+        let route = IdentityRoute {
+            identity_id: identity_id.clone(),
+            account_id: account_id.clone(),
+            email: identity.email().to_owned(),
+            is_default: identity.is_default(),
+            sendable: identity.sendable(),
+            account_kind: identity.account_kind(),
+        };
+        let source = source_account.map(|(account_id, account_kind)| SourceIdentityInputs {
+            account_id,
+            account_kind,
+            headers: SourceMessageHeaders::default(),
+            sent_identity_id: None,
+        });
+        let warning = cross_account_warning(context, Some(&route), source.as_ref());
+        if !cross_account_acknowledged(
+            warning.as_ref(),
+            acks,
+            &identity_id,
+            &revision.to,
+            &revision.cc,
+            &revision.bcc,
+        ) {
+            return Err(EngineError::Conflict {
+                detail: "this reply sends from another account; acknowledge cross_account"
+                    .to_owned(),
+            });
+        }
         let (in_reply_to, references) = self
             .read_through(move |resources| {
                 resources.read(|tx| {
@@ -150,9 +230,6 @@ impl Engine {
                 })
             })
             .await?;
-        let account_id = revision.account_id.clone().ok_or_else(|| {
-            EngineError::internal("the revision's route disappeared while sending")
-        })?;
         let attempt_id = self.resources().new_uuid_string();
         let now = self.resources().now();
         let resources = Arc::clone(self.resources());
@@ -232,6 +309,187 @@ impl Engine {
         receipt_id(&receipt, "attempt_id")?;
         Ok(receipt)
     }
+
+    /// `resolve_unknown_send(attempt_id, resolution)` (spec/05 step 6,
+    /// 07): record the user's answer to an unresolved `outcome_unknown`
+    /// attempt, exactly once. `marked_sent` moves its `unknown`
+    /// recipients to `sent` and sets the draft `sent`; `kept_as_draft`
+    /// returns the draft to `editing`; `send_again` re-queues the
+    /// frozen bytes. A second resolution is `Conflict`.
+    pub async fn resolve_unknown_send(
+        &self,
+        idempotency_key: &str,
+        attempt_id: &str,
+        resolution: UnknownResolution,
+    ) -> Result<ResolvedUnknown, EngineError> {
+        validate_idempotency_key(idempotency_key)?;
+        if attempt_id.is_empty() {
+            return Err(EngineError::invalid_input(
+                "attempt_id",
+                "an attempt id is required",
+            ));
+        }
+        // A replayed key answers the resolution it recorded before
+        // the attempt's now-resolved state would refuse it.
+        let replay_key = idempotency_key.to_owned();
+        let replayed = self
+            .read_through(move |resources| {
+                resources.read(|tx| replay(tx, &replay_key, RESOLVE_UNKNOWN_SEND))
+            })
+            .await?;
+        if let Some(receipt) = replayed {
+            let (_, resolution, new_attempt_id) = resolution_from_receipt(&receipt)?;
+            return Ok(ResolvedUnknown {
+                receipt,
+                resolution,
+                new_attempt_id,
+            });
+        }
+        let undo_seconds = match resolution {
+            UnknownResolution::SendAgain => undo_seconds(&self.settings().await?)?,
+            _ => 0,
+        };
+        let new_attempt_id = match resolution {
+            UnknownResolution::SendAgain => Some(self.resources().new_uuid_string()),
+            _ => None,
+        };
+        let now = self.resources().now();
+        let (key, id) = (idempotency_key.to_owned(), attempt_id.to_owned());
+        let receipt = self
+            .resources()
+            .write(WritePriority::User, move |tx| {
+                let receipt = run_once(tx, &key, RESOLVE_UNKNOWN_SEND, now, |tx| {
+                    let created = resolve_unknown_send(
+                        tx,
+                        &id,
+                        resolution,
+                        new_attempt_id.as_deref(),
+                        undo_seconds,
+                        now,
+                    )?;
+                    Ok(encode_resolution_receipt(
+                        &id,
+                        resolution,
+                        created.as_deref(),
+                    ))
+                })?;
+                Ok(receipt)
+            })
+            .await?;
+        let (_, resolution, new_attempt_id) = resolution_from_receipt(&receipt)?;
+        Ok(ResolvedUnknown {
+            receipt,
+            resolution,
+            new_attempt_id,
+        })
+    }
+
+    /// `confirm_send_route(attempt_id)` (spec/05 step 3, 07): a
+    /// `queued` attempt adopts the account's current generation. An
+    /// unsendable identity or any other state is `Conflict`; an unknown
+    /// attempt is `NotFound`.
+    pub async fn confirm_send_route(
+        &self,
+        idempotency_key: &str,
+        attempt_id: &str,
+    ) -> Result<Receipt, EngineError> {
+        let id = attempt_id.to_owned();
+        self.attempt_command(
+            idempotency_key,
+            attempt_id,
+            CONFIRM_SEND_ROUTE,
+            move |tx, now| confirm_send_route(tx, &id, now),
+        )
+        .await
+    }
+
+    /// `retry_rejected_recipients(attempt_id)` (spec/05 step 5, 07):
+    /// refused for a Proton attempt, which has no partial acceptance.
+    /// An unknown attempt is `NotFound`.
+    pub async fn retry_rejected_recipients(
+        &self,
+        idempotency_key: &str,
+        attempt_id: &str,
+    ) -> Result<Receipt, EngineError> {
+        let id = attempt_id.to_owned();
+        self.attempt_command(
+            idempotency_key,
+            attempt_id,
+            RETRY_REJECTED_RECIPIENTS,
+            move |tx, _| retry_rejected_recipients(tx, &id),
+        )
+        .await
+    }
+
+    /// Run a counted attempt command under `command`.
+    async fn attempt_command(
+        &self,
+        idempotency_key: &str,
+        attempt_id: &str,
+        command: &'static str,
+        effect: impl FnOnce(&Transaction, Timestamp) -> Result<(), StoreError> + Send + 'static,
+    ) -> Result<Receipt, EngineError> {
+        validate_idempotency_key(idempotency_key)?;
+        if attempt_id.is_empty() {
+            return Err(EngineError::invalid_input(
+                "attempt_id",
+                "an attempt id is required",
+            ));
+        }
+        let now = self.resources().now();
+        let (key, id) = (idempotency_key.to_owned(), attempt_id.to_owned());
+        let receipt = self
+            .resources()
+            .write(WritePriority::User, move |tx| {
+                let receipt = run_once(tx, &key, command, now, |tx| {
+                    effect(tx, now)?;
+                    Ok(encode_receipt_id("attempt_id", &id))
+                })?;
+                Ok(receipt)
+            })
+            .await?;
+        receipt_id(&receipt, "attempt_id")?;
+        Ok(receipt)
+    }
+}
+
+/// The resolution receipt's body: the attempt, the resolution and,
+/// for `send_again`, the new attempt's id.
+fn encode_resolution_receipt(
+    attempt_id: &str,
+    resolution: UnknownResolution,
+    new_attempt_id: Option<&str>,
+) -> String {
+    let mut body = serde_json::Map::new();
+    body.insert("attempt_id".to_owned(), attempt_id.into());
+    body.insert("resolution".to_owned(), resolution.as_str().into());
+    if let Some(new_attempt_id) = new_attempt_id {
+        body.insert("new_attempt_id".to_owned(), new_attempt_id.into());
+    }
+    serde_json::Value::Object(body).to_string()
+}
+
+/// Read a resolution receipt's answer (spec/07): a replayed key
+/// answers the resolution it recorded, never the caller's argument.
+/// Malformed stored JSON or a missing field is `Corrupt`.
+fn resolution_from_receipt(
+    receipt: &Receipt,
+) -> Result<(String, UnknownResolution, Option<String>), EngineError> {
+    let parsed: serde_json::Value = serde_json::from_str(receipt.result_json())
+        .map_err(|_| EngineError::corrupt("a stored resolution receipt is not JSON"))?;
+    let attempt_id = parsed["attempt_id"]
+        .as_str()
+        .filter(|id| !id.is_empty())
+        .ok_or_else(|| EngineError::corrupt("a stored resolution receipt names no attempt"))?;
+    let resolution = parsed["resolution"]
+        .as_str()
+        .ok_or_else(|| EngineError::corrupt("a stored resolution receipt names no resolution"))?;
+    let resolution = UnknownResolution::from_stored(resolution)?;
+    let new_attempt_id = parsed["new_attempt_id"]
+        .as_str()
+        .filter(|id| !id.is_empty())
+        .map(str::to_owned);
+    Ok((attempt_id.to_owned(), resolution, new_attempt_id))
 }
 
 /// The `sending.undo_seconds` setting's effective value (spec/02).
