@@ -51,6 +51,9 @@ pub enum SendError {
     Crypto,
     /// A package needs at least one recipient.
     NoRecipients,
+    /// An external recipient whose lookup returned keys: the pilot
+    /// doesn't send PGP to external addresses (spec/05 step 1).
+    ExternalKeys,
 }
 
 impl fmt::Display for SendError {
@@ -59,6 +62,7 @@ impl fmt::Display for SendError {
             Self::RecipientKey => "a recipient's public key is missing or unusable",
             Self::Crypto => "the OpenPGP provider refused the operation",
             Self::NoRecipients => "a package needs at least one recipient",
+            Self::ExternalKeys => "an external recipient with keys can't be sent to",
         })
     }
 }
@@ -121,13 +125,23 @@ impl RecipientKeys {
     }
 }
 
-/// One recipient of a send: its address and the keys the lookup
-/// returned. `None` is an external address without keys, which gets
-/// the clear scheme (spec/05 step 1).
+/// One recipient of a send: its address and what its key lookup
+/// returned. The lookup alone decides the scheme (spec/05 step 1): an
+/// internal address is encrypted to its keys, an external one without
+/// keys gets the clear scheme, and anything else is refused, so a
+/// caller can't send in clear by leaving keys out.
 #[derive(Debug, Clone)]
 pub struct SendRecipient {
     pub address: String,
-    pub keys: Option<RecipientKeys>,
+    pub keys: RecipientKeys,
+}
+
+impl SendRecipient {
+    /// Whether this recipient gets the clear scheme: an external
+    /// address whose lookup returned no keys.
+    fn is_clear(&self) -> bool {
+        self.keys.recipient_type == RECIPIENT_TYPE_EXTERNAL && self.keys.keys.is_empty()
+    }
 }
 
 /// One body part to package: its MIME type and plaintext bytes
@@ -395,12 +409,12 @@ fn build_package<P: PGPProviderSync>(
         .map_err(|_| SendError::Crypto)?;
     let data_packet = encrypt_body_packet(provider, sender, &session, body.data)?;
     let clear_key = SessionKey::new(session.export().as_ref().to_vec(), session.algorithm());
-    let has_clear = recipients.iter().any(|recipient| recipient.keys.is_none());
+    let has_clear = recipients.iter().any(SendRecipient::is_clear);
 
     let mut addresses = BTreeMap::new();
     let mut scheme = 0;
     for recipient in recipients {
-        let Some(keys) = &recipient.keys else {
+        if recipient.is_clear() {
             // An external recipient without keys: the clear scheme
             // carries the session key itself (spec/05 step 1).
             scheme |= CLEAR_SCHEME;
@@ -414,8 +428,14 @@ fn build_package<P: PGPProviderSync>(
                 },
             );
             continue;
-        };
-        let recipient_key = encrypt_recipient_key(provider, keys, &session, attachments)?;
+        }
+        match recipient.keys.recipient_type {
+            RECIPIENT_TYPE_INTERNAL => {}
+            RECIPIENT_TYPE_EXTERNAL => return Err(SendError::ExternalKeys),
+            _ => return Err(SendError::RecipientKey),
+        }
+        let recipient_key =
+            encrypt_recipient_key(provider, &recipient.keys, &session, attachments)?;
         scheme |= INTERNAL_SCHEME;
         addresses.insert(recipient.address.clone(), recipient_key);
     }
@@ -558,6 +578,14 @@ mod tests {
         key
     }
 
+    /// An external address's lookup without keys.
+    fn external_keys() -> RecipientKeys {
+        RecipientKeys {
+            keys: Vec::new(),
+            recipient_type: RECIPIENT_TYPE_EXTERNAL,
+        }
+    }
+
     fn internal_keys(public_armored: &str) -> RecipientKeys {
         RecipientKeys {
             keys: vec![RecipientPublicKey {
@@ -606,7 +634,7 @@ mod tests {
             &sender,
             &[SendRecipient {
                 address: INTERNAL.to_owned(),
-                keys: Some(internal_keys(recipient.public_key())),
+                keys: internal_keys(recipient.public_key()),
             }],
             &[SendBody {
                 mime_type: "text/plain",
@@ -679,6 +707,49 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn only_an_internal_lookup_or_an_external_one_without_keys_is_sent() {
+        let server = server().await;
+        let provider = ProtonPGP::new_rust_sync();
+        let sender = sender_key(&provider);
+        let recipient = server
+            .recipient_key(USER, INTERNAL)
+            .expect("the recipient key");
+        let build = |keys: RecipientKeys| {
+            build_packages(
+                &provider,
+                &sender,
+                &[SendRecipient {
+                    address: "someone@example.test".to_owned(),
+                    keys,
+                }],
+                &[SendBody {
+                    mime_type: "text/plain",
+                    data: b"hello",
+                }],
+                &[],
+            )
+        };
+
+        // External with keys: the pilot sends no external PGP, and the
+        // keys are never used as if the address were internal.
+        let mut external_with_keys = internal_keys(recipient.public_key());
+        external_with_keys.recipient_type = RECIPIENT_TYPE_EXTERNAL;
+        assert_eq!(
+            build(external_with_keys).err(),
+            Some(SendError::ExternalKeys)
+        );
+
+        // An unknown type and an internal address without an active key
+        // are refused, never sent in clear.
+        let mut unknown = internal_keys(recipient.public_key());
+        unknown.recipient_type = 7;
+        assert_eq!(build(unknown).err(), Some(SendError::RecipientKey));
+        let mut keyless = external_keys();
+        keyless.recipient_type = RECIPIENT_TYPE_INTERNAL;
+        assert_eq!(build(keyless).err(), Some(SendError::RecipientKey));
+    }
+
+    #[tokio::test]
     async fn an_external_recipient_gets_the_clear_scheme_and_the_session_key() {
         let provider = ProtonPGP::new_rust_sync();
         let sender = sender_key(&provider);
@@ -687,7 +758,7 @@ mod tests {
             &sender,
             &[SendRecipient {
                 address: "external@example.test".to_owned(),
-                keys: None,
+                keys: external_keys(),
             }],
             &[SendBody {
                 mime_type: "text/plain",
@@ -746,7 +817,7 @@ mod tests {
             &sender,
             &[SendRecipient {
                 address: "external@example.test".to_owned(),
-                keys: None,
+                keys: external_keys(),
             }],
             &[
                 SendBody {
@@ -822,7 +893,7 @@ mod tests {
             &sender,
             &[SendRecipient {
                 address: INTERNAL.to_owned(),
-                keys: Some(internal_keys(recipient.public_key())),
+                keys: internal_keys(recipient.public_key()),
             }],
             &[SendBody {
                 mime_type: "text/plain",
@@ -853,7 +924,7 @@ mod tests {
             &sender,
             &[SendRecipient {
                 address: "external@example.test".to_owned(),
-                keys: None,
+                keys: external_keys(),
             }],
             &[SendBody {
                 mime_type: "text/plain",
@@ -883,11 +954,11 @@ mod tests {
             &[
                 SendRecipient {
                     address: INTERNAL.to_owned(),
-                    keys: Some(internal_keys(recipient.public_key())),
+                    keys: internal_keys(recipient.public_key()),
                 },
                 SendRecipient {
                     address: "external@example.test".to_owned(),
-                    keys: None,
+                    keys: external_keys(),
                 },
             ],
             &[SendBody {
@@ -925,7 +996,7 @@ mod tests {
             &sender,
             &[SendRecipient {
                 address: "external@example.test".to_owned(),
-                keys: None,
+                keys: external_keys(),
             }],
             &[SendBody {
                 mime_type: "text/plain",
