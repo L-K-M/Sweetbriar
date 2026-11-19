@@ -1435,6 +1435,14 @@ public protocol CoreProtocol: AnyObject, Sendable {
     func recipientCompletions(token: CancelToken, prefix: String, limit: UInt32) async throws  -> [DraftRecipient]
     
     /**
+     * `diagnostics_package()` (spec/07 "Queries"): the one UTF-8 JSON
+     * document. The app and OS versions come from the shell, since the
+     * core knows only its own. A query: the token races the core's
+     * read lock and the work itself.
+     */
+    func diagnosticsPackage(token: CancelToken, appVersion: String, osVersion: String) async throws  -> String
+    
+    /**
      * `create_draft(context)` (spec/07 "Commands"): a new `editing`
      * draft under an idempotency key the shell made (`UUID()` in
      * Swift) — a repeated key returns the stored receipt and its
@@ -2387,6 +2395,28 @@ open func recipientCompletions(token: CancelToken, prefix: String, limit: UInt32
             completeFunc: ffi_sb_ffi_rust_future_complete_rust_buffer,
             freeFunc: ffi_sb_ffi_rust_future_free_rust_buffer,
             liftFunc: FfiConverterSequenceTypeDraftRecipient.lift,
+            errorHandler: FfiConverterTypeCoreError_lift
+        )
+}
+    
+    /**
+     * `diagnostics_package()` (spec/07 "Queries"): the one UTF-8 JSON
+     * document. The app and OS versions come from the shell, since the
+     * core knows only its own. A query: the token races the core's
+     * read lock and the work itself.
+     */
+open func diagnosticsPackage(token: CancelToken, appVersion: String, osVersion: String)async throws  -> String  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_sb_ffi_fn_method_core_diagnostics_package(
+                        self.uniffiCloneHandle(),FfiConverterTypeCancelToken_lower(token),FfiConverterString.lower(appVersion),FfiConverterString.lower(osVersion)
+                )
+            },
+            pollFunc: ffi_sb_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_sb_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_sb_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterString.lift,
             errorHandler: FfiConverterTypeCoreError_lift
         )
 }
@@ -16530,6 +16560,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sb_ffi_checksum_method_core_recipient_completions() != 3862) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sb_ffi_checksum_method_core_diagnostics_package() != 23541) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sb_ffi_checksum_method_core_create_draft() != 12088) {

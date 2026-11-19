@@ -30,6 +30,7 @@ mod backups;
 mod cancel;
 mod compose;
 pub use compose::{ComposeCatalog, ComposeIdentity};
+mod diagnostics;
 mod drafts;
 mod error;
 mod health;

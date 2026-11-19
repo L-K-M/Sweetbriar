@@ -398,6 +398,11 @@ uint64_t uniffi_sb_ffi_fn_method_core_parse_draft_recipients(uint64_t ptr, uint6
 uint64_t uniffi_sb_ffi_fn_method_core_recipient_completions(uint64_t ptr, uint64_t token, RustBuffer prefix, uint32_t limit
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_DIAGNOSTICS_PACKAGE
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_DIAGNOSTICS_PACKAGE
+uint64_t uniffi_sb_ffi_fn_method_core_diagnostics_package(uint64_t ptr, uint64_t token, RustBuffer app_version, RustBuffer os_version
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_CREATE_DRAFT
 #define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_CREATE_DRAFT
 uint64_t uniffi_sb_ffi_fn_method_core_create_draft(uint64_t ptr, uint64_t token, RustBuffer idempotency_key, RustBuffer context
@@ -1209,6 +1214,12 @@ uint16_t uniffi_sb_ffi_checksum_method_core_parse_draft_recipients(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_RECIPIENT_COMPLETIONS
 #define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_RECIPIENT_COMPLETIONS
 uint16_t uniffi_sb_ffi_checksum_method_core_recipient_completions(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_DIAGNOSTICS_PACKAGE
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_DIAGNOSTICS_PACKAGE
+uint16_t uniffi_sb_ffi_checksum_method_core_diagnostics_package(void
     
 );
 #endif
