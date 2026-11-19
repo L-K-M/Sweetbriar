@@ -75,9 +75,13 @@ pub struct RecoveryPage {
     pub has_more: bool,
 }
 
-/// The shared relation: the last non-present occurrence of every
-/// message with no present occurrence. `cursor` adds the keyset (or the
-/// anchor's own row for [`contains`]).
+/// The shared relation: for every message with no `present`
+/// occurrence, its last occurrence, which must be one of the listed
+/// states, so a message whose last occurrence is the breaker's
+/// `vanish_pending` drops out. `cursor` adds the keyset, or the
+/// anchor's own row for the cursor's membership check. The account
+/// filter sits on the occurrence, whose account the schema's foreign
+/// keys tie to the message's.
 fn source(cursor: &str) -> String {
     format!(
         "FROM occurrences o
@@ -94,7 +98,7 @@ fn source(cursor: &str) -> String {
                SELECT 1 FROM occurrences p
                WHERE p.message_id = o.message_id AND p.state = 'present'
            )
-           AND (:account IS NULL OR m.account_id = :account)
+           AND (:account IS NULL OR o.account_id = :account)
            {cursor}"
     )
 }
