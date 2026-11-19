@@ -11,7 +11,7 @@ use sb_test_support::{
 };
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 
 const USER: &str = "owner@example.test";
 const PASSWORD: &str = "synthetic-proton-password";
@@ -459,8 +459,31 @@ async fn an_expired_or_unknown_sign_in_id_is_not_found() {
 #[tokio::test]
 async fn signing_in_again_keeps_the_uuid_and_bumps_the_generation() {
     let h = setup(vec![TestAccount::new(USER, PASSWORD)]).await;
+    h.server
+        .add_message(USER, sb_test_support::FakeMessage::new("m1").with_time(100));
     let (_id, state) = begin(&h, "first").await;
     let id = account_id(&state);
+    listed(&h.core, &id).await;
+    // Local data the second sign-in must keep: a tag, a note and the
+    // message they hang on.
+    let db = h.scratch.path().join("store/state.sqlite");
+    let message_id = count_rows(&db, "SELECT message_id FROM logical_messages LIMIT 1");
+    let occurrence = count_rows(
+        &db,
+        &format!("SELECT occurrence_id FROM occurrences WHERE message_id = {message_id} LIMIT 1"),
+    );
+    h.core
+        .add_tag(
+            "tag-1",
+            crate::MessageSelection::OccurrenceIds(vec![occurrence]),
+            "keep",
+        )
+        .await
+        .expect("tag");
+    h.core
+        .set_note("note-1", message_id, "keep me")
+        .await
+        .expect("note");
     let generation = account_column(&h, &id, "config_generation");
     let revision = account_column(&h, &id, "revision");
     let before = secret_field(&h.secrets, &id, "refresh_token_hex");
@@ -474,6 +497,22 @@ async fn signing_in_again_keeps_the_uuid_and_bumps_the_generation() {
     assert_eq!(proton_accounts(&h), 1);
     assert_eq!(count(&h.scratch, "identities"), 2);
     assert_eq!(count(&h.scratch, "identities WHERE is_default = 1"), 1);
+    assert_eq!(
+        count_rows(
+            &db,
+            &format!("SELECT COUNT(*) FROM message_tags WHERE message_id = {message_id}")
+        ),
+        1,
+        "the tag stays"
+    );
+    assert_eq!(
+        count_rows(
+            &db,
+            &format!("SELECT COUNT(*) FROM notes WHERE message_id = {message_id}")
+        ),
+        1,
+        "the note stays"
+    );
     let after = secret_field(&h.secrets, &id, "refresh_token_hex");
     assert_ne!(after, before, "the refresh token was replaced");
     assert_eq!(account(&h.core, &id).await.state, AccountState::Active);
@@ -659,7 +698,11 @@ async fn disconnecting_revokes_the_session_and_keeps_the_account() {
     let credential_ref = format!("account/{id}/proton-session");
     assert!(h.secrets.get(&credential_ref).is_ok());
 
-    core.disconnect_account(&id).await.expect("disconnect");
+    let receipt = core
+        .disconnect_account("disconnect-1", &id)
+        .await
+        .expect("disconnect");
+    assert_eq!(receipt.command, "disconnect_account");
 
     let seen = h.server.requests();
     let requests = &seen[before..];
@@ -688,7 +731,11 @@ async fn disconnecting_revokes_the_session_and_keeps_the_account() {
     let db = h.scratch.path().join("store/state.sqlite");
     let revision = format!("SELECT revision FROM accounts WHERE account_id = '{id}'");
     let before = count_rows(&db, &revision);
-    core.disconnect_account(&id).await.expect("again");
+    let replayed = core
+        .disconnect_account("disconnect-1", &id)
+        .await
+        .expect("again");
+    assert_eq!(replayed, receipt, "the stored receipt comes back");
     assert_eq!(count_rows(&db, &revision), before, "no write");
 }
 
@@ -721,7 +768,7 @@ async fn a_stalled_revoke_holds_up_neither_the_disconnect_nor_the_sessions() {
             "the session lock was held across the revoke"
         );
     };
-    let (disconnected, ()) = tokio::join!(core.disconnect_account(&id), observe);
+    let (disconnected, ()) = tokio::join!(core.disconnect_account("disconnect-2", &id), observe);
     disconnected.expect("disconnect");
     assert!(
         h.server
@@ -746,10 +793,156 @@ async fn disconnecting_a_non_proton_account_is_refused() {
         .account_id;
     let error = h
         .core
-        .disconnect_account(&local)
+        .disconnect_account("disconnect-local", &local)
         .await
         .expect_err("only a Proton account can be disconnected here");
     invalid_field(&error, "account");
+}
+
+#[tokio::test]
+async fn pausing_a_proton_account_stops_requests_and_survives_a_reopen() {
+    let h = setup(vec![TestAccount::new(USER, PASSWORD)]).await;
+    let (_id, state) = begin(&h, "first").await;
+    let id = account_id(&state);
+    listed(&h.core, &id).await;
+
+    let receipt = h.core.pause_account("pause-1", &id).await.expect("pause");
+    assert_eq!(receipt.command, "pause_account");
+    assert_eq!(account(&h.core, &id).await.state, AccountState::Paused);
+    let requests = h.server.requests().len();
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    assert_eq!(
+        h.server.requests().len(),
+        requests,
+        "a paused account makes no request"
+    );
+    let replayed = h.core.pause_account("pause-1", &id).await.expect("replay");
+    assert_eq!(replayed, receipt, "the stored receipt comes back");
+
+    h.core.shutdown().await;
+    let core = reopen(&h.scratch, &h.secrets, &h.server, &h.clock).await;
+    core.engine().proton_restore_settled().await;
+    let requests = h.server.requests().len();
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    assert_eq!(
+        h.server.requests().len(),
+        requests,
+        "launch starts no worker for a paused account"
+    );
+    assert_eq!(account(&core, &id).await.state, AccountState::Paused);
+
+    let resumed = core.resume_account("resume-1", &id).await.expect("resume");
+    assert_eq!(resumed.command, "resume_account");
+    let coverage = listed(&core, &id).await;
+    assert_eq!(coverage.listing, sb_engine::ProtonListingState::Complete);
+    assert_eq!(account(&core, &id).await.state, AccountState::Active);
+}
+
+#[tokio::test]
+async fn restore_then_resume_reconciles_a_proton_account_and_keeps_its_data() {
+    let h = setup(vec![TestAccount::new(USER, PASSWORD)]).await;
+    h.server
+        .add_message(USER, sb_test_support::FakeMessage::new("m1").with_time(100));
+    let (_id, state) = begin(&h, "first").await;
+    let id = account_id(&state);
+    listed(&h.core, &id).await;
+
+    let db = h.scratch.path().join("store/state.sqlite");
+    let message_id = count_rows(&db, "SELECT message_id FROM logical_messages LIMIT 1");
+    let occurrence = count_rows(
+        &db,
+        &format!("SELECT occurrence_id FROM occurrences WHERE message_id = {message_id} LIMIT 1"),
+    );
+    h.core
+        .add_tag(
+            "tag-1",
+            crate::MessageSelection::OccurrenceIds(vec![occurrence]),
+            "keep",
+        )
+        .await
+        .expect("tag");
+    h.core
+        .set_note("note-1", message_id, "keep me")
+        .await
+        .expect("note");
+    let started = h.core.start_backup("backup-1").await.expect("backup");
+    let copy = started.copy.expect("a fresh key starts a copy");
+    assert_eq!(
+        copy.finished().await,
+        crate::BackupEnd::Complete { after: None }
+    );
+    let prepared = h
+        .core
+        .prepare_restore(&started.generation_id, Arc::new(AtomicBool::new(false)))
+        .await
+        .expect("prepare");
+    let crate::Restored { core, receipt } = h
+        .core
+        .restore("restore-1", prepared, Arc::new(AtomicBool::new(false)))
+        .await
+        .expect("restore");
+    receipt.unwrap();
+
+    // The quarantine paused the account and marked it restore-pending;
+    // the listing it had is still the backed-up one.
+    assert_eq!(account(&core, &id).await.state, AccountState::Paused);
+    let pending = count_rows(
+        &db,
+        &format!("SELECT restore_pending FROM accounts WHERE account_id = '{id}'"),
+    );
+    assert_eq!(pending, 1);
+    let complete = count_rows(
+        &db,
+        &format!(
+            "SELECT COUNT(*) FROM proton_accounts
+             WHERE account_id = '{id}' AND listing_state = 'complete'"
+        ),
+    );
+    assert_eq!(complete, 1);
+
+    let resumed = core.resume_account("resume-1", &id).await.expect("resume");
+    assert_eq!(resumed.command, "resume_account");
+    let pending = count_rows(
+        &db,
+        &format!("SELECT restore_pending FROM accounts WHERE account_id = '{id}'"),
+    );
+    assert_eq!(pending, 0, "the resume cleared restore_pending");
+    let coverage = listed(&core, &id).await;
+    assert_eq!(coverage.listing, sb_engine::ProtonListingState::Complete);
+    let bootstrapped = count_rows(
+        &db,
+        &format!(
+            "SELECT COUNT(*) FROM proton_accounts
+             WHERE account_id = '{id}' AND event_cursor IS NOT NULL"
+        ),
+    );
+    assert_eq!(bootstrapped, 1, "the worker bootstrapped again");
+
+    // Tags, notes, the body and the message itself all stay.
+    assert_eq!(
+        count_rows(
+            &db,
+            &format!("SELECT COUNT(*) FROM message_tags WHERE message_id = {message_id}")
+        ),
+        1,
+        "the tag stays"
+    );
+    assert_eq!(
+        count_rows(
+            &db,
+            &format!("SELECT COUNT(*) FROM notes WHERE message_id = {message_id}")
+        ),
+        1,
+        "the note stays"
+    );
+    assert_eq!(
+        count_rows(
+            &db,
+            &format!("SELECT COUNT(*) FROM occurrences WHERE message_id = {message_id}")
+        ),
+        1,
+        "the message stays"
+    );
 }
 
 /// Wait for the account's bootstrap listing to complete.

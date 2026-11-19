@@ -352,18 +352,75 @@ impl Core {
         .await
     }
 
-    /// `disconnect_account(id)` (spec/07): revoke a Proton account's
-    /// session, delete its secret and mark it disconnected, keeping
-    /// every row and its data. A command.
+    /// `update_account(id, params)` (spec/07 "Account management")
+    /// under an idempotency key the shell made: the display name only.
+    /// A command.
+    pub async fn update_account(
+        &self,
+        token: Arc<CancelToken>,
+        idempotency_key: String,
+        account_id: String,
+        display_name: String,
+    ) -> Result<Receipt, CoreError> {
+        let receipt = self
+            .command(&token, async |core| {
+                core.update_account(&idempotency_key, &account_id, &display_name)
+                    .await
+            })
+            .await?;
+        Ok(Receipt::from_service(&receipt))
+    }
+
+    /// `pause_account(id)` (spec/07 "Account management") under an
+    /// idempotency key the shell made. A command: the account's worker
+    /// stops before the receipt answers.
+    pub async fn pause_account(
+        &self,
+        token: Arc<CancelToken>,
+        idempotency_key: String,
+        account_id: String,
+    ) -> Result<Receipt, CoreError> {
+        let receipt = self
+            .command(&token, async |core| {
+                core.pause_account(&idempotency_key, &account_id).await
+            })
+            .await?;
+        Ok(Receipt::from_service(&receipt))
+    }
+
+    /// `resume_account(id)` (spec/07 "Account management") under an
+    /// idempotency key the shell made. A command: the account's worker
+    /// starts once the state change commits.
+    pub async fn resume_account(
+        &self,
+        token: Arc<CancelToken>,
+        idempotency_key: String,
+        account_id: String,
+    ) -> Result<Receipt, CoreError> {
+        let receipt = self
+            .command(&token, async |core| {
+                core.resume_account(&idempotency_key, &account_id).await
+            })
+            .await?;
+        Ok(Receipt::from_service(&receipt))
+    }
+
+    /// `disconnect_account(key, id)` (spec/07): revoke a Proton
+    /// account's session, delete its secret and mark it disconnected,
+    /// keeping every row and its data. A repeated key answers its
+    /// stored receipt and does nothing else. A command.
     pub async fn disconnect_account(
         &self,
         token: Arc<CancelToken>,
+        idempotency_key: String,
         account_id: String,
-    ) -> Result<(), CoreError> {
-        self.command(&token, async |core| {
-            core.disconnect_account(&account_id).await
-        })
-        .await
+    ) -> Result<Receipt, CoreError> {
+        let receipt = self
+            .command(&token, async |core| {
+                core.disconnect_account(&idempotency_key, &account_id).await
+            })
+            .await?;
+        Ok(Receipt::from_service(&receipt))
     }
 }
 
@@ -568,6 +625,83 @@ mod tests {
                 },
             }
         );
+    }
+
+    /// The account commands cross the FFI: a rename commits and
+    /// replays, the local archive refuses pause and resume on `account`,
+    /// and a bad display name is `InvalidInput` on `display_name`.
+    #[test]
+    fn account_commands_cross_the_ffi() {
+        let scratch = ScratchDir::new("ffi-account-commands");
+        let config = CoreConfig {
+            data_root: scratch.path().join("store").to_string_lossy().into_owned(),
+            cache_root: scratch.path().join("cache").to_string_lossy().into_owned(),
+        };
+        let core = block_on(open_core(CancelToken::new(), config)).expect("a fresh store opens");
+        let accounts = block_on(core.accounts(CancelToken::new())).expect("accounts");
+        let archive = accounts
+            .iter()
+            .find(|account| account.kind == crate::AccountKind::Local)
+            .expect("the local archive")
+            .account_id
+            .clone();
+
+        let receipt = block_on(core.update_account(
+            CancelToken::new(),
+            "update-ffi".to_owned(),
+            archive.clone(),
+            "  Owner  ".to_owned(),
+        ))
+        .expect("rename");
+        assert_eq!(receipt.command, "update_account");
+        let accounts = block_on(core.accounts(CancelToken::new())).expect("accounts");
+        let renamed = accounts
+            .iter()
+            .find(|account| account.account_id == archive)
+            .unwrap();
+        assert_eq!(renamed.display_name, "Owner");
+        let replayed = block_on(core.update_account(
+            CancelToken::new(),
+            "update-ffi".to_owned(),
+            archive.clone(),
+            "Other".to_owned(),
+        ))
+        .expect("replay");
+        assert_eq!(replayed, receipt);
+
+        let error = block_on(core.pause_account(
+            CancelToken::new(),
+            "pause-ffi".to_owned(),
+            archive.clone(),
+        ))
+        .expect_err("the local archive has no server");
+        assert!(
+            matches!(error, CoreError::InvalidInput { ref field, .. } if field == "account"),
+            "{error:?}"
+        );
+        let error = block_on(core.resume_account(
+            CancelToken::new(),
+            "resume-ffi".to_owned(),
+            archive.clone(),
+        ))
+        .expect_err("the local archive has no server");
+        assert!(
+            matches!(error, CoreError::InvalidInput { ref field, .. } if field == "account"),
+            "{error:?}"
+        );
+        let error = block_on(core.update_account(
+            CancelToken::new(),
+            "bad-ffi".to_owned(),
+            archive.clone(),
+            String::new(),
+        ))
+        .expect_err("an empty name is refused");
+        assert!(
+            matches!(error, CoreError::InvalidInput { ref field, .. } if field == "display_name"),
+            "{error:?}"
+        );
+
+        block_on(core.shutdown());
     }
 
     /// The four refusal fields spec/07 names must survive the FFI

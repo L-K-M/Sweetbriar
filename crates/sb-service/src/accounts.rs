@@ -401,13 +401,73 @@ impl Core {
         Ok(())
     }
 
-    /// `disconnect_account(id)` (spec/07, 04): revoke a Proton
+    /// `update_account(id, params)` (spec/07 "Account management")
+    /// under an idempotency key: the display name only, trimmed and
+    /// validated, with `revision` bumped and `config_generation`
+    /// untouched. A repeated key answers its stored receipt.
+    pub async fn update_account(
+        &self,
+        idempotency_key: &str,
+        account_id: &str,
+        display_name: &str,
+    ) -> Result<Receipt, CoreError> {
+        let receipt = self
+            .engine()
+            .update_account(idempotency_key, account_id, display_name)
+            .await?;
+        Ok(Receipt::from_engine(&receipt))
+    }
+
+    /// `pause_account(id)` (spec/07 "Account management") under an
+    /// idempotency key: an active account pauses and its worker stops
+    /// before the command answers. A paused account answers a receipt
+    /// and changes nothing; a `needs_attention` or `disconnected` one is
+    /// `Conflict`; the local archive is `InvalidInput` on `account`.
+    pub async fn pause_account(
+        &self,
+        idempotency_key: &str,
+        account_id: &str,
+    ) -> Result<Receipt, CoreError> {
+        let receipt = self
+            .engine()
+            .pause_account(idempotency_key, account_id)
+            .await?;
+        Ok(Receipt::from_engine(&receipt))
+    }
+
+    /// `resume_account(id)` (spec/07 "Account management") under an
+    /// idempotency key: a paused account activates and its worker
+    /// starts; one a restore paused reconciles first. An active account
+    /// answers a receipt and changes nothing; a `needs_attention` or
+    /// `disconnected` one is `Conflict`; the local archive is
+    /// `InvalidInput` on `account`.
+    pub async fn resume_account(
+        &self,
+        idempotency_key: &str,
+        account_id: &str,
+    ) -> Result<Receipt, CoreError> {
+        let receipt = self
+            .engine()
+            .resume_account(idempotency_key, account_id)
+            .await?;
+        Ok(Receipt::from_engine(&receipt))
+    }
+
+    /// `disconnect_account(key, id)` (spec/07, 04): revoke a Proton
     /// account's session, delete its secret and mark it disconnected,
     /// keeping every row and its data. Only a Proton account; another
-    /// kind is `InvalidInput` on `account`.
-    pub async fn disconnect_account(&self, account_id: &str) -> Result<(), CoreError> {
-        self.engine().disconnect_account(account_id).await?;
-        Ok(())
+    /// kind is `InvalidInput` on `account`. A repeated key answers its
+    /// stored receipt and does nothing else.
+    pub async fn disconnect_account(
+        &self,
+        idempotency_key: &str,
+        account_id: &str,
+    ) -> Result<Receipt, CoreError> {
+        let receipt = self
+            .engine()
+            .disconnect_account(idempotency_key, account_id)
+            .await?;
+        Ok(Receipt::from_engine(&receipt))
     }
 
     /// `resolve_breaker_event(id, resolution)` (spec/07 "Safety",
