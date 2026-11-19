@@ -672,6 +672,7 @@ impl FakeProtonServer {
 #[cfg(test)]
 mod tests {
     use std::io;
+    use std::time::Duration;
 
     use base64::Engine as _;
     use bytes::Bytes;
@@ -688,7 +689,7 @@ mod tests {
     use tokio::net::TcpStream;
     use tokio_rustls::TlsConnector;
 
-    use crate::{FakeProtonServer, TestAccount};
+    use crate::{FakeProtonServer, Fault, TestAccount};
 
     use super::{CLEAR_SCHEME, INTERNAL_SCHEME};
 
@@ -1146,6 +1147,129 @@ mod tests {
                 .expect("the clear body"),
             b"clear body"
         );
+    }
+
+    #[tokio::test]
+    async fn faults_drop_applied_replies_and_refuse_calls() {
+        let server = serve().await;
+        let client = TestClient::new(&server);
+        let provider = ProtonPGP::new_rust_sync();
+        let recipient = server.recipient_key(USER, INTERNAL).expect("the key");
+
+        server.set_fault(Some(Fault::Once(Box::new(Fault::DropAfterApply))));
+        assert!(
+            client
+                .json(
+                    "POST",
+                    "/mail/v4/messages",
+                    json!({"Message": draft_message("dropped", DRAFT_BODY)}),
+                )
+                .await
+                .is_err()
+        );
+        let id = client
+            .ok("GET", "/mail/v4/messages?PageSize=100", json!({}))
+            .await["Messages"]
+            .as_array()
+            .expect("messages")
+            .iter()
+            .find(|message| {
+                message["LabelIDs"]
+                    .as_array()
+                    .is_some_and(|labels| labels.contains(&json!("8")))
+            })
+            .expect("the draft")["ID"]
+            .as_str()
+            .expect("the id")
+            .to_owned();
+
+        let (key_packets, data_packet) = {
+            let (key_packets, data_packet, _, _) =
+                encrypt_body(&provider, recipient.public_key(), b"upload bytes");
+            (key_packets, data_packet)
+        };
+        server.set_fault(Some(Fault::Once(Box::new(Fault::DropAfterApply))));
+        assert!(
+            client
+                .request(
+                    "POST",
+                    "/mail/v4/attachments",
+                    upload_body(&id, &key_packets, &data_packet),
+                    CONTENT_TYPE,
+                )
+                .await
+                .is_err()
+        );
+        let full = client
+            .ok("GET", &format!("/mail/v4/messages/{id}"), json!({}))
+            .await;
+        assert_eq!(
+            full["Message"]["Attachments"][0]["Size"],
+            json!(b"upload bytes".len())
+        );
+
+        let parts = package(
+            &provider,
+            recipient.public_key(),
+            INTERNAL,
+            INTERNAL_SCHEME,
+            b"hello",
+        );
+        server.set_fault(Some(Fault::Once(Box::new(Fault::DropAfterApply))));
+        assert!(
+            client
+                .json(
+                    "POST",
+                    &format!("/mail/v4/messages/{id}"),
+                    json!({"Packages": [parts.json]}),
+                )
+                .await
+                .is_err()
+        );
+        assert_eq!(server.sends(), 1);
+        let full = client
+            .ok("GET", &format!("/mail/v4/messages/{id}"), json!({}))
+            .await;
+        assert_eq!(full["Message"]["LabelIDs"], json!(["5", "7"]));
+
+        let id = create_draft(&client).await;
+        let path = format!("/mail/v4/messages/{id}");
+        server.set_fault(Some(Fault::OnceAt {
+            path: path.clone(),
+            fault: Box::new(Fault::Code {
+                status: 400,
+                code: 2064,
+            }),
+        }));
+        let (status, body) = client
+            .json("POST", &path, json!({"Packages": []}))
+            .await
+            .expect("the refusal");
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(body["Code"], 2064);
+        assert_eq!(server.sends(), 1);
+    }
+
+    #[tokio::test]
+    async fn connection_faults_refuse_before_tls_and_stall_the_handshake() {
+        let server = serve().await;
+
+        // The listener accepts and closes before any TLS byte, so the
+        // client's handshake fails: a connect error, not a timeout.
+        server.set_fault(Some(Fault::RefuseConnection));
+        let error = tls_connect(server.base_url())
+            .await
+            .expect_err("the connection is refused before TLS");
+        assert_ne!(error.kind(), io::ErrorKind::TimedOut);
+
+        // The listener accepts and sends nothing, so a client with a
+        // deadline sees a timeout before the handshake completes.
+        server.set_fault(Some(Fault::StallHandshake(Duration::from_secs(5))));
+        let started = std::time::Instant::now();
+        let stalled =
+            tokio::time::timeout(Duration::from_millis(100), tls_connect(server.base_url())).await;
+        assert!(stalled.is_err(), "the handshake stalls past the deadline");
+        assert!(started.elapsed() < Duration::from_secs(1));
     }
 
     #[tokio::test]
