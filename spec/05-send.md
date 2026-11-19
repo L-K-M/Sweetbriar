@@ -114,8 +114,9 @@ Otherwise the draft keeps its state.
    - **First,** outside any transaction, build the MIME and publish it to
      the object store (03). If publishing fails, nothing else happens.
    - **Then,** in one transaction:
-     - insert `send_attempts` (`held`, `hold_until = now + undo window`)
-       and `send_recipients` (`pending`, one row per address, 02);
+     - insert `send_attempts` (`held`, `hold_until = now + undo window`,
+       the `sending.undo_seconds` setting, 02) and `send_recipients`
+       (`pending`, one row per address, 02);
      - set the draft to `queued`.
      - If this transaction fails, the published object is an orphan, and
        GC handles it.
@@ -127,6 +128,11 @@ Otherwise the draft keeps its state.
    `confirm_send_route`. The claim to submit and a cancel are serialized
    by the writer; whichever commits first wins. Once `submitting`, an
    attempt can't be cancelled.
+   - Once `hold_until` has passed, the account's worker moves a `held`
+     attempt to `queued` in one write, guarded on `held` so a cancel
+     that committed first wins. At startup a `held` attempt whose window
+     passed while the app was closed is queued the same way; one whose
+     window is still open stays `held` until it ends.
 3. **`queued` → `submitting`** commits before any network I/O.
    - **Before claiming,** the engine checks that the attempt's
      `config_generation` equals the account's current one. If the account
@@ -148,7 +154,9 @@ Otherwise the draft keeps its state.
      `outcome_unknown` whatever its progress, until SMTP records its own
      marker that `DATA` began.
 4. **Proton submission** (04-sync-proton's transport, on the account's
-   worker; one request in flight per account):
+   one worker between its sync steps, so the attempt's requests are the
+   worker's and one body fetch stays the only other request in flight;
+   an attempt's requests are sequential):
    1. **Recipient keys.** `GET /core/v4/keys?Email=` for each recipient.
       An internal recipient (Proton) is encrypted to its keys. An
       external recipient for whom the endpoint returns no keys is sent
@@ -183,8 +191,11 @@ Otherwise the draft keeps its state.
       attempt `failed` before the send request, naming the draft.
       Attachments the attempt recorded are expected and pass.
    4. **Send.** Build one package per MIME type the recipients need
-      (`text/html` for a Markdown draft, with the frozen `text/plain`
-      for recipients who prefer it; `text/plain` for a plain draft):
+      (`text/html` for a Markdown draft, `text/plain` for a plain
+      draft; recipients' MIME preferences live in Proton contacts,
+      which the pilot doesn't read, so the pilot needs one package and
+      the frozen `text/plain` alternative of a Markdown draft goes in
+      a second one only once those preferences are read, *later*):
       the body's data packet, and per recipient its scheme (internal:
       the session keys encrypted to its key; clear: the session keys in
       the package), signed as Proton's clients sign. Then commit
@@ -194,7 +205,8 @@ Otherwise the draft keeps its state.
         message) → attempt `accepted`; every recipient `sent` (accepted
         by Proton, not delivered). The draft becomes `sent` only if its
         `current_revision_id` still equals the attempt's revision (02).
-        The sent message's id is the draft id.
+        The sent message's id is the draft id. Each recipient counts
+        as sent to in `seen_addresses` (02), in the same transaction.
       - **A refusal whose code is in a qualified pre-submission class**
         → `failed`, recipients `unsent`, Proton's code and message shown.
         A class is qualified only when the `go-proton-api` lane (11) or
@@ -264,8 +276,9 @@ Otherwise the draft keeps its state.
    - **A `failed` attempt** also returns its draft to `editing`.
    - **Proton evidence:** when a Proton attempt becomes
      `outcome_unknown` (from a reply, at startup or after a restore),
-     and again when the Out Box opens it, the engine reads the draft's
-     metadata by `proton_draft_id`. If Proton shows it sent (it carries
+     and again at each of the account worker's polls while it is
+     unresolved, the engine reads the draft's metadata by
+     `proton_draft_id`; `out_box()` only reports what was observed. If Proton shows it sent (it carries
      Sent, `7`, and no longer Drafts, `8`), the attempt becomes
      `accepted`, its `unknown` recipients `sent` and the draft `sent`
      under the current-revision rule (02): that is Proton's own record, and
@@ -292,7 +305,7 @@ Otherwise the draft keeps its state.
 ## The Sent copy
 
 - **Proton saves the Sent copy itself:** the sent draft becomes the
-  Sent message (`server_saves_sent=1`). Sweetbriar never uploads or
+  Sent message (`sent_copy = 'server_saves'` at insert). Sweetbriar never uploads or
   imports a Sent copy for Proton accounts.
 - **Reconciliation:** after `accepted`, the attempt's `sent_copy` is
   `server_saves`. The events link the Sent message to the attempt by

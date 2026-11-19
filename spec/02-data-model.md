@@ -671,6 +671,14 @@ from discarded drafts. It is listed in the backup.
   Imported mailbox roles are unreliable and a message may have several
   labels, so M1.6 applies no role/direction or self-address filter. Completion
   may offer an own address; no automatic identity suppression is implied.
+- **Sent-to counts (M4.3):** when an attempt becomes `accepted`, or
+  is resolved `marked_sent`, each of its recipients that becomes `sent`
+  adds one to its canonical row's `times_sent_to` (inserting the row,
+  with `email` the recipient's spelling on the attempt and
+  `last_seen_at` now, when absent), and sets `last_account_id` to the
+  attempt's account, in the same transaction. An existing row keeps
+  its `email`, `display_name` and `last_seen_at`: sending isn't an
+  observation of the address. A recipient is counted once per attempt.
 - Migration 7 adds the kept ledger. WITHOUT ROWID stores its canonical key once
   rather than duplicating the composite primary key, within the per-key budget.
 
@@ -1296,7 +1304,9 @@ CREATE TABLE send_recipients (
 - **Proton submission (M4, 05):** a migration adds to `send_attempts`
   `proton_draft_id TEXT` (the draft Proton created, which becomes the
   sent message), `proton_uploads_json TEXT` (`{"v":1,"attachments":[…]}`:
-  the attachment ids uploaded so far, in the frozen MIME's order) and
+  the attachments uploaded so far, in the frozen MIME's order, each
+  `{"id","name","mime_type","size"}` with Proton's attachment id and
+  the name, type and size the draft reports, 05's retry match) and
   `send_requested_at INTEGER` (Proton only, committed just before the
   send request), with `CHECK (send_requested_at IS NULL OR
   proton_draft_id IS NOT NULL)`; generic attempts (*later*) never set
@@ -1335,6 +1345,7 @@ extend:
 | Key | Values | Default |
 |---|---|---|
 | `appearance.compose_cue` | `standard`, `strong` (08 Strong mode) | `standard` |
+| `sending.undo_seconds` | `5`, `7`, `10`, `20`, `30`: the undo-send window a new attempt is held for (05, M4.3; Settings → Sending safety, M4.4) | `7` |
 | `notifications.previews` | `off`, `on`: whether new-mail notifications show sender and subject (10, M2.7) | `off` |
 | `backups.destination` | Empty for the default, or an absolute directory path without NUL (M1.8j1b) | Empty: the data root's `backups/` |
 | `reader.reading_view_senders` | The senders whose messages open in the Reading view (08, M6.3b2): lowercase addresses, each with one `@` and at most 254 bytes, sorted, unique, joined by newlines; at most 1,000 | Empty: every message opens in sender layout |

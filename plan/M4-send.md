@@ -161,6 +161,103 @@ inspectable Out Box. Unknown outcomes are never retried automatically.
     request;
   - no Sent copy is uploaded or imported (request log);
   - the restore test turns pending attempts into `outcome_unknown`.
+- **Split (2026-11-19):** a survey of the code put the step at about
+  7,800 changed lines, so it lands as seven PRs. M4.3a and M4.3c may
+  start in parallel; M4.3b follows M4.3a, M4.3d follows M4.3c, M4.3e
+  needs M4.3b and M4.3d, M4.3f follows M4.3e, and M4.3g may start once
+  M4.3d merges. Commands reach the FFI with M4.4. The spec PR that
+  added this note settled the undo window (`sending.undo_seconds`),
+  the `held` to `queued` move, the pilot's single package, the
+  submission's place on the account's one worker, the evidence check's
+  trigger, the recorded upload fields, the sent-to counts and
+  `out_box()`'s rows.
+
+#### M4.3a Outbox queue — linux
+
+- **Deliverables:** the migration adding `proton_draft_id`,
+  `proton_uploads_json` and `send_requested_at` (02); the
+  `sending.undo_seconds` setting; `send_draft` (current-revision and
+  live-attempt checks, compose and publish the frozen bytes, then one
+  transaction inserting the `held` attempt and its recipients and
+  setting the draft `queued`) and `cancel_send`, through store, engine
+  and service.
+- **Acceptance:** M4.3's bullets on a non-current revision, `sent` or
+  `discarded` drafts, two keys queuing one attempt, one recipient for
+  `a@X.NET` and `a@x.net`, the route-snapshot schema refusal,
+  `discard_draft` while an attempt is live, and queue R1, save R2
+  (R1's cancellation leaves R2 intact).
+
+#### M4.3b Resolution, route and Out Box — linux
+
+- **Deliverables:** `resolve_unknown_send`, `confirm_send_route`,
+  `retry_rejected_recipients` (`Conflict` for Proton), the
+  `cross_account` ack check in `send_draft`, the sent-to counts on
+  `marked_sent`, and `out_box()` (07), through store, engine and
+  service.
+- **Acceptance:** M4.3's bullets on each resolution (exactly once,
+  across a restart, discarding afterwards, a queued R2 untouched),
+  recipients `unknown` then `sent`, the cross-account ack, "Send
+  again"'s frozen bytes, `confirm_send_route`, a reconfiguration
+  keeping the attempt `queued`, and `retry_rejected_recipients`.
+
+#### M4.3c Fake server send calls — linux
+
+- **Deliverables:** the fake's key lookup for internal and external
+  recipients (with and without keys), draft create and update,
+  attachment upload with the draft reporting each attachment's name,
+  type and size, and send, recording each recipient's package and
+  counting sends; faults that drop the reply after a draft creation,
+  an upload or a send was applied, refuse a connection before it is
+  established, stall before the TLS handshake, and refuse with a
+  chosen code (11).
+- **Acceptance:** tests driving the fake directly: each call's
+  recorded effect, the counter, and each fault.
+
+#### M4.3d Proton submission transport — linux
+
+- **Deliverables:** in `sb-proton`, the recipient key lookup, draft
+  create and update, attachment upload and send with one package per
+  MIME type, the body and attachments encrypted and signed with
+  `proton-crypto`; the sender's address key for signing; errors that
+  keep Proton's code for identity refusals and tell a connection never
+  established from one lost after the request began.
+- **Acceptance:** against the fake, an internal recipient's package
+  carries the session keys encrypted to its key and the fake decrypts
+  the body; an external recipient without keys gets the clear scheme;
+  a dropped send reply is not replayed.
+
+#### M4.3e Submission on the account worker — linux
+
+- **Deliverables:** the `held` to `queued` move, at the worker's
+  ticks and at startup, the `config_generation` gate, the claim, submission steps 1 to 5 between
+  the worker's sync steps, the reply interpretation with the (empty)
+  qualified pre-submission list, failures before `send_requested_at`
+  with the in-memory backoff, `needs_attention` on an identity or
+  session refusal, the sent-to counts on `accepted`, and Sent
+  reconciliation by `proton_draft_id`.
+- **Acceptance:** M4.3's bullets on a dropped send reply, a refusal of
+  the send, draft and upload reuse after a crash, a dropped upload or
+  draft-creation reply, a connection never established versus a
+  timeout after the request began, an external recipient with keys,
+  a definite failure, R1 accepted with R2 saved or queued, and no Sent
+  copy uploaded.
+
+#### M4.3f Recovery, evidence and crash cuts — linux
+
+- **Deliverables:** startup recovery of Proton `submitting` attempts
+  by `send_requested_at` (M4.3e queues the `held` ones); the evidence
+  check (05); the crash-cut suite over every transition.
+- **Acceptance:** zero duplicate sends across 200 seeds; a dropped
+  send the fake applied becomes `accepted` by evidence without a second
+  send; the restore test turns pending attempts into
+  `outcome_unknown`.
+
+#### M4.3g Send suite on the `go-proton-api` lane — linux (nightly)
+
+- **Deliverables:** the lane's send suite and driver support, recording
+  which refusals occur before anything is sent (the evidence the
+  qualified list needs, 05).
+- **Acceptance:** the lane runs green and records a dated artifact.
 
 ### M4.4 Compose window, identity strip and Out Box — L, macos-ci + owner
 
