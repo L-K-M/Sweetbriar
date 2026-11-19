@@ -1,17 +1,22 @@
-//! Identity writes (spec/02 `identities`, spec/07 "Identities").
+//! Identity writes and From-resolution reads (spec/02 `identities`,
+//! spec/05 "Identities and From resolution").
 //!
-//! The two identity commands' rows: an upsert for the accounts whose
-//! addresses the user maintains, and the one-default flip. Proton
-//! accounts are refused here because their identities come from
-//! Proton's addresses and a later refresh would overwrite a local edit
-//! (M2.12).
+//! The writes are the two identity commands' rows: an upsert for the
+//! accounts whose addresses the user maintains, and the one-default
+//! flip. Proton accounts are refused here because their identities come
+//! from Proton's addresses and a later refresh would overwrite a local
+//! edit (M2.12). The read gathers a source occurrence's resolver inputs
+//! offline from `message_headers` alone: no acquisition or body is
+//! touched, so a reply resolves before its body is downloaded.
 
 use rusqlite::{OptionalExtension, Transaction, params};
 
 use crate::StoreError;
 use crate::accounts::IdentitySendable;
+use crate::messages::{self, ReaderAddress};
 use crate::query::AddressOperand;
 use crate::schema::classify;
+use crate::sidebar::AccountKind;
 
 /// Why an identity command refused although its target exists, beyond
 /// the ordinary store failures. Both refusals are policy, not damage.
@@ -272,8 +277,269 @@ pub fn set_default_identity(tx: &Transaction, identity_id: &str) -> Result<(), I
     Ok(())
 }
 
+/// The headers a reply's identity and recipients resolve from, exactly
+/// as `message_headers` stores them. Absent fields are empty lists.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SourceMessageHeaders {
+    pub from: Vec<ReaderAddress>,
+    pub reply_to: Vec<ReaderAddress>,
+    pub to: Vec<ReaderAddress>,
+    pub cc: Vec<ReaderAddress>,
+    /// `Delivered-To`/`X-Original-To` values: plain address strings.
+    pub delivered_to: Vec<String>,
+}
+
+/// A source occurrence's gathered inputs (spec/05): its account, the
+/// message's headers, and the identity a recorded send attempt used.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourceIdentityInputs {
+    pub account_id: String,
+    pub account_kind: AccountKind,
+    pub headers: SourceMessageHeaders,
+    pub sent_identity_id: Option<String>,
+}
+
+/// One account identity as resolution sees it (spec/02 `identities`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IdentityRoute {
+    pub identity_id: String,
+    pub account_id: String,
+    pub email: String,
+    pub is_default: bool,
+    pub sendable: IdentitySendable,
+    pub account_kind: AccountKind,
+}
+
+/// Everything [`crate::identities`] resolution needs, gathered in one
+/// short read (spec/05).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IdentityResolutionInputs {
+    /// `None` for a new message.
+    pub source: Option<SourceIdentityInputs>,
+    pub identities: Vec<IdentityRoute>,
+    pub selected_account_id: Option<String>,
+    pub global_default_identity_id: Option<String>,
+}
+
 fn store_error(error: rusqlite::Error) -> IdentityError {
     IdentityError::Store(classify(error, "read an identity"))
+}
+
+fn mailbox_account(tx: &Transaction, mailbox_id: i64) -> Result<String, StoreError> {
+    tx.query_row(
+        "SELECT account_id FROM mailboxes WHERE mailbox_id = ?1",
+        params![mailbox_id],
+        |row| row.get(0),
+    )
+    .optional()
+    .map_err(|e| classify(e, "read the selected mailbox"))?
+    .ok_or_else(|| StoreError::not_found(format!("mailbox {mailbox_id}")))
+}
+
+fn require_account(tx: &Transaction, account_id: &str) -> Result<(), StoreError> {
+    let exists = tx
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM accounts WHERE account_id = ?1)",
+            params![account_id],
+            |row| row.get::<_, bool>(0),
+        )
+        .map_err(|e| classify(e, "read the selected account"))?;
+    if exists {
+        Ok(())
+    } else {
+        Err(StoreError::not_found(format!("account {account_id}")))
+    }
+}
+
+fn account_kind(kind: &str) -> Result<AccountKind, StoreError> {
+    match kind {
+        "local" => Ok(AccountKind::Local),
+        "imap" => Ok(AccountKind::Imap),
+        "proton" => Ok(AccountKind::Proton),
+        _ => Err(StoreError::corrupt(format!(
+            "an account's kind is '{kind}'"
+        ))),
+    }
+}
+
+fn delivered_to(json: Option<String>) -> Result<Vec<String>, StoreError> {
+    let Some(json) = json else {
+        return Ok(Vec::new());
+    };
+    let parsed: serde_json::Value = serde_json::from_str(&json)
+        .map_err(|_| StoreError::corrupt("delivered-to values are not JSON"))?;
+    let list = parsed
+        .as_array()
+        .ok_or_else(|| StoreError::corrupt("delivered-to values are not a list"))?;
+    list.iter()
+        .map(|value| {
+            value
+                .as_str()
+                .map(str::to_owned)
+                .ok_or_else(|| StoreError::corrupt("a delivered-to value is not text"))
+        })
+        .collect()
+}
+
+/// The resolver's whole input, gathered from one occurrence (or none for
+/// a new message). Header-only: it reads `message_headers` and never an
+/// acquisition. `selected_account_id` and `selected_mailbox_id` are the
+/// compose context; a mailbox resolves to its account, and the two must
+/// agree when both are given. The global default is `identity.default`
+/// (spec/07); malformed stored text is `Corrupt`, an absent or empty
+/// one selects nothing.
+pub fn identity_resolution_inputs(
+    tx: &Transaction,
+    source_occurrence_id: Option<i64>,
+    selected_account_id: Option<&str>,
+    selected_mailbox_id: Option<i64>,
+) -> Result<IdentityResolutionInputs, StoreError> {
+    let err = |e| classify(e, "gather identity resolution inputs");
+    let source = match source_occurrence_id {
+        Some(occurrence_id) => {
+            // Headers are left-joined: a message fetched before any body
+            // still resolves, and an absent row is empty rather than
+            // damage.
+            let row = tx
+                .query_row(
+                    "SELECT o.account_id, a.kind, h.from_json, h.reply_to_json, h.to_json,
+                            h.cc_json, h.delivered_to_json, h.header_message_id
+                     FROM occurrences o JOIN accounts a USING (account_id)
+                     LEFT JOIN message_headers h ON h.message_id = o.message_id
+                     WHERE o.occurrence_id = ?1",
+                    params![occurrence_id],
+                    |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, String>(1)?,
+                            row.get::<_, Option<String>>(2)?,
+                            row.get::<_, Option<String>>(3)?,
+                            row.get::<_, Option<String>>(4)?,
+                            row.get::<_, Option<String>>(5)?,
+                            row.get::<_, Option<String>>(6)?,
+                            row.get::<_, Option<String>>(7)?,
+                        ))
+                    },
+                )
+                .optional()
+                .map_err(err)?;
+            let Some((account_id, kind, from, reply_to, to, cc, delivered_json, message_id)) = row
+            else {
+                return Err(StoreError::not_found(format!("occurrence {occurrence_id}")));
+            };
+            let (from, reply_to, to, cc, delivered) = (
+                messages::addresses(from)?,
+                messages::addresses(reply_to)?,
+                messages::addresses(to)?,
+                messages::addresses(cc)?,
+                delivered_to(delivered_json)?,
+            );
+            let sent_identity_id = match message_id.as_deref() {
+                Some(message_id) => tx
+                    .query_row(
+                        "SELECT identity_id FROM send_attempts
+                         WHERE message_id_header = ?1
+                         ORDER BY created_at DESC, attempt_id DESC LIMIT 1",
+                        params![message_id],
+                        |row| row.get(0),
+                    )
+                    .optional()
+                    .map_err(err)?,
+                None => None,
+            };
+            Some(SourceIdentityInputs {
+                account_id,
+                account_kind: account_kind(&kind)?,
+                headers: SourceMessageHeaders {
+                    from,
+                    reply_to,
+                    to,
+                    cc,
+                    delivered_to: delivered,
+                },
+                sent_identity_id,
+            })
+        }
+        None => None,
+    };
+
+    let selected_account_id = match (selected_account_id, selected_mailbox_id) {
+        (Some(account), mailbox) => {
+            require_account(tx, account)?;
+            if let Some(mailbox) = mailbox
+                && mailbox_account(tx, mailbox)? != account
+            {
+                return Err(StoreError::InvalidInput {
+                    message: "selected account and mailbox disagree".to_owned(),
+                });
+            }
+            Some(account.to_owned())
+        }
+        (None, Some(mailbox)) => Some(mailbox_account(tx, mailbox)?),
+        (None, None) => None,
+    };
+
+    let mut statement = tx
+        .prepare(
+            "SELECT i.identity_id, i.account_id, i.email, i.is_default, i.sendable, a.kind
+             FROM identities i JOIN accounts a USING (account_id)
+             ORDER BY a.sort_order, a.account_id, i.identity_id",
+        )
+        .map_err(err)?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, String>(5)?,
+            ))
+        })
+        .map_err(err)?;
+    let mut identities = Vec::new();
+    for row in rows {
+        let (identity_id, account_id, email, is_default, sendable, kind) = row.map_err(err)?;
+        identities.push(IdentityRoute {
+            identity_id,
+            account_id,
+            email,
+            is_default: is_default != 0,
+            sendable: IdentitySendable::from_stored(&sendable).map_err(|_| {
+                StoreError::corrupt(format!("an identity's sendable state is '{sendable}'"))
+            })?,
+            account_kind: account_kind(&kind)?,
+        });
+    }
+
+    let global_default_identity_id = match tx
+        .query_row(
+            "SELECT value_json FROM settings WHERE key = 'identity.default'",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(err)?
+    {
+        Some(raw) => {
+            let parsed: String = serde_json::from_str(&raw)
+                .map_err(|_| StoreError::corrupt("identity.default is not a JSON string"))?;
+            if parsed.is_empty() {
+                None
+            } else {
+                Some(parsed)
+            }
+        }
+        None => None,
+    };
+
+    Ok(IdentityResolutionInputs {
+        source,
+        identities,
+        selected_account_id,
+        global_default_identity_id,
+    })
 }
 
 #[cfg(test)]

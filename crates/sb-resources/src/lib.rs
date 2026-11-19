@@ -149,7 +149,8 @@ pub use sb_store::exports::{
     create_export_job, export_chunks, export_job, recoverable_export_jobs,
 };
 pub use sb_store::identities::{
-    IdentityError, IdentityWrite, set_default_identity, upsert_identity,
+    IdentityError, IdentityResolutionInputs, IdentityRoute, IdentityWrite, SourceIdentityInputs,
+    SourceMessageHeaders, identity_resolution_inputs, set_default_identity, upsert_identity,
 };
 pub use sb_store::imports::{
     ImportJobState, ImportMessage, ImportParseState, ImportSummary, MAX_IMPORT_BATCH,
@@ -177,10 +178,11 @@ pub use sb_store::messages::{
     get_message, message_for_occurrence, messages_for_occurrences,
 };
 pub use sb_store::query::{
-    Kept, MAX_QUERY_INPUT_BYTES, ParseCode, ParseContext, Query, QueryCounts, QueryError,
-    SearchAnchor, SearchIndexState, SearchLimitation, SearchPage, SearchRebuildProgress,
-    SearchScope, StoredSearchCoverage as Coverage, TextFormatError, UnknownCount, counts,
-    read_search_date_page, read_search_relevance_page, search_date_ids, search_relevance_ids,
+    AddressOperand, Kept, MAX_QUERY_INPUT_BYTES, ParseCode, ParseContext, Query, QueryCounts,
+    QueryError, SearchAnchor, SearchIndexState, SearchLimitation, SearchPage,
+    SearchRebuildProgress, SearchScope, StoredSearchCoverage as Coverage, TextFormatError,
+    UnknownCount, counts, read_search_date_page, read_search_relevance_page, search_date_ids,
+    search_relevance_ids,
 };
 pub use sb_store::settings::{StoredSetting, read_all, upsert};
 pub use sb_store::sidebar::{
