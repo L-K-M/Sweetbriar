@@ -356,8 +356,8 @@ enum SetupFailure {
 }
 
 /// Record the worker's next attempt and why (spec/04's table):
-/// offline while Bridge isn't running, not answering for another
-/// failure. `wait` is the transport's delay before the next attempt.
+/// offline for an I/O failure, not answering for another failure.
+/// `wait` is the transport's delay before the next attempt.
 fn record_reconnect(worker: &Worker, account_id: &str, cause: &ImapError, wait: Duration) {
     let now_ms = worker.resources().now().as_millis();
     let next_retry_ms = now_ms + wait.as_millis() as i64;
@@ -365,10 +365,7 @@ fn record_reconnect(worker: &Worker, account_id: &str, cause: &ImapError, wait: 
         .statuses()
         .get(account_id)
         .and_then(|status| status.last_sync_ms);
-    let condition = match retrying_pause(cause) {
-        Some(ConnectionPause::BridgeNotRunning) => LiveCondition::Offline { next_retry_ms },
-        _ => LiveCondition::NotAnswering { next_retry_ms },
-    };
+    let condition = reconnect_condition(cause, next_retry_ms);
     worker.statuses().set(
         account_id,
         LiveStatus {
@@ -726,6 +723,16 @@ fn retrying_pause(cause: &ImapError) -> Option<ConnectionPause> {
             ..
         } => Some(ConnectionPause::BridgeNotRunning),
         _ => None,
+    }
+}
+
+/// The condition a retried failure shows (spec/04's table): offline
+/// for an I/O failure (Bridge not running, a reset, a timeout), not
+/// answering when the server answered but the exchange failed.
+fn reconnect_condition(cause: &ImapError, next_retry_ms: i64) -> LiveCondition {
+    match cause {
+        ImapError::Io { .. } => LiveCondition::Offline { next_retry_ms },
+        _ => LiveCondition::NotAnswering { next_retry_ms },
     }
 }
 
