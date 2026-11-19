@@ -296,6 +296,21 @@ fn content_id_of(headers: &Value) -> Option<String> {
     (!value.is_empty()).then(|| value.trim().to_owned())
 }
 
+/// A message id sent as a query value. Proton ids are base64url, whose
+/// alphabet needs no query encoding; anything else (`&`, `+`, a space)
+/// could change the query, so it is refused before the request.
+fn validate_query_id(id: &str, what: &str) -> Result<(), ProtonError> {
+    let base64url = !id.is_empty()
+        && id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'='));
+    base64url
+        .then_some(())
+        .ok_or_else(|| ProtonError::Malformed {
+            message: format!("{what} must be base64url, not {id:?}"),
+        })
+}
+
 /// A message or attachment id must be one non-empty path segment: no empty
 /// id, no control character, and none of `/ \ ? # %`, which would change the
 /// request's path or query.
@@ -535,20 +550,7 @@ impl Client {
         let page_size = page_size.min(MAX_PAGE_SIZE);
         let mut path = format!("{MESSAGES_PATH}?Page=0&PageSize={page_size}&Sort=Time&Desc=1");
         if let Some(anchor) = after {
-            // Proton ids are base64url, whose alphabet needs no query
-            // encoding; anything else is refused before the request.
-            if !anchor
-                .id
-                .bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'='))
-            {
-                return Err(ProtonError::Malformed {
-                    message: format!(
-                        "an anchor message id must be base64url, not {:?}",
-                        anchor.id
-                    ),
-                });
-            }
+            validate_query_id(&anchor.id, "an anchor message id")?;
             path.push_str(&format!("&End={}&EndID={}", anchor.time, anchor.id));
         }
         let response: MessagesResponse =
@@ -568,6 +570,35 @@ impl Client {
             total: response.total,
             stale: response.stale,
         })
+    }
+
+    /// `GET /mail/v4/messages?ID=<id>&Page=0&PageSize=1`: one
+    /// message's metadata, as the live target check and the refused
+    /// body's re-read use it (spec/04 "Sync loop" step 3, "Intents
+    /// and the mutation matrix"). The pinned `go-proton-api` server
+    /// reads `ID` from the query and answers the listing envelope;
+    /// production is confirmed by M2.Q. An empty `Messages` is
+    /// `None`; a returned message whose `ID` differs from the asked id
+    /// is `UnexpectedMessage` and never applied.
+    pub async fn message_metadata(
+        &self,
+        session: &Session,
+        id: &str,
+    ) -> Result<Option<MessageMetadata>, ProtonError> {
+        validate_query_id(id, "a by-id read's message id")?;
+        let path = format!("{MESSAGES_PATH}?ID={id}&Page=0&PageSize=1");
+        let response: MessagesResponse =
+            self.get_json(&path, session, Priority::Background).await?;
+        let mut messages = Vec::with_capacity(response.messages.len());
+        for (index, value) in response.messages.into_iter().enumerate() {
+            let at = format!("{MESSAGES_PATH} (message {index} of the by-id read)");
+            let message = MessageMetadata::from_value(value, &at)?;
+            if message.id != id {
+                return Err(ProtonError::UnexpectedMessage);
+            }
+            messages.push(message);
+        }
+        Ok(messages.into_iter().next())
     }
 
     /// `GET /mail/v4/messages/count`: per-label totals and unread counts

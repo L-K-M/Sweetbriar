@@ -3,7 +3,7 @@
 //! damaged body is recorded and retried on a key change, and reading
 //! sends no mutation.
 
-use super::events::{event_requests, until};
+use super::events::{assert_occurrences, event_requests, until};
 use super::*;
 
 use sb_test_support::{FakeAttachment, FakeMessage};
@@ -45,6 +45,35 @@ fn proton_column(h: &Harness, id: &str, column: &str) -> i64 {
     count_rows(
         &db,
         &format!("SELECT {column} FROM proton_accounts WHERE account_id = '{id}'"),
+    )
+}
+
+/// The by-id metadata reads the server has seen, as their query.
+fn metadata_reads(h: &Harness) -> Vec<String> {
+    h.server
+        .requests()
+        .into_iter()
+        .filter(|request| {
+            request.path == "/mail/v4/messages"
+                && request
+                    .query
+                    .as_deref()
+                    .is_some_and(|query| query.starts_with("ID="))
+        })
+        .map(|request| request.query.unwrap_or_default())
+        .collect()
+}
+
+/// `message_headers.fetched_at` for a provider key.
+fn fetched_at(h: &Harness, provider_key: &str) -> i64 {
+    let db = h.scratch.path().join("store/state.sqlite");
+    count_rows(
+        &db,
+        &format!(
+            "SELECT h.fetched_at FROM message_headers h
+             JOIN logical_messages l ON l.message_id = h.message_id
+             WHERE l.provider_key = '{provider_key}'"
+        ),
     )
 }
 
@@ -151,6 +180,153 @@ async fn a_response_naming_another_message_is_refused_without_a_loop() {
         !event_requests(&h.server).is_empty(),
         "the worker still polls its events"
     );
+}
+
+#[tokio::test]
+async fn a_refused_body_is_reread_by_id_and_its_metadata_applied() {
+    let h = setup(vec![TestAccount::new(USER, PASSWORD)]).await;
+    h.server.add_message(
+        USER,
+        FakeMessage::new("m1")
+            .with_time(100)
+            .with_labels(&["0", "5"]),
+    );
+    // The by-id read answers the message's current labels, which moved
+    // since the listing.
+    h.server.set_metadata_answer_labels(USER, "m1", &["3", "5"]);
+    h.server.set_wrong_message_id(USER, true);
+    let (_id, state) = begin(&h, "reread").await;
+    let id = account_id(&state);
+    listed(&h.core, &id).await;
+
+    // Wait for the re-read's write, not just its request. The listing
+    // state isn't checked first: the worker may fetch and re-read
+    // before `listed` returns, and Inbox ending `vanished` below
+    // already shows the listing stored it.
+    wait_for(|| {
+        count(
+            &h.scratch,
+            "occurrences o JOIN logical_messages l ON l.message_id = o.message_id
+             JOIN mailboxes m ON m.mailbox_id = o.mailbox_id
+             WHERE l.provider_key = 'm1' AND m.remote_name = 'Trash'
+               AND o.state = 'present'",
+        ) == 1
+    })
+    .await;
+    assert_eq!(
+        metadata_reads(&h),
+        vec!["ID=m1&Page=0&PageSize=1".to_owned()]
+    );
+    // The body isn't fetched again, and nothing is stored for it.
+    assert_eq!(body_fetches(&h), vec!["/mail/v4/messages/m1".to_owned()]);
+    assert_eq!(
+        count(
+            &h.scratch,
+            "acquisition_sources WHERE source_kind = 'proton_fetch'"
+        ),
+        0
+    );
+    assert_eq!(count(&h.scratch, "proton_body_failures"), 0);
+    // The re-read's metadata was applied: Inbox vanished, Trash
+    // appeared, All Mail stayed.
+    assert_occurrences(
+        &h,
+        "m1",
+        &[
+            ("All Mail", "present"),
+            ("Inbox", "vanished"),
+            ("Trash", "present"),
+        ],
+    );
+    let coverage = h.core.engine().proton_coverage(&id).await.unwrap();
+    assert_eq!(coverage.with_body, 0);
+}
+
+#[tokio::test]
+async fn an_empty_metadata_reread_writes_nothing() {
+    let h = setup(vec![TestAccount::new(USER, PASSWORD)]).await;
+    h.server.add_message(
+        USER,
+        FakeMessage::new("m1")
+            .with_time(100)
+            .with_labels(&["0", "5"]),
+    );
+    h.server
+        .add_message(USER, FakeMessage::new("m2").with_time(50));
+    h.server.set_metadata_hidden(USER, "m1", true);
+    h.server.set_wrong_message_id(USER, true);
+    let (_id, state) = begin(&h, "empty-reread").await;
+    let id = account_id(&state);
+    listed(&h.core, &id).await;
+    let before = fetched_at(&h, "m1");
+
+    // m1 is newer, so the queue fetches it first; m2's fetch after it
+    // proves the empty re-read was processed.
+    wait_for(|| body_fetches(&h).len() == 2).await;
+    assert_eq!(
+        metadata_reads(&h),
+        vec!["ID=m1&Page=0&PageSize=1".to_owned()]
+    );
+    assert_eq!(
+        body_fetches(&h),
+        vec![
+            "/mail/v4/messages/m1".to_owned(),
+            "/mail/v4/messages/m2".to_owned(),
+        ]
+    );
+    assert_eq!(
+        count(
+            &h.scratch,
+            "acquisition_sources a JOIN logical_messages l ON l.acquisition_id = a.acquisition_id
+             WHERE l.provider_key = 'm1' AND a.source_kind = 'proton_fetch'"
+        ),
+        0
+    );
+    assert_eq!(count(&h.scratch, "proton_body_failures"), 0);
+    // An empty answer writes nothing: headers and occurrences stay.
+    assert_eq!(fetched_at(&h, "m1"), before);
+    assert_occurrences(&h, "m1", &[("Inbox", "present"), ("All Mail", "present")]);
+}
+
+#[tokio::test]
+async fn a_reread_naming_another_message_writes_nothing_and_moves_on() {
+    let h = setup(vec![TestAccount::new(USER, PASSWORD)]).await;
+    h.server.add_message(
+        USER,
+        FakeMessage::new("m1")
+            .with_time(100)
+            .with_labels(&["0", "5"]),
+    );
+    h.server
+        .add_message(USER, FakeMessage::new("m2").with_time(50));
+    // Both the body and the by-id read name another message: the
+    // re-read is refused like an empty answer, not retried forever.
+    h.server.set_wrong_message_id(USER, true);
+    h.server.set_wrong_metadata_id(USER, true);
+    let (_id, state) = begin(&h, "wrong-reread").await;
+    let id = account_id(&state);
+    listed(&h.core, &id).await;
+    let before = fetched_at(&h, "m1");
+
+    wait_for(|| body_fetches(&h).len() >= 2).await;
+    assert_eq!(
+        body_fetches(&h),
+        vec![
+            "/mail/v4/messages/m1".to_owned(),
+            "/mail/v4/messages/m2".to_owned(),
+        ]
+    );
+    wait_for(|| metadata_reads(&h).len() >= 2).await;
+    assert_eq!(
+        metadata_reads(&h),
+        vec![
+            "ID=m1&Page=0&PageSize=1".to_owned(),
+            "ID=m2&Page=0&PageSize=1".to_owned(),
+        ]
+    );
+    assert_eq!(count(&h.scratch, "proton_body_failures"), 0);
+    assert_eq!(fetched_at(&h, "m1"), before);
+    assert_occurrences(&h, "m1", &[("Inbox", "present"), ("All Mail", "present")]);
 }
 
 #[tokio::test]

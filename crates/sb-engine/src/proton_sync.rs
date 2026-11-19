@@ -21,10 +21,10 @@ use sb_resources::proton_bodies::{
     pending_proton_bodies, record_body_failure,
 };
 use sb_resources::proton_sync::{
-    BreakerResolution, EventChunk, ListedPage, ProtonChange, ProtonListingState, anchor,
-    apply_event_chunk, begin_listing, checkpoint, commit_listed_page, finish_listing,
-    listed_message, reconcile_proton_labels, refresh_proton_identities, resolve_breaker_event,
-    withhold_unlisted,
+    BreakerResolution, EventChunk, ListedPage, ProtonChange, ProtonListingState, RereadMessage,
+    anchor, apply_event_chunk, apply_reread_message, begin_listing, checkpoint, commit_listed_page,
+    finish_listing, listed_message, reconcile_proton_labels, refresh_proton_identities,
+    resolve_breaker_event, withhold_unlisted,
 };
 use sb_resources::{
     AccountState, EventAction, EventBatch, EventId, KeyStore, ListingAnchor, PROTON_MAX_PAGE_SIZE,
@@ -541,7 +541,8 @@ impl Attempt<'_> {
             if self.skipped.contains(&body.provider_key) {
                 continue;
             }
-            self.acquire_one(&body, account.key_generation).await?;
+            self.acquire_one(&body, account.key_generation, account.revision)
+                .await?;
         }
         Ok(())
     }
@@ -549,7 +550,12 @@ impl Attempt<'_> {
     /// Fetch, decrypt and commit one pending body. A failure is
     /// recorded and the queue moves on; a transport failure is the
     /// caller's `Halt`.
-    async fn acquire_one(&mut self, body: &PendingBody, key_generation: i64) -> Result<(), Halt> {
+    async fn acquire_one(
+        &mut self,
+        body: &PendingBody,
+        key_generation: i64,
+        revision: i64,
+    ) -> Result<(), Halt> {
         let fetched = match self
             .call_classified(|client, session| async move {
                 client.message(&session, &body.provider_key).await
@@ -558,10 +564,11 @@ impl Attempt<'_> {
         {
             Ok(fetched) => fetched,
             // spec/04 step 3: the id in the response must equal
-            // provider_key. Nothing is written; the metadata re-read the
-            // spec asks for needs a listing filter this transport
-            // version doesn't expose, so the run skips the message.
+            // provider_key. The message's metadata is re-read by id and
+            // applied as an event's change would; the body isn't
+            // fetched again this run.
             Err(FetchError::UnexpectedMessage) => {
+                self.reread_metadata(body, revision).await?;
                 self.skipped.insert(body.provider_key.clone());
                 return Ok(());
             }
@@ -642,6 +649,50 @@ impl Attempt<'_> {
                 None => Err(Halt::Retry),
             },
         }
+    }
+
+    /// Re-read one message's metadata by id after its body response
+    /// named another message (spec/04 step 3, plan M2.16d), and apply
+    /// it as an event's change would. An empty answer writes nothing,
+    /// since only a delete event or a complete listing removes a
+    /// message; nor does one naming another message, which is refused
+    /// as the body was. A transport failure is the caller's `Halt`.
+    async fn reread_metadata(&self, body: &PendingBody, revision: i64) -> Result<(), Halt> {
+        let key = body.provider_key.clone();
+        let metadata = match self
+            .call_classified(move |client, session| {
+                let key = key.clone();
+                async move { client.message_metadata(&session, &key).await }
+            })
+            .await
+        {
+            Ok(metadata) => metadata,
+            // Retrying would fetch the same refused body forever and
+            // starve the rest of the queue.
+            Err(FetchError::UnexpectedMessage) => None,
+            Err(FetchError::Ended) => return Err(Halt::Ended),
+            Err(_) => return Err(Halt::Retry),
+        };
+        let Some(metadata) = metadata else {
+            return Ok(());
+        };
+        let listed = listed_message(&metadata);
+        let id = self.account_id.to_owned();
+        let now = self.worker.resources().now();
+        self.write(move |tx| {
+            apply_reread_message(
+                tx,
+                &RereadMessage {
+                    account_id: &id,
+                    message: &listed,
+                    expected_revision: revision,
+                },
+                now,
+            )
+            .map(drop)
+        })
+        .await?;
+        Ok(())
     }
 
     /// Record one body failure at the account's current key generation;

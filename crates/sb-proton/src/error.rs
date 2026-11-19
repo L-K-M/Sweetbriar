@@ -160,9 +160,9 @@ pub enum ProtonError {
         /// A static description; never the response body.
         message: String,
     },
-    /// A full-message response named a different message than the one
-    /// requested. spec/04 step 3: the id must equal `provider_key`;
-    /// anything else is refused.
+    /// A full-message response or a by-id metadata read named a
+    /// different message than the one requested. spec/04 step 3: the id
+    /// must equal `provider_key`; anything else is refused.
     UnexpectedMessage,
     /// An attachment data packet grew past the download bound. It is a
     /// typed failure, never a truncated return (spec/04 step 3).

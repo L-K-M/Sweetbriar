@@ -187,7 +187,17 @@ its label id appended, as in "Travel (l1)" for the label with id
      linked to the logical message; refresh `message_headers` from the
      stored header block; queue for search.
    - The id in the response must equal `provider_key`; anything else is
-     refused and the message's metadata is re-read.
+     refused and the message's metadata is re-read by id
+     (`/mail/v4/messages` filtered by `ID`, the live target check's
+     read). The metadata it returns updates the message's occurrences
+     as an event's would, without moving the event cursor or counting
+     for the breaker. An empty answer writes nothing, since only a
+     delete event or a complete listing removes a message; an answer
+     naming another message is refused and writes nothing either. The
+     store applies a re-read only once the bootstrap listing is
+     complete and at the account revision the queue read; otherwise
+     it refuses it and the run retries. The body isn't fetched again
+     in that run.
    - A body that can't be decrypted gets no acquisition. The message
      records the failure in `proton_body_failures` (02) and shows "Couldn't decrypt this message";
      it is retried after a key change.
