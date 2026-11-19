@@ -25,6 +25,16 @@ fn the_recovery_query_round_trips_over_the_exported_path() {
     let archive = sb_test_support::block_on(core.accounts(token())).unwrap()[0]
         .account_id
         .clone();
+    let empty =
+        sb_test_support::block_on(core.recovery(token(), None, RecoveryAnchor::Top, 10)).unwrap();
+    assert_eq!(
+        empty,
+        RecoveryPage {
+            rows: Vec::new(),
+            after: None,
+            has_more: false,
+        }
+    );
     sb_test_support::block_on(core.shutdown());
 
     sb_test_support::execute_sql(
