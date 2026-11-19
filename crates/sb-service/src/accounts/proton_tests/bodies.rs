@@ -198,9 +198,11 @@ async fn a_refused_body_is_reread_by_id_and_its_metadata_applied() {
     let (_id, state) = begin(&h, "reread").await;
     let id = account_id(&state);
     listed(&h.core, &id).await;
-    assert_occurrences(&h, "m1", &[("Inbox", "present"), ("All Mail", "present")]);
 
-    // Wait for the re-read's write, not just its request.
+    // Wait for the re-read's write, not just its request. The listing
+    // state isn't checked first: the worker may fetch and re-read
+    // before `listed` returns, and Inbox ending `vanished` below
+    // already shows the listing stored it.
     wait_for(|| {
         count(
             &h.scratch,

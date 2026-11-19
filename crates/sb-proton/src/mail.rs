@@ -579,7 +579,7 @@ impl Client {
     /// reads `ID` from the query and answers the listing envelope;
     /// production is confirmed by M2.Q. An empty `Messages` is
     /// `None`; a returned message whose `ID` differs from the asked id
-    /// is `Malformed` and never applied.
+    /// is `UnexpectedMessage` and never applied.
     pub async fn message_metadata(
         &self,
         session: &Session,
