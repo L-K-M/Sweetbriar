@@ -492,7 +492,7 @@ pub(crate) fn encode_receipt_id(field: &str, id: &str) -> String {
 /// command answers this stored id, never a fresh argument. Malformed
 /// stored JSON or a missing, empty or non-string id is `Corrupt` —
 /// never an invented id.
-fn receipt_id(receipt: &Receipt, field: &str) -> Result<String, EngineError> {
+pub(crate) fn receipt_id(receipt: &Receipt, field: &str) -> Result<String, EngineError> {
     let parsed: serde_json::Value = serde_json::from_str(receipt.result_json())
         .map_err(|_| EngineError::corrupt("a stored command receipt is not JSON"))?;
     match parsed[field].as_str() {

@@ -74,12 +74,21 @@ fn valid_sender_list(value: &str) -> bool {
     })
 }
 
+/// `sending.undo_seconds`'s dotted key (spec/02), shared with the
+/// send command that reads its effective value.
+pub(crate) const UNDO_SECONDS_KEY: &str = "sending.undo_seconds";
+
 /// The pilot's settings registry (spec/02), which later steps extend.
 const REGISTRY: &[RegisteredSetting] = &[
     RegisteredSetting {
         key: "appearance.compose_cue",
         values: Values::Choices(&["standard", "strong"]),
         default: "standard",
+    },
+    RegisteredSetting {
+        key: UNDO_SECONDS_KEY,
+        values: Values::Choices(&["5", "7", "10", "20", "30"]),
+        default: "7",
     },
     RegisteredSetting {
         key: BACKUP_DESTINATION_SETTING,
