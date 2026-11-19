@@ -1572,6 +1572,13 @@ public protocol CoreProtocol: AnyObject, Sendable {
     func startImport(token: CancelToken, idempotencyKey: String, paths: [String], target: ImportTarget) async throws  -> ImportStarted
     
     /**
+     * `intents(filter)` (spec/07): parked and quarantined intents,
+     * oldest first, at most `limit` rows. A query: the token races the
+     * core's lock and the read itself.
+     */
+    func intents(token: CancelToken, filter: IntentFilter, anchor: IntentAnchor, limit: UInt32) async throws  -> IntentPage
+    
+    /**
      * `add_tag(selection, tag)` (spec/07 Messages): attach the named
      * tag, creating the definition when the name is new. A repeated
      * key answers its stored receipt. Like every command it honours
@@ -1627,6 +1634,13 @@ public protocol CoreProtocol: AnyObject, Sendable {
      * answers its stored receipt.
      */
     func setNote(token: CancelToken, idempotencyKey: String, messageId: Int64, text: String) async throws  -> Receipt
+    
+    /**
+     * `recovery(account_id?)` (spec/07): logical messages with no
+     * `present` occurrence, newest first, at most `limit` rows. A
+     * query: the token races the core's lock and the read itself.
+     */
+    func recovery(token: CancelToken, accountId: String?, anchor: RecoveryAnchor, limit: UInt32) async throws  -> RecoveryPage
     
     /**
      * Replay before preparation; otherwise verify/stage with the core usable,
@@ -2717,6 +2731,27 @@ open func startImport(token: CancelToken, idempotencyKey: String, paths: [String
 }
     
     /**
+     * `intents(filter)` (spec/07): parked and quarantined intents,
+     * oldest first, at most `limit` rows. A query: the token races the
+     * core's lock and the read itself.
+     */
+open func intents(token: CancelToken, filter: IntentFilter, anchor: IntentAnchor, limit: UInt32)async throws  -> IntentPage  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_sb_ffi_fn_method_core_intents(
+                        self.uniffiCloneHandle(),FfiConverterTypeCancelToken_lower(token),FfiConverterTypeIntentFilter_lower(filter),FfiConverterTypeIntentAnchor_lower(anchor),FfiConverterUInt32.lower(limit)
+                )
+            },
+            pollFunc: ffi_sb_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_sb_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_sb_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeIntentPage_lift,
+            errorHandler: FfiConverterTypeCoreError_lift
+        )
+}
+    
+    /**
      * `add_tag(selection, tag)` (spec/07 Messages): attach the named
      * tag, creating the definition when the name is new. A repeated
      * key answers its stored receipt. Like every command it honours
@@ -2888,6 +2923,27 @@ open func setNote(token: CancelToken, idempotencyKey: String, messageId: Int64, 
             completeFunc: ffi_sb_ffi_rust_future_complete_rust_buffer,
             freeFunc: ffi_sb_ffi_rust_future_free_rust_buffer,
             liftFunc: FfiConverterTypeReceipt_lift,
+            errorHandler: FfiConverterTypeCoreError_lift
+        )
+}
+    
+    /**
+     * `recovery(account_id?)` (spec/07): logical messages with no
+     * `present` occurrence, newest first, at most `limit` rows. A
+     * query: the token races the core's lock and the read itself.
+     */
+open func recovery(token: CancelToken, accountId: String?, anchor: RecoveryAnchor, limit: UInt32)async throws  -> RecoveryPage  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_sb_ffi_fn_method_core_recovery(
+                        self.uniffiCloneHandle(),FfiConverterTypeCancelToken_lower(token),FfiConverterOptionString.lower(accountId),FfiConverterTypeRecoveryAnchor_lower(anchor),FfiConverterUInt32.lower(limit)
+                )
+            },
+            pollFunc: ffi_sb_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_sb_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_sb_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeRecoveryPage_lift,
             errorHandler: FfiConverterTypeCoreError_lift
         )
 }
@@ -6699,6 +6755,240 @@ public func FfiConverterTypeImportTotals_lower(_ value: ImportTotals) -> RustBuf
 
 
 /**
+ * One parked or quarantined intent as the health surface shows it.
+ */
+public struct Intent: Equatable, Hashable {
+    public var intentId: String
+    public var accountId: String
+    public var kind: IntentKind
+    public var state: IntentState
+    /**
+     * The target occurrence ids `target_json` holds.
+     */
+    public var targetOccurrenceIds: [Int64]
+    /**
+     * Set on a quarantined intent.
+     */
+    public var quarantineReason: QuarantineReason?
+    /**
+     * A parked intent's terminal error, when one was recorded.
+     */
+    public var lastError: String?
+    public var effect: IntentEffect
+    public var createdAtMs: Int64
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(intentId: String, accountId: String, kind: IntentKind, state: IntentState, 
+        /**
+         * The target occurrence ids `target_json` holds.
+         */targetOccurrenceIds: [Int64], 
+        /**
+         * Set on a quarantined intent.
+         */quarantineReason: QuarantineReason?, 
+        /**
+         * A parked intent's terminal error, when one was recorded.
+         */lastError: String?, effect: IntentEffect, createdAtMs: Int64) {
+        self.intentId = intentId
+        self.accountId = accountId
+        self.kind = kind
+        self.state = state
+        self.targetOccurrenceIds = targetOccurrenceIds
+        self.quarantineReason = quarantineReason
+        self.lastError = lastError
+        self.effect = effect
+        self.createdAtMs = createdAtMs
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension Intent: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeIntent: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> Intent {
+        return
+            try Intent(
+                intentId: FfiConverterString.read(from: &buf), 
+                accountId: FfiConverterString.read(from: &buf), 
+                kind: FfiConverterTypeIntentKind.read(from: &buf), 
+                state: FfiConverterTypeIntentState.read(from: &buf), 
+                targetOccurrenceIds: FfiConverterSequenceInt64.read(from: &buf), 
+                quarantineReason: FfiConverterOptionTypeQuarantineReason.read(from: &buf), 
+                lastError: FfiConverterOptionString.read(from: &buf), 
+                effect: FfiConverterTypeIntentEffect.read(from: &buf), 
+                createdAtMs: FfiConverterInt64.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: Intent, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.intentId, into: &buf)
+        FfiConverterString.write(value.accountId, into: &buf)
+        FfiConverterTypeIntentKind.write(value.kind, into: &buf)
+        FfiConverterTypeIntentState.write(value.state, into: &buf)
+        FfiConverterSequenceInt64.write(value.targetOccurrenceIds, into: &buf)
+        FfiConverterOptionTypeQuarantineReason.write(value.quarantineReason, into: &buf)
+        FfiConverterOptionString.write(value.lastError, into: &buf)
+        FfiConverterTypeIntentEffect.write(value.effect, into: &buf)
+        FfiConverterInt64.write(value.createdAtMs, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeIntent_lift(_ buf: RustBuffer) throws -> Intent {
+    return try FfiConverterTypeIntent.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeIntent_lower(_ value: Intent) -> RustBuffer {
+    return FfiConverterTypeIntent.lower(value)
+}
+
+
+/**
+ * Which parked or quarantined intents a page reads; `None` leaves a
+ * dimension unfiltered.
+ */
+public struct IntentFilter: Equatable, Hashable {
+    public var accountId: String?
+    public var state: IntentState?
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(accountId: String?, state: IntentState?) {
+        self.accountId = accountId
+        self.state = state
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension IntentFilter: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeIntentFilter: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> IntentFilter {
+        return
+            try IntentFilter(
+                accountId: FfiConverterOptionString.read(from: &buf), 
+                state: FfiConverterOptionTypeIntentState.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: IntentFilter, into buf: inout [UInt8]) {
+        FfiConverterOptionString.write(value.accountId, into: &buf)
+        FfiConverterOptionTypeIntentState.write(value.state, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeIntentFilter_lift(_ buf: RustBuffer) throws -> IntentFilter {
+    return try FfiConverterTypeIntentFilter.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeIntentFilter_lower(_ value: IntentFilter) -> RustBuffer {
+    return FfiConverterTypeIntentFilter.lower(value)
+}
+
+
+/**
+ * One page of parked or quarantined intents, oldest first.
+ */
+public struct IntentPage: Equatable, Hashable {
+    public var rows: [Intent]
+    /**
+     * The last row's cursor; `None` when the page is empty.
+     */
+    public var after: String?
+    /**
+     * Whether more rows follow the page's last one.
+     */
+    public var hasMore: Bool
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(rows: [Intent], 
+        /**
+         * The last row's cursor; `None` when the page is empty.
+         */after: String?, 
+        /**
+         * Whether more rows follow the page's last one.
+         */hasMore: Bool) {
+        self.rows = rows
+        self.after = after
+        self.hasMore = hasMore
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension IntentPage: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeIntentPage: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> IntentPage {
+        return
+            try IntentPage(
+                rows: FfiConverterSequenceTypeIntent.read(from: &buf), 
+                after: FfiConverterOptionString.read(from: &buf), 
+                hasMore: FfiConverterBool.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: IntentPage, into buf: inout [UInt8]) {
+        FfiConverterSequenceTypeIntent.write(value.rows, into: &buf)
+        FfiConverterOptionString.write(value.after, into: &buf)
+        FfiConverterBool.write(value.hasMore, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeIntentPage_lift(_ buf: RustBuffer) throws -> IntentPage {
+    return try FfiConverterTypeIntentPage.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeIntentPage_lower(_ value: IntentPage) -> RustBuffer {
+    return FfiConverterTypeIntentPage.lower(value)
+}
+
+
+/**
  * One list row (spec/07): display fields only — no MIME tree, no
  * body.
  */
@@ -8328,6 +8618,169 @@ public func FfiConverterTypeReceipt_lift(_ buf: RustBuffer) throws -> Receipt {
 #endif
 public func FfiConverterTypeReceipt_lower(_ value: Receipt) -> RustBuffer {
     return FfiConverterTypeReceipt.lower(value)
+}
+
+
+/**
+ * One Recovery row: the logical message and its last occurrence's
+ * mailbox, state and time.
+ */
+public struct Recovery: Equatable, Hashable {
+    public var messageId: Int64
+    public var accountId: String
+    public var mailboxId: Int64
+    public var mailboxName: String
+    public var state: RecoveryState
+    /**
+     * The last occurrence's `last_seen_at`, epoch milliseconds.
+     */
+    public var lastSeenAtMs: Int64
+    /**
+     * The last occurrence's id, the order's tie-break.
+     */
+    public var occurrenceId: Int64
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(messageId: Int64, accountId: String, mailboxId: Int64, mailboxName: String, state: RecoveryState, 
+        /**
+         * The last occurrence's `last_seen_at`, epoch milliseconds.
+         */lastSeenAtMs: Int64, 
+        /**
+         * The last occurrence's id, the order's tie-break.
+         */occurrenceId: Int64) {
+        self.messageId = messageId
+        self.accountId = accountId
+        self.mailboxId = mailboxId
+        self.mailboxName = mailboxName
+        self.state = state
+        self.lastSeenAtMs = lastSeenAtMs
+        self.occurrenceId = occurrenceId
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension Recovery: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeRecovery: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> Recovery {
+        return
+            try Recovery(
+                messageId: FfiConverterInt64.read(from: &buf), 
+                accountId: FfiConverterString.read(from: &buf), 
+                mailboxId: FfiConverterInt64.read(from: &buf), 
+                mailboxName: FfiConverterString.read(from: &buf), 
+                state: FfiConverterTypeRecoveryState.read(from: &buf), 
+                lastSeenAtMs: FfiConverterInt64.read(from: &buf), 
+                occurrenceId: FfiConverterInt64.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: Recovery, into buf: inout [UInt8]) {
+        FfiConverterInt64.write(value.messageId, into: &buf)
+        FfiConverterString.write(value.accountId, into: &buf)
+        FfiConverterInt64.write(value.mailboxId, into: &buf)
+        FfiConverterString.write(value.mailboxName, into: &buf)
+        FfiConverterTypeRecoveryState.write(value.state, into: &buf)
+        FfiConverterInt64.write(value.lastSeenAtMs, into: &buf)
+        FfiConverterInt64.write(value.occurrenceId, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeRecovery_lift(_ buf: RustBuffer) throws -> Recovery {
+    return try FfiConverterTypeRecovery.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeRecovery_lower(_ value: Recovery) -> RustBuffer {
+    return FfiConverterTypeRecovery.lower(value)
+}
+
+
+/**
+ * One page of the Recovery list, newest first.
+ */
+public struct RecoveryPage: Equatable, Hashable {
+    public var rows: [Recovery]
+    /**
+     * The last row's cursor; `None` when the page is empty.
+     */
+    public var after: String?
+    /**
+     * Whether more rows follow the page's last one.
+     */
+    public var hasMore: Bool
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(rows: [Recovery], 
+        /**
+         * The last row's cursor; `None` when the page is empty.
+         */after: String?, 
+        /**
+         * Whether more rows follow the page's last one.
+         */hasMore: Bool) {
+        self.rows = rows
+        self.after = after
+        self.hasMore = hasMore
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension RecoveryPage: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeRecoveryPage: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> RecoveryPage {
+        return
+            try RecoveryPage(
+                rows: FfiConverterSequenceTypeRecovery.read(from: &buf), 
+                after: FfiConverterOptionString.read(from: &buf), 
+                hasMore: FfiConverterBool.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: RecoveryPage, into buf: inout [UInt8]) {
+        FfiConverterSequenceTypeRecovery.write(value.rows, into: &buf)
+        FfiConverterOptionString.write(value.after, into: &buf)
+        FfiConverterBool.write(value.hasMore, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeRecoveryPage_lift(_ buf: RustBuffer) throws -> RecoveryPage {
+    return try FfiConverterTypeRecoveryPage.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeRecoveryPage_lower(_ value: RecoveryPage) -> RustBuffer {
+    return FfiConverterTypeRecoveryPage.lower(value)
 }
 
 
@@ -11674,6 +12127,359 @@ public func FfiConverterTypeIntegrity_lower(_ value: Integrity) -> RustBuffer {
 
 
 /**
+ * Where an intent page starts. Cursors are the core's opaque strings.
+ */
+
+public enum IntentAnchor: Equatable, Hashable {
+    
+    case top
+    /**
+     * Rows after the cursor's row in the oldest-first order.
+     */
+    case after(cursor: String
+    )
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension IntentAnchor: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeIntentAnchor: FfiConverterRustBuffer {
+    typealias SwiftType = IntentAnchor
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> IntentAnchor {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .top
+        
+        case 2: return .after(cursor: try FfiConverterString.read(from: &buf)
+        )
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: IntentAnchor, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .top:
+            writeInt(&buf, Int32(1))
+        
+        
+        case let .after(cursor):
+            writeInt(&buf, Int32(2))
+            FfiConverterString.write(cursor, into: &buf)
+            
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeIntentAnchor_lift(_ buf: RustBuffer) throws -> IntentAnchor {
+    return try FfiConverterTypeIntentAnchor.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeIntentAnchor_lower(_ value: IntentAnchor) -> RustBuffer {
+    return FfiConverterTypeIntentAnchor.lower(value)
+}
+
+
+
+/**
+ * The intent's effect as stored.
+ */
+
+public enum IntentEffect: Equatable, Hashable {
+    
+    case setFlags(add: [String], remove: [String]
+    )
+    case toMailbox(mailboxId: Int64
+    )
+    case deleteToTrash
+    /**
+     * A reserved operation, not produced in the pilot (spec/02).
+     */
+    case reserved(argsJson: String
+    )
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension IntentEffect: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeIntentEffect: FfiConverterRustBuffer {
+    typealias SwiftType = IntentEffect
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> IntentEffect {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .setFlags(add: try FfiConverterSequenceString.read(from: &buf), remove: try FfiConverterSequenceString.read(from: &buf)
+        )
+        
+        case 2: return .toMailbox(mailboxId: try FfiConverterInt64.read(from: &buf)
+        )
+        
+        case 3: return .deleteToTrash
+        
+        case 4: return .reserved(argsJson: try FfiConverterString.read(from: &buf)
+        )
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: IntentEffect, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case let .setFlags(add,remove):
+            writeInt(&buf, Int32(1))
+            FfiConverterSequenceString.write(add, into: &buf)
+            FfiConverterSequenceString.write(remove, into: &buf)
+            
+        
+        case let .toMailbox(mailboxId):
+            writeInt(&buf, Int32(2))
+            FfiConverterInt64.write(mailboxId, into: &buf)
+            
+        
+        case .deleteToTrash:
+            writeInt(&buf, Int32(3))
+        
+        
+        case let .reserved(argsJson):
+            writeInt(&buf, Int32(4))
+            FfiConverterString.write(argsJson, into: &buf)
+            
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeIntentEffect_lift(_ buf: RustBuffer) throws -> IntentEffect {
+    return try FfiConverterTypeIntentEffect.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeIntentEffect_lower(_ value: IntentEffect) -> RustBuffer {
+    return FfiConverterTypeIntentEffect.lower(value)
+}
+
+
+
+/**
+ * What the intent does (spec/02 `intents.op`).
+ */
+
+public enum IntentKind: Equatable, Hashable {
+    
+    case setFlags
+    case move
+    case copy
+    case deleteToTrash
+    /**
+     * Reserved, not produced in the pilot (spec/02).
+     */
+    case expungeScoped
+    /**
+     * Reserved, not produced in the pilot (spec/02).
+     */
+    case append
+    /**
+     * Reserved, not produced in the pilot; sends use send attempts.
+     */
+    case submit
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension IntentKind: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeIntentKind: FfiConverterRustBuffer {
+    typealias SwiftType = IntentKind
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> IntentKind {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .setFlags
+        
+        case 2: return .move
+        
+        case 3: return .copy
+        
+        case 4: return .deleteToTrash
+        
+        case 5: return .expungeScoped
+        
+        case 6: return .append
+        
+        case 7: return .submit
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: IntentKind, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .setFlags:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .move:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .copy:
+            writeInt(&buf, Int32(3))
+        
+        
+        case .deleteToTrash:
+            writeInt(&buf, Int32(4))
+        
+        
+        case .expungeScoped:
+            writeInt(&buf, Int32(5))
+        
+        
+        case .append:
+            writeInt(&buf, Int32(6))
+        
+        
+        case .submit:
+            writeInt(&buf, Int32(7))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeIntentKind_lift(_ buf: RustBuffer) throws -> IntentKind {
+    return try FfiConverterTypeIntentKind.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeIntentKind_lower(_ value: IntentKind) -> RustBuffer {
+    return FfiConverterTypeIntentKind.lower(value)
+}
+
+
+
+/**
+ * The states the health surface lists (spec/02).
+ */
+
+public enum IntentState: Equatable, Hashable {
+    
+    case parked
+    case quarantined
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension IntentState: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeIntentState: FfiConverterRustBuffer {
+    typealias SwiftType = IntentState
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> IntentState {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .parked
+        
+        case 2: return .quarantined
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: IntentState, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .parked:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .quarantined:
+            writeInt(&buf, Int32(2))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeIntentState_lift(_ buf: RustBuffer) throws -> IntentState {
+    return try FfiConverterTypeIntentState.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeIntentState_lower(_ value: IntentState) -> RustBuffer {
+    return FfiConverterTypeIntentState.lower(value)
+}
+
+
+
+/**
  * What a mailbox is.
  */
 
@@ -12201,6 +13007,96 @@ public func FfiConverterTypeProtonSignInStep_lower(_ value: ProtonSignInStep) ->
 
 
 
+/**
+ * Why a quarantined intent waits for the user (spec/02).
+ */
+
+public enum QuarantineReason: Equatable, Hashable {
+    
+    case epochChange
+    case restore
+    case ambiguousMatch
+    case configChange
+    case breaker
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension QuarantineReason: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeQuarantineReason: FfiConverterRustBuffer {
+    typealias SwiftType = QuarantineReason
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> QuarantineReason {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .epochChange
+        
+        case 2: return .restore
+        
+        case 3: return .ambiguousMatch
+        
+        case 4: return .configChange
+        
+        case 5: return .breaker
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: QuarantineReason, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .epochChange:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .restore:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .ambiguousMatch:
+            writeInt(&buf, Int32(3))
+        
+        
+        case .configChange:
+            writeInt(&buf, Int32(4))
+        
+        
+        case .breaker:
+            writeInt(&buf, Int32(5))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeQuarantineReason_lift(_ buf: RustBuffer) throws -> QuarantineReason {
+    return try FfiConverterTypeQuarantineReason.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeQuarantineReason_lower(_ value: QuarantineReason) -> RustBuffer {
+    return FfiConverterTypeQuarantineReason.lower(value)
+}
+
+
+
 
 public indirect enum ReadingBlock: Equatable, Hashable {
     
@@ -12650,6 +13546,157 @@ public func FfiConverterTypeReadingSupport_lift(_ buf: RustBuffer) throws -> Rea
 #endif
 public func FfiConverterTypeReadingSupport_lower(_ value: ReadingSupport) -> RustBuffer {
     return FfiConverterTypeReadingSupport.lower(value)
+}
+
+
+
+/**
+ * Where a Recovery page starts. Cursors are the core's opaque strings.
+ */
+
+public enum RecoveryAnchor: Equatable, Hashable {
+    
+    case top
+    /**
+     * Rows strictly older than the cursor's row.
+     */
+    case after(cursor: String
+    )
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension RecoveryAnchor: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeRecoveryAnchor: FfiConverterRustBuffer {
+    typealias SwiftType = RecoveryAnchor
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> RecoveryAnchor {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .top
+        
+        case 2: return .after(cursor: try FfiConverterString.read(from: &buf)
+        )
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: RecoveryAnchor, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .top:
+            writeInt(&buf, Int32(1))
+        
+        
+        case let .after(cursor):
+            writeInt(&buf, Int32(2))
+            FfiConverterString.write(cursor, into: &buf)
+            
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeRecoveryAnchor_lift(_ buf: RustBuffer) throws -> RecoveryAnchor {
+    return try FfiConverterTypeRecoveryAnchor.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeRecoveryAnchor_lower(_ value: RecoveryAnchor) -> RustBuffer {
+    return FfiConverterTypeRecoveryAnchor.lower(value)
+}
+
+
+
+/**
+ * The occurrence states the Recovery list shows (spec/07).
+ */
+
+public enum RecoveryState: Equatable, Hashable {
+    
+    case vanished
+    case epochStale
+    case superseded
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension RecoveryState: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeRecoveryState: FfiConverterRustBuffer {
+    typealias SwiftType = RecoveryState
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> RecoveryState {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .vanished
+        
+        case 2: return .epochStale
+        
+        case 3: return .superseded
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: RecoveryState, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .vanished:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .epochStale:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .superseded:
+            writeInt(&buf, Int32(3))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeRecoveryState_lift(_ buf: RustBuffer) throws -> RecoveryState {
+    return try FfiConverterTypeRecoveryState.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeRecoveryState_lower(_ value: RecoveryState) -> RustBuffer {
+    return FfiConverterTypeRecoveryState.lower(value)
 }
 
 
@@ -14111,6 +15158,30 @@ fileprivate struct FfiConverterOptionTypeCredentialPause: FfiConverterRustBuffer
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterOptionTypeIntentState: FfiConverterRustBuffer {
+    typealias SwiftType = IntentState?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeIntentState.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeIntentState.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterOptionTypeMailboxRole: FfiConverterRustBuffer {
     typealias SwiftType = MailboxRole?
 
@@ -14151,6 +15222,30 @@ fileprivate struct FfiConverterOptionTypeMboxVariant: FfiConverterRustBuffer {
         switch try readInt(&buf) as Int8 {
         case 0: return nil
         case 1: return try FfiConverterTypeMboxVariant.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionTypeQuarantineReason: FfiConverterRustBuffer {
+    typealias SwiftType = QuarantineReason?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeQuarantineReason.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeQuarantineReason.read(from: &buf)
         default: throw UniffiInternalError.unexpectedOptionalTag
         }
     }
@@ -14534,6 +15629,31 @@ fileprivate struct FfiConverterSequenceTypeImportSource: FfiConverterRustBuffer 
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterSequenceTypeIntent: FfiConverterRustBuffer {
+    typealias SwiftType = [Intent]
+
+    public static func write(_ value: [Intent], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeIntent.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [Intent] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [Intent]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeIntent.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterSequenceTypeListRow: FfiConverterRustBuffer {
     typealias SwiftType = [ListRow]
 
@@ -14701,6 +15821,31 @@ fileprivate struct FfiConverterSequenceTypeReadingListItem: FfiConverterRustBuff
         seq.reserveCapacity(Int(len))
         for _ in 0 ..< len {
             seq.append(try FfiConverterTypeReadingListItem.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeRecovery: FfiConverterRustBuffer {
+    typealias SwiftType = [Recovery]
+
+    public static func write(_ value: [Recovery], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeRecovery.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [Recovery] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [Recovery]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeRecovery.read(from: &buf))
         }
         return seq
     }
@@ -15193,6 +16338,9 @@ private let initializationResult: InitializationResult = {
     if (uniffi_sb_ffi_checksum_method_core_start_import() != 35998) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_sb_ffi_checksum_method_core_intents() != 34827) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_sb_ffi_checksum_method_core_add_tag() != 58021) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -15218,6 +16366,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sb_ffi_checksum_method_core_set_note() != 52753) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sb_ffi_checksum_method_core_recovery() != 24643) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sb_ffi_checksum_method_core_start_restore() != 32123) {
