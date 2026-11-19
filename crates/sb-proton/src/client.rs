@@ -311,6 +311,7 @@ impl Client {
     /// from one lost after the request began, and a pre-request
     /// failure from an unknown outcome. [`Client::send`] maps them to
     /// the public [`ProtonError`] as before.
+    #[allow(clippy::too_many_arguments)] // `send`'s parameters plus the reply policy
     pub(crate) async fn send_classified(
         &self,
         method: Method,
