@@ -65,6 +65,11 @@ impl fmt::Display for SendError {
 
 impl std::error::Error for SendError {}
 
+/// The `/core/v4/keys` flag of a key that may be encrypted to
+/// (`KeyStateActive`, `go-proton-api/keys_types.go`; research
+/// `keys-crypto.md`). A key without it is obsolete.
+pub const KEY_STATE_ACTIVE: u32 = 2;
+
 /// One public key `GET /core/v4/keys` serves for an address
 /// (research `keys-crypto.md` §5; `go-proton-api/keys_types.go`).
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -101,13 +106,17 @@ impl RecipientKeys {
         self.recipient_type == RECIPIENT_TYPE_INTERNAL
     }
 
-    /// The key to encrypt to: the primary key, else the first. The
-    /// lookup already filters the keys Proton will accept.
+    /// The key to encrypt to: the primary active key, else the first
+    /// active one. An obsolete key is never encrypted to.
     pub fn encryption_key(&self) -> Option<&str> {
-        self.keys
+        let mut active = self
+            .keys
             .iter()
+            .filter(|key| key.flags & KEY_STATE_ACTIVE != 0);
+        let first = active.clone().next();
+        active
             .find(|key| key.primary)
-            .or_else(|| self.keys.first())
+            .or(first)
             .map(|key| key.public_key.as_str())
     }
 }
@@ -644,7 +653,33 @@ mod tests {
     }
 
     #[test]
-    fn an_external_recipient_gets_the_clear_scheme_and_the_session_key() {
+    fn the_encryption_key_skips_obsolete_keys() {
+        let key = |flags, public_key: &str, primary| RecipientPublicKey {
+            flags,
+            public_key: public_key.to_owned(),
+            primary,
+        };
+        let keys = RecipientKeys {
+            keys: vec![key(1, "obsolete", true), key(3, "active", false)],
+            recipient_type: RECIPIENT_TYPE_INTERNAL,
+        };
+        assert_eq!(keys.encryption_key(), Some("active"));
+
+        let keys = RecipientKeys {
+            keys: vec![key(3, "first", false), key(3, "primary", true)],
+            recipient_type: RECIPIENT_TYPE_INTERNAL,
+        };
+        assert_eq!(keys.encryption_key(), Some("primary"));
+
+        let keys = RecipientKeys {
+            keys: vec![key(1, "obsolete", true)],
+            recipient_type: RECIPIENT_TYPE_INTERNAL,
+        };
+        assert_eq!(keys.encryption_key(), None);
+    }
+
+    #[tokio::test]
+    async fn an_external_recipient_gets_the_clear_scheme_and_the_session_key() {
         let provider = ProtonPGP::new_rust_sync();
         let sender = sender_key(&provider);
         let packages = build_packages(
@@ -673,10 +708,18 @@ mod tests {
         assert_eq!(entry.scheme, CLEAR_SCHEME);
         assert!(entry.body_key_packet.is_none());
 
+        // The fake reads the signed clear body with the clear session
+        // key, as Proton's server does.
+        let server = server().await;
+        let fake = server.recipient_key(USER, INTERNAL).expect("a fake key");
+        assert_eq!(
+            fake.decrypt_clear_body("aes256", body_key.key(), &package.body)
+                .as_deref(),
+            Some(&b"hello"[..])
+        );
+
         // The clear session key decrypts the body, and the sender's
-        // signature verifies over it. (The fake's `decrypt_clear_body`
-        // reads only unsigned literal packets, so this uses the
-        // provider directly.)
+        // signature verifies over it.
         let session = provider
             .session_key_import(body_key.key(), body_key.algorithm())
             .expect("the session key imports");
