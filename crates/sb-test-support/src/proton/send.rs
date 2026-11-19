@@ -6,7 +6,7 @@
 //! code.
 
 use std::collections::HashMap;
-use std::io::{self, Cursor, Read};
+use std::io::{self, Cursor};
 use std::sync::{Arc, Mutex};
 
 use base64::Engine as _;
@@ -159,17 +159,14 @@ impl<P: PGPProviderSync> RecipientKey for RecipientKeyImpl<P> {
                 key: RawSessionKey::from(key.to_vec()),
             })
             .ok()?;
-        let mut out = Vec::new();
-        match plain {
-            Message::Literal { mut reader, .. } => {
-                reader.read_to_end(&mut out).ok()?;
-            }
-            Message::Compressed { mut reader, .. } => {
-                reader.read_to_end(&mut out).ok()?;
-            }
-            _ => return None,
+        // Proton's clients sign every package body, the clear one
+        // included, so the literal data may sit inside a signed or
+        // compressed message.
+        let mut plain = plain.decompress().ok()?;
+        if matches!(plain, Message::Encrypted { .. }) {
+            return None;
         }
-        Some(out)
+        plain.as_data_vec().ok()
     }
 }
 
