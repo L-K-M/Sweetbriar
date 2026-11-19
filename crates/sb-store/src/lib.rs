@@ -23,6 +23,7 @@ mod import_reports;
 pub mod imports;
 pub mod index;
 mod integrity;
+pub mod intents;
 mod list_rows;
 pub mod lists;
 mod maintenance;

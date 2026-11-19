@@ -1251,6 +1251,21 @@ CREATE INDEX intents_runnable ON intents(account_id, state, next_attempt_at);
     breaker event. It is set exactly when `state='quarantined'`, which the
     engine enforces.
   - `wait_reason` separates waiting from failing.
+- **Payloads (M2.7c1):** the health surface reads, and the M3 writers
+  produce:
+  - `target_json`: `{"v":1,"occurrence_ids":[…]}`, plus the provider's
+    fields (an IMAP occurrence's mailbox, UIDVALIDITY and UID, a Proton
+    message's `provider_key`), which the reader ignores. The health
+    surface shows the target as these occurrence ids.
+  - `args_json`:
+    - `set_flags`: `{"v":1,"add":[…],"remove":[…]}`;
+    - `move` and `copy`: `{"v":1,"to_mailbox_id":N}`;
+    - `delete_to_trash`: `{"v":1}`, with the destination resolved when
+      the intent runs.
+  - The reserved operations' args are shown as stored. Any other
+    shape is `Corrupt`.
+  - M3.1's spec revision may extend these shapes, and the reader
+    changes with it.
 - The execution and reconciliation rules are in
   [04-sync-imap](04-sync-imap.md), with Proton's evidence in
   [04-sync-proton](04-sync-proton.md).

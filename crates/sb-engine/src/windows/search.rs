@@ -138,7 +138,7 @@ impl Engine {
         anchor: Anchor,
         limit: u32,
     ) -> Result<Window, EngineError> {
-        check_limit(limit)?;
+        check_page_limit(limit, "a window page")?;
         let spec = self.compute(move || spec.prepare()).await?;
         let read = self.search_page(spec.clone(), anchor, limit, None).await?;
         let windows = Arc::clone(self.windows());

@@ -169,6 +169,10 @@ pub use sb_store::index::{
     MAX_INDEX_BATCH, MAX_INDEX_BATCH_BYTES, ObservedAvailability, PendingDocument,
     note_observed_availability, publish_batch, search_generation, target_version,
 };
+pub use sb_store::intents::{
+    IntentAnchor, IntentEffect, IntentFilter, IntentKey, IntentKind, IntentPage, IntentState,
+    MAX_INTENT_PAGE_ROWS, QuarantineReason, StoredIntent, intents,
+};
 pub use sb_store::lists::{
     ListAnchor, ListKey, ListPage, ListScope, MAX_PAGE_ROWS, MailboxRole, PageRead, StoredListRow,
     list_generation, list_ids, read_list_page,
