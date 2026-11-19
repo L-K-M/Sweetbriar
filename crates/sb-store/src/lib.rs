@@ -39,6 +39,7 @@ mod restore_artifacts;
 mod restore_pending;
 mod schema;
 pub mod seen;
+pub mod send;
 pub mod settings;
 pub mod sidebar;
 mod source_snapshots;
@@ -103,6 +104,7 @@ pub use receipts::{
     Receipt, encode_job_receipt, receipt_generation_id, receipt_job_id, replay, run_once,
 };
 pub use restore_artifacts::{RestoreArtifact, RestoreArtifactKind};
+pub use send::{SendAttempt, cancel_send, reply_headers, send_draft};
 pub use settings::{StoredSetting, read_all, upsert};
 pub use source_snapshots::{ImportSourceCapture, ImportSourceSnapshot};
 pub use store::SwapRestoreError;

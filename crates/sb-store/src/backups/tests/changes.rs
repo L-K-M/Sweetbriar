@@ -244,6 +244,10 @@ fn a_store_migrating_in_starts_due() {
          DROP INDEX mailboxes_provider_key;
          ALTER TABLE mailboxes DROP COLUMN provider_key;
          ALTER TABLE mailboxes DROP COLUMN remote_total;
+         DROP INDEX send_attempts_runnable;
+         ALTER TABLE send_attempts DROP COLUMN send_requested_at;
+         ALTER TABLE send_attempts DROP COLUMN proton_uploads_json;
+         ALTER TABLE send_attempts DROP COLUMN proton_draft_id;
          PRAGMA user_version = 24;",
     );
 
