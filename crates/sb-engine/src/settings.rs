@@ -91,6 +91,11 @@ const REGISTRY: &[RegisteredSetting] = &[
         default: "7",
     },
     RegisteredSetting {
+        key: "notifications.previews",
+        values: Values::Choices(&["off", "on"]),
+        default: "off",
+    },
+    RegisteredSetting {
         key: BACKUP_DESTINATION_SETTING,
         values: Values::BackupDirectory,
         default: "",

@@ -78,7 +78,7 @@ fn settings_round_trip_across_processes() {
     assert!(out.status.success(), "get failed: {}", stderr(&out));
     assert_eq!(
         stdout(&out),
-        "appearance.compose_cue=standard\nsending.undo_seconds=7\nbackups.destination=\nreader.reading_view_senders=\n"
+        "appearance.compose_cue=standard\nsending.undo_seconds=7\nnotifications.previews=off\nbackups.destination=\nreader.reading_view_senders=\n"
     );
 
     let out = cli(&root, &["settings", "get", "appearance.compose_cue"]);
@@ -101,7 +101,7 @@ fn destination_settings_are_escaped_display_lines_not_terminal_controls() {
     assert_eq!(
         stdout(&out),
         format!(
-            "appearance.compose_cue=standard\nsending.undo_seconds=7\n{expected}reader.reading_view_senders=\n"
+            "appearance.compose_cue=standard\nsending.undo_seconds=7\nnotifications.previews=off\n{expected}reader.reading_view_senders=\n"
         )
     );
 }
@@ -291,7 +291,7 @@ fn a_non_default_value_survives_process_restarts() {
     for (args, expected) in [
         (
             &["settings", "get"][..],
-            "appearance.compose_cue=strong\nsending.undo_seconds=7\nbackups.destination=\nreader.reading_view_senders=\n",
+            "appearance.compose_cue=strong\nsending.undo_seconds=7\nnotifications.previews=off\nbackups.destination=\nreader.reading_view_senders=\n",
         ),
         (
             &["settings", "get", "appearance.compose_cue"][..],
