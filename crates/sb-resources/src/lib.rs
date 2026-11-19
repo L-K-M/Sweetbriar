@@ -32,8 +32,9 @@ pub use sb_imap::{
 pub use sb_platform::{Secret, SecretError, SecretStore};
 pub use sb_store::accounts::{
     AddressMode, ConnectionPause, CredentialPause, EndpointSecurity, IdentitySendable,
-    ImapEndpoint, ImapProvider, clear_connection_pause, imap_endpoint, pause_for_connection,
-    pause_for_credential, syncable_accounts,
+    ImapEndpoint, ImapProvider, clear_connection_pause, clear_imap_cursors, imap_endpoint,
+    pause_account, pause_for_connection, pause_for_credential, resume_account, syncable_accounts,
+    update_account,
 };
 mod bodies;
 pub use bodies::{AttachmentLease, BodyKind, BodyLease, PublishedAttachment, PublishedBody};
@@ -68,7 +69,7 @@ pub use proton::{
     BEGIN_PROTON_SIGN_IN, PROTON_API_BASE_URL, ProtonAccount, ProtonRefusal, ProtonSessionError,
     ProtonSessionSecret, ProtonSignInParams, ProtonTransport, RestoredProtonSession,
     decode_proton_session, disconnect_proton_account, encode_proton_session, pause_for_session,
-    proton_account, proton_identities,
+    proton_account, proton_identities, reset_proton_for_restore,
 };
 // The transport items an account's sign-in conversation drives
 // (spec/01 rule 3): the engine keeps them in memory and maps errors

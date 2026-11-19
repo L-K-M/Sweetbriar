@@ -129,14 +129,17 @@ pub fn imap_endpoint(tx: &Transaction, account_id: &str) -> Result<ImapEndpoint,
 
 /// The IMAP accounts a sync worker runs for, in sidebar order: active
 /// ones, and ones paused for their connection (the worker keeps
-/// retrying, spec/04). A user-paused or disconnected account, and one
-/// waiting for its credential, has no worker.
+/// retrying, spec/04). A user-paused or disconnected account, one
+/// waiting for its credential, and one a restore has not reconciled
+/// (`restore_pending`, 03) have no worker: only a resume or a sign-in
+/// again revives a restored account.
 pub fn syncable_accounts(tx: &Transaction) -> Result<Vec<String>, StoreError> {
     let read = |e| classify(e, "read the syncable accounts");
     let mut statement = tx
         .prepare(
             "SELECT account_id, state, state_reason FROM accounts
              WHERE kind = 'imap' AND state IN ('active', 'needs_attention')
+               AND restore_pending = 0
              ORDER BY sort_order",
         )
         .map_err(read)?;
@@ -202,8 +205,24 @@ pub fn clear_connection_pause(tx: &Transaction, account_id: &str) -> Result<bool
     let Current::Connection(_) = current(tx, account_id)? else {
         return Ok(false);
     };
+    // A restored account reconciles in whatever transaction makes it
+    // active (07): its IMAP cursors are discarded first.
+    let restore_pending = tx
+        .query_row(
+            "SELECT restore_pending FROM accounts WHERE account_id = ?1",
+            params![account_id],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()
+        .map_err(|e| classify(e, "read the account's restore flag"))?
+        .unwrap_or(0);
+    if restore_pending != 0 {
+        super::clear_imap_cursors(tx, account_id)?;
+    }
     tx.execute(
-        "UPDATE accounts SET state = 'active', state_reason = NULL, revision = revision + 1
+        "UPDATE accounts
+         SET state = 'active', state_reason = NULL, restore_pending = 0,
+             revision = revision + 1
          WHERE account_id = ?1",
         params![account_id],
     )

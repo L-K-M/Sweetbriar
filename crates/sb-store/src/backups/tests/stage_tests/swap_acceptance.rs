@@ -362,22 +362,24 @@ fn resolve(paths: &StorePaths, stage: &Path, preserved: &Path, old: &str, new: &
         Resolved::Old
     } else {
         assert_eq!(incarnation, new, "neither the old nor the restored store");
-        let (accounts, paused): (i64, i64) = reading(&store, |tx| {
+        let (accounts, paused, pending): (i64, i64, i64) = reading(&store, |tx| {
             tx.query_row(
                 "SELECT count(*),
                         count(*) FILTER
-                          (WHERE provider <> 'local_archive' AND state = 'paused')
+                          (WHERE provider <> 'local_archive' AND state = 'paused'),
+                        count(*) FILTER
+                          (WHERE provider <> 'local_archive' AND restore_pending = 1)
                  FROM accounts",
                 [],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .map_err(bug)
         });
-        // The fixture's account pauses; the seeded local archive keeps
-        // its state.
+        // The fixture's account pauses and is restore-pending; the
+        // seeded local archive keeps its state.
         assert_eq!(
-            (accounts, paused),
-            (2, 1),
+            (accounts, paused, pending),
+            (2, 1, 1),
             "the restored store opens quarantined"
         );
         assert_eq!(

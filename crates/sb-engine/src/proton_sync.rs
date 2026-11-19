@@ -27,9 +27,9 @@ use sb_resources::proton_sync::{
     withhold_unlisted,
 };
 use sb_resources::{
-    EventAction, EventBatch, EventId, KeyStore, ListingAnchor, PROTON_MAX_PAGE_SIZE, ProtonClient,
-    ProtonError, Secret, Session, StoreError, Transaction, WritePriority, proton_account,
-    proton_identities,
+    AccountState, EventAction, EventBatch, EventId, KeyStore, ListingAnchor, PROTON_MAX_PAGE_SIZE,
+    ProtonClient, ProtonError, Secret, Session, StoreError, StoredAccount, Transaction,
+    WritePriority, accounts, proton_account, proton_identities,
 };
 
 use std::collections::{BTreeSet, HashSet};
@@ -144,7 +144,10 @@ impl Engine {
         let sessions = Arc::clone(&self.proton_sessions);
         let opened = Arc::clone(&self.proton_opened);
         let _ = self.spawn_worker(move |worker| async move {
-            start_all(&worker, &jobs, &sessions, &opened).await;
+            let accounts = worker.blocking(|resources| resources.read(accounts)).await;
+            if let Ok(Ok(accounts)) = accounts {
+                start_all(&worker, &jobs, &sessions, &opened, &accounts).await;
+            }
         });
     }
 }
@@ -198,15 +201,31 @@ impl Engine {
     }
 }
 
-/// Start a worker for every account whose session is in memory.
+/// Start a worker for every account whose session is in memory, except
+/// a paused or disconnected one: launch starts neither (spec/04
+/// "Account states and health", 07 `pause_account`).
 pub(crate) async fn start_all(
     spawner: &impl Spawn,
     jobs: &Arc<AccountJobs>,
     sessions: &Arc<Sessions>,
     opened: &Arc<ProtonOpened>,
+    accounts: &[StoredAccount],
 ) {
-    let accounts: Vec<String> = sessions.lock().await.keys().cloned().collect();
-    for account_id in accounts {
+    let skipping: HashSet<&str> = accounts
+        .iter()
+        .filter(|account| {
+            matches!(
+                account.state,
+                AccountState::Paused | AccountState::Disconnected
+            )
+        })
+        .map(|account| account.account_id.as_str())
+        .collect();
+    let ids: Vec<String> = sessions.lock().await.keys().cloned().collect();
+    for account_id in ids {
+        if skipping.contains(account_id.as_str()) {
+            continue;
+        }
         start(spawner, jobs, sessions, opened, account_id);
     }
 }

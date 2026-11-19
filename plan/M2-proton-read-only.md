@@ -694,6 +694,13 @@ the provider policies (`proton_bridge`, `generic_imap`) live in
   `restore_pending`, set by a restore on every account other than the
   local archive (pausing only `active` ones), lands with the spec PR,
   since the spec's schema and the migrated one must agree.
+- **Split (2026-11-18):** the implementation measured about 1,570
+  changed lines without the generated bindings, over the 1,450 limit,
+  so it lands as M2.7a1, the commands, worker stop and start, launch
+  skips and the reconcile through store and engine (about 1,150), and
+  M2.7a2, their service and FFI exports with regenerated bindings, the
+  bridge's disconnect call site and the tests against the fake (about
+  430).
 - **Acceptance:** pausing stops the account's requests to the fake
   before the receipt and survives a reopen; resuming a restored IMAP
   account clears its cursors and a restored Proton account
