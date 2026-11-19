@@ -9,7 +9,9 @@ actor FakeActivityHealthEvents: ActivityHealthEvents {
     private var answered: UInt64 = 0
     private var waiter: CheckedContinuation<Void, any Error>?
     private var failure: (any Error)?
-    private var isClosed = false
+    /// A cancellation whose hop reached the actor before `park`'s did:
+    /// the two hops race, and the parked continuation must not leak.
+    private var cancelledBeforePark = false
 
     func next() async throws {
         try await withTaskCancellationHandler {
@@ -23,8 +25,9 @@ actor FakeActivityHealthEvents: ActivityHealthEvents {
     }
 
     private func park(_ continuation: CheckedContinuation<Void, any Error>) {
-        if isClosed {
-            continuation.resume(throwing: CoreFailure.unavailable(reason: "fake stream closed"))
+        if cancelledBeforePark {
+            cancelledBeforePark = false
+            continuation.resume(throwing: CancellationError())
             return
         }
         if let failure {
@@ -40,10 +43,12 @@ actor FakeActivityHealthEvents: ActivityHealthEvents {
     }
 
     private func cancelPark() {
-        if let waiter {
-            self.waiter = nil
-            waiter.resume(throwing: CancellationError())
+        guard let waiter else {
+            cancelledBeforePark = true
+            return
         }
+        self.waiter = nil
+        waiter.resume(throwing: CancellationError())
     }
 
     func emit() {
@@ -89,6 +94,7 @@ actor FakeActivitySource: ActivitySource {
     private var intentsPage = IntentPage(rows: [], after: nil, hasMore: false)
     private var recoveryPage = RecoveryPage(rows: [], after: nil, hasMore: false)
     private var healthGate: Gate?
+    private var subscribeGate: Gate?
     private var resolveGate: Gate?
     private var intentsFailure: (any Error)?
     private var subscribeFailure: (any Error)?
@@ -101,6 +107,7 @@ actor FakeActivitySource: ActivitySource {
     func setRecovery(_ page: RecoveryPage) { recoveryPage = page }
     func holdHealth(_ gate: Gate?) { healthGate = gate }
     func holdResolve(_ gate: Gate?) { resolveGate = gate }
+    func holdSubscribe(_ gate: Gate?) { subscribeGate = gate }
     func failIntents(_ error: (any Error)?) { intentsFailure = error }
     func failSubscribe(_ error: (any Error)?) { subscribeFailure = error }
     func failResolve(_ error: (any Error)?) { resolveFailure = error }
@@ -127,6 +134,7 @@ actor FakeActivitySource: ActivitySource {
 
     func subscribeAccountHealth() async throws -> FakeActivityHealthEvents {
         calls.append(.subscribe)
+        if let subscribeGate { await subscribeGate.wait() }
         if let subscribeFailure { throw subscribeFailure }
         let feed = FakeActivityHealthEvents()
         feeds.append(feed)

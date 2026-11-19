@@ -44,8 +44,8 @@ public final class ActivityModel {
     public private(set) var intentsTruncated = false
     public private(set) var recovery: [Recovery] = []
     public private(set) var recoveryTruncated = false
-    /// The last full read's first failure, or nil; the sections keep
-    /// what they showed before.
+    /// The last full read's first failure, or nil. A section whose
+    /// fetch failed keeps what it showed; the others still update.
     public private(set) var loadError: (any Error)?
     /// The last breaker resolution's failure, cleared by the next
     /// success; nil while none failed.
@@ -170,7 +170,9 @@ public final class ActivityModel {
             } catch is CancellationError {
             } catch {
                 // A failed subscription stops following; retry() starts
-                // over, and the window keeps its last good state.
+                // over, and the window keeps its last good state. A
+                // stopped follower's late failure isn't the current one's.
+                guard self.followTicket == ticket else { return }
                 self.loadError = error
             }
         }

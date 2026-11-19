@@ -103,6 +103,28 @@ struct ActivityModelTests {
     }
 
     @Test
+    func aStoppedFollowersLateFailureLeavesTheRestartedOneAlone() async throws {
+        let source = FakeActivitySource()
+        let gate = Gate()
+        await source.holdSubscribe(gate)
+        let model = ActivityModel(source: source)
+        model.start()
+        try #require(await eventually { await source.subscribeCount == 1 })
+        model.stop()
+        await source.holdSubscribe(nil)
+        model.start()
+        try #require(await eventually { await source.feeds.count == 1 })
+        // Both subscribes, then the restarted follower's full read.
+        try #require(await eventually { await source.calls.count == 5 })
+        try? await Task.sleep(for: .milliseconds(50))
+        await source.failSubscribe(CoreFailure.unavailable(reason: "store closing"))
+        await gate.open()
+        try? await Task.sleep(for: .milliseconds(100))
+        #expect(model.loadError == nil, "the stale follower's failure is not the restarted one's")
+        model.stop()
+    }
+
+    @Test
     func resolvePassesAFreshKeyPerActionAndGuardsTheInFlightEvent() async throws {
         let source = FakeActivitySource()
         let gate = Gate()
@@ -121,7 +143,9 @@ struct ActivityModelTests {
         #expect(calls[1].eventId == "event-2" && calls[1].resolution == .keep)
         #expect(calls[0].key != calls[1].key)
         #expect(calls.allSatisfy { UUID(uuidString: $0.key) != nil })
-        #expect(await source.healthReads == 2, "each success re-reads account health")
+        #expect(
+            await eventually { await source.healthReads == 2 },
+            "each success re-reads account health")
         #expect(model.actionError == nil)
         model.stop()
     }
