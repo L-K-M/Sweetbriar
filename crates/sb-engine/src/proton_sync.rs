@@ -636,7 +636,8 @@ impl Attempt<'_> {
     /// named another message (spec/04 step 3, plan M2.16d), and apply
     /// it as an event's change would. An empty answer writes nothing,
     /// since only a delete event or a complete listing removes a
-    /// message. A transport failure is the caller's `Halt`.
+    /// message; nor does one naming another message, which is refused
+    /// as the body was. A transport failure is the caller's `Halt`.
     async fn reread_metadata(&self, body: &PendingBody, revision: i64) -> Result<(), Halt> {
         let key = body.provider_key.clone();
         let metadata = match self
@@ -647,6 +648,9 @@ impl Attempt<'_> {
             .await
         {
             Ok(metadata) => metadata,
+            // Retrying would fetch the same refused body forever and
+            // starve the rest of the queue.
+            Err(FetchError::UnexpectedMessage) => None,
             Err(FetchError::Ended) => return Err(Halt::Ended),
             Err(_) => return Err(Halt::Retry),
         };

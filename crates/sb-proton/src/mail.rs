@@ -296,9 +296,6 @@ fn content_id_of(headers: &Value) -> Option<String> {
     (!value.is_empty()).then(|| value.trim().to_owned())
 }
 
-/// A message or attachment id must be one non-empty path segment: no empty
-/// id, no control character, and none of `/ \ ? # %`, which would change the
-/// request's path or query.
 /// A message id sent as a query value. Proton ids are base64url, whose
 /// alphabet needs no query encoding; anything else (`&`, `+`, a space)
 /// could change the query, so it is refused before the request.
@@ -314,6 +311,9 @@ fn validate_query_id(id: &str, what: &str) -> Result<(), ProtonError> {
         })
 }
 
+/// A message or attachment id must be one non-empty path segment: no empty
+/// id, no control character, and none of `/ \ ? # %`, which would change the
+/// request's path or query.
 fn validate_path_id(id: &str) -> Result<(), ProtonError> {
     // `.` and `..` are dot segments a proxy may resolve to another path,
     // and some servers read `\` as `/`.
@@ -594,12 +594,7 @@ impl Client {
             let at = format!("{MESSAGES_PATH} (message {index} of the by-id read)");
             let message = MessageMetadata::from_value(value, &at)?;
             if message.id != id {
-                return Err(ProtonError::Malformed {
-                    message: format!(
-                        "the {MESSAGES_PATH} by-id read for {id} answered {}",
-                        message.id
-                    ),
-                });
+                return Err(ProtonError::UnexpectedMessage);
             }
             messages.push(message);
         }

@@ -460,6 +460,7 @@ pub(super) fn store_message(
     stats: &mut ListedPageStats,
     changed: &mut BTreeSet<i64>,
 ) -> Result<i64, StoreError> {
+    require_canonical_metadata(message)?;
     let message_id = find_or_create_message(tx, account_id, message, now, stats)?;
     super::breaker::reappeared(tx, message_id, now)?;
     let mut writes = OccurrenceWrites { stats, changed };
@@ -486,6 +487,7 @@ pub(super) fn store_reread_message(
     stats: &mut ListedPageStats,
     changed: &mut BTreeSet<i64>,
 ) -> Result<i64, StoreError> {
+    require_canonical_metadata(message)?;
     let message_id = find_or_create_message(tx, account_id, message, now, stats)?;
     let mut writes = OccurrenceWrites { stats, changed };
     store_occurrences(
@@ -497,6 +499,17 @@ pub(super) fn store_reread_message(
         now,
         &mut writes,
     )
+}
+
+/// Checked before the message's first write, so invalid metadata
+/// touches nothing.
+fn require_canonical_metadata(message: &ListedMessage) -> Result<(), StoreError> {
+    if !message.raw_metadata.starts_with(METADATA_PREFIX) {
+        return Err(invalid(
+            "listed metadata must be the canonical proton_metadata JSON",
+        ));
+    }
+    Ok(())
 }
 
 /// The writes one message's occurrences make: the page's stats and
@@ -518,11 +531,6 @@ fn store_occurrences(
     now: Timestamp,
     writes: &mut OccurrenceWrites<'_>,
 ) -> Result<i64, StoreError> {
-    if !message.raw_metadata.starts_with(METADATA_PREFIX) {
-        return Err(invalid(
-            "listed metadata must be the canonical proton_metadata JSON",
-        ));
-    }
     let stats = &mut *writes.stats;
     let changed = &mut *writes.changed;
     let wanted: BTreeSet<i64> = message

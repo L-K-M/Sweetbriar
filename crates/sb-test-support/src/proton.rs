@@ -502,7 +502,7 @@ struct Account {
     malformed_messages: bool,
     wrong_message_id: bool,
     /// Answers a by-id metadata read with another message's id, which
-    /// the transport must refuse as `Malformed` (plan M2.16d).
+    /// the transport must refuse as `UnexpectedMessage` (plan M2.16d).
     wrong_metadata_id: bool,
     /// Message ids whose full-message request answers with the
     /// account's damaged body fixture (plan M2.16c).
@@ -1107,7 +1107,7 @@ impl FakeProtonServer {
     }
 
     /// Answers a by-id metadata read with another message's id, which
-    /// the transport must refuse as `Malformed` (plan M2.16d).
+    /// the transport must refuse as `UnexpectedMessage` (plan M2.16d).
     pub fn set_wrong_metadata_id(&self, username: &str, on: bool) {
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         account_mut(&mut state, username).wrong_metadata_id = on;

@@ -287,6 +287,47 @@ async fn an_empty_metadata_reread_writes_nothing() {
 }
 
 #[tokio::test]
+async fn a_reread_naming_another_message_writes_nothing_and_moves_on() {
+    let h = setup(vec![TestAccount::new(USER, PASSWORD)]).await;
+    h.server.add_message(
+        USER,
+        FakeMessage::new("m1")
+            .with_time(100)
+            .with_labels(&["0", "5"]),
+    );
+    h.server
+        .add_message(USER, FakeMessage::new("m2").with_time(50));
+    // Both the body and the by-id read name another message: the
+    // re-read is refused like an empty answer, not retried forever.
+    h.server.set_wrong_message_id(USER, true);
+    h.server.set_wrong_metadata_id(USER, true);
+    let (_id, state) = begin(&h, "wrong-reread").await;
+    let id = account_id(&state);
+    listed(&h.core, &id).await;
+    let before = fetched_at(&h, "m1");
+
+    wait_for(|| body_fetches(&h).len() >= 2).await;
+    assert_eq!(
+        body_fetches(&h),
+        vec![
+            "/mail/v4/messages/m1".to_owned(),
+            "/mail/v4/messages/m2".to_owned(),
+        ]
+    );
+    wait_for(|| metadata_reads(&h).len() >= 2).await;
+    assert_eq!(
+        metadata_reads(&h),
+        vec![
+            "ID=m1&Page=0&PageSize=1".to_owned(),
+            "ID=m2&Page=0&PageSize=1".to_owned(),
+        ]
+    );
+    assert_eq!(count(&h.scratch, "proton_body_failures"), 0);
+    assert_eq!(fetched_at(&h, "m1"), before);
+    assert_occurrences(&h, "m1", &[("Inbox", "present"), ("All Mail", "present")]);
+}
+
+#[tokio::test]
 async fn a_damaged_body_is_recorded_and_retried_after_a_key_change() {
     let h = setup(vec![TestAccount::new(USER, PASSWORD)]).await;
     h.server

@@ -1370,7 +1370,7 @@ async fn by_id_metadata_read_refuses_another_id() {
         .message_metadata(&session, "msg-0")
         .await
         .expect_err("the answer names another id");
-    assert!(matches!(error, ProtonError::Malformed { .. }), "{error:?}");
+    assert!(matches!(error, ProtonError::UnexpectedMessage), "{error:?}");
 }
 
 #[tokio::test]
