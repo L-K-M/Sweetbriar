@@ -16,8 +16,7 @@ use crate::Engine;
 pub(crate) const MAX_MESSAGE_IDS: usize = 20;
 
 /// One account's arrivals since a subscription's last answer
-/// (spec/07). `count` is every arrival; `message_ids` the newest
-/// [`MAX_MESSAGE_IDS`].
+/// (spec/07). `count` is every arrival; `message_ids` the newest 20.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NewMail {
     pub account_id: String,

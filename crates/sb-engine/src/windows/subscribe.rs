@@ -331,7 +331,7 @@ impl Windows {
 impl NewMailSubscription {
     /// Wait for one account's arrivals since the last answer. Several
     /// are one answer: `count` is all of them and `message_ids` the
-    /// newest [`MAX_MESSAGE_IDS`], so none is dropped silently
+    /// newest 20, so none is dropped silently
     /// (spec/07 "Coalescing"). One call at a time; a cancelled call
     /// moves nothing; shutdown ends a wait with `Unavailable`.
     pub async fn next(&self) -> Result<NewMail, EngineError> {
