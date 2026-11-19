@@ -842,7 +842,10 @@ fn redact_addresses(message: &str) -> String {
     let mut index = 0;
     while index < bytes.len() {
         if bytes[index] == b'@' {
-            let start = address_local_start(bytes, index);
+            // Never walk back into an address already masked: in
+            // `a@b.c@d.e` the second `@` would otherwise start inside
+            // the first.
+            let start = address_local_start(bytes, index).max(copied);
             let end = address_domain_end(bytes, index);
             if start < index && end > index + 1 && bytes[index + 1..end].contains(&b'.') {
                 redacted.push_str(&message[copied..start]);
@@ -881,12 +884,15 @@ fn address_domain_end(bytes: &[u8], at: usize) -> usize {
     end
 }
 
+/// Non-ASCII bytes count as address characters so an internationalized
+/// address is masked too. Both walks still stop only at an ASCII byte
+/// or the string's ends, so every slice stays on a char boundary.
 fn is_address_byte(byte: u8) -> bool {
-    byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-' | b'+')
+    byte.is_ascii_alphanumeric() || !byte.is_ascii() || matches!(byte, b'.' | b'_' | b'-' | b'+')
 }
 
 fn is_domain_byte(byte: u8) -> bool {
-    byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-')
+    byte.is_ascii_alphanumeric() || !byte.is_ascii() || matches!(byte, b'.' | b'-')
 }
 
 /// `proton_body_failures.reason` (spec/02).

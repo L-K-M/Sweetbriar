@@ -667,6 +667,24 @@ fn a_refusal_records_redacted_diagnostics_and_pauses_with_the_reason() {
     assert!(proton_account_reads(&store, "a1"));
 }
 
+/// The redactor survives addresses run together and masks
+/// non-ASCII ones (spec/10): it scans server text inside a store
+/// write, so it must neither panic nor let an address through.
+#[test]
+fn the_redactor_handles_adjacent_and_non_ascii_addresses() {
+    let adjacent = super::redact_addresses("a@b.c@d.e");
+    assert!(adjacent.starts_with("<address>"), "{adjacent}");
+    assert!(!adjacent.contains("a@b.c"), "{adjacent}");
+
+    assert_eq!(super::redact_addresses("café@example.test"), "<address>");
+    assert_eq!(super::redact_addresses("a@bü.test"), "<address>");
+    assert_eq!(
+        super::redact_addresses("日本語 owner@example.test."),
+        "日本語 <address>."
+    );
+    assert_eq!(super::redact_addresses("a@b and @b.com"), "a@b and @b.com");
+}
+
 /// Whether the account's Proton row still reads.
 fn proton_account_reads(store: &crate::Store, account_id: &str) -> bool {
     reading(store, |tx| {
