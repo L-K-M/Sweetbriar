@@ -190,6 +190,10 @@ pub use sb_store::query::{
     UnknownCount, counts, read_search_date_page, read_search_relevance_page, search_date_ids,
     search_relevance_ids,
 };
+pub use sb_store::recovery::{
+    MAX_RECOVERY_PAGE_ROWS, RecoveryAnchor, RecoveryKey, RecoveryPage, RecoveryState,
+    StoredRecovery, recovery,
+};
 pub use sb_store::settings::{StoredSetting, read_all, upsert};
 pub use sb_store::sidebar::{
     AccountKind, AccountState, MailboxKind, MailboxList, StoredAccount, StoredMailbox, accounts,
