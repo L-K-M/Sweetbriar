@@ -227,3 +227,48 @@ async fn a_5xx_records_diagnostics_and_leaves_the_account_active() {
     );
     h.server.set_fault(None);
 }
+
+#[tokio::test]
+async fn a_refusal_whose_pause_fails_keeps_the_worker_retrying() {
+    let h = setup(vec![TestAccount::new(USER, PASSWORD)]).await;
+    let (_id, state) = begin(&h, "pause failure").await;
+    let id = account_id(&state);
+    listed(&h.core, &id).await;
+
+    // The pause write fails: ending the worker now would leave an
+    // active account with nothing syncing it.
+    let db = h.scratch.path().join("store/state.sqlite");
+    sb_test_support::execute_sql(
+        &db,
+        "CREATE TRIGGER reject_pause BEFORE UPDATE OF state ON accounts
+         WHEN NEW.state = 'needs_attention'
+         BEGIN SELECT RAISE(ABORT, 'fixture pause failure'); END",
+    );
+    h.server.set_fault(Some(Fault::Code {
+        status: 400,
+        code: 2064,
+    }));
+    h.core.engine().poll_proton_events();
+    until(|| diagnostics_code(&h, &id) == Some(2064), "the refusal").await;
+    assert!(!is_needs_attention(&h, &id));
+
+    // The worker retries the refused poll after its first backoff (1 s
+    // in real time) instead of ending.
+    let requests = event_requests(&h.server).len();
+    for _ in 0..250 {
+        if event_requests(&h.server).len() > requests {
+            break;
+        }
+        tokio::time::sleep(TICK).await;
+        settle().await;
+    }
+    assert!(
+        event_requests(&h.server).len() > requests,
+        "the worker ended without persisting the pause"
+    );
+
+    // Once the pause can persist, the retry lands it.
+    sb_test_support::execute_sql(&db, "DROP TRIGGER reject_pause");
+    until(|| is_needs_attention(&h, &id), "the persisted pause").await;
+    h.server.set_fault(None);
+}

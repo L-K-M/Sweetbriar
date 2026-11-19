@@ -1017,14 +1017,21 @@ impl Attempt<'_> {
         let Some(reason) = needs_attention(error) else {
             return Halt::Retry;
         };
+        // The worker ends only once the pause persisted: ending without
+        // it would leave an active account with nothing syncing it, so
+        // a failed write retries the attempt, which records and pauses
+        // again.
         let id = self.account_id.to_owned();
-        let _ = self
+        let paused = self
             .worker
             .resources()
             .write(WritePriority::Sync, move |tx| {
                 pause_for_reason(tx, &id, reason)
             })
             .await;
+        if paused.is_err() {
+            return Halt::Retry;
+        }
         Halt::Ended
     }
 
