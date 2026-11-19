@@ -16,11 +16,12 @@ use std::fmt;
 
 use sb_store::accounts::{IdentitySendable, NewIdentity};
 
-use sb_store::proton::{NewProtonSignIn, ProtonPasswordMode, commit_proton_sign_in};
 pub use sb_store::proton::{
-    ProtonAccount, disconnect_proton_account, pause_for_proton_credential, pause_for_session,
+    APP_IDENTITY_REFUSED_REASON, HUMAN_VERIFICATION_REASON, ProtonAccount, SESSION_REFUSED_REASON,
+    disconnect_proton_account, pause_for_proton_credential, pause_for_reason, pause_for_session,
     proton_account, reactivate_proton_account, reset_proton_for_restore,
 };
+use sb_store::proton::{NewProtonSignIn, ProtonPasswordMode, commit_proton_sign_in};
 use sb_store::{StoreError, WritePriority, run_once};
 use std::future::Future;
 use std::sync::Arc;

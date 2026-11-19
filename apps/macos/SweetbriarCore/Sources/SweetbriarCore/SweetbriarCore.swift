@@ -1149,11 +1149,27 @@ public protocol CoreProtocol: AnyObject, Sendable {
     func pauseAccount(token: CancelToken, idempotencyKey: String, accountId: String) async throws  -> Receipt
     
     /**
+     * `resolve_breaker_event(key, id, resolution)` (spec/07 "Safety")
+     * under an idempotency key the shell made: Accept applies the
+     * event's withheld deletes, Keep leaves them withheld. A command:
+     * a repeated key answers its stored receipt and does nothing else.
+     */
+    func resolveBreakerEvent(token: CancelToken, idempotencyKey: String, eventId: String, resolution: BreakerResolution) async throws  -> Receipt
+    
+    /**
      * `resume_account(id)` (spec/07 "Account management") under an
      * idempotency key the shell made. A command: the account's worker
      * starts once the state change commits.
      */
     func resumeAccount(token: CancelToken, idempotencyKey: String, accountId: String) async throws  -> Receipt
+    
+    /**
+     * `set_app_active(active)` (spec/07 "Account management"): a
+     * lifecycle signal, not a command — no key, no receipt, nothing
+     * stored. The Proton event poll waits 30 s while the app is active
+     * and 2 min otherwise (spec/04); it starts inactive.
+     */
+    func setAppActive(active: Bool) async throws 
     
     /**
      * `update_account(id, params)` (spec/07 "Account management")
@@ -1787,6 +1803,28 @@ open func pauseAccount(token: CancelToken, idempotencyKey: String, accountId: St
 }
     
     /**
+     * `resolve_breaker_event(key, id, resolution)` (spec/07 "Safety")
+     * under an idempotency key the shell made: Accept applies the
+     * event's withheld deletes, Keep leaves them withheld. A command:
+     * a repeated key answers its stored receipt and does nothing else.
+     */
+open func resolveBreakerEvent(token: CancelToken, idempotencyKey: String, eventId: String, resolution: BreakerResolution)async throws  -> Receipt  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_sb_ffi_fn_method_core_resolve_breaker_event(
+                        self.uniffiCloneHandle(),FfiConverterTypeCancelToken_lower(token),FfiConverterString.lower(idempotencyKey),FfiConverterString.lower(eventId),FfiConverterTypeBreakerResolution_lower(resolution)
+                )
+            },
+            pollFunc: ffi_sb_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_sb_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_sb_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeReceipt_lift,
+            errorHandler: FfiConverterTypeCoreError_lift
+        )
+}
+    
+    /**
      * `resume_account(id)` (spec/07 "Account management") under an
      * idempotency key the shell made. A command: the account's worker
      * starts once the state change commits.
@@ -1803,6 +1841,28 @@ open func resumeAccount(token: CancelToken, idempotencyKey: String, accountId: S
             completeFunc: ffi_sb_ffi_rust_future_complete_rust_buffer,
             freeFunc: ffi_sb_ffi_rust_future_free_rust_buffer,
             liftFunc: FfiConverterTypeReceipt_lift,
+            errorHandler: FfiConverterTypeCoreError_lift
+        )
+}
+    
+    /**
+     * `set_app_active(active)` (spec/07 "Account management"): a
+     * lifecycle signal, not a command — no key, no receipt, nothing
+     * stored. The Proton event poll waits 30 s while the app is active
+     * and 2 min otherwise (spec/04); it starts inactive.
+     */
+open func setAppActive(active: Bool)async throws   {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_sb_ffi_fn_method_core_set_app_active(
+                        self.uniffiCloneHandle(),FfiConverterBool.lower(active)
+                )
+            },
+            pollFunc: ffi_sb_ffi_rust_future_poll_void,
+            completeFunc: ffi_sb_ffi_rust_future_complete_void,
+            freeFunc: ffi_sb_ffi_rust_future_free_void,
+            liftFunc: { $0 },
             errorHandler: FfiConverterTypeCoreError_lift
         )
 }
@@ -9815,6 +9875,81 @@ public func FfiConverterTypeBodyKind_lower(_ value: BodyKind) -> RustBuffer {
 
 
 
+/**
+ * The user's choice on a breaker event (spec/07 "Safety").
+ */
+
+public enum BreakerResolution: Equatable, Hashable {
+    
+    /**
+     * Apply the disappearances.
+     */
+    case accept
+    /**
+     * Leave the messages withheld and keep watching.
+     */
+    case keep
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension BreakerResolution: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeBreakerResolution: FfiConverterRustBuffer {
+    typealias SwiftType = BreakerResolution
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> BreakerResolution {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .accept
+        
+        case 2: return .keep
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: BreakerResolution, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .accept:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .keep:
+            writeInt(&buf, Int32(2))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBreakerResolution_lift(_ buf: RustBuffer) throws -> BreakerResolution {
+    return try FfiConverterTypeBreakerResolution.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBreakerResolution_lower(_ value: BreakerResolution) -> RustBuffer {
+    return FfiConverterTypeBreakerResolution.lower(value)
+}
+
+
+
 
 public enum ComposeFormat: Equatable, Hashable {
     
@@ -14416,7 +14551,13 @@ private let initializationResult: InitializationResult = {
     if (uniffi_sb_ffi_checksum_method_core_pause_account() != 41086) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_sb_ffi_checksum_method_core_resolve_breaker_event() != 55999) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_sb_ffi_checksum_method_core_resume_account() != 44820) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sb_ffi_checksum_method_core_set_app_active() != 52342) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sb_ffi_checksum_method_core_update_account() != 22644) {

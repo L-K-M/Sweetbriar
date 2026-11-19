@@ -400,9 +400,48 @@ pub fn proton_account_by_user_id(
     read_account(tx, "proton_user_id", proton_user_id)
 }
 
-/// spec/04's user-visible reason for a Proton account whose session
-/// could not be restored: the owner must sign in again.
+/// `accounts.state_reason` for a Proton account that needs the owner
+/// (spec/04 "Account states and health", the "User sees" column).
+/// The reason is persisted and shown on the health surface, so the
+/// vocabulary is the spec's own wording and is frozen like a schema:
+/// a refused session ([`SESSION_REFUSED_REASON`]), human verification
+/// ([`HUMAN_VERIFICATION_REASON`]) and a refused app identity
+/// ([`APP_IDENTITY_REFUSED_REASON`]). A secret-store failure keeps
+/// `CredentialPause`'s reasons (spec/10).
 pub const SESSION_REFUSED_REASON: &str = "Sign in again";
+
+/// spec/04's reason for an account Proton asked the owner to verify
+/// (human verification during sync; it opens the verification sheet).
+pub const HUMAN_VERIFICATION_REASON: &str = "Proton asks you to verify";
+
+/// spec/04's reason for an account whose app identity Proton refused
+/// (2064, 5003); Proton's own message is in `diagnostics_json`.
+pub const APP_IDENTITY_REFUSED_REASON: &str = "Proton refused this version of Sweetbriar";
+
+/// Put an active or already-attentioned Proton account in
+/// `needs_attention` with `reason`, keeping every row and its data
+/// (spec/04 "Account states and health"). A user-paused or
+/// disconnected account is left as it is; an unknown account is
+/// `NotFound`.
+pub fn pause_for_reason(
+    tx: &Transaction,
+    account_id: &str,
+    reason: &str,
+) -> Result<(), StoreError> {
+    let changed = tx
+        .execute(
+            "UPDATE accounts
+             SET state = 'needs_attention', state_reason = ?2, revision = revision + 1
+             WHERE account_id = ?1 AND kind = 'proton'
+               AND state IN ('active', 'needs_attention')",
+            params![account_id, reason],
+        )
+        .map_err(|e| classify(e, "pause the Proton account"))?;
+    if changed == 1 || proton_account(tx, account_id)?.is_some() {
+        return Ok(());
+    }
+    Err(StoreError::not_found(format!("account {account_id}")))
+}
 
 /// Put an active or already-attentioned Proton account in
 /// `needs_attention` with [`SESSION_REFUSED_REASON`], keeping every
@@ -410,19 +449,7 @@ pub const SESSION_REFUSED_REASON: &str = "Sign in again";
 /// user-paused or disconnected account is left as it is; an unknown
 /// account is `NotFound`.
 pub fn pause_for_session(tx: &Transaction, account_id: &str) -> Result<(), StoreError> {
-    let changed = tx
-        .execute(
-            "UPDATE accounts
-             SET state = 'needs_attention', state_reason = ?2, revision = revision + 1
-             WHERE account_id = ?1 AND kind = 'proton'
-               AND state IN ('active', 'needs_attention')",
-            params![account_id, SESSION_REFUSED_REASON],
-        )
-        .map_err(|e| classify(e, "pause the Proton account's session"))?;
-    if changed == 1 || proton_account(tx, account_id)?.is_some() {
-        return Ok(());
-    }
-    Err(StoreError::not_found(format!("account {account_id}")))
+    pause_for_reason(tx, account_id, SESSION_REFUSED_REASON)
 }
 
 /// Record a Proton sign-in's credential failure (spec/10): the account
@@ -777,6 +804,89 @@ pub fn set_diagnostics(
     )
     .map_err(|e| classify(e, "record the Proton diagnostics"))?;
     require_account(tx, account_id)
+}
+
+/// Record a refusal's redacted diagnostics (spec/02
+/// `proton_accounts.diagnostics_json`, spec/10): canonical
+/// `{"v":1,"code":n,"message":"…","at":ms}`, with Proton's
+/// numeric code when it sent one and anything shaped like an address
+/// masked. Reads the account's current revision, so a concurrent write
+/// is `Conflict` like [`set_diagnostics`].
+pub fn record_refusal(
+    tx: &Transaction,
+    account_id: &str,
+    code: Option<i64>,
+    message: &str,
+    now: Timestamp,
+) -> Result<ProtonAccount, StoreError> {
+    let account = require_account(tx, account_id)?;
+    let mut body = serde_json::Map::new();
+    body.insert("v".to_owned(), 1.into());
+    if let Some(code) = code {
+        body.insert("code".to_owned(), code.into());
+    }
+    body.insert("message".to_owned(), redact_addresses(message).into());
+    body.insert("at".to_owned(), now.as_millis().into());
+    let json = serde_json::Value::Object(body).to_string();
+    set_diagnostics(tx, account_id, Some(&json), account.revision)
+}
+
+/// Mask anything shaped like an email address as `<address>`
+/// (spec/10): a refusal message may quote one. The local part is a
+/// nonempty run of address characters before `@`; the domain a run
+/// with at least one dot after it. `a@b` and `@b.com` are left alone.
+fn redact_addresses(message: &str) -> String {
+    let bytes = message.as_bytes();
+    let mut redacted = String::with_capacity(message.len());
+    let mut copied = 0;
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'@' {
+            let start = address_local_start(bytes, index);
+            let end = address_domain_end(bytes, index);
+            if start < index && end > index + 1 && bytes[index + 1..end].contains(&b'.') {
+                redacted.push_str(&message[copied..start]);
+                redacted.push_str("<address>");
+                copied = end;
+                index = end;
+                continue;
+            }
+        }
+        index += 1;
+    }
+    redacted.push_str(&message[copied..]);
+    redacted
+}
+
+/// Where an address's local part starts: the run of address
+/// characters before `@`.
+fn address_local_start(bytes: &[u8], at: usize) -> usize {
+    let mut start = at;
+    while start > 0 && is_address_byte(bytes[start - 1]) {
+        start -= 1;
+    }
+    start
+}
+
+/// Where an address's domain ends: the run of domain characters after
+/// `@`, minus a trailing dot or hyphen left as sentence punctuation.
+fn address_domain_end(bytes: &[u8], at: usize) -> usize {
+    let mut end = at + 1;
+    while end < bytes.len() && is_domain_byte(bytes[end]) {
+        end += 1;
+    }
+    while end > at + 1 && (bytes[end - 1] == b'.' || bytes[end - 1] == b'-') {
+        end -= 1;
+    }
+    end
+}
+
+fn is_address_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-' | b'+')
+}
+
+fn is_domain_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-')
 }
 
 /// `proton_body_failures.reason` (spec/02).

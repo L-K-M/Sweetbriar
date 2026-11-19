@@ -13,7 +13,7 @@
 //! disconnect, which removes the session, ends it.
 
 use crate::account_sync::AccountJobs;
-use crate::engine::{Engine, Spawn, Worker};
+use crate::engine::{Engine, Spawn, Worker, validate_idempotency_key};
 use crate::policy::proton_api;
 use crate::proton::{Sessions, mark_session_refused, restore_proton_account};
 use sb_resources::proton_bodies::{
@@ -23,13 +23,14 @@ use sb_resources::proton_bodies::{
 use sb_resources::proton_sync::{
     BreakerResolution, EventChunk, ListedPage, ProtonChange, ProtonListingState, RereadMessage,
     anchor, apply_event_chunk, apply_reread_message, begin_listing, checkpoint, commit_listed_page,
-    finish_listing, listed_message, reconcile_proton_labels, refresh_proton_identities,
-    resolve_breaker_event, withhold_unlisted,
+    finish_listing, listed_message, reconcile_proton_labels, record_refusal,
+    refresh_proton_identities, resolve_breaker_event, withhold_unlisted,
 };
 use sb_resources::{
-    AccountState, EventAction, EventBatch, EventId, KeyStore, ListingAnchor, PROTON_MAX_PAGE_SIZE,
-    ProtonClient, ProtonError, Secret, Session, StoreError, StoredAccount, Transaction,
-    WritePriority, accounts, proton_account, proton_identities,
+    APP_IDENTITY_REFUSED_REASON, AccountState, ApiCode, EventAction, EventBatch, EventId,
+    HUMAN_VERIFICATION_REASON, KeyStore, ListingAnchor, PROTON_MAX_PAGE_SIZE, ProtonClient,
+    ProtonError, Receipt, Secret, Session, StoreError, StoredAccount, Transaction, WritePriority,
+    accounts, pause_for_reason, proton_account, proton_identities, run_once,
 };
 
 use std::collections::{BTreeSet, HashSet};
@@ -44,14 +45,18 @@ use tokio::sync::watch;
 /// shorter than this ends the listing, so it must not exceed the
 /// transport's limit.
 const PAGE_SIZE: u32 = PROTON_MAX_PAGE_SIZE;
+/// `resolve_breaker_event`'s name in `command_receipts` (spec/07).
+const RESOLVE_BREAKER_EVENT: &str = "resolve_breaker_event";
 /// The first wait after a failed attempt; it doubles up to
 /// [`MAX_RETRY_DELAY`] (spec/04 "Backoff": 1 s to 5 min).
 const FIRST_RETRY_DELAY: Duration = Duration::from_secs(1);
 const MAX_RETRY_DELAY: Duration = Duration::from_secs(5 * 60);
-/// The wait between event polls. spec/04 polls every 30 s while the
-/// app is active and every 2 min otherwise; the app reports neither yet
-/// (M2.7), so this is the slower one.
-const POLL_INTERVAL: Duration = Duration::from_secs(2 * 60);
+/// How long the worker waits between event polls while the app is
+/// active (spec/04 "Sync loop" step 2).
+const ACTIVE_POLL_INTERVAL: Duration = Duration::from_secs(30);
+/// How long it waits while the app is inactive, the cadence it starts
+/// on (spec/04 "Sync loop" step 2; `set_app_active`, spec/07).
+const INACTIVE_POLL_INTERVAL: Duration = Duration::from_secs(2 * 60);
 /// Message changes per write: a listed page's worth, which fits the
 /// store's write budget. A longer response is applied in chunks, its
 /// cursor moving with the last; each change carries the message's full
@@ -124,6 +129,17 @@ enum FetchError {
     Retry,
 }
 
+impl From<Halt> for FetchError {
+    /// A refusal's halt: an account-state refusal ends the worker,
+    /// every other one retries.
+    fn from(halt: Halt) -> Self {
+        match halt {
+            Halt::Ended => Self::Ended,
+            _ => Self::Retry,
+        }
+    }
+}
+
 /// The identities' address ids and the failed key ids, which a key
 /// change is a change to (spec/02 `key_generation`).
 fn key_state(keys: &dyn KeyStore) -> (BTreeSet<String>, BTreeSet<String>) {
@@ -177,25 +193,52 @@ impl Engine {
         self.account_jobs().poll_now();
     }
 
-    /// `resolve_breaker_event(id, resolution)` (spec/07 "Safety",
+    /// Test seam: wake a Proton poll wait so it re-reads the injected
+    /// clock (spec/11), the way a test advances the maintenance
+    /// scheduler's clock. It changes no poll's schedule itself.
+    #[cfg(any(test, feature = "test-seams"))]
+    #[doc(hidden)]
+    pub fn wake_proton_poll(&self) {
+        self.account_jobs().poll_wait().notify_one();
+    }
+
+    /// `set_app_active(active)` (spec/07 "Account management"): a
+    /// lifecycle signal, not a command. No key, no receipt, nothing
+    /// stored. A Proton worker waits 30 s between event polls while
+    /// the app is active and 2 min otherwise (spec/04 "Sync loop"
+    /// step 2); it starts inactive, and the wait recomputes its
+    /// deadline when the signal changes, so a switch takes effect
+    /// without waiting out a running 2-min wait.
+    pub fn set_app_active(&self, active: bool) {
+        self.account_jobs().set_app_active(active);
+    }
+
+    /// `resolve_breaker_event(key, id, resolution)` (spec/07 "Safety",
     /// spec/04-sync-proton "The breaker"): Accept applies a Proton
     /// event's withheld deletes and Keep leaves them withheld. Either
-    /// lifts the account's pause, classifying the deletes it held.
+    /// lifts the account's pause, classifying the deletes it held. A
+    /// repeated key answers its stored receipt and resolves nothing
+    /// again; an unknown event is `NotFound`.
     pub async fn resolve_breaker_event(
         &self,
+        idempotency_key: &str,
         event_id: &str,
         resolution: BreakerResolution,
-    ) -> Result<(), crate::EngineError> {
-        let id = event_id.to_owned();
+    ) -> Result<Receipt, crate::EngineError> {
+        validate_idempotency_key(idempotency_key)?;
+        let (key, id) = (idempotency_key.to_owned(), event_id.to_owned());
         self.command(move |worker| async move {
             let now = worker.resources().now();
             worker
                 .resources()
                 .write(WritePriority::User, move |tx| {
-                    resolve_breaker_event(tx, &id, resolution, now)
+                    run_once(tx, &key, RESOLVE_BREAKER_EVENT, now, |tx| {
+                        resolve_breaker_event(tx, &id, resolution, now)?;
+                        Ok("{}".to_owned())
+                    })
                 })
-                .await?;
-            Ok(())
+                .await
+                .map_err(crate::EngineError::from)
         })
         .await
     }
@@ -245,14 +288,27 @@ pub(crate) fn start(
     let sessions = Arc::clone(sessions);
     let opened = Arc::clone(opened);
     let id = account_id.clone();
-    let poll = jobs.poll_signal();
+    let signals = PollSignals {
+        poll: jobs.poll_signal(),
+        active: jobs.app_active(),
+        wake: jobs.poll_wait(),
+    };
     let spawned = spawner.spawn_worker(move |worker| async move {
-        run(&worker, &sessions, &opened, &id, stop, poll).await;
+        run(&worker, &sessions, &opened, &id, stop, signals).await;
         owner.release(&id);
     });
     if spawned.is_err() {
         jobs.release(&account_id);
     }
+}
+
+/// What a worker's wait between event polls listens to: the poll hint,
+/// the app-active signal for the cadence (spec/04 "Sync loop" step 2)
+/// and the test wake that re-reads the clock.
+struct PollSignals {
+    poll: watch::Receiver<()>,
+    active: watch::Receiver<bool>,
+    wake: Arc<tokio::sync::Notify>,
 }
 
 async fn run(
@@ -261,8 +317,9 @@ async fn run(
     opened: &ProtonOpened,
     account_id: &str,
     stop: watch::Receiver<bool>,
-    poll: watch::Receiver<()>,
+    signals: PollSignals,
 ) {
+    let PollSignals { poll, active, wake } = signals;
     let Ok(client) = worker.resources().proton_client() else {
         return;
     };
@@ -279,6 +336,8 @@ async fn run(
             account_id,
             stop: &stop,
             poll: poll.clone(),
+            active: active.clone(),
+            wake: Arc::clone(&wake),
             advanced: AtomicBool::new(false),
             skipped: &mut skipped,
         };
@@ -323,6 +382,10 @@ struct Attempt<'a> {
     account_id: &'a str,
     stop: &'a watch::Receiver<bool>,
     poll: watch::Receiver<()>,
+    /// Whether the app is active, for the poll cadence (spec/04).
+    active: watch::Receiver<bool>,
+    /// Woken to re-read the clock between polls (the test seam).
+    wake: Arc<tokio::sync::Notify>,
     /// Set once an events response is applied.
     advanced: AtomicBool,
     /// Provider keys this run refused as another message's response.
@@ -484,6 +547,8 @@ impl Attempt<'_> {
     async fn follow(&mut self) -> Halt {
         let mut poll = self.poll.clone();
         poll.mark_unchanged();
+        let mut stop = self.stop.clone();
+        let mut active = self.active.clone();
         loop {
             match self.poll_once().await {
                 Ok(true) => continue,
@@ -493,13 +558,12 @@ impl Attempt<'_> {
             if let Err(halt) = self.drain_bodies().await {
                 return halt;
             }
-            tokio::select! {
-                () = tokio::time::sleep(POLL_INTERVAL) => {}
-                changed = poll.changed() => {
-                    if changed.is_err() {
-                        return Halt::Stopped;
-                    }
-                }
+            let start = self.worker.resources().now();
+            let now = || self.worker.resources().now();
+            if let Some(halt) =
+                wait_for_next_poll(now, &mut stop, &mut poll, &mut active, &self.wake, start).await
+            {
+                return halt;
             }
         }
     }
@@ -919,7 +983,7 @@ impl Attempt<'_> {
             Err(ProtonError::UnexpectedMessage) => return Err(FetchError::UnexpectedMessage),
             Err(ProtonError::AttachmentTooLarge) => return Err(FetchError::AttachmentTooLarge),
             Err(ProtonError::Unauthorized) => {}
-            Err(_) => return Err(FetchError::Retry),
+            Err(error) => return Err(self.refusal(&error).await.into()),
         }
         self.refresh(&session).await;
         let session = self.session().await.map_err(|_| FetchError::Ended)?;
@@ -927,8 +991,41 @@ impl Attempt<'_> {
             Ok(value) => Ok(value),
             Err(ProtonError::UnexpectedMessage) => Err(FetchError::UnexpectedMessage),
             Err(ProtonError::AttachmentTooLarge) => Err(FetchError::AttachmentTooLarge),
-            Err(_) => Err(FetchError::Retry),
+            // A second 401 is the refresh's own failure, not a Proton
+            // refusal with a code; retry as before, recording nothing.
+            Err(ProtonError::Unauthorized) => Err(FetchError::Retry),
+            Err(error) => Err(self.refusal(&error).await.into()),
         }
+    }
+
+    /// Record a mapped refusal's redacted diagnostics, then map the
+    /// account-state refusals (spec/04's table): human verification
+    /// and a refused app identity put the account `needs_attention`
+    /// and end the worker without retrying; nothing local is deleted.
+    /// Every other refusal leaves the account active and retries.
+    async fn refusal(&self, error: &ProtonError) -> Halt {
+        let (code, message) = refusal_diagnostics(error);
+        let id = self.account_id.to_owned();
+        let now = self.worker.resources().now();
+        let _ = self
+            .worker
+            .resources()
+            .write(WritePriority::Sync, move |tx| {
+                record_refusal(tx, &id, code, &message, now).map(|_| ())
+            })
+            .await;
+        let Some(reason) = needs_attention(error) else {
+            return Halt::Retry;
+        };
+        let id = self.account_id.to_owned();
+        let _ = self
+            .worker
+            .resources()
+            .write(WritePriority::Sync, move |tx| {
+                pause_for_reason(tx, &id, reason)
+            })
+            .await;
+        Halt::Ended
     }
 
     async fn session(&self) -> Result<Session, Halt> {
@@ -962,6 +1059,97 @@ impl Attempt<'_> {
             .resources()
             .write(WritePriority::Sync, closure)
             .await?)
+    }
+}
+
+/// Wait out the poll interval before the next events poll; `None`
+/// polls again, `Some` halts the worker. `now` reads the engine's
+/// clock and `start` is the poll's start by it; the deadline is
+/// `start + interval`, recomputed from `start` when the app-active
+/// signal changes, so a switch to active never waits out a running
+/// 2-min wait (spec/04 "Sync loop" step 2). A poll hint polls at
+/// once; a test wake only re-reads the clock.
+async fn wait_for_next_poll(
+    now: impl Fn() -> sb_resources::Timestamp,
+    stop: &mut watch::Receiver<bool>,
+    poll: &mut watch::Receiver<()>,
+    active: &mut watch::Receiver<bool>,
+    wake: &tokio::sync::Notify,
+    start: sb_resources::Timestamp,
+) -> Option<Halt> {
+    loop {
+        let interval = if *active.borrow() {
+            ACTIVE_POLL_INTERVAL
+        } else {
+            INACTIVE_POLL_INTERVAL
+        };
+        let deadline = start.as_millis() + interval.as_millis() as i64;
+        let remaining = deadline - now().as_millis();
+        if remaining <= 0 {
+            return None;
+        }
+        let sleep = tokio::time::sleep(Duration::from_millis(
+            u64::try_from(remaining).unwrap_or(u64::MAX),
+        ));
+        tokio::select! {
+            () = sleep => return None,
+            () = stopped(stop) => return Some(Halt::Stopped),
+            changed = poll.changed() => {
+                if changed.is_err() {
+                    return Some(Halt::Stopped);
+                }
+                return None;
+            }
+            changed = active.changed() => {
+                if changed.is_err() {
+                    return Some(Halt::Stopped);
+                }
+                // Recompute the deadline from the wait's start with the
+                // new cadence.
+            }
+            () = wake.notified() => {
+                // Re-read the clock; the deadline may have moved.
+            }
+        }
+    }
+}
+
+/// Proton's numeric code and message for a mapped refusal (spec/04's
+/// table, spec/10). The code is `None` when Proton sent none (a 5xx
+/// body, an offline transport).
+fn refusal_diagnostics(error: &ProtonError) -> (Option<i64>, String) {
+    match error {
+        ProtonError::HumanVerificationRequired => (
+            Some(ApiCode::HumanVerificationRequired as i64),
+            error.to_string(),
+        ),
+        ProtonError::Refused { code, message } => (Some(*code as i64), message.clone()),
+        ProtonError::RefreshRefused { message } => {
+            (Some(ApiCode::RefreshTokenInvalid as i64), message.clone())
+        }
+        ProtonError::HumanVerificationInvalid { message } => (
+            Some(ApiCode::HumanVerificationTokenInvalid as i64),
+            message.clone(),
+        ),
+        other => (None, other.to_string()),
+    }
+}
+
+/// The `state_reason` a mapped refusal stops the worker for (spec/04's
+/// table): human verification, and this app's identity refused (2064,
+/// 5001, 5002, 5003). `None` when the worker retries.
+fn needs_attention(error: &ProtonError) -> Option<&'static str> {
+    match error {
+        ProtonError::HumanVerificationRequired => Some(HUMAN_VERIFICATION_REASON),
+        ProtonError::Refused { code, .. } => matches!(
+            code,
+            ApiCode::ProductInvalid
+                | ApiCode::AppVersionMissingDev
+                | ApiCode::AppVersionMissing
+                | ApiCode::AppVersionUnsupported
+        )
+        .then_some(APP_IDENTITY_REFUSED_REASON),
+        _ => None,
     }
 }
 

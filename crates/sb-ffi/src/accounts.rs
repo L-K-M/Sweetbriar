@@ -272,6 +272,24 @@ impl ProtonSignInParams {
     }
 }
 
+/// The user's choice on a breaker event (spec/07 "Safety").
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum BreakerResolution {
+    /// Apply the disappearances.
+    Accept,
+    /// Leave the messages withheld and keep watching.
+    Keep,
+}
+
+impl BreakerResolution {
+    fn into_service(self) -> sb_service::BreakerResolution {
+        match self {
+            Self::Accept => sb_service::BreakerResolution::Accept,
+            Self::Keep => sb_service::BreakerResolution::Keep,
+        }
+    }
+}
+
 /// `begin_proton_sign_in`'s answer: the open conversation, or a
 /// replayed key's stored receipt after completion (spec/07).
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
@@ -422,13 +440,48 @@ impl Core {
             .await?;
         Ok(Receipt::from_service(&receipt))
     }
+
+    /// `resolve_breaker_event(key, id, resolution)` (spec/07 "Safety")
+    /// under an idempotency key the shell made: Accept applies the
+    /// event's withheld deletes, Keep leaves them withheld. A command:
+    /// a repeated key answers its stored receipt and does nothing else.
+    pub async fn resolve_breaker_event(
+        &self,
+        token: Arc<CancelToken>,
+        idempotency_key: String,
+        event_id: String,
+        resolution: BreakerResolution,
+    ) -> Result<Receipt, CoreError> {
+        let receipt = self
+            .command(&token, async |core| {
+                core.resolve_breaker_event(&idempotency_key, &event_id, resolution.into_service())
+                    .await
+            })
+            .await?;
+        Ok(Receipt::from_service(&receipt))
+    }
+
+    /// `set_app_active(active)` (spec/07 "Account management"): a
+    /// lifecycle signal, not a command — no key, no receipt, nothing
+    /// stored. The Proton event poll waits 30 s while the app is active
+    /// and 2 min otherwise (spec/04); it starts inactive.
+    pub async fn set_app_active(&self, active: bool) -> Result<(), CoreError> {
+        let guard = self.service.read().await;
+        let Some(core) = guard.as_ref() else {
+            return Err(CoreError::unavailable_shut_down());
+        };
+        core.set_app_active(active);
+        Ok(())
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::api::{CoreConfig, open_core};
-    use sb_test_support::{CERT_PEM, FakeImapServer, KEY_PEM, ScratchDir, Script, block_on};
+    use sb_test_support::{
+        CERT_PEM, FakeImapServer, KEY_PEM, ScratchDir, Script, block_on, count_rows, execute_sql,
+    };
 
     /// The committed test certificate's DER SHA-256.
     const TEST_CERT_SHA256: &str =
@@ -699,6 +752,106 @@ mod tests {
         assert!(
             matches!(error, CoreError::InvalidInput { ref field, .. } if field == "display_name"),
             "{error:?}"
+        );
+
+        block_on(core.shutdown());
+    }
+
+    /// `resolve_breaker_event` crosses the FFI under a key: Accept and
+    /// Keep leave the event `accepted`/`kept`, a repeated key answers
+    /// the stored receipt, an unknown event is `NotFound`, and
+    /// `set_app_active` is a signal that stores nothing.
+    #[test]
+    fn breaker_events_and_the_activity_signal_cross_the_ffi() {
+        let scratch = ScratchDir::new("ffi-breaker-events");
+        let config = CoreConfig {
+            data_root: scratch.path().join("store").to_string_lossy().into_owned(),
+            cache_root: scratch.path().join("cache").to_string_lossy().into_owned(),
+        };
+        let core = block_on(open_core(CancelToken::new(), config)).expect("a fresh store opens");
+        let db = scratch.path().join("store/state.sqlite");
+        execute_sql(
+            &db,
+            "INSERT INTO accounts
+             (account_id, kind, provider, display_name, state, sort_order, created_at)
+             VALUES ('acct-1', 'proton', 'proton_api', 'Owner', 'active', 1, 0);
+             INSERT INTO proton_accounts
+             (account_id, api_base_url, username, proton_user_id, credential_ref,
+              password_mode, listing_state)
+             VALUES ('acct-1', 'https://mail.example/api', 'owner', 'user-1', 'ref', 1, 'complete');
+             INSERT INTO breaker_events
+             (event_id, account_id, mailbox_id, kind, details_json, state, created_at)
+             VALUES ('proton-acct-1-1', 'acct-1', NULL, 'bulk_disappearance',
+                     '{\"disappeared\":1,\"mailbox_messages\":1}', 'open', 0);
+             INSERT INTO breaker_events
+             (event_id, account_id, mailbox_id, kind, details_json, state, created_at)
+             VALUES ('proton-acct-1-2', 'acct-1', NULL, 'bulk_disappearance',
+                     '{\"disappeared\":1,\"mailbox_messages\":1}', 'open', 0);",
+        );
+
+        let receipt = block_on(core.resolve_breaker_event(
+            CancelToken::new(),
+            "accept-ffi".to_owned(),
+            "proton-acct-1-1".to_owned(),
+            BreakerResolution::Accept,
+        ))
+        .expect("accept");
+        assert_eq!(receipt.command, "resolve_breaker_event");
+        assert_eq!(
+            count_rows(
+                &db,
+                "SELECT COUNT(*) FROM breaker_events WHERE state = 'accepted'"
+            ),
+            1
+        );
+        // A repeated key answers the stored receipt and resolves nothing.
+        let replayed = block_on(core.resolve_breaker_event(
+            CancelToken::new(),
+            "accept-ffi".to_owned(),
+            "proton-acct-1-1".to_owned(),
+            BreakerResolution::Keep,
+        ))
+        .expect("replay");
+        assert_eq!(replayed, receipt);
+        assert_eq!(
+            count_rows(
+                &db,
+                "SELECT COUNT(*) FROM breaker_events WHERE state = 'accepted'"
+            ),
+            1
+        );
+
+        let kept = block_on(core.resolve_breaker_event(
+            CancelToken::new(),
+            "keep-ffi".to_owned(),
+            "proton-acct-1-2".to_owned(),
+            BreakerResolution::Keep,
+        ))
+        .expect("keep");
+        assert_eq!(kept.command, "resolve_breaker_event");
+        assert_eq!(
+            count_rows(
+                &db,
+                "SELECT COUNT(*) FROM breaker_events WHERE state = 'kept'"
+            ),
+            1
+        );
+
+        let error = block_on(core.resolve_breaker_event(
+            CancelToken::new(),
+            "accept-missing".to_owned(),
+            "proton-unknown".to_owned(),
+            BreakerResolution::Accept,
+        ))
+        .expect_err("an unknown event");
+        assert!(matches!(error, CoreError::NotFound { .. }), "{error:?}");
+
+        // A lifecycle signal, not a command: no receipt is stored.
+        block_on(core.set_app_active(true)).expect("the signal");
+        assert_eq!(
+            count_rows(&db, "SELECT COUNT(*) FROM command_receipts"),
+            2,
+            "only the two first-time breaker commands stored receipts"
         );
 
         block_on(core.shutdown());

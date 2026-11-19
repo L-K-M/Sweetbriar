@@ -492,8 +492,20 @@ async fn response_codes_map_to_typed_refusals() {
         server.set_fault(Some(Fault::Code { status, code }));
         let error = client.ping().await.expect_err("the fault refuses");
         let matched = match expected {
-            "app identity refused" => matches!(error, ProtonError::Unavailable { .. }),
-            "unsupported version" => matches!(error, ProtonError::Unavailable { .. }),
+            "app identity refused" => matches!(
+                error,
+                ProtonError::Refused {
+                    code: ApiCode::ProductInvalid,
+                    ..
+                }
+            ),
+            "unsupported version" => matches!(
+                error,
+                ProtonError::Refused {
+                    code: ApiCode::AppVersionUnsupported,
+                    ..
+                }
+            ),
             "refresh refused" => matches!(error, ProtonError::RefreshRefused { .. }),
             "human verification token refused" => {
                 matches!(error, ProtonError::HumanVerificationInvalid { .. })
@@ -1424,12 +1436,30 @@ async fn unsafe_ids_and_unknown_ids_are_refused() {
         .message(&session, "missing-message")
         .await
         .expect_err("the message does not exist");
-    assert!(matches!(error, ProtonError::Unavailable { .. }));
+    assert!(
+        matches!(
+            error,
+            ProtonError::Refused {
+                code: ApiCode::InvalidValue,
+                ..
+            }
+        ),
+        "{error:?}"
+    );
     let error = client
         .attachment(&session, "missing-attachment")
         .await
         .expect_err("the attachment does not exist");
-    assert!(matches!(error, ProtonError::Unavailable { .. }));
+    assert!(
+        matches!(
+            error,
+            ProtonError::Refused {
+                code: ApiCode::InvalidValue,
+                ..
+            }
+        ),
+        "{error:?}"
+    );
 }
 
 #[tokio::test]

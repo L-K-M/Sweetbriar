@@ -87,16 +87,17 @@ pub use objects::{
 };
 pub use paths::StorePaths;
 pub use proton::{
-    AppliedEvents, BreakerResolution, Classified, EventChunk, ListedMessage, ListedPage,
-    ListedPageStats, MAX_PENDING_BODIES, MailboxCoverage, NewProtonAccount, ObservedLabel,
-    PendingBody, ProtonAccount, ProtonBody, ProtonBodyCommit, ProtonBodyFailure,
-    ProtonBodyFailureReason, ProtonChange, ProtonCoverage, ProtonListingState, ProtonPasswordMode,
-    RereadMessage, apply_event_chunk, apply_reread_message, begin_listing, body_failure,
-    bump_key_generation, clear_body_failure, commit_listed_page, commit_proton_body,
-    complete_listing, finish_listing, insert_proton_account, pending_proton_bodies, proton_account,
+    APP_IDENTITY_REFUSED_REASON, AppliedEvents, BreakerResolution, Classified, EventChunk,
+    HUMAN_VERIFICATION_REASON, ListedMessage, ListedPage, ListedPageStats, MAX_PENDING_BODIES,
+    MailboxCoverage, NewProtonAccount, ObservedLabel, PendingBody, ProtonAccount, ProtonBody,
+    ProtonBodyCommit, ProtonBodyFailure, ProtonBodyFailureReason, ProtonChange, ProtonCoverage,
+    ProtonListingState, ProtonPasswordMode, RereadMessage, SESSION_REFUSED_REASON,
+    apply_event_chunk, apply_reread_message, begin_listing, body_failure, bump_key_generation,
+    clear_body_failure, commit_listed_page, commit_proton_body, complete_listing, finish_listing,
+    insert_proton_account, pause_for_reason, pending_proton_bodies, proton_account,
     proton_account_by_user_id, proton_coverage, reconcile_proton_labels, record_body_failure,
-    refresh_proton_identities, resolve_breaker_event, set_diagnostics, set_event_cursor,
-    update_listing_checkpoint, withhold_unlisted,
+    record_refusal, refresh_proton_identities, resolve_breaker_event, set_diagnostics,
+    set_event_cursor, update_listing_checkpoint, withhold_unlisted,
 };
 pub use readers::{ReadStop, Scoped};
 pub use receipts::{

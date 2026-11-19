@@ -80,12 +80,34 @@ async fn a_refresh_withholds_what_its_listing_missed_and_too_much_opens_an_epoch
     );
     assert_occurrences(&h, "m7", &[("All Mail", "present"), ("Inbox", "present")]);
 
-    h.core
-        .resolve_breaker_event(&format!("proton-{id}-1"), BreakerResolution::Accept)
+    let receipt = h
+        .core
+        .resolve_breaker_event(
+            "accept-epoch",
+            &format!("proton-{id}-1"),
+            BreakerResolution::Accept,
+        )
         .await
         .unwrap();
+    assert_eq!(receipt.command, "resolve_breaker_event");
     assert_occurrences(&h, "m1", &[("All Mail", "vanished"), ("Inbox", "vanished")]);
     assert_eq!(count(&h.scratch, "proton_disappearances"), 0);
+    // A repeated key answers the stored receipt and resolves nothing
+    // again (spec/07 "Commands").
+    let replayed = h
+        .core
+        .resolve_breaker_event(
+            "accept-epoch",
+            &format!("proton-{id}-1"),
+            BreakerResolution::Keep,
+        )
+        .await
+        .unwrap();
+    assert_eq!(replayed, receipt);
+    assert_eq!(
+        count(&h.scratch, "breaker_events WHERE state = 'accepted'"),
+        1
+    );
 }
 
 #[tokio::test]
@@ -129,18 +151,30 @@ async fn a_mass_delete_opens_the_breaker_until_it_clears_or_is_resolved() {
     let h = deleted_while_closed(h).await;
     until(&h, "breaker_events WHERE state = 'open'", 1).await;
     let event_id = format!("proton-{id}-2");
-    h.core
-        .resolve_breaker_event(&event_id, BreakerResolution::Keep)
+    let kept = h
+        .core
+        .resolve_breaker_event("keep-2", &event_id, BreakerResolution::Keep)
         .await
         .unwrap();
+    assert_eq!(kept.command, "resolve_breaker_event");
+    assert_eq!(count(&h.scratch, "breaker_events WHERE state = 'kept'"), 1);
+    // A repeated key answers the stored receipt; the event stays kept.
+    let replayed = h
+        .core
+        .resolve_breaker_event("keep-2", &event_id, BreakerResolution::Accept)
+        .await
+        .unwrap();
+    assert_eq!(replayed, kept);
+    assert_eq!(count(&h.scratch, "breaker_events WHERE state = 'kept'"), 1);
+    // A fresh key on a kept event is still a Conflict.
     assert!(matches!(
         h.core
-            .resolve_breaker_event(&event_id, BreakerResolution::Keep)
+            .resolve_breaker_event("keep-again", &event_id, BreakerResolution::Keep)
             .await,
         Err(CoreError::Conflict { .. })
     ));
     h.core
-        .resolve_breaker_event(&event_id, BreakerResolution::Accept)
+        .resolve_breaker_event("accept-2", &event_id, BreakerResolution::Accept)
         .await
         .unwrap();
     assert_eq!(
@@ -151,7 +185,11 @@ async fn a_mass_delete_opens_the_breaker_until_it_clears_or_is_resolved() {
     assert_occurrences(&h, "m1", &[("All Mail", "vanished"), ("Inbox", "vanished")]);
     assert!(matches!(
         h.core
-            .resolve_breaker_event("proton-unknown", BreakerResolution::Accept)
+            .resolve_breaker_event(
+                "accept-unknown",
+                "proton-unknown",
+                BreakerResolution::Accept
+            )
             .await,
         Err(CoreError::NotFound { .. })
     ));

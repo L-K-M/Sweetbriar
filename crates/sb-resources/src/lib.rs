@@ -66,16 +66,17 @@ pub use index::{
 mod maintenance;
 mod proton;
 pub use proton::{
-    BEGIN_PROTON_SIGN_IN, PROTON_API_BASE_URL, ProtonAccount, ProtonRefusal, ProtonSessionError,
-    ProtonSessionSecret, ProtonSignInParams, ProtonTransport, RestoredProtonSession,
-    decode_proton_session, disconnect_proton_account, encode_proton_session, pause_for_session,
-    proton_account, proton_identities, reset_proton_for_restore,
+    APP_IDENTITY_REFUSED_REASON, BEGIN_PROTON_SIGN_IN, HUMAN_VERIFICATION_REASON,
+    PROTON_API_BASE_URL, ProtonAccount, ProtonRefusal, ProtonSessionError, ProtonSessionSecret,
+    ProtonSignInParams, ProtonTransport, RestoredProtonSession, SESSION_REFUSED_REASON,
+    decode_proton_session, disconnect_proton_account, encode_proton_session, pause_for_reason,
+    pause_for_session, proton_account, proton_identities, reset_proton_for_restore,
 };
 // The transport items an account's sign-in conversation drives
 // (spec/01 rule 3): the engine keeps them in memory and maps errors
 // without depending on a leaf.
 pub use sb_proton::{
-    AttachmentMetadata, CertificateDer, Challenge, Client as ProtonClient, DecryptError,
+    ApiCode, AttachmentMetadata, CertificateDer, Challenge, Client as ProtonClient, DecryptError,
     EventAction, EventBatch, EventId, FinishedSignIn, FullMessage, Identity, KeyStore, Label,
     LabelKind, ListingAnchor, MAX_PAGE_SIZE as PROTON_MAX_PAGE_SIZE, ModulusSignatureVerifier,
     ProtonError, SecretBuffer, SecretString, Session, SignIn, SignInStep, Trust,

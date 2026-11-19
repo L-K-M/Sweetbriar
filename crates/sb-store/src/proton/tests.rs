@@ -1,7 +1,7 @@
 //! Proton account and body-failure row tests (spec/02 "Proton
 //! accounts", plan M2.13a).
 
-use rusqlite::params;
+use rusqlite::{OptionalExtension, params};
 use sb_test_support::{ScratchDir, block_on, real_fs};
 use sb_types::time::Timestamp;
 
@@ -9,12 +9,13 @@ use crate::StoreError;
 use crate::accounts::{CredentialPause, IdentitySendable, NewIdentity};
 use crate::open;
 use crate::proton::{
-    NewProtonAccount, NewProtonSignIn, ProtonBodyFailureReason, ProtonListingState,
-    ProtonPasswordMode, SESSION_REFUSED_REASON, begin_listing, body_failure, clear_body_failure,
-    commit_proton_sign_in, complete_listing, disconnect_proton_account, insert_proton_account,
-    pause_for_proton_credential, pause_for_session, proton_account, proton_account_by_user_id,
-    reactivate_proton_account, record_body_failure, refresh_proton_identities, set_diagnostics,
-    set_event_cursor, update_listing_checkpoint,
+    HUMAN_VERIFICATION_REASON, NewProtonAccount, NewProtonSignIn, ProtonBodyFailureReason,
+    ProtonListingState, ProtonPasswordMode, SESSION_REFUSED_REASON, begin_listing, body_failure,
+    clear_body_failure, commit_proton_sign_in, complete_listing, disconnect_proton_account,
+    insert_proton_account, pause_for_proton_credential, pause_for_reason, pause_for_session,
+    proton_account, proton_account_by_user_id, reactivate_proton_account, record_body_failure,
+    record_refusal, refresh_proton_identities, set_diagnostics, set_event_cursor,
+    update_listing_checkpoint,
 };
 use crate::testing::{reading, scratch_paths, test_seams};
 
@@ -605,6 +606,79 @@ fn proton_listing_cursors_follow_the_check_invariants() {
         }
         Ok(())
     });
+}
+
+/// A refusal records its redacted diagnostics (spec/02, 10): the
+/// numeric code when Proton sent one, the message with an address
+/// masked, and the time. `pause_for_reason` puts the account
+/// `needs_attention` with the spec/04 reason and keeps every row.
+#[test]
+fn a_refusal_records_redacted_diagnostics_and_pauses_with_the_reason() {
+    let (_scratch, store) = proton_store("proton-refusal");
+    block_on(store.write(crate::WritePriority::User, |tx| {
+        insert_account(tx, "a1", 1);
+        insert_proton_account(tx, &new_account("a1", "user-1")).map(|_| ())
+    }))
+    .unwrap();
+
+    block_on(store.write(crate::WritePriority::User, |tx| {
+        let account = record_refusal(
+            tx,
+            "a1",
+            Some(2064),
+            "Proton refused owner@example.test and other@example.test: unknown product",
+            now(),
+        )?;
+        let json = account.diagnostics_json.expect("the diagnostics");
+        assert!(json.contains("\"code\":2064"), "{json}");
+        assert!(json.contains("\"v\":1"), "{json}");
+        assert!(json.contains("<address>"), "{json}");
+        assert!(!json.contains("owner@example.test"), "{json}");
+        assert!(!json.contains("other@example.test"), "{json}");
+        Ok(())
+    }))
+    .unwrap();
+
+    // No code when Proton sent none (a 5xx body, an offline transport).
+    block_on(store.write(crate::WritePriority::User, |tx| {
+        let account = record_refusal(tx, "a1", None, "Proton isn't answering", now())?;
+        let json = account.diagnostics_json.expect("the diagnostics");
+        assert!(!json.contains("\"code\""), "{json}");
+        assert!(json.contains("Proton isn't answering"), "{json}");
+        Ok(())
+    }))
+    .unwrap();
+
+    block_on(store.write(crate::WritePriority::User, |tx| {
+        pause_for_reason(tx, "a1", HUMAN_VERIFICATION_REASON)
+    }))
+    .unwrap();
+    let (state, reason): (String, Option<String>) = reading(&store, |tx| {
+        tx.query_row(
+            "SELECT state, state_reason FROM accounts WHERE account_id = 'a1'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .map_err(|e| crate::schema::classify(e, "read the state"))
+    });
+    assert_eq!(state, "needs_attention");
+    assert_eq!(reason.as_deref(), Some("Proton asks you to verify"));
+    // The account's data stays: the Proton row and its diagnostics.
+    assert!(proton_account_reads(&store, "a1"));
+}
+
+/// Whether the account's Proton row still reads.
+fn proton_account_reads(store: &crate::Store, account_id: &str) -> bool {
+    reading(store, |tx| {
+        tx.query_row(
+            "SELECT 1 FROM proton_accounts WHERE account_id = ?1",
+            [account_id],
+            |_| Ok(()),
+        )
+        .optional()
+        .map_err(|e| crate::schema::classify(e, "read the Proton account"))
+        .map(|row| row.is_some())
+    })
 }
 
 /// A body failure records, increments, reads and clears (spec/02,

@@ -143,6 +143,18 @@ pub enum ProtonError {
     /// parses the verification details, into its `Challenge`; this
     /// mapper sees Proton's `Error` text alone.
     HumanVerificationRequired,
+    /// A refusal Proton answered with a numeric API code: an
+    /// anti-abuse block, this app's identity/version being refused, a
+    /// paid-plan gate, an invalid value, or a device-verification or
+    /// scope refusal. The sync worker records the code and message in
+    /// the account's diagnostics and maps the account-state refusals
+    /// (spec/04 "Account states and health").
+    Refused {
+        /// Proton's numeric code.
+        code: ApiCode,
+        /// Proton's `Error` text.
+        message: String,
+    },
     /// 12087: the human-verification token was rejected.
     HumanVerificationInvalid {
         /// Proton's `Error` text.
@@ -188,34 +200,6 @@ impl ProtonError {
     pub(crate) fn from_api(code: ApiCode, message: &str) -> Option<Self> {
         Some(match code {
             ApiCode::Success | ApiCode::Multi => return None,
-            // `auth-session.md` §2: unknown product/platform (2064) and
-            // an outdated version (5003) are this app's identity being
-            // refused; there is no fallback (spec/04).
-            ApiCode::ProductInvalid
-            | ApiCode::AppVersionMissing
-            | ApiCode::AppVersionMissingDev
-            | ApiCode::AppVersionUnsupported => Self::Unavailable {
-                message: message.to_owned(),
-            },
-            // `auth-session.md` §9: 2028 is an anti-abuse block, not a
-            // user error; stop retrying and show Proton's message.
-            ApiCode::AntiAbuse => Self::Unavailable {
-                message: message.to_owned(),
-            },
-            // `auth-session.md` §9: 9002 device verification and §7
-            // 9101 insufficient scope are account-state refusals.
-            ApiCode::DeviceVerificationRequired | ApiCode::InsufficientScope => Self::Unavailable {
-                message: message.to_owned(),
-            },
-            // `policy-risk.md` §8: 10004 is the paid-plan gate.
-            ApiCode::PaidPlanRequired => Self::Unavailable {
-                message: message.to_owned(),
-            },
-            // `auth-session.md` §3: 2001 is an invalid request value;
-            // the sign-in conversation treats it as a failed request.
-            ApiCode::InvalidValue => Self::Unavailable {
-                message: message.to_owned(),
-            },
             // `auth-session.md` §9: 6003 names the account, not the
             // password; the caller maps it to `InvalidInput::Account`.
             ApiCode::UsernameInvalid => Self::InvalidInput(InvalidField::Account),
@@ -230,6 +214,16 @@ impl ProtonError {
             },
             // `auth-session.md` §6: 10013 is a refused refresh token.
             ApiCode::RefreshTokenInvalid => Self::RefreshRefused {
+                message: message.to_owned(),
+            },
+            // Every other code (`auth-session.md` §§2, 3, 7, 9:
+            // 2064/5001/5002/5003 this app's identity, 2028 an
+            // anti-abuse block, 9002 device verification, 9101
+            // insufficient scope, 10004 the paid-plan gate, 2001 an
+            // invalid value) is a refusal carrying its numeric code,
+            // which the sync worker records (spec/04, 10).
+            code => Self::Refused {
+                code,
                 message: message.to_owned(),
             },
         })
@@ -252,6 +246,7 @@ impl fmt::Display for ProtonError {
                 f.write_str("the SRP modulus signature did not verify with Proton's key")
             }
             Self::HumanVerificationRequired => f.write_str("Proton asked for human verification"),
+            Self::Refused { message, .. } => write!(f, "{message}"),
             Self::HumanVerificationInvalid { message } => {
                 write!(f, "Proton rejected the human-verification token: {message}")
             }
