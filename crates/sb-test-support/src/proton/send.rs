@@ -5,7 +5,7 @@
 //! (`keys-crypto.md` §4-5, `mail-sync.md` §4, §7); no Proton or Bridge
 //! code.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::io::{self, Cursor};
 use std::sync::{Arc, Mutex};
 
@@ -61,12 +61,16 @@ pub struct RecordedSessionKey {
     pub algorithm: String,
 }
 
-/// One recipient's entry in a package: its scheme and body key packet.
+/// One recipient's entry in a package: its scheme, body key packet
+/// and attachment key packets (research `keys-crypto.md` §4).
 #[derive(Debug, Clone)]
 pub struct RecordedRecipient {
     pub address: String,
     pub scheme: u8,
     pub body_key_packet: Vec<u8>,
+    /// The attachments' session keys encrypted to the recipient's
+    /// key, by attachment id.
+    pub attachment_key_packets: BTreeMap<String, Vec<u8>>,
 }
 
 /// An internal recipient's unlocked address key, for tests that
@@ -170,6 +174,33 @@ impl<P: PGPProviderSync> RecipientKey for RecipientKeyImpl<P> {
     }
 }
 
+/// Decodes a form-encoded query value; an invalid escape is kept as
+/// written.
+fn form_decode(value: &str) -> String {
+    let bytes = value.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let escaped = (bytes[i] == b'%')
+            .then(|| bytes.get(i + 1..i + 3))
+            .flatten()
+            .filter(|hex| hex.iter().all(u8::is_ascii_hexdigit))
+            .and_then(|hex| std::str::from_utf8(hex).ok())
+            .and_then(|hex| u8::from_str_radix(hex, 16).ok());
+        match (bytes[i], escaped) {
+            (_, Some(byte)) => {
+                decoded.push(byte);
+                i += 3;
+                continue;
+            }
+            (b'+', None) => decoded.push(b' '),
+            (byte, None) => decoded.push(byte),
+        }
+        i += 1;
+    }
+    String::from_utf8_lossy(&decoded).into_owned()
+}
+
 /// `GET /core/v4/keys?Email=`: an internal address answers 1 with its
 /// public keys; an external address answers 2, with keys only when a
 /// test registered them (research `keys-crypto.md` §5).
@@ -182,7 +213,9 @@ pub(super) fn handle_keys(
     let Some(username) = authenticated(&mut state, headers) else {
         return Ok(unauthorized());
     };
-    let email = query_value(query, "Email").unwrap_or_default();
+    // Decoded the way Proton's server reads a query (Go's
+    // `url.ParseQuery`): `%XX` escapes, and `+` as a space.
+    let email = form_decode(&query_value(query, "Email").unwrap_or_default());
     let internal = state
         .accounts
         .get(&username)
@@ -511,6 +544,21 @@ fn record_package(package: &Value) -> RecordedPackage {
                             .and_then(Value::as_str)
                             .unwrap_or_default(),
                     ),
+                    attachment_key_packets: value
+                        .get("AttachmentKeyPackets")
+                        .and_then(Value::as_object)
+                        .map(|packets| {
+                            packets
+                                .iter()
+                                .map(|(id, packet)| {
+                                    (
+                                        id.clone(),
+                                        decode_base64(packet.as_str().unwrap_or_default()),
+                                    )
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default(),
                 })
                 .collect()
         })
@@ -689,6 +737,12 @@ mod tests {
     use crate::{FakeProtonServer, Fault, TestAccount};
 
     use super::{CLEAR_SCHEME, INTERNAL_SCHEME};
+
+    #[test]
+    fn form_decoding_keeps_an_escape_that_is_not_two_hex_digits() {
+        assert_eq!(super::form_decode("a%2Bb+c"), "a+b c");
+        assert_eq!(super::form_decode("%+F%zz%4"), "% F%zz%4");
+    }
 
     const USER: &str = "owner@example.org";
     const INTERNAL: &str = "owner@example.test";
