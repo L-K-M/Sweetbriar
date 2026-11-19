@@ -328,17 +328,21 @@ pub(super) fn handle_draft_write(
         .accounts
         .get_mut(&username)
         .expect("the session's account exists");
+    // Proton refuses a sender that is not one of the account's own
+    // addresses; an update takes the sender's address too.
+    let Some(address_id) = account
+        .addresses
+        .iter()
+        .find(|address| address.email.eq_ignore_ascii_case(&fields.sender_address))
+        .map(|address| address.id.clone())
+    else {
+        return Ok(error(422, "InvalidValue"));
+    };
     let existing = account.messages.iter_mut().find(|message| message.id == id);
     let Some(draft) = existing else {
         if !created {
             return Ok(error(404, "message not found"));
         }
-        let address_id = account
-            .addresses
-            .iter()
-            .find(|address| address.email.eq_ignore_ascii_case(&fields.sender_address))
-            .map(|address| address.id.clone())
-            .unwrap_or_else(|| "owner-primary".to_owned());
         let mut draft = FakeMessage::new(&id).with_labels(&[DRAFTS_LABEL, ALL_MAIL_LABEL]);
         draft.flags = 0;
         draft.unread = false;
@@ -352,6 +356,7 @@ pub(super) fn handle_draft_write(
     if !is_draft(draft) {
         return Ok(error(400, "message is not a draft"));
     }
+    draft.address_id = address_id;
     apply_draft_fields(draft, &id, fields);
     let clone = draft.clone();
     let json = message_body_json(&clone);
@@ -1154,10 +1159,13 @@ mod tests {
         no_address["Sender"] = json!({"Name": "No address"});
         let mut bad_mime = draft_message("x", "");
         bad_mime["MIMEType"] = json!("application/json");
+        let mut foreign = draft_message("x", "");
+        foreign["Sender"] = json!({"Name": "Stranger", "Address": "stranger@example.test"});
         for message in [
             json!({"Subject": "x", "MIMEType": "text/plain", "Body": ""}),
             no_address,
             bad_mime,
+            foreign.clone(),
         ] {
             let (status, body) = client
                 .json("POST", "/mail/v4/messages", json!({"Message": message}))
@@ -1188,6 +1196,16 @@ mod tests {
         );
 
         let id = create_draft(&client).await;
+        let (status, body) = client
+            .json(
+                "PUT",
+                &format!("/mail/v4/messages/{id}"),
+                json!({"Message": foreign}),
+            )
+            .await
+            .expect("the request");
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(body["Code"], 2001);
         client
             .ok(
                 "POST",
