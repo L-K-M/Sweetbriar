@@ -1281,6 +1281,19 @@ fn migration_33_restore_pending_defaults_and_is_checked() {
             [],
         )
         .expect("a paused account is restore-pending");
+        // Becoming active must clear the flag in the same statement
+        // (spec/07): alone, the state change is refused.
+        let alone = tx.execute(
+            "UPDATE accounts SET state = 'active' WHERE provider = 'local_archive'",
+            [],
+        );
+        assert!(alone.is_err(), "activation kept restore_pending");
+        tx.execute(
+            "UPDATE accounts SET state = 'active', restore_pending = 0
+             WHERE provider = 'local_archive'",
+            [],
+        )
+        .expect("activation clears restore_pending in one statement");
         Ok(())
     });
 }
