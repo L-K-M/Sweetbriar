@@ -69,6 +69,144 @@ pub struct SendAttempt {
     pub bcc: Vec<DraftRecipient>,
 }
 
+/// One attachment the attempt has already uploaded to Proton's draft,
+/// in the frozen MIME's order (spec/02, 05 step 3). The stored JSON
+/// keeps the four fields spec/02 names, so the array position is the
+/// attachment index.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProtonUpload {
+    pub index: usize,
+    /// Proton's attachment id, which the send packages key on.
+    pub id: String,
+    pub name: String,
+    pub mime_type: String,
+    pub size: u64,
+}
+
+/// The `proton_uploads_json` shape (spec/02).
+#[derive(serde::Serialize, serde::Deserialize)]
+struct StoredUploads {
+    v: u32,
+    attachments: Vec<StoredUpload>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct StoredUpload {
+    id: String,
+    name: String,
+    mime_type: String,
+    size: u64,
+}
+
+/// Parse `proton_uploads_json`, numbering each attachment by its array
+/// position; a missing value is none.
+fn parse_uploads(json: Option<&str>) -> Result<Vec<ProtonUpload>, StoreError> {
+    let Some(json) = json else {
+        return Ok(Vec::new());
+    };
+    let stored: StoredUploads = serde_json::from_str(json).map_err(|_| {
+        StoreError::corrupt("a send attempt's Proton uploads are not the stored shape")
+    })?;
+    if stored.v != 1 {
+        return Err(StoreError::corrupt(format!(
+            "a send attempt's Proton uploads have version {}",
+            stored.v
+        )));
+    }
+    Ok(stored
+        .attachments
+        .into_iter()
+        .enumerate()
+        .map(|(index, upload)| ProtonUpload {
+            index,
+            id: upload.id,
+            name: upload.name,
+            mime_type: upload.mime_type,
+            size: upload.size,
+        })
+        .collect())
+}
+
+/// Whether a claimed attempt answers another message or forwards it
+/// (spec/05 step 4's `Action`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SendParentKind {
+    Reply,
+    Forward,
+}
+
+impl SendParentKind {
+    fn from_stored(name: &str) -> Result<Self, StoreError> {
+        match name {
+            "reply" => Ok(Self::Reply),
+            "forward" => Ok(Self::Forward),
+            _ => Err(StoreError::corrupt(format!(
+                "a send attempt's parent kind is '{name}'"
+            ))),
+        }
+    }
+}
+
+/// The message a claimed attempt replies to or forwards, when it is in
+/// the same account and Proton knows its id (spec/05 step 4's
+/// `ParentID`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SendParent {
+    pub provider_message_id: String,
+    pub kind: SendParentKind,
+}
+
+/// One recipient of a claimed attempt: the address as first written,
+/// its canonical form and its field (spec/02).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClaimedRecipient {
+    pub address: String,
+    pub canonical: String,
+    pub kind: RecipientKind,
+}
+
+/// The attempt the account worker claimed, committed `submitting`
+/// before any network I/O (spec/05 step 3).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClaimedSend {
+    pub attempt_id: String,
+    pub draft_id: String,
+    pub revision_id: String,
+    pub account_id: String,
+    pub identity_id: String,
+    pub envelope_from: String,
+    pub message_id_header: String,
+    pub mime_sha256: String,
+    pub recipients: Vec<ClaimedRecipient>,
+    pub proton_draft_id: Option<String>,
+    pub uploads: Vec<ProtonUpload>,
+    pub parent: Option<SendParent>,
+}
+
+/// A definite pre-acceptance failure (spec/05 step 4): Proton's code
+/// and message, or a local reason.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SendFailure {
+    pub code: Option<i64>,
+    pub message: String,
+    pub rejected: Option<SendFailureRejection>,
+}
+
+/// The recipient a failure refuses permanently and its stored reason.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SendFailureRejection {
+    pub canonical: String,
+    pub reason: String,
+}
+
+/// Proton's code and message as `final_reply` (spec/02).
+fn final_reply(code: Option<i64>, message: &str) -> String {
+    match code {
+        Some(code) => format!("{code} {message}"),
+        None => message.to_owned(),
+    }
+}
+
 /// A reply's source occurrence message, or a forward's logical
 /// message, with its `In-Reply-To` and `References` (spec/05). A
 /// message fetched before any body still carries its headers.
@@ -345,6 +483,451 @@ pub fn cancel_send(tx: &Transaction, attempt_id: &str, now: Timestamp) -> Result
     )
     .map_err(|e| classify(e, "return a draft to editing"))?;
     Ok(())
+}
+
+/// `queue_due_held(now)` (spec/05 step 2): every `held` attempt whose
+/// undo window has passed becomes `queued`, all accounts, in one
+/// statement. The `held` guard lets a cancel that committed first win.
+/// Returns how many attempts moved.
+pub fn queue_due_held(tx: &Transaction, now: Timestamp) -> Result<usize, StoreError> {
+    let moved = tx
+        .execute(
+            "UPDATE send_attempts SET state = 'queued', updated_at = ?2
+             WHERE state = 'held' AND hold_until IS NOT NULL AND hold_until <= ?1",
+            params![now.as_millis(), now.as_millis()],
+        )
+        .map_err(|e| classify(e, "queue due held send attempts"))?;
+    Ok(moved)
+}
+
+/// `claim_send_attempt(account_id, now)` (spec/05 step 3): the oldest
+/// `queued` attempt of the account whose `config_generation` is still
+/// the account's current one becomes `submitting`, committed before any
+/// network I/O. A stale generation is skipped and stays `queued` (the
+/// Out Box reports it as waiting for `confirm_send_route`). The state,
+/// account and generation guards let a cancel or another transition
+/// that committed first win; a lost race is `None`, never a panic.
+pub fn claim_send_attempt(
+    tx: &Transaction,
+    account_id: &str,
+    now: Timestamp,
+) -> Result<Option<ClaimedSend>, StoreError> {
+    let err = |e| classify(e, "claim a send attempt");
+    let now_ms = now.as_millis();
+    let candidate = tx
+        .query_row(
+            "SELECT s.attempt_id, s.draft_id, s.revision_id, s.account_id, s.identity_id,
+                    s.envelope_from, s.message_id_header, s.mime_sha256, s.proton_draft_id,
+                    s.config_generation
+             FROM send_attempts s
+             JOIN accounts a ON a.account_id = s.account_id
+             WHERE s.account_id = ?1 AND s.state = 'queued'
+               AND s.config_generation = a.config_generation
+             ORDER BY s.created_at, s.attempt_id
+             LIMIT 1",
+            params![account_id],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, String>(5)?,
+                    row.get::<_, String>(6)?,
+                    row.get::<_, String>(7)?,
+                    row.get::<_, Option<String>>(8)?,
+                    row.get::<_, i64>(9)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(err)?;
+    let Some((
+        attempt_id,
+        draft_id,
+        revision_id,
+        attempt_account,
+        identity_id,
+        envelope_from,
+        message_id_header,
+        mime_sha256,
+        proton_draft_id,
+        config_generation,
+    )) = candidate
+    else {
+        return Ok(None);
+    };
+    let claimed = tx
+        .execute(
+            "UPDATE send_attempts SET state = 'submitting', updated_at = ?2
+             WHERE attempt_id = ?1 AND account_id = ?3 AND state = 'queued'
+               AND config_generation = ?4",
+            params![attempt_id, now_ms, account_id, config_generation],
+        )
+        .map_err(err)?;
+    if claimed == 0 {
+        return Ok(None);
+    }
+    let recipients = claim_recipients(tx, &attempt_id)?;
+    let uploads_json: Option<String> = tx
+        .query_row(
+            "SELECT proton_uploads_json FROM send_attempts WHERE attempt_id = ?1",
+            params![attempt_id],
+            |row| row.get(0),
+        )
+        .map_err(err)?;
+    let uploads = parse_uploads(uploads_json.as_deref())?;
+    let parent = claim_parent(tx, &draft_id, &attempt_account)?;
+    Ok(Some(ClaimedSend {
+        attempt_id,
+        draft_id,
+        revision_id,
+        account_id: attempt_account,
+        identity_id,
+        envelope_from,
+        message_id_header,
+        mime_sha256,
+        recipients,
+        proton_draft_id,
+        uploads,
+        parent,
+    }))
+}
+
+/// The claimed attempt's recipients, in canonical order (spec/02).
+fn claim_recipients(
+    tx: &Transaction,
+    attempt_id: &str,
+) -> Result<Vec<ClaimedRecipient>, StoreError> {
+    let err = |e| classify(e, "read a claimed attempt's recipients");
+    let mut statement = tx
+        .prepare(
+            "SELECT canonical, address, kind FROM send_recipients
+             WHERE attempt_id = ?1 ORDER BY canonical",
+        )
+        .map_err(err)?;
+    let rows = statement
+        .query_map(params![attempt_id], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })
+        .map_err(err)?;
+    rows.map(|row| {
+        let (canonical, address, kind) = row.map_err(err)?;
+        Ok(ClaimedRecipient {
+            address,
+            canonical,
+            kind: RecipientKind::from_stored(&kind)?,
+        })
+    })
+    .collect()
+}
+
+/// The draft's reply or forward source when it is a message in the
+/// same account with a Proton id (spec/05 step 4). A local or
+/// cross-account source, or one Proton never listed, is `None`.
+fn claim_parent(
+    tx: &Transaction,
+    draft_id: &str,
+    account_id: &str,
+) -> Result<Option<SendParent>, StoreError> {
+    let err = |e| classify(e, "read a claimed attempt's parent");
+    let row = tx
+        .query_row(
+            "SELECT lm.provider_key,
+                    CASE WHEN d.reply_to_occurrence_id IS NOT NULL
+                         THEN 'reply' ELSE 'forward' END
+             FROM drafts d
+             LEFT JOIN occurrences o ON o.occurrence_id = d.reply_to_occurrence_id
+             LEFT JOIN logical_messages lm
+               ON lm.message_id = COALESCE(o.message_id, d.forward_of_message_id)
+              AND lm.account_id = ?1
+             WHERE d.draft_id = ?2",
+            params![account_id, draft_id],
+            |row| Ok((row.get::<_, Option<String>>(0)?, row.get::<_, String>(1)?)),
+        )
+        .optional()
+        .map_err(err)?;
+    match row {
+        Some((Some(provider_message_id), kind)) => Ok(Some(SendParent {
+            provider_message_id,
+            kind: SendParentKind::from_stored(&kind)?,
+        })),
+        _ => Ok(None),
+    }
+}
+
+/// `record_proton_draft(attempt_id, proton_draft_id)` (spec/05 step
+/// 2): commit the draft Proton created, only while `submitting`, and
+/// only when none is recorded yet, so a retried attempt reuses its
+/// draft instead of naming a second one. Returns whether it applied.
+pub fn record_proton_draft(
+    tx: &Transaction,
+    attempt_id: &str,
+    proton_draft_id: &str,
+) -> Result<bool, StoreError> {
+    let applied = tx
+        .execute(
+            "UPDATE send_attempts SET proton_draft_id = ?2
+             WHERE attempt_id = ?1 AND state = 'submitting' AND proton_draft_id IS NULL",
+            params![attempt_id, proton_draft_id],
+        )
+        .map_err(|e| classify(e, "record the Proton draft"))?;
+    Ok(applied == 1)
+}
+
+/// `record_proton_upload(attempt_id, upload)` (spec/05 step 3):
+/// append one uploaded attachment to `proton_uploads_json`, only while
+/// `submitting`. `upload.index` must be the next position in the
+/// frozen MIME's order. Returns whether it applied.
+pub fn record_proton_upload(
+    tx: &Transaction,
+    attempt_id: &str,
+    upload: &ProtonUpload,
+) -> Result<bool, StoreError> {
+    let err = |e| classify(e, "record a Proton upload");
+    let (state, json): (String, Option<String>) = tx
+        .query_row(
+            "SELECT state, proton_uploads_json FROM send_attempts WHERE attempt_id = ?1",
+            params![attempt_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()
+        .map_err(err)?
+        .ok_or_else(|| StoreError::not_found(format!("send attempt {attempt_id}")))?;
+    if state != "submitting" {
+        return Ok(false);
+    }
+    let mut stored = match json.as_deref() {
+        None => StoredUploads {
+            v: 1,
+            attachments: Vec::new(),
+        },
+        Some(json) => serde_json::from_str(json).map_err(|_| {
+            StoreError::corrupt("a send attempt's Proton uploads are not the stored shape")
+        })?,
+    };
+    if stored.v != 1 {
+        return Err(StoreError::corrupt(format!(
+            "a send attempt's Proton uploads have version {}",
+            stored.v
+        )));
+    }
+    if upload.index != stored.attachments.len() {
+        return Err(StoreError::InvalidInput {
+            message: format!(
+                "attachment {} is not the next upload in the frozen MIME's order",
+                upload.index
+            ),
+        });
+    }
+    stored.attachments.push(StoredUpload {
+        id: upload.id.clone(),
+        name: upload.name.clone(),
+        mime_type: upload.mime_type.clone(),
+        size: upload.size,
+    });
+    let json = serde_json::to_string(&stored)
+        .map_err(|_| StoreError::internal("encode a send attempt's Proton uploads"))?;
+    let applied = tx
+        .execute(
+            "UPDATE send_attempts SET proton_uploads_json = ?2
+             WHERE attempt_id = ?1 AND state = 'submitting'",
+            params![attempt_id, json],
+        )
+        .map_err(err)?;
+    Ok(applied == 1)
+}
+
+/// `commit_send_requested(attempt_id, now)` (spec/05 step 4): stamp
+/// `send_requested_at` just before the send request, only while
+/// `submitting` with a recorded draft. Returns whether it applied.
+pub fn commit_send_requested(
+    tx: &Transaction,
+    attempt_id: &str,
+    now: Timestamp,
+) -> Result<bool, StoreError> {
+    let applied = tx
+        .execute(
+            "UPDATE send_attempts SET send_requested_at = ?2, updated_at = ?2
+             WHERE attempt_id = ?1 AND state = 'submitting' AND proton_draft_id IS NOT NULL",
+            params![attempt_id, now.as_millis()],
+        )
+        .map_err(|e| classify(e, "record the send request"))?;
+    Ok(applied == 1)
+}
+
+/// `requeue_before_request(attempt_id, now)` (spec/05 step 4): a
+/// connection never established or any failure before the send request
+/// returns the attempt to `queued` and clears `send_requested_at`,
+/// keeping the recorded draft and uploads for the retry. Returns
+/// whether it applied.
+pub fn requeue_before_request(
+    tx: &Transaction,
+    attempt_id: &str,
+    now: Timestamp,
+) -> Result<bool, StoreError> {
+    let applied = tx
+        .execute(
+            "UPDATE send_attempts
+             SET state = 'queued', send_requested_at = NULL, updated_at = ?2
+             WHERE attempt_id = ?1 AND state = 'submitting'",
+            params![attempt_id, now.as_millis()],
+        )
+        .map_err(|e| classify(e, "requeue a send attempt"))?;
+    Ok(applied == 1)
+}
+
+/// The attempt's draft, revision and account, or `NotFound`.
+fn attempt_row(tx: &Transaction, attempt_id: &str) -> Result<(String, String, String), StoreError> {
+    let err = |e| classify(e, "read a send attempt");
+    tx.query_row(
+        "SELECT draft_id, revision_id, account_id FROM send_attempts
+         WHERE attempt_id = ?1",
+        params![attempt_id],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+    )
+    .optional()
+    .map_err(err)?
+    .ok_or_else(|| StoreError::not_found(format!("send attempt {attempt_id}")))
+}
+
+/// `mark_send_accepted(attempt_id, now)` (spec/05 step 4): a
+/// `submitting` attempt, or an unresolved `outcome_unknown` the
+/// evidence check resolved as sent, becomes `accepted`; its recipients
+/// become `sent`, each counted in `seen_addresses`, and the draft
+/// `sent` under the current-revision rule, all in one transaction.
+pub fn mark_send_accepted(
+    tx: &Transaction,
+    attempt_id: &str,
+    now: Timestamp,
+) -> Result<bool, StoreError> {
+    let err = |e| classify(e, "accept a send");
+    let now_ms = now.as_millis();
+    let (draft_id, revision_id, account_id) = attempt_row(tx, attempt_id)?;
+    let applied = tx
+        .execute(
+            "UPDATE send_attempts SET state = 'accepted', updated_at = ?2
+             WHERE attempt_id = ?1
+               AND (state = 'submitting'
+                    OR (state = 'outcome_unknown' AND resolution IS NULL))",
+            params![attempt_id, now_ms],
+        )
+        .map_err(err)?;
+    if applied == 0 {
+        return Ok(false);
+    }
+    let recipients: Vec<(String, String)> = {
+        let mut statement = tx
+            .prepare(
+                "SELECT canonical, address FROM send_recipients
+                 WHERE attempt_id = ?1 ORDER BY canonical",
+            )
+            .map_err(err)?;
+        let rows = statement
+            .query_map(params![attempt_id], |row| Ok((row.get(0)?, row.get(1)?)))
+            .map_err(err)?;
+        rows.collect::<Result<_, _>>().map_err(err)?
+    };
+    tx.execute(
+        "UPDATE send_recipients SET state = 'sent' WHERE attempt_id = ?1",
+        params![attempt_id],
+    )
+    .map_err(err)?;
+    add_sent_to_counts(tx, &recipients, &account_id, now_ms)?;
+    set_draft_state(tx, &draft_id, &revision_id, "sent", now_ms)?;
+    Ok(true)
+}
+
+/// `mark_send_failed(attempt_id, failure, now)` (spec/05 step 4): a
+/// `submitting` attempt becomes `failed` with the reply in
+/// `final_reply`; its recipients become `unsent`, except an optional one
+/// set `rejected_permanent`, and the draft returns to `editing` under
+/// the current-revision rule, all in one transaction.
+pub fn mark_send_failed(
+    tx: &Transaction,
+    attempt_id: &str,
+    failure: &SendFailure,
+    now: Timestamp,
+) -> Result<bool, StoreError> {
+    let err = |e| classify(e, "fail a send");
+    let now_ms = now.as_millis();
+    let (draft_id, revision_id, _account) = attempt_row(tx, attempt_id)?;
+    let applied = tx
+        .execute(
+            "UPDATE send_attempts
+             SET state = 'failed', final_reply = ?2, updated_at = ?3
+             WHERE attempt_id = ?1 AND state = 'submitting'",
+            params![
+                attempt_id,
+                final_reply(failure.code, &failure.message),
+                now_ms
+            ],
+        )
+        .map_err(err)?;
+    if applied == 0 {
+        return Ok(false);
+    }
+    tx.execute(
+        "UPDATE send_recipients SET state = 'unsent' WHERE attempt_id = ?1",
+        params![attempt_id],
+    )
+    .map_err(err)?;
+    if let Some(rejected) = &failure.rejected {
+        let refused = tx
+            .execute(
+                "UPDATE send_recipients
+                 SET state = 'rejected_permanent', rcpt_reply = ?3
+                 WHERE attempt_id = ?1 AND canonical = ?2",
+                params![attempt_id, rejected.canonical, rejected.reason],
+            )
+            .map_err(err)?;
+        if refused == 0 {
+            return Err(StoreError::InvalidInput {
+                message: format!(
+                    "recipient {} is not on send attempt {attempt_id}",
+                    rejected.canonical
+                ),
+            });
+        }
+    }
+    set_draft_state(tx, &draft_id, &revision_id, "editing", now_ms)?;
+    Ok(true)
+}
+
+/// `mark_outcome_unknown(attempt_id, now)` (spec/05 step 4): a
+/// `submitting` attempt whose send reply was lost becomes
+/// `outcome_unknown` and its recipients `unknown`; the draft reads
+/// `queued` under the current-revision rule.
+pub fn mark_outcome_unknown(
+    tx: &Transaction,
+    attempt_id: &str,
+    now: Timestamp,
+) -> Result<bool, StoreError> {
+    let err = |e| classify(e, "mark a send's outcome unknown");
+    let now_ms = now.as_millis();
+    let (draft_id, revision_id, _account) = attempt_row(tx, attempt_id)?;
+    let applied = tx
+        .execute(
+            "UPDATE send_attempts SET state = 'outcome_unknown', updated_at = ?2
+             WHERE attempt_id = ?1 AND state = 'submitting'",
+            params![attempt_id, now_ms],
+        )
+        .map_err(err)?;
+    if applied == 0 {
+        return Ok(false);
+    }
+    tx.execute(
+        "UPDATE send_recipients SET state = 'unknown' WHERE attempt_id = ?1",
+        params![attempt_id],
+    )
+    .map_err(err)?;
+    set_draft_state(tx, &draft_id, &revision_id, "queued", now_ms)?;
+    Ok(true)
 }
 
 /// Move a draft's state only while the attempt's revision is still its

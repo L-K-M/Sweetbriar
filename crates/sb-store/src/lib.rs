@@ -109,9 +109,12 @@ pub use receipts::{
 };
 pub use restore_artifacts::{RestoreArtifact, RestoreArtifactKind};
 pub use send::{
-    OutBox, OutBoxRecipient, OutBoxRow, RecipientKind, RecipientState, SendAttempt, SentCopy,
-    UnknownResolution, cancel_send, confirm_send_route, out_box, reply_headers,
-    reply_source_account, resolve_unknown_send, retry_rejected_recipients, send_draft,
+    ClaimedRecipient, ClaimedSend, OutBox, OutBoxRecipient, OutBoxRow, ProtonUpload, RecipientKind,
+    RecipientState, SendAttempt, SendFailure, SendFailureRejection, SendParent, SendParentKind,
+    SentCopy, UnknownResolution, cancel_send, claim_send_attempt, commit_send_requested,
+    confirm_send_route, mark_outcome_unknown, mark_send_accepted, mark_send_failed, out_box,
+    queue_due_held, record_proton_draft, record_proton_upload, reply_headers, reply_source_account,
+    requeue_before_request, resolve_unknown_send, retry_rejected_recipients, send_draft,
 };
 pub use settings::{StoredSetting, read_all, upsert};
 pub use source_snapshots::{ImportSourceCapture, ImportSourceSnapshot};

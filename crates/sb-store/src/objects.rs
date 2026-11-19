@@ -694,6 +694,14 @@ impl FileObjectStore {
         self.chain_dir(&id.sha256).join(id.sha256_hex())
     }
 
+    /// Open a published object by its SHA-256 alone (spec/03): the
+    /// length comes from the file and the verifying reader checks the
+    /// hash at EOF. Send attempts record only the hash, so this is the
+    /// frozen-bytes read the submission worker uses (spec/05).
+    pub fn open_by_sha256(&self, sha: &str) -> Result<ObjectReader, StoreError> {
+        self.open_backup_reference(sha)
+    }
+
     /// Open a snapshot reference whose content hash is known but whose
     /// length may not be recorded (draft and send-attempt references).
     /// The ordinary verifying reader retains its quarantine behavior.
