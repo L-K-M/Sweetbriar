@@ -88,3 +88,40 @@ impl Engine {
         self.windows().subscribe_new_mail()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::future::Future;
+    use std::sync::Arc;
+
+    use crate::windows::Windows;
+
+    #[test]
+    fn two_accounts_arrivals_answer_one_after_the_other() {
+        let windows = Arc::new(Windows::new());
+        let subscription = windows.subscribe_new_mail();
+        windows.new_mail_arrived("a", vec![1]);
+        windows.new_mail_arrived("b", vec![2]);
+
+        let first = sb_test_support::block_on(subscription.next()).expect("a answers");
+        assert_eq!(
+            (first.account_id.as_str(), first.message_ids),
+            ("a", vec![1])
+        );
+
+        // The second account's batch is already pending: it answers
+        // on the first poll, without waiting for another arrival.
+        let mut next = std::pin::pin!(subscription.next());
+        let polled = next
+            .as_mut()
+            .poll(&mut std::task::Context::from_waker(std::task::Waker::noop()));
+        let std::task::Poll::Ready(second) = polled else {
+            panic!("b's pending batch waits for another arrival");
+        };
+        let second = second.expect("b answers");
+        assert_eq!(
+            (second.account_id.as_str(), second.message_ids),
+            ("b", vec![2])
+        );
+    }
+}

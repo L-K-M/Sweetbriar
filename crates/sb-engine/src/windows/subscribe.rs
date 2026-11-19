@@ -308,15 +308,12 @@ impl AccountHealthSubscription {
 pub struct NewMailSubscription {
     windows: Arc<Windows>,
     subscriber: Arc<Subscriber>,
-    /// The new-mail changes this subscription has answered.
-    answered: AtomicU64,
     waiting: AtomicBool,
 }
 
 impl Windows {
     /// `subscribe_new_mail` (spec/07), starting from now: the
-    /// subscription's queue is empty and its mark is the changes so
-    /// far, so only later arrivals answer. In memory only.
+    /// subscription's queue is empty, so only later arrivals answer. In memory only.
     pub(crate) fn subscribe_new_mail(self: &Arc<Self>) -> NewMailSubscription {
         let subscriber = Arc::new(Subscriber::new());
         self.new_mail
@@ -326,7 +323,6 @@ impl Windows {
         NewMailSubscription {
             windows: Arc::clone(self),
             subscriber,
-            answered: AtomicU64::new(self.new_mail_changes()),
             waiting: AtomicBool::new(false),
         }
     }
@@ -346,9 +342,11 @@ impl NewMailSubscription {
             if seen.shut {
                 return Err(shut_down());
             }
-            if self.answered.swap(seen.new_mail, Ordering::AcqRel) != seen.new_mail
-                && let Some(batch) = self.subscriber.pop()
-            {
+            // The queue, not the version, decides: another account's
+            // batch may already wait behind the one last answered.
+            // Reading the version first means an arrival after the
+            // pop still wakes the wait below.
+            if let Some(batch) = self.subscriber.pop() {
                 return Ok(batch);
             }
             versions.changed().await.map_err(|_| shut_down())?;

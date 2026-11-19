@@ -704,11 +704,6 @@ impl Windows {
         self.versions.send_modify(|versions| versions.new_mail += 1);
     }
 
-    /// The new-mail changes so far, where its subscription starts.
-    pub(crate) fn new_mail_changes(&self) -> u64 {
-        self.versions.borrow().new_mail
-    }
-
     /// The engine is shutting down: end every waiting `next`.
     pub(crate) fn shut(&self) {
         self.versions.send_modify(|versions| versions.shut = true);
