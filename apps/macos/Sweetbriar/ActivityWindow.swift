@@ -28,6 +28,8 @@ final class ActivityWindowController: NSWindowController {
             defer: false
         )
         window.title = Self.title
+        // A saved frame wins; only a first open is centered.
+        let restored = window.setFrameUsingName(Self.autosaveName)
         window.setFrameAutosaveName(Self.autosaveName)
         // The controller outlives a close, so the window must too.
         window.isReleasedWhenClosed = false
@@ -35,7 +37,7 @@ final class ActivityWindowController: NSWindowController {
             model: model, bridge: bridge, onSignInAgain: onSignInAgain
         ))
         super.init(window: window)
-        window.center()
+        if !restored { window.center() }
     }
 
     required init?(coder: NSCoder) {
@@ -51,6 +53,9 @@ private struct ActivityView: View {
 
     @State private var accounts: [Account] = []
     @State private var now = Date()
+    @State private var accountsError: (any Error)?
+    /// Relative times ("2 minutes ago") move on while health is quiet.
+    private static let clockInterval: Duration = .seconds(30)
     private static let presentation = ActivityPresentation()
 
     var body: some View {
@@ -58,6 +63,10 @@ private struct ActivityView: View {
             VStack(alignment: .leading, spacing: 20) {
                 if let loadError = model.loadError {
                     loadErrorRow(loadError)
+                }
+                if let accountsError {
+                    Text("Couldn't read the accounts: \(accountsError.localizedDescription)")
+                        .foregroundStyle(.secondary)
                 }
                 accountsSection
                 if let actionError = model.actionError {
@@ -72,7 +81,21 @@ private struct ActivityView: View {
         }
         .task(id: model.accounts) {
             now = Date()
-            accounts = (try? await bridge.accounts()) ?? []
+            do {
+                accounts = try await bridge.accounts()
+                accountsError = nil
+            } catch is CancellationError {
+            } catch {
+                // Keep the names and "Sign in again" from the last good
+                // read, and say why they may be stale.
+                accountsError = error
+            }
+        }
+        .task {
+            while !Task.isCancelled {
+                try? await Task.sleep(for: Self.clockInterval)
+                now = Date()
+            }
         }
     }
 

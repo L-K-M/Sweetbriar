@@ -64,6 +64,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let backups = SharedBackups(
             beforeRestore: { [weak self] in
+                // Close the Activity window before the swap, so its
+                // reads end with the old core.
+                self?.retireActivityWindow()
                 self?.composeCues?.freezeForRestore()
                 self?.settingsWindow?.retireEditor()
                 self?.mainWindow?.retireWritersForRestore()
