@@ -568,14 +568,6 @@ impl Attempt<'_> {
                     let sent = metadata.label_ids.iter().any(|label| label == SENT_LABEL);
                     let drafts = metadata.label_ids.iter().any(|label| label == DRAFTS_LABEL);
                     if sent && !drafts {
-                        let now = self.worker.resources().now();
-                        let id = attempt.attempt_id.clone();
-                        self.worker
-                            .resources()
-                            .write(WritePriority::Sync, move |tx| {
-                                mark_send_accepted(tx, &id, now)
-                            })
-                            .await?;
                         Evidence::Sent
                     } else if drafts {
                         Evidence::Drafts
@@ -587,8 +579,20 @@ impl Attempt<'_> {
                 Err(FetchError::Ended) => return Err(Halt::Ended),
                 Err(_) => Evidence::ReadFailed,
             };
+            // Recorded before the accept commits, so a reader that sees
+            // the attempt accepted also sees why.
             self.send_evidence
                 .record(&attempt.attempt_id, observed.line(&draft_id));
+            if matches!(observed, Evidence::Sent) {
+                let now = self.worker.resources().now();
+                let id = attempt.attempt_id.clone();
+                self.worker
+                    .resources()
+                    .write(WritePriority::Sync, move |tx| {
+                        mark_send_accepted(tx, &id, now)
+                    })
+                    .await?;
+            }
         }
         Ok(())
     }
