@@ -216,9 +216,12 @@ pub use sb_store::recovery::{
     StoredRecovery, recovery,
 };
 pub use sb_store::send::{
-    OutBox, OutBoxRecipient, OutBoxRow, RecipientKind, RecipientState, SendAttempt, SentCopy,
-    UnknownResolution, cancel_send, confirm_send_route, out_box, reply_headers,
-    reply_source_account, resolve_unknown_send, retry_rejected_recipients, send_draft,
+    ClaimedRecipient, ClaimedSend, OutBox, OutBoxRecipient, OutBoxRow, ProtonUpload, RecipientKind,
+    RecipientState, SendAttempt, SendFailure, SendFailureRejection, SendParent, SendParentKind,
+    SentCopy, UnknownResolution, cancel_send, claim_send_attempt, commit_send_requested,
+    confirm_send_route, mark_outcome_unknown, mark_send_accepted, mark_send_failed, out_box,
+    queue_due_held, record_proton_draft, record_proton_upload, reply_headers, reply_source_account,
+    requeue_before_request, resolve_unknown_send, retry_rejected_recipients, send_draft,
 };
 pub use sb_store::settings::{StoredSetting, read_all, upsert};
 pub use sb_store::sidebar::{
@@ -653,6 +656,24 @@ impl Resources {
     pub fn read_object(&self, id: &ObjectId) -> Result<Vec<u8>, StoreError> {
         let mut reader = self.store.objects().open(id)?;
         let mut bytes = Vec::with_capacity(usize::try_from(id.byte_length()).unwrap_or(0));
+        reader.read_to_end(&mut bytes).map_err(|error| {
+            read_error_as_store_error(&error)
+                .cloned()
+                .unwrap_or_else(|| StoreError::Unavailable {
+                    reason: format!("cannot read the object: {error}"),
+                    io_kind: None,
+                })
+        })?;
+        Ok(bytes)
+    }
+
+    /// Read a published object's exact bytes by its SHA-256 alone,
+    /// verifying the hash at EOF (spec/03). A send attempt records only
+    /// the hash, so this is its frozen-bytes read (spec/05). Blocking
+    /// I/O; run on a blocking thread.
+    pub fn read_object_by_sha256(&self, sha: &str) -> Result<Vec<u8>, StoreError> {
+        let mut reader = self.store.objects().open_by_sha256(sha)?;
+        let mut bytes = Vec::new();
         reader.read_to_end(&mut bytes).map_err(|error| {
             read_error_as_store_error(&error)
                 .cloned()

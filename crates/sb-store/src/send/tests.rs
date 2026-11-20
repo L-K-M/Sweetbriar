@@ -2,7 +2,7 @@
 //! recipient canonicalization, the conflict boundaries, `cancel_send`
 //! and the route snapshot's schema refusal.
 
-use std::io::Cursor;
+use std::io::{Cursor, Read};
 use std::sync::Arc;
 
 use rusqlite::Connection;
@@ -453,12 +453,57 @@ fn the_route_snapshot_refusal_is_the_schema() {
 }
 /// Queue the seed revision as attempt `a1`.
 fn queue(store: &Store) {
+    queue_as(store, "a1", "r1");
+}
+
+/// Queue one revision as an attempt with the given id.
+fn queue_as(store: &Store, attempt_id: &str, revision_id: &str) {
     let object = publish(store);
-    let queued = attempt(&object);
+    let mut queued = attempt(&object);
+    queued.attempt_id = attempt_id.to_owned();
+    queued.revision_id = revision_id.to_owned();
     let published = Arc::clone(&object);
     writing(store, move |tx| {
         send_draft(tx, &queued, &published, 7, now())
     });
+}
+
+/// Insert a Proton message and an occurrence of it, so a draft can
+/// point at the source.
+fn seed_source(store: &Store, provider_key: Option<&'static str>) {
+    writing(store, move |tx| {
+        tx.execute(
+            "INSERT INTO mailboxes
+             (mailbox_id, account_id, remote_name, kind, selectable, sync_state)
+             VALUES (7, 'acct', 'Inbox', 'folder', 1, 'synced')",
+            [],
+        )
+        .map_err(|e| StoreError::internal(e.to_string()))?;
+        tx.execute(
+            "INSERT INTO logical_messages (message_id, account_id, provider_key, created_at)
+             VALUES (9, 'acct', ?1, 0)",
+            params![provider_key],
+        )
+        .map_err(|e| StoreError::internal(e.to_string()))?;
+        tx.execute(
+            "INSERT INTO occurrences
+             (occurrence_id, account_id, mailbox_id, message_id, first_seen_at, last_seen_at, state)
+             VALUES (11, 'acct', 7, 9, 0, 0, 'present')",
+            [],
+        )
+        .map_err(|e| StoreError::internal(e.to_string()))?;
+        Ok(())
+    });
+}
+
+fn upload(index: usize) -> ProtonUpload {
+    ProtonUpload {
+        index,
+        id: format!("att-{index}"),
+        name: format!("file-{index}.bin"),
+        mime_type: "application/octet-stream".to_owned(),
+        size: 10,
+    }
 }
 
 /// Move an attempt to `state`, optionally moving its recipients too.
@@ -1160,5 +1205,577 @@ fn a_failed_attempt_is_live_until_a_newer_attempt_replaces_it() {
     let out_box = read_out_box(&store, 3_000);
     assert_eq!(attempt_ids(&out_box.live), vec!["a2"]);
     assert_eq!(attempt_ids(&out_box.history), vec!["a1"]);
+    store.close().unwrap();
+}
+
+/// Claim the seed attempt `a1`.
+fn claim(store: &Store) -> ClaimedSend {
+    writing(store, |tx| claim_send_attempt(tx, "acct", now())).unwrap()
+}
+
+fn accept(store: &Store) -> bool {
+    writing(store, |tx| mark_send_accepted(tx, "a1", now()))
+}
+
+fn fail(store: &Store, failure: SendFailure) -> bool {
+    writing(store, move |tx| mark_send_failed(tx, "a1", &failure, now()))
+}
+
+fn unknown(store: &Store) -> bool {
+    writing(store, |tx| mark_outcome_unknown(tx, "a1", now()))
+}
+
+#[test]
+fn queue_due_held_moves_only_attempts_past_their_window() {
+    let (_scratch, _paths, store) = scratch();
+    seed(&store);
+    queue(&store);
+    writing(&store, |tx| {
+        tx.execute(
+            "UPDATE send_attempts SET hold_until = ?1 WHERE attempt_id = 'a1'",
+            [now().as_millis()],
+        )
+        .map_err(|e| StoreError::internal(e.to_string()))?;
+        assert_eq!(queue_due_held(tx, now())?, 1);
+        Ok(())
+    });
+    assert_eq!(
+        one(
+            &store,
+            "SELECT state FROM send_attempts WHERE attempt_id = 'a1'"
+        ),
+        "queued"
+    );
+    writing(&store, |tx| {
+        tx.execute(
+            "UPDATE send_attempts SET state = 'held', hold_until = ?1
+             WHERE attempt_id = 'a1'",
+            [now().as_millis() + 1_000],
+        )
+        .map_err(|e| StoreError::internal(e.to_string()))?;
+        assert_eq!(queue_due_held(tx, now())?, 0);
+        Ok(())
+    });
+    assert_eq!(
+        one(
+            &store,
+            "SELECT state FROM send_attempts WHERE attempt_id = 'a1'"
+        ),
+        "held"
+    );
+    // A cancel that committed first wins.
+    writing(&store, |tx| cancel_send(tx, "a1", now()));
+    writing(&store, |tx| {
+        assert_eq!(queue_due_held(tx, now())?, 0);
+        Ok(())
+    });
+    assert_eq!(
+        one(
+            &store,
+            "SELECT state FROM send_attempts WHERE attempt_id = 'a1'"
+        ),
+        "cancelled"
+    );
+    store.close().unwrap();
+}
+
+#[test]
+fn claim_carries_the_attempt_its_recipients_and_its_parent() {
+    let (_scratch, _paths, store) = scratch();
+    seed(&store);
+    seed_source(&store, Some("parent-1"));
+    writing(&store, |tx| {
+        tx.execute(
+            "UPDATE drafts SET reply_to_occurrence_id = 11 WHERE draft_id = 'd1'",
+            [],
+        )
+        .map_err(|e| StoreError::internal(e.to_string()))?;
+        Ok(())
+    });
+    queue(&store);
+    force(&store, "a1", "queued", None);
+    let claimed = claim(&store);
+    assert_eq!(claimed.attempt_id, "a1");
+    assert_eq!(
+        (
+            claimed.draft_id.as_str(),
+            claimed.revision_id.as_str(),
+            claimed.account_id.as_str(),
+            claimed.identity_id.as_str(),
+            claimed.envelope_from.as_str(),
+            claimed.message_id_header.as_str(),
+        ),
+        (
+            "d1",
+            "r1",
+            "acct",
+            "id",
+            "me@example.test",
+            "m@example.test"
+        )
+    );
+    assert_eq!(
+        claimed.recipients,
+        vec![
+            ClaimedRecipient {
+                address: "a@X.NET".to_owned(),
+                canonical: "a@x.net".to_owned(),
+                kind: RecipientKind::To,
+            },
+            ClaimedRecipient {
+                address: "b@Y.NET".to_owned(),
+                canonical: "b@y.net".to_owned(),
+                kind: RecipientKind::Bcc,
+            },
+        ]
+    );
+    assert_eq!(
+        claimed.parent,
+        Some(SendParent {
+            provider_message_id: "parent-1".to_owned(),
+            kind: SendParentKind::Reply,
+        })
+    );
+    assert_eq!(
+        one(
+            &store,
+            "SELECT state FROM send_attempts WHERE attempt_id = 'a1'"
+        ),
+        "submitting"
+    );
+    assert!(
+        writing(&store, |tx| claim_send_attempt(tx, "other", now())).is_none(),
+        "another account has no claim"
+    );
+    assert!(
+        writing(&store, |tx| claim_send_attempt(tx, "acct", now())).is_none(),
+        "a submitting attempt is not claimable twice"
+    );
+
+    // A forward source reads the same way.
+    let requeued = writing(&store, |tx| requeue_before_request(tx, "a1", now()));
+    assert!(requeued);
+    writing(&store, |tx| {
+        tx.execute(
+            "UPDATE drafts SET reply_to_occurrence_id = NULL, forward_of_message_id = 9
+             WHERE draft_id = 'd1'",
+            [],
+        )
+        .map_err(|e| StoreError::internal(e.to_string()))?;
+        Ok(())
+    });
+    let claimed = claim(&store);
+    assert_eq!(
+        claimed.parent,
+        Some(SendParent {
+            provider_message_id: "parent-1".to_owned(),
+            kind: SendParentKind::Forward,
+        })
+    );
+    let requeued = writing(&store, |tx| requeue_before_request(tx, "a1", now()));
+    assert!(requeued);
+    // A source Proton never listed has no parent id to send.
+    writing(&store, |tx| {
+        tx.execute(
+            "UPDATE logical_messages SET provider_key = NULL WHERE message_id = 9",
+            [],
+        )
+        .map_err(|e| StoreError::internal(e.to_string()))?;
+        Ok(())
+    });
+    assert_eq!(claim(&store).parent, None);
+    store.close().unwrap();
+}
+
+#[test]
+fn claim_takes_the_oldest_and_skips_a_stale_generation() {
+    let (_scratch, _paths, store) = scratch();
+    seed(&store);
+    queue_as(&store, "a1", "r1");
+    save_second_revision(&store);
+    queue_as(&store, "a2", "r2");
+    force(&store, "a1", "queued", None);
+    force(&store, "a2", "queued", None);
+    assert_eq!(claim(&store).attempt_id, "a1");
+    assert_eq!(claim(&store).attempt_id, "a2");
+
+    let (_scratch2, _paths2, store2) = scratch();
+    seed(&store2);
+    queue(&store2);
+    force(&store2, "a1", "queued", None);
+    writing(&store2, |tx| {
+        tx.execute(
+            "UPDATE accounts SET config_generation = 2 WHERE account_id = 'acct'",
+            [],
+        )
+        .map_err(|e| StoreError::internal(e.to_string()))?;
+        Ok(())
+    });
+    assert!(
+        writing(&store2, |tx| claim_send_attempt(tx, "acct", now())).is_none(),
+        "a stale generation is skipped"
+    );
+    assert_eq!(
+        one(
+            &store2,
+            "SELECT state FROM send_attempts WHERE attempt_id = 'a1'"
+        ),
+        "queued"
+    );
+    writing(&store2, |tx| confirm_send_route(tx, "a1", now()));
+    assert_eq!(claim(&store2).attempt_id, "a1");
+    store.close().unwrap();
+    store2.close().unwrap();
+}
+
+#[test]
+fn records_apply_only_while_submitting_and_survive_a_requeue() {
+    let (_scratch, _paths, store) = scratch();
+    seed(&store);
+    queue(&store);
+    force(&store, "a1", "queued", None);
+    assert!(!writing(&store, |tx| record_proton_draft(tx, "a1", "pd")));
+    assert!(!writing(&store, |tx| record_proton_upload(
+        tx,
+        "a1",
+        &upload(0)
+    )));
+    writing(&store, |tx| {
+        assert!(claim_send_attempt(tx, "acct", now())?.is_some());
+        assert!(!commit_send_requested(tx, "a1", now())?);
+        assert!(record_proton_draft(tx, "a1", "pd")?);
+        assert!(!record_proton_draft(tx, "a1", "other")?);
+        assert!(record_proton_upload(tx, "a1", &upload(0))?);
+        assert!(record_proton_upload(tx, "a1", &upload(1))?);
+        assert!(commit_send_requested(tx, "a1", now())?);
+        assert!(requeue_before_request(tx, "a1", now())?);
+        Ok(())
+    });
+    assert_eq!(
+        one(
+            &store,
+            "SELECT state FROM send_attempts WHERE attempt_id = 'a1'"
+        ),
+        "queued"
+    );
+    assert_eq!(
+        one_i64(
+            &store,
+            "SELECT count(send_requested_at) FROM send_attempts WHERE attempt_id = 'a1'"
+        ),
+        0
+    );
+    assert_eq!(
+        one(
+            &store,
+            "SELECT proton_draft_id FROM send_attempts WHERE attempt_id = 'a1'"
+        ),
+        "pd"
+    );
+    let claimed = claim(&store);
+    assert_eq!(claimed.proton_draft_id.as_deref(), Some("pd"));
+    assert_eq!(claimed.uploads, vec![upload(0), upload(1)]);
+    store.close().unwrap();
+}
+
+#[test]
+fn accept_moves_recipients_and_counts_each_once() {
+    let (_scratch, _paths, store) = scratch();
+    seed(&store);
+    writing(&store, |tx| {
+        tx.execute(
+            "INSERT INTO seen_addresses
+             (canonical, email, display_name, last_seen_at, times_sent_to, times_received,
+              last_account_id)
+             VALUES ('a@x.net', 'old@x.net', 'Old', 5, 4, 2, NULL)",
+            [],
+        )
+        .map_err(|e| StoreError::internal(e.to_string()))?;
+        Ok(())
+    });
+    queue(&store);
+    force(&store, "a1", "queued", None);
+    claim(&store);
+    assert!(accept(&store));
+    assert_eq!(
+        one(
+            &store,
+            "SELECT state FROM send_attempts WHERE attempt_id = 'a1'"
+        ),
+        "accepted"
+    );
+    assert_eq!(
+        one_i64(
+            &store,
+            "SELECT count(*) FROM send_recipients
+             WHERE attempt_id = 'a1' AND state = 'sent'"
+        ),
+        2
+    );
+    assert_eq!(
+        one(&store, "SELECT state FROM drafts WHERE draft_id = 'd1'"),
+        "sent"
+    );
+    // `a@X.NET` and `a@x.net` are one recipient, counted once.
+    assert_eq!(
+        one(
+            &store,
+            "SELECT times_sent_to || '|' || email || '|' || last_account_id
+             FROM seen_addresses WHERE canonical = 'a@x.net'"
+        ),
+        "5|old@x.net|acct"
+    );
+    assert!(
+        !accept(&store),
+        "a second acceptance doesn't apply or count again"
+    );
+    store.close().unwrap();
+}
+
+#[test]
+fn accept_resolves_an_unknown_attempt() {
+    let (_scratch, _paths, store) = scratch();
+    seed(&store);
+    queue(&store);
+    force(&store, "a1", "outcome_unknown", Some("unknown"));
+    assert!(accept(&store));
+    assert_eq!(
+        one_i64(
+            &store,
+            "SELECT count(*) FROM send_recipients
+             WHERE attempt_id = 'a1' AND state = 'sent'"
+        ),
+        2
+    );
+    assert_eq!(
+        one(&store, "SELECT state FROM drafts WHERE draft_id = 'd1'"),
+        "sent"
+    );
+    store.close().unwrap();
+}
+
+#[test]
+fn fail_records_the_reply_the_rejection_and_editing() {
+    let (_scratch, _paths, store) = scratch();
+    seed(&store);
+    queue(&store);
+    force(&store, "a1", "queued", None);
+    claim(&store);
+    assert!(fail(
+        &store,
+        SendFailure {
+            code: Some(2064),
+            message: "identity refused".to_owned(),
+            rejected: None,
+        }
+    ));
+    assert_eq!(
+        one(
+            &store,
+            "SELECT final_reply FROM send_attempts WHERE attempt_id = 'a1'"
+        ),
+        "2064 identity refused"
+    );
+    assert_eq!(
+        one_i64(
+            &store,
+            "SELECT count(*) FROM send_recipients
+             WHERE attempt_id = 'a1' AND state = 'unsent'"
+        ),
+        2
+    );
+    assert_eq!(
+        one(&store, "SELECT state FROM drafts WHERE draft_id = 'd1'"),
+        "editing"
+    );
+    assert!(!fail(
+        &store,
+        SendFailure {
+            code: None,
+            message: "again".into(),
+            rejected: None
+        }
+    ));
+
+    // The external-with-keys shape: one recipient refused permanently,
+    // the others unsent, the draft back to editing.
+    let (_scratch, _paths, store) = scratch();
+    seed(&store);
+    queue(&store);
+    force(&store, "a1", "queued", None);
+    claim(&store);
+    assert!(fail(
+        &store,
+        SendFailure {
+            code: None,
+            message: "external recipient has keys".to_owned(),
+            rejected: Some(SendFailureRejection {
+                canonical: "a@x.net".to_owned(),
+                reason: "keys known; clear text refused".to_owned(),
+            }),
+        }
+    ));
+    assert_eq!(
+        one(
+            &store,
+            "SELECT state || '|' || rcpt_reply FROM send_recipients
+             WHERE attempt_id = 'a1' AND canonical = 'a@x.net'"
+        ),
+        "rejected_permanent|keys known; clear text refused"
+    );
+    assert_eq!(
+        one(
+            &store,
+            "SELECT state FROM send_recipients
+             WHERE attempt_id = 'a1' AND canonical = 'b@y.net'"
+        ),
+        "unsent"
+    );
+    assert_eq!(
+        one(&store, "SELECT state FROM drafts WHERE draft_id = 'd1'"),
+        "editing"
+    );
+    store.close().unwrap();
+}
+
+#[test]
+fn fail_refuses_a_stranger_as_rejected_before_changing_anything() {
+    let (_scratch, _paths, store) = scratch();
+    seed(&store);
+    queue(&store);
+    force(&store, "a1", "queued", None);
+    claim(&store);
+    writing(&store, |tx| {
+        let failure = SendFailure {
+            code: None,
+            message: "external recipient has keys".to_owned(),
+            rejected: Some(SendFailureRejection {
+                canonical: "stranger@z.net".to_owned(),
+                reason: "keys known; clear text refused".to_owned(),
+            }),
+        };
+        assert!(matches!(
+            mark_send_failed(tx, "a1", &failure, now()),
+            Err(StoreError::InvalidInput { .. })
+        ));
+        // Inside the same transaction: nothing moved, so a caller that
+        // goes on to record the failure without the stranger can.
+        let state: String = tx
+            .query_row(
+                "SELECT state FROM send_attempts WHERE attempt_id = 'a1'",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|e| StoreError::internal(e.to_string()))?;
+        assert_eq!(state, "submitting");
+        let unsent: i64 = tx
+            .query_row(
+                "SELECT count(*) FROM send_recipients
+                 WHERE attempt_id = 'a1' AND state = 'unsent'",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|e| StoreError::internal(e.to_string()))?;
+        assert_eq!(unsent, 0);
+        Ok(())
+    });
+    store.close().unwrap();
+}
+
+#[test]
+fn unknown_marks_recipients_and_refuses_a_second_transition() {
+    let (_scratch, _paths, store) = scratch();
+    seed(&store);
+    queue(&store);
+    force(&store, "a1", "queued", None);
+    claim(&store);
+    assert!(unknown(&store));
+    assert_eq!(
+        one(
+            &store,
+            "SELECT state FROM send_attempts WHERE attempt_id = 'a1'"
+        ),
+        "outcome_unknown"
+    );
+    assert_eq!(
+        one_i64(
+            &store,
+            "SELECT count(*) FROM send_recipients
+             WHERE attempt_id = 'a1' AND state = 'unknown'"
+        ),
+        2
+    );
+    assert_eq!(
+        one(&store, "SELECT state FROM drafts WHERE draft_id = 'd1'"),
+        "queued"
+    );
+    assert!(
+        !unknown(&store),
+        "an unknown attempt doesn't go unknown twice"
+    );
+    store.close().unwrap();
+}
+
+#[test]
+fn transitions_leave_a_newer_revision_alone() {
+    for state in ["accepted", "failed", "outcome_unknown"] {
+        for queue_r2 in [false, true] {
+            let (_scratch, _paths, store) = scratch();
+            seed(&store);
+            queue(&store);
+            force(&store, "a1", "queued", None);
+            save_second_revision(&store);
+            if queue_r2 {
+                queue_as(&store, "a2", "r2");
+                force(&store, "a2", "queued", None);
+            }
+            claim(&store);
+            match state {
+                "accepted" => assert!(accept(&store)),
+                "failed" => assert!(fail(
+                    &store,
+                    SendFailure {
+                        code: None,
+                        message: "no".to_owned(),
+                        rejected: None,
+                    }
+                )),
+                _ => assert!(unknown(&store)),
+            }
+            let expected = if queue_r2 { "queued" } else { "editing" };
+            assert_eq!(
+                one(&store, "SELECT state FROM drafts WHERE draft_id = 'd1'"),
+                expected
+            );
+            store.close().unwrap();
+        }
+    }
+}
+
+#[test]
+fn frozen_bytes_read_by_sha_returns_the_published_bytes() {
+    let (_scratch, _paths, store) = scratch();
+    let object = publish(&store);
+    let sha = object.id().sha256_hex();
+    let mut reader = store.objects().open_by_sha256(&sha).unwrap();
+    let mut bytes = Vec::new();
+    reader.read_to_end(&mut bytes).unwrap();
+    assert_eq!(bytes, b"frozen mime");
+
+    // A file at another hash's path fails verification.
+    let wrong = crate::objects::ObjectId::from_parts([7u8; 32], b"frozen mime".len() as u64);
+    let path = store.objects().object_path(&wrong);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, b"frozen mime").unwrap();
+    let mut reader = store.objects().open_by_sha256(&wrong.sha256_hex()).unwrap();
+    let mut bytes = Vec::new();
+    let error = reader.read_to_end(&mut bytes).unwrap_err();
+    assert!(
+        matches!(
+            crate::objects::read_error_as_store_error(&error),
+            Some(StoreError::Corrupt { .. })
+        ),
+        "{error:?}"
+    );
     store.close().unwrap();
 }

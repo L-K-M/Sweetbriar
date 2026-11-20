@@ -31,7 +31,8 @@ use sb_resources::{
     APP_IDENTITY_REFUSED_REASON, AccountState, ApiCode, BackoffKind, EventAction, EventBatch,
     EventId, HUMAN_VERIFICATION_REASON, KeyStore, ListingAnchor, PROTON_MAX_PAGE_SIZE,
     ProtonClient, ProtonError, Receipt, Secret, Session, StoreError, StoredAccount, Transaction,
-    WritePriority, accounts, pause_for_reason, proton_account, proton_identities, run_once,
+    WritePriority, accounts, pause_for_reason, proton_account, proton_identities, queue_due_held,
+    run_once,
 };
 
 use std::collections::{BTreeSet, HashSet};
@@ -252,14 +253,17 @@ impl Engine {
 
 /// Start a worker for every account whose session is in memory, except
 /// a paused or disconnected one: launch starts neither (spec/04
-/// "Account states and health", 07 `pause_account`).
+/// "Account states and health", 07 `pause_account`). First move every
+/// due `held` attempt to `queued` for all accounts, including those
+/// whose worker never starts (spec/05 step 2).
 pub(crate) async fn start_all(
-    spawner: &impl Spawn,
+    worker: &Worker,
     jobs: &Arc<AccountJobs>,
     sessions: &Arc<Sessions>,
     opened: &Arc<ProtonOpened>,
     accounts: &[StoredAccount],
 ) {
+    queue_due_held_at_startup(worker).await;
     let skipping: HashSet<&str> = accounts
         .iter()
         .filter(|account| {
@@ -275,8 +279,24 @@ pub(crate) async fn start_all(
         if skipping.contains(account_id.as_str()) {
             continue;
         }
-        start(spawner, jobs, sessions, opened, account_id);
+        start(worker, jobs, sessions, opened, account_id);
     }
+}
+
+/// Move every `held` attempt whose undo window has passed to `queued`
+/// (spec/05 step 2), all accounts, in one write, so a paused or
+/// disconnected account's attempts move too though its worker never
+/// starts. Best effort: every running worker's poll repeats the same
+/// all-account sweep, and with none running the next start does.
+async fn queue_due_held_at_startup(worker: &Worker) {
+    let now = worker.resources().now();
+    let _ = worker
+        .resources()
+        .write(WritePriority::Sync, move |tx| {
+            queue_due_held(tx, now)?;
+            Ok(())
+        })
+        .await;
 }
 
 /// Start the account's worker unless one runs.
@@ -446,7 +466,13 @@ struct Attempt<'a> {
 
 impl Attempt<'_> {
     /// Bootstrap, then follow the events, until something halts it.
+    /// The `held` to `queued` move runs first, so a window that ended
+    /// while the worker was busy is observed before any claim (spec/05
+    /// step 2).
     async fn sync(&mut self) -> Halt {
+        if let Err(halt) = self.queue_due_held().await {
+            return halt;
+        }
         loop {
             let halt = match self.bootstrap().await {
                 Ok(()) => {
@@ -459,6 +485,21 @@ impl Attempt<'_> {
                 return halt;
             }
         }
+    }
+
+    /// Move due `held` attempts to `queued` at the start of a sync and
+    /// after each poll (spec/05 step 2). A write failure is a retry,
+    /// like any other sync write.
+    async fn queue_due_held(&self) -> Result<(), Halt> {
+        let now = self.worker.resources().now();
+        self.worker
+            .resources()
+            .write(WritePriority::Sync, move |tx| {
+                queue_due_held(tx, now)?;
+                Ok(())
+            })
+            .await?;
+        Ok(())
     }
 
     /// One successful pass over Proton: the last sync time moves and
@@ -622,6 +663,11 @@ impl Attempt<'_> {
                 Ok(true) => continue,
                 Ok(false) => {}
                 Err(halt) => return halt,
+            }
+            // Each poll also ends the undo windows that passed since
+            // the last one (spec/05 step 2).
+            if let Err(halt) = self.queue_due_held().await {
+                return halt;
             }
             if let Err(halt) = self.drain_bodies().await {
                 return halt;
