@@ -8,7 +8,7 @@ use sb_test_support::{ScratchDir, block_on, execute_sql};
 
 fn round_trip<T>(value: T) -> T
 where
-    T: Clone + uniffi::Lower<crate::UniFfiTag> + uniffi::Lift<crate::UniFfiTag>,
+    T: uniffi::Lower<crate::UniFfiTag> + uniffi::Lift<crate::UniFfiTag>,
 {
     let mut bytes = Vec::new();
     <T as uniffi::Lower<crate::UniFfiTag>>::write(value, &mut bytes);
@@ -455,5 +455,109 @@ fn resolve_unknown_send_records_the_answer() {
     ))
     .unwrap_err();
     assert!(matches!(err, CoreError::Conflict { .. }), "{err}");
+    block_on(core.shutdown());
+}
+
+/// Send Again queues a new live attempt; a repeated key replays the
+/// first answer instead of meeting the now-resolved attempt's
+/// `Conflict`; route confirmation and the rejected-recipient retry
+/// cross the boundary with their refusals (spec/07).
+#[test]
+fn send_again_replays_and_the_route_and_retry_commands_refuse() {
+    let (scratch, core) = scratch_core("ffi-send-again");
+    block_on(core.shutdown());
+    seed_sender(&state_db(&scratch));
+    let core = reopen(&scratch);
+
+    let draft_id = create_draft(&core, "create-1");
+    let revision_id = save(&core, "save-1", &draft_id, None);
+    let attempt_id = block_on(core.send_draft(
+        CancelToken::new(),
+        "send-1".into(),
+        draft_id,
+        revision_id,
+        vec![],
+    ))
+    .unwrap()
+    .attempt_id;
+
+    // A held attempt has no route to confirm; a Proton attempt has no
+    // rejected recipients; an unknown attempt is NotFound.
+    let err = block_on(core.confirm_send_route(
+        CancelToken::new(),
+        "confirm-1".into(),
+        attempt_id.clone(),
+    ))
+    .unwrap_err();
+    assert!(matches!(err, CoreError::Conflict { .. }), "{err}");
+    let err = block_on(core.retry_rejected_recipients(
+        CancelToken::new(),
+        "retry-1".into(),
+        attempt_id.clone(),
+    ))
+    .unwrap_err();
+    assert!(matches!(err, CoreError::Conflict { .. }), "{err}");
+    for err in [
+        block_on(core.confirm_send_route(CancelToken::new(), "confirm-2".into(), "nope".into()))
+            .unwrap_err(),
+        block_on(core.retry_rejected_recipients(
+            CancelToken::new(),
+            "retry-2".into(),
+            "nope".into(),
+        ))
+        .unwrap_err(),
+    ] {
+        assert!(matches!(err, CoreError::NotFound { .. }), "{err}");
+    }
+
+    block_on(core.shutdown());
+    execute_sql(
+        &state_db(&scratch),
+        &format!(
+            "UPDATE send_attempts SET state = 'outcome_unknown' WHERE attempt_id = '{attempt_id}';
+             UPDATE send_recipients SET state = 'unknown' WHERE attempt_id = '{attempt_id}';"
+        ),
+    );
+    let core = reopen(&scratch);
+
+    let resolve = || {
+        block_on(core.resolve_unknown_send(
+            CancelToken::new(),
+            "resolve-1".into(),
+            attempt_id.clone(),
+            UnknownResolution::SendAgain,
+        ))
+        .unwrap()
+    };
+    let resolved = resolve();
+    assert_eq!(resolved.resolution, UnknownResolution::SendAgain);
+    let new_attempt = resolved
+        .new_attempt_id
+        .clone()
+        .expect("Send Again queues an attempt");
+    assert_ne!(new_attempt, attempt_id);
+    let replayed = resolve();
+    assert_eq!(
+        replayed.receipt, resolved.receipt,
+        "the same key replays its receipt"
+    );
+    assert_eq!(replayed.new_attempt_id, Some(new_attempt.clone()));
+
+    let out_box = block_on(core.out_box(CancelToken::new())).unwrap();
+    assert_eq!(
+        out_box
+            .live
+            .iter()
+            .map(|row| row.attempt_id.as_str())
+            .collect::<Vec<_>>(),
+        [new_attempt.as_str()],
+        "only the new attempt is live"
+    );
+    let old = out_box
+        .history
+        .iter()
+        .find(|row| row.attempt_id == attempt_id)
+        .expect("the resolved attempt is history");
+    assert_eq!(old.resolution, Some(UnknownResolution::SendAgain));
     block_on(core.shutdown());
 }

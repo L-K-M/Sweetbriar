@@ -272,7 +272,9 @@ impl Core {
     /// `cancel_send(attempt_id)` (spec/07 "Commands"): a `held` or
     /// `queued` attempt becomes `cancelled` and its draft returns to
     /// `editing`; any other state is `Conflict`, an unknown attempt
-    /// `NotFound`. The receipt answers `{"attempt_id": ...}`.
+    /// `NotFound`. A repeated key replays its receipt rather than
+    /// meeting the cancelled state. The receipt answers
+    /// `{"attempt_id": ...}`.
     pub async fn cancel_send(
         &self,
         token: Arc<CancelToken>,
@@ -293,6 +295,7 @@ impl Core {
     /// `Conflict`. `marked_sent` counts the unknown recipients as sent
     /// and sets the draft `sent`; `kept_as_draft` returns it to
     /// `editing`; `send_again` queues a new attempt and answers its id.
+    /// A repeated key replays the first answer, new attempt included.
     pub async fn resolve_unknown_send(
         &self,
         token: Arc<CancelToken>,
@@ -311,8 +314,8 @@ impl Core {
 
     /// `confirm_send_route(attempt_id)` (spec/07 "Commands"): a
     /// `queued` attempt adopts the account's current generation. An
-    /// unsendable identity or any other state is `Conflict`. The
-    /// receipt answers `{"attempt_id": ...}`.
+    /// unsendable identity or any other state is `Conflict`. A repeated
+    /// key replays its receipt. The receipt answers `{"attempt_id": ...}`.
     pub async fn confirm_send_route(
         &self,
         token: Arc<CancelToken>,
@@ -328,8 +331,9 @@ impl Core {
     }
 
     /// `retry_rejected_recipients(attempt_id)` (spec/07 "Commands"):
-    /// refused for a Proton attempt; nothing is sent. The receipt
-    /// answers `{"attempt_id": ...}`.
+    /// a Proton attempt is `Conflict`, having no partially accepted
+    /// recipients; an unknown attempt is `NotFound`. A repeated key
+    /// replays its receipt. The receipt answers `{"attempt_id": ...}`.
     pub async fn retry_rejected_recipients(
         &self,
         token: Arc<CancelToken>,

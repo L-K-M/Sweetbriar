@@ -1703,15 +1703,17 @@ public protocol CoreProtocol: AnyObject, Sendable {
      * `cancel_send(attempt_id)` (spec/07 "Commands"): a `held` or
      * `queued` attempt becomes `cancelled` and its draft returns to
      * `editing`; any other state is `Conflict`, an unknown attempt
-     * `NotFound`. The receipt answers `{"attempt_id": ...}`.
+     * `NotFound`. A repeated key replays its receipt rather than
+     * meeting the cancelled state. The receipt answers
+     * `{"attempt_id": ...}`.
      */
     func cancelSend(token: CancelToken, idempotencyKey: String, attemptId: String) async throws  -> Receipt
     
     /**
      * `confirm_send_route(attempt_id)` (spec/07 "Commands"): a
      * `queued` attempt adopts the account's current generation. An
-     * unsendable identity or any other state is `Conflict`. The
-     * receipt answers `{"attempt_id": ...}`.
+     * unsendable identity or any other state is `Conflict`. A repeated
+     * key replays its receipt. The receipt answers `{"attempt_id": ...}`.
      */
     func confirmSendRoute(token: CancelToken, idempotencyKey: String, attemptId: String) async throws  -> Receipt
     
@@ -1730,13 +1732,15 @@ public protocol CoreProtocol: AnyObject, Sendable {
      * `Conflict`. `marked_sent` counts the unknown recipients as sent
      * and sets the draft `sent`; `kept_as_draft` returns it to
      * `editing`; `send_again` queues a new attempt and answers its id.
+     * A repeated key replays the first answer, new attempt included.
      */
     func resolveUnknownSend(token: CancelToken, idempotencyKey: String, attemptId: String, resolution: UnknownResolution) async throws  -> ResolvedUnknown
     
     /**
      * `retry_rejected_recipients(attempt_id)` (spec/07 "Commands"):
-     * refused for a Proton attempt; nothing is sent. The receipt
-     * answers `{"attempt_id": ...}`.
+     * a Proton attempt is `Conflict`, having no partially accepted
+     * recipients; an unknown attempt is `NotFound`. A repeated key
+     * replays its receipt. The receipt answers `{"attempt_id": ...}`.
      */
     func retryRejectedRecipients(token: CancelToken, idempotencyKey: String, attemptId: String) async throws  -> Receipt
     
@@ -3204,7 +3208,9 @@ open func coverage(token: CancelToken, scope: SearchScope)async throws  -> Cover
      * `cancel_send(attempt_id)` (spec/07 "Commands"): a `held` or
      * `queued` attempt becomes `cancelled` and its draft returns to
      * `editing`; any other state is `Conflict`, an unknown attempt
-     * `NotFound`. The receipt answers `{"attempt_id": ...}`.
+     * `NotFound`. A repeated key replays its receipt rather than
+     * meeting the cancelled state. The receipt answers
+     * `{"attempt_id": ...}`.
      */
 open func cancelSend(token: CancelToken, idempotencyKey: String, attemptId: String)async throws  -> Receipt  {
     return
@@ -3225,8 +3231,8 @@ open func cancelSend(token: CancelToken, idempotencyKey: String, attemptId: Stri
     /**
      * `confirm_send_route(attempt_id)` (spec/07 "Commands"): a
      * `queued` attempt adopts the account's current generation. An
-     * unsendable identity or any other state is `Conflict`. The
-     * receipt answers `{"attempt_id": ...}`.
+     * unsendable identity or any other state is `Conflict`. A repeated
+     * key replays its receipt. The receipt answers `{"attempt_id": ...}`.
      */
 open func confirmSendRoute(token: CancelToken, idempotencyKey: String, attemptId: String)async throws  -> Receipt  {
     return
@@ -3273,6 +3279,7 @@ open func outBox(token: CancelToken)async throws  -> OutBox  {
      * `Conflict`. `marked_sent` counts the unknown recipients as sent
      * and sets the draft `sent`; `kept_as_draft` returns it to
      * `editing`; `send_again` queues a new attempt and answers its id.
+     * A repeated key replays the first answer, new attempt included.
      */
 open func resolveUnknownSend(token: CancelToken, idempotencyKey: String, attemptId: String, resolution: UnknownResolution)async throws  -> ResolvedUnknown  {
     return
@@ -3292,8 +3299,9 @@ open func resolveUnknownSend(token: CancelToken, idempotencyKey: String, attempt
     
     /**
      * `retry_rejected_recipients(attempt_id)` (spec/07 "Commands"):
-     * refused for a Proton attempt; nothing is sent. The receipt
-     * answers `{"attempt_id": ...}`.
+     * a Proton attempt is `Conflict`, having no partially accepted
+     * recipients; an unknown attempt is `NotFound`. A repeated key
+     * replays its receipt. The receipt answers `{"attempt_id": ...}`.
      */
 open func retryRejectedRecipients(token: CancelToken, idempotencyKey: String, attemptId: String)async throws  -> Receipt  {
     return
@@ -17694,19 +17702,19 @@ private let initializationResult: InitializationResult = {
     if (uniffi_sb_ffi_checksum_method_core_coverage() != 60982) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_sb_ffi_checksum_method_core_cancel_send() != 37345) {
+    if (uniffi_sb_ffi_checksum_method_core_cancel_send() != 23657) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_sb_ffi_checksum_method_core_confirm_send_route() != 20193) {
+    if (uniffi_sb_ffi_checksum_method_core_confirm_send_route() != 34635) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sb_ffi_checksum_method_core_out_box() != 29312) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_sb_ffi_checksum_method_core_resolve_unknown_send() != 48236) {
+    if (uniffi_sb_ffi_checksum_method_core_resolve_unknown_send() != 878) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_sb_ffi_checksum_method_core_retry_rejected_recipients() != 5554) {
+    if (uniffi_sb_ffi_checksum_method_core_retry_rejected_recipients() != 65200) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sb_ffi_checksum_method_core_send_draft() != 30998) {
