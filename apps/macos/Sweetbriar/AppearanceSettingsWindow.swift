@@ -58,6 +58,7 @@ private struct AppearanceSettingsLoader: View {
     @State private var bridge: CoreBridge?
     @State private var model: BackupsModel?
     @State private var accountsModel: AccountsSettingsModel?
+    @State private var diagnosticsModel: DiagnosticsModel?
     @State private var failure: String?
 
     var body: some View {
@@ -88,9 +89,10 @@ private struct AppearanceSettingsLoader: View {
                                                    description: Text("Quit and reopen Sweetbriar to settle the restore."))
                         } else if backups.isRestoring {
                             ProgressView("Waiting for the restore outcome…")
-                        } else if let accountsModel {
+                        } else if let accountsModel, let diagnosticsModel {
                             AccountsSettingsView(
-                                model: accountsModel, editor: editor, editorRevision: editor.revision,
+                                model: accountsModel, diagnostics: diagnosticsModel,
+                                editor: editor, editorRevision: editor.revision,
                                 onSignInAgain: onSignInAgain
                             )
                             .id(editor.revision)
@@ -122,6 +124,7 @@ private struct AppearanceSettingsLoader: View {
                 self.bridge = bridge
                 model = backups.model(source: bridge)
                 accountsModel = AccountsSettingsModel(source: bridge)
+                diagnosticsModel = DiagnosticsModel(source: bridge)
                 if model == nil { failure = "Settings are unavailable while quitting." }
             } catch { failure = error.localizedDescription }
         }

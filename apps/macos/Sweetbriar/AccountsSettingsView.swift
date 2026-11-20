@@ -6,6 +6,7 @@ import SweetbriarBridge
 /// server commands, plus the notification previews toggle (spec/10).
 struct AccountsSettingsView: View {
     let model: AccountsSettingsModel
+    let diagnostics: DiagnosticsModel
     let editor: ArchiveWriteTasks
     let editorRevision: UInt64
     let onSignInAgain: @MainActor (Account) -> Void
@@ -13,6 +14,7 @@ struct AccountsSettingsView: View {
     @State private var renaming: [String: String] = [:]
     @State private var disconnectCandidate: Account?
     @State private var confirmDisconnect = false
+    @State private var showDiagnostics = false
     @State private var admissionError: String?
 
     var body: some View {
@@ -46,12 +48,18 @@ struct AccountsSettingsView: View {
                 }
                 Divider()
                 previewsSection
+                Divider()
+                Button("Diagnostics…") { showDiagnostics = true }
+                    .accessibilityIdentifier("accounts-diagnostics")
                 Spacer(minLength: 0)
             }
             .padding(24)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
         .task { await model.load() }
+        .sheet(isPresented: $showDiagnostics) {
+            DiagnosticsSheet(model: diagnostics)
+        }
         .confirmationDialog(
             "Disconnect \(disconnectCandidate?.displayName ?? "this account")?",
             isPresented: $confirmDisconnect,
