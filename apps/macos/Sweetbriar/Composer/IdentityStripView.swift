@@ -43,6 +43,16 @@ final class IdentityStripView: NSView {
             needsDisplay = true
         }
     }
+    /// The account color's name, exposed as the accessibility value so a
+    /// UI test can observe a route's color (spec/08 "Identity strip and
+    /// account colors"); empty for an unavailable route. The drawn
+    /// tokens stay the source of truth for the fill.
+    var colorName: String = "" {
+        didSet {
+            guard colorName != oldValue else { return }
+            setAccessibilityValue(colorName)
+        }
+    }
     var textFont: NSFont = .preferredFont(forTextStyle: .body, options: [:]) {
         didSet {
             guard textFont != oldValue else { return }
@@ -68,6 +78,7 @@ final class IdentityStripView: NSView {
         super.init(frame: frameRect)
         setAccessibilityElement(true)
         setAccessibilityRole(.staticText)
+        setAccessibilityIdentifier("composeIdentityStrip")
         setAccessibilityLabel(content.accessibilityLabel)
         NSWorkspace.shared.notificationCenter.addObserver(
             self, selector: #selector(displayOptionsChanged),

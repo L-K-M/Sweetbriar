@@ -20,7 +20,7 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
     let identityStrip = IdentityStripAccessory(nibName: nil, bundle: nil)
     private let appearance: AppearanceModel?
     private let cue: ComposeCueModel?
-    private let announceRoute: @MainActor (String) -> Void
+    private var announceRoute: @MainActor (String) -> Void
     private let modeControl = NSSegmentedControl(
         labels: ["Plain", "Markdown"], trackingMode: .selectOne,
         target: nil, action: nil)
@@ -188,6 +188,7 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
             }
         }
         buildContent(window)
+        installRouteAnnouncementRecorder(in: window)
         render()
         observeModel()
         observeBanner()
@@ -202,6 +203,24 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
     }
 
     required init?(coder: NSCoder) { fatalError("ComposeWindowController is built in code") }
+
+    /// `-recordRouteAnnouncements YES` (UI-test hook, spec/11 "UI"): the
+    /// default `announceRoute` additionally writes the last message into a
+    /// `RouteAnnouncementRecorder` in this window, so the From-switch test
+    /// can read it. Without the argument nothing changes: no element and
+    /// the same announcement.
+    private static let recordRouteAnnouncementsKey = "recordRouteAnnouncements"
+
+    private func installRouteAnnouncementRecorder(in window: NSWindow) {
+        guard UserDefaults.standard.bool(forKey: Self.recordRouteAnnouncementsKey) else { return }
+        let recorder = RouteAnnouncementRecorder(frame: NSRect(x: 0, y: 0, width: 1, height: 1))
+        window.contentView?.addSubview(recorder)
+        let post = announceRoute
+        announceRoute = { message in
+            post(message)
+            recorder.record(message)
+        }
+    }
 
     private func buildContent(_ window: NSWindow) {
         let recipientRows = zip(["To:", "Cc:", "Bcc:"], recipientFields).map { title, field in
@@ -871,6 +890,21 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
         if cueStatusLabel.isHidden != (message == nil) { cueStatusLabel.isHidden = message == nil }
     }
 
+    /// The resolved identity's effective account color as its palette
+    /// name, or the `#rrggbb` itself when it is not a preset (spec/08
+    /// "Identity strip and account colors"). Empty when the strip shows
+    /// no resolved identity. Published through the strip's accessibility
+    /// value so a UI test can observe a route's color.
+    private func stripColorName() -> String {
+        guard case .identity = identityStrip.strip.content,
+            let identity = identityControls.model.selectedIdentity,
+            let resolved = IdentityStripContent.matchingAppearance(
+                for: identity, in: appearance?.appearance)
+        else { return "" }
+        let srgb = resolved.colorSrgb
+        return appearance?.palette.first { $0.colorSrgb == srgb }?.name ?? srgb
+    }
+
     /// The window's existing admission checks: a selected identity that
     /// can actually send, at least one stored recipient, an editing draft,
     /// no conflict or deciding sheet, no send already owning the window,
@@ -968,6 +1002,7 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
                 label: model.failure == nil ? "Loading sending identity…" : "Sending identity unavailable")
         }
         identityStrip.setContent(stripContent, routeChanged: routeChanged)
+        identityStrip.strip.colorName = stripColorName()
         renderChrome()
         let subject = model.content.flatMap { $0.subject.isEmpty ? nil : $0.subject } ?? "New Message"
         window?.title = identityControls.titleContext.map { "\(subject) · \($0)" } ?? subject
