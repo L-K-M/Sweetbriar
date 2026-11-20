@@ -11,6 +11,7 @@ final class AccountSettingsFlowTests: XCTestCase {
     private static let seededName = "Owner"
     private static let renamedName = "Renamed Proton"
 
+    @MainActor
     func testRenameAndPauseLeaveTheirStoredStates() throws {
         continueAfterFailure = false
         let roots = FileManager.default.temporaryDirectory
@@ -42,28 +43,21 @@ final class AccountSettingsFlowTests: XCTestCase {
         XCTAssertTrue(window.outlines["sidebar"].staticTexts["Local Archive"]
             .waitForExistence(timeout: Self.timeout))
 
-        let appMenu = app.menuBars.menuBarItems["Sweetbriar"]
-        if appMenu.waitForExistence(timeout: 5) {
-            appMenu.click()
-            let settingsItem = app.menuBars.menuItems["Settings…"]
-            XCTAssertTrue(settingsItem.waitForExistence(timeout: Self.timeout))
-            settingsItem.click()
-        } else {
-            // The app menu's own title can be the localized app name;
-            // the item's ⌘, key equivalent is stable.
-            app.typeKey(",", modifierFlags: .command)
-        }
+        app.menuBars.menuBarItems["Sweetbriar"].click()
+        app.menuBars.menuItems["Settings…"].click()
 
+        // The tab picker's items are tabs, as in the Backups suite.
         let settings = app.windows["Settings"]
         XCTAssertTrue(settings.waitForExistence(timeout: Self.timeout))
-        let accountsTab = settings.buttons["Accounts"]
+        let accountsTab = settings.descendants(matching: .tab)
+            .matching(NSPredicate(format: "label == %@", "Accounts")).firstMatch
         XCTAssertTrue(accountsTab.waitForExistence(timeout: Self.timeout))
         accountsTab.click()
 
         let nameField = settings.textFields["account-name-\(Self.accountID)"]
         XCTAssertTrue(nameField.waitForExistence(timeout: Self.timeout))
         XCTAssertEqual(nameField.value as? String, Self.seededName)
-        nameField.tap()
+        nameField.click()
         nameField.typeKey("a", modifierFlags: .command)
         nameField.typeKey(.delete, modifierFlags: [])
         nameField.typeText(Self.renamedName)
@@ -73,7 +67,7 @@ final class AccountSettingsFlowTests: XCTestCase {
         // window is closed when it appears and the pause click is taken.
         let status = settings.staticTexts["accountCommandStatus"]
         XCTAssertTrue(status.waitForExistence(timeout: Self.timeout))
-        XCTAssertTrue(waitForLabel(status, "Renamed"))
+        XCTAssertTrue(waitForValue(status, "Renamed"))
 
         let pause = settings.buttons["account-pause-\(Self.accountID)"]
         XCTAssertTrue(pause.waitForExistence(timeout: Self.timeout))
@@ -81,7 +75,7 @@ final class AccountSettingsFlowTests: XCTestCase {
 
         let state = settings.staticTexts["account-state-\(Self.accountID)"]
         XCTAssertTrue(state.waitForExistence(timeout: Self.timeout))
-        XCTAssertTrue(waitForLabel(state, "Paused"))
+        XCTAssertTrue(waitForValue(state, "Paused"))
 
         app.terminate()
         XCTAssertTrue(app.wait(for: .notRunning, timeout: Self.timeout))
@@ -99,9 +93,11 @@ final class AccountSettingsFlowTests: XCTestCase {
         ]
     }
 
-    private func waitForLabel(_ element: XCUIElement, _ label: String) -> Bool {
+    /// A SwiftUI `Text` reports its string as the element's value.
+    @MainActor
+    private func waitForValue(_ element: XCUIElement, _ value: String) -> Bool {
         let matched = expectation(
-            for: NSPredicate(format: "label == %@", label), evaluatedWith: element)
+            for: NSPredicate(format: "value == %@", value), evaluatedWith: element)
         return XCTWaiter().wait(for: [matched], timeout: Self.timeout) == .completed
     }
 
