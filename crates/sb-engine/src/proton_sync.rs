@@ -766,6 +766,7 @@ impl Attempt<'_> {
                 self.client,
                 self.account_id,
                 self.send_backoff,
+                self.send_evidence,
             )
             .await
             {

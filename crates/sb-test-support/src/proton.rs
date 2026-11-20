@@ -21,8 +21,8 @@ use hyper::body::Incoming;
 use hyper::{Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
 use pgp::composed::{
-    ArmorOptions, CleartextSignedMessage, EncryptionCaps, KeyType, SecretKeyParamsBuilder,
-    SignedPublicKey, SubkeyParamsBuilder,
+    ArmorOptions, CleartextSignedMessage, Deserializable, EncryptionCaps, KeyType,
+    SecretKeyParamsBuilder, SignedPublicKey, SubkeyParamsBuilder,
 };
 use pgp::types::Password;
 use proton_crypto::ProtonPGP;
@@ -1032,6 +1032,17 @@ impl FakeProtonServer {
     pub fn verifier(&self) -> Arc<dyn ModulusSignatureVerifier + Send + Sync> {
         let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         Arc::new(TestVerifier(state.public_key.clone()))
+    }
+
+    /// The armored test public key its signed modulus carries, so a
+    /// separate process (a crash-cut child) can build the same verifier
+    /// from [`fake_modulus_verifier`].
+    pub fn verifier_public_key(&self) -> String {
+        let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        state
+            .public_key
+            .to_armored_string(ArmorOptions::default())
+            .expect("the fake's public key armors")
     }
 
     /// Every request the server has seen, in order.
@@ -2559,6 +2570,14 @@ fn test_identity() -> (String, SignedPublicKey) {
         .to_armored_string(ArmorOptions::default())
         .expect("the signed modulus armors");
     (armored, public)
+}
+
+/// Builds the fake's modulus verifier from the armored test public key
+/// alone. A crash-cut child in another process uses it to trust the
+/// parent process's fake server (spec/11).
+pub fn fake_modulus_verifier(armored: &str) -> Arc<dyn ModulusSignatureVerifier + Send + Sync> {
+    let (public, _) = SignedPublicKey::from_string(armored).expect("the fake's public key parses");
+    Arc::new(TestVerifier(public))
 }
 
 /// Verifies the fake's signed modulus with the fake's test key.

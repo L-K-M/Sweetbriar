@@ -38,7 +38,40 @@ pub(crate) const DRAFTS_LABEL: &str = "8";
 #[derive(Default)]
 pub(crate) struct SendEvidence {
     latest: Mutex<HashMap<String, Vec<String>>>,
+    /// Test seam: fired at each submission store transition, so a
+    /// crash-cut child can die around it (spec/11). `None` outside
+    /// tests.
+    #[cfg(test)]
+    hook: Mutex<Option<SendWriteHook>>,
 }
+
+/// A submission's store transition (spec/11 crash cuts): the writes
+/// `proton_send` makes, each with a before and an after phase.
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SendTransition {
+    Claim,
+    RecordDraft,
+    RecordUpload,
+    SendRequested,
+    Accepted,
+    Failed,
+    Unknown,
+    Requeue,
+}
+
+/// Which side of a store write a crash cut lands on (spec/11: before,
+/// inside and after each transaction).
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SendPhase {
+    Before,
+    After,
+}
+
+/// The crash-cut hook's signature: the transition and its phase.
+#[cfg(test)]
+pub(crate) type SendWriteHook = Arc<dyn Fn(SendTransition, SendPhase) + Send + Sync>;
 
 impl SendEvidence {
     /// Record the latest observation for one attempt, replacing an
@@ -56,6 +89,20 @@ impl SendEvidence {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clone()
+    }
+
+    /// Install the test crash-cut hook.
+    #[cfg(test)]
+    pub(crate) fn set_hook(&self, hook: Option<SendWriteHook>) {
+        *self.hook.lock().unwrap_or_else(|e| e.into_inner()) = hook;
+    }
+
+    /// Fire the test hook at one transition's phase.
+    #[cfg(test)]
+    pub(crate) fn fire(&self, transition: SendTransition, phase: SendPhase) {
+        if let Some(hook) = self.hook.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+            hook(transition, phase);
+        }
     }
 }
 
@@ -162,17 +209,22 @@ pub(crate) async fn submit_queued_attempts(
     client: &ProtonClient,
     account_id: &str,
     backoff: &mut SendBackoff,
+    evidence: &SendEvidence,
 ) -> Result<(), Halt> {
     let mut attempted = HashSet::new();
     for _ in 0..MAX_SUBMITS_PER_PASS {
         let now = worker.resources().now();
         let id = account_id.to_owned();
+        #[cfg(test)]
+        evidence.fire(SendTransition::Claim, SendPhase::Before);
         let claimed = worker
             .resources()
             .write(WritePriority::Sync, move |tx| {
                 claim_send_attempt(tx, &id, now)
             })
             .await?;
+        #[cfg(test)]
+        evidence.fire(SendTransition::Claim, SendPhase::After);
         let Some(claimed) = claimed else {
             return Ok(());
         };
@@ -184,16 +236,23 @@ pub(crate) async fn submit_queued_attempts(
             // leave it claimed-then-requeued and try the next pass.
             let now = worker.resources().now();
             let id = claimed.attempt_id.clone();
+            #[cfg(test)]
+            evidence.fire(SendTransition::Requeue, SendPhase::Before);
             worker
                 .resources()
                 .write(WritePriority::Sync, move |tx| {
                     requeue_before_request(tx, &id, now)
                 })
                 .await?;
+            #[cfg(test)]
+            evidence.fire(SendTransition::Requeue, SendPhase::After);
             return Ok(());
         }
         if matches!(
-            submit_one(worker, sessions, client, account_id, claimed, backoff).await?,
+            submit_one(
+                worker, sessions, client, account_id, claimed, backoff, evidence
+            )
+            .await?,
             SubmitOutcome::Requeued
         ) {
             return Ok(());
@@ -217,6 +276,7 @@ async fn submit_one(
     account_id: &str,
     claimed: ClaimedSend,
     backoff: &mut SendBackoff,
+    evidence: &SendEvidence,
 ) -> Result<SubmitOutcome, Halt> {
     let sha = claimed.mime_sha256.clone();
     let bytes = match worker
@@ -252,7 +312,7 @@ async fn submit_one(
             };
             let now = worker.resources().now();
             let id = claimed.attempt_id.clone();
-            fail(worker, &id, &failure, now).await?;
+            fail(worker, evidence, &id, &failure, now).await?;
             backoff.record_success(&claimed.attempt_id);
             return Ok(SubmitOutcome::Done);
         }
@@ -269,7 +329,10 @@ async fn submit_one(
             Err(error) => {
                 record_diagnostics(worker, account_id, &error).await;
                 let mapped = interpret(&error, false);
-                return apply_action(worker, account_id, &claimed, mapped, false, backoff).await;
+                return apply_action(
+                    worker, account_id, &claimed, mapped, false, backoff, evidence,
+                )
+                .await;
             }
         };
         match plan_recipient(recipient, keys) {
@@ -277,7 +340,7 @@ async fn submit_one(
             Err(failure) => {
                 let now = worker.resources().now();
                 let id = claimed.attempt_id.clone();
-                fail(worker, &id, &failure, now).await?;
+                fail(worker, evidence, &id, &failure, now).await?;
                 backoff.record_success(&claimed.attempt_id);
                 return Ok(SubmitOutcome::Done);
             }
@@ -289,14 +352,20 @@ async fn submit_one(
         Ok(encrypted) => encrypted,
         Err(error) => {
             let action = sender_error_action(error);
-            return apply_action(worker, account_id, &claimed, action, false, backoff).await;
+            return apply_action(
+                worker, account_id, &claimed, action, false, backoff, evidence,
+            )
+            .await;
         }
     };
     let body = match String::from_utf8(encrypted) {
         Ok(body) => body,
         Err(_) => {
             let action = sender_error_action(SendError::Crypto);
-            return apply_action(worker, account_id, &claimed, action, false, backoff).await;
+            return apply_action(
+                worker, account_id, &claimed, action, false, backoff, evidence,
+            )
+            .await;
         }
     };
     let (template, parent_id, action) = draft_parts(&claimed, &frozen, body);
@@ -309,8 +378,10 @@ async fn submit_one(
                 Err(error) => {
                     record_diagnostics(worker, account_id, &error).await;
                     let mapped = interpret(&error, false);
-                    return apply_action(worker, account_id, &claimed, mapped, false, backoff)
-                        .await;
+                    return apply_action(
+                        worker, account_id, &claimed, mapped, false, backoff, evidence,
+                    )
+                    .await;
                 }
             }
         }
@@ -327,12 +398,16 @@ async fn submit_one(
                     // Drafts (spec/05 step 2).
                     let id = claimed.attempt_id.clone();
                     let created = draft.id.clone();
+                    #[cfg(test)]
+                    evidence.fire(SendTransition::RecordDraft, SendPhase::Before);
                     let applied = worker
                         .resources()
                         .write(WritePriority::Sync, move |tx| {
                             record_proton_draft(tx, &id, &created)
                         })
                         .await?;
+                    #[cfg(test)]
+                    evidence.fire(SendTransition::RecordDraft, SendPhase::After);
                     if !applied {
                         return Ok(SubmitOutcome::Done);
                     }
@@ -341,8 +416,10 @@ async fn submit_one(
                 Err(error) => {
                     record_diagnostics(worker, account_id, &error).await;
                     let mapped = interpret(&error, false);
-                    return apply_action(worker, account_id, &claimed, mapped, false, backoff)
-                        .await;
+                    return apply_action(
+                        worker, account_id, &claimed, mapped, false, backoff, evidence,
+                    )
+                    .await;
                 }
             }
         }
@@ -364,7 +441,10 @@ async fn submit_one(
             Err(error) => {
                 record_diagnostics(worker, account_id, &error).await;
                 let mapped = interpret(&error, false);
-                return apply_action(worker, account_id, &claimed, mapped, false, backoff).await;
+                return apply_action(
+                    worker, account_id, &claimed, mapped, false, backoff, evidence,
+                )
+                .await;
             }
         };
         match reconcile_draft_uploads(
@@ -375,6 +455,8 @@ async fn submit_one(
         ) {
             Ok(recovered) => {
                 for upload in recovered {
+                    #[cfg(test)]
+                    evidence.fire(SendTransition::RecordUpload, SendPhase::Before);
                     let applied = worker
                         .resources()
                         .write(WritePriority::Sync, {
@@ -383,6 +465,8 @@ async fn submit_one(
                             move |tx| record_proton_upload(tx, &id, &upload)
                         })
                         .await?;
+                    #[cfg(test)]
+                    evidence.fire(SendTransition::RecordUpload, SendPhase::After);
                     if !applied {
                         return Ok(SubmitOutcome::Done);
                     }
@@ -390,7 +474,7 @@ async fn submit_one(
                 }
             }
             Err(message) => {
-                fail_definitely(worker, backoff, &claimed, message).await?;
+                fail_definitely(worker, backoff, evidence, &claimed, message).await?;
                 return Ok(SubmitOutcome::Done);
             }
         }
@@ -406,7 +490,7 @@ async fn submit_one(
         let data = match attachment.extract(&bytes) {
             Ok(data) => data,
             Err(message) => {
-                fail_definitely(worker, backoff, &claimed, message).await?;
+                fail_definitely(worker, backoff, evidence, &claimed, message).await?;
                 return Ok(SubmitOutcome::Done);
             }
         };
@@ -414,7 +498,10 @@ async fn submit_one(
             Ok(encrypted) => encrypted,
             Err(error) => {
                 let action = sender_error_action(error);
-                return apply_action(worker, account_id, &claimed, action, false, backoff).await;
+                return apply_action(
+                    worker, account_id, &claimed, action, false, backoff, evidence,
+                )
+                .await;
             }
         };
         let upload = AttachmentUpload {
@@ -429,7 +516,10 @@ async fn submit_one(
             Err(error) => {
                 record_diagnostics(worker, account_id, &error).await;
                 let mapped = interpret(&error, false);
-                return apply_action(worker, account_id, &claimed, mapped, false, backoff).await;
+                return apply_action(
+                    worker, account_id, &claimed, mapped, false, backoff, evidence,
+                )
+                .await;
             }
         };
         let recorded = ProtonUpload {
@@ -439,6 +529,8 @@ async fn submit_one(
             mime_type: attachment.media_type.clone(),
             size: u64::try_from(uploaded.size).unwrap_or(data.len() as u64),
         };
+        #[cfg(test)]
+        evidence.fire(SendTransition::RecordUpload, SendPhase::Before);
         let applied = worker
             .resources()
             .write(WritePriority::Sync, {
@@ -447,6 +539,8 @@ async fn submit_one(
                 move |tx| record_proton_upload(tx, &id, &recorded)
             })
             .await?;
+        #[cfg(test)]
+        evidence.fire(SendTransition::RecordUpload, SendPhase::After);
         if !applied {
             return Ok(SubmitOutcome::Done);
         }
@@ -465,6 +559,7 @@ async fn submit_one(
             fail_definitely(
                 worker,
                 backoff,
+                evidence,
                 &claimed,
                 format!(
                     "the draft didn't carry attachment {}'s key packets",
@@ -478,7 +573,10 @@ async fn submit_one(
             Ok(send) => send_attachments.push(send),
             Err(error) => {
                 let action = sender_error_action(error);
-                return apply_action(worker, account_id, &claimed, action, false, backoff).await;
+                return apply_action(
+                    worker, account_id, &claimed, action, false, backoff, evidence,
+                )
+                .await;
             }
         }
     }
@@ -491,17 +589,24 @@ async fn submit_one(
         Ok(packages) => packages,
         Err(error) => {
             let action = sender_error_action(error);
-            return apply_action(worker, account_id, &claimed, action, false, backoff).await;
+            return apply_action(
+                worker, account_id, &claimed, action, false, backoff, evidence,
+            )
+            .await;
         }
     };
     let now = worker.resources().now();
     let id = claimed.attempt_id.clone();
+    #[cfg(test)]
+    evidence.fire(SendTransition::SendRequested, SendPhase::Before);
     let committed = worker
         .resources()
         .write(WritePriority::Sync, move |tx| {
             commit_send_requested(tx, &id, now)
         })
         .await?;
+    #[cfg(test)]
+    evidence.fire(SendTransition::SendRequested, SendPhase::After);
     if !committed {
         return Ok(SubmitOutcome::Done);
     }
@@ -511,12 +616,16 @@ async fn submit_one(
         Ok(_) => {
             let now = worker.resources().now();
             let id = claimed.attempt_id.clone();
+            #[cfg(test)]
+            evidence.fire(SendTransition::Accepted, SendPhase::Before);
             let applied = worker
                 .resources()
                 .write(WritePriority::Sync, move |tx| {
                     mark_send_accepted(tx, &id, now)
                 })
                 .await?;
+            #[cfg(test)]
+            evidence.fire(SendTransition::Accepted, SendPhase::After);
             if applied {
                 backoff.record_success(&claimed.attempt_id);
             }
@@ -525,7 +634,10 @@ async fn submit_one(
         Err(error) => {
             record_diagnostics(worker, account_id, &error).await;
             let mapped = interpret(&error, true);
-            apply_action(worker, account_id, &claimed, mapped, true, backoff).await
+            apply_action(
+                worker, account_id, &claimed, mapped, true, backoff, evidence,
+            )
+            .await
         }
     }
 }
@@ -593,6 +705,7 @@ fn reconcile_draft_uploads(
 async fn fail_definitely(
     worker: &crate::engine::Worker,
     backoff: &mut SendBackoff,
+    evidence: &SendEvidence,
     claimed: &ClaimedSend,
     message: String,
 ) -> Result<(), Halt> {
@@ -603,7 +716,7 @@ async fn fail_definitely(
         message,
         rejected: None,
     };
-    fail(worker, &id, &failure, now).await?;
+    fail(worker, evidence, &id, &failure, now).await?;
     backoff.record_success(&claimed.attempt_id);
     Ok(())
 }
@@ -807,18 +920,23 @@ async fn apply_action(
     action: Action,
     send_requested: bool,
     backoff: &mut SendBackoff,
+    evidence: &SendEvidence,
 ) -> Result<SubmitOutcome, Halt> {
     let attempt_id = claimed.attempt_id.as_str();
     match action {
         Action::Retry => {
             let now = worker.resources().now();
             let id = claimed.attempt_id.clone();
+            #[cfg(test)]
+            evidence.fire(SendTransition::Requeue, SendPhase::Before);
             let applied = worker
                 .resources()
                 .write(WritePriority::Sync, move |tx| {
                     requeue_before_request(tx, &id, now)
                 })
                 .await?;
+            #[cfg(test)]
+            evidence.fire(SendTransition::Requeue, SendPhase::After);
             if applied {
                 backoff.record_failure(&claimed.attempt_id, worker.resources().now());
                 return Ok(SubmitOutcome::Requeued);
@@ -828,19 +946,23 @@ async fn apply_action(
         Action::Failed(failure) => {
             let now = worker.resources().now();
             let id = claimed.attempt_id.clone();
-            fail(worker, &id, &failure, now).await?;
+            fail(worker, evidence, &id, &failure, now).await?;
             backoff.record_success(attempt_id);
             Ok(SubmitOutcome::Done)
         }
         Action::Unknown => {
             let now = worker.resources().now();
             let id = claimed.attempt_id.clone();
+            #[cfg(test)]
+            evidence.fire(SendTransition::Unknown, SendPhase::Before);
             let applied = worker
                 .resources()
                 .write(WritePriority::Sync, move |tx| {
                     mark_outcome_unknown(tx, &id, now)
                 })
                 .await?;
+            #[cfg(test)]
+            evidence.fire(SendTransition::Unknown, SendPhase::After);
             if applied {
                 backoff.record_success(attempt_id);
             }
@@ -849,6 +971,14 @@ async fn apply_action(
         Action::Attention { reason } => {
             let now = worker.resources().now();
             let id = claimed.attempt_id.clone();
+            #[cfg(test)]
+            let transition = if send_requested {
+                SendTransition::Unknown
+            } else {
+                SendTransition::Requeue
+            };
+            #[cfg(test)]
+            evidence.fire(transition, SendPhase::Before);
             let applied = if send_requested {
                 worker
                     .resources()
@@ -864,6 +994,8 @@ async fn apply_action(
                     })
                     .await?
             };
+            #[cfg(test)]
+            evidence.fire(transition, SendPhase::After);
             if applied {
                 backoff.record_success(attempt_id);
             }
@@ -913,20 +1045,29 @@ async fn record_diagnostics(
 
 async fn fail(
     worker: &crate::engine::Worker,
+    evidence: &SendEvidence,
     attempt_id: &str,
     failure: &SendFailure,
     now: Timestamp,
 ) -> Result<(), Halt> {
+    let _ = evidence;
     let id = attempt_id.to_owned();
     let failure = failure.clone();
+    #[cfg(test)]
+    evidence.fire(SendTransition::Failed, SendPhase::Before);
     worker
         .resources()
         .write(WritePriority::Sync, move |tx| {
             mark_send_failed(tx, &id, &failure, now)
         })
         .await?;
+    #[cfg(test)]
+    evidence.fire(SendTransition::Failed, SendPhase::After);
     Ok(())
 }
+
+#[cfg(test)]
+mod crash_tests;
 
 #[cfg(test)]
 mod tests {
