@@ -1,0 +1,361 @@
+//! Sending commands and the Out Box over FFI (spec/07 "Commands",
+//! "Other queries"): the service-owned send DTOs cross as this
+//! crate's own records, field by field, and the five commands each
+//! take the token and idempotency key the shell made. `out_box` is a
+//! query, so its token races every wait (spec/07).
+
+use crate::api::Receipt;
+use crate::drafts::AttemptState;
+use crate::{CancelToken, Core, CoreError};
+use std::sync::Arc;
+
+/// The `sent_copy` column's words (spec/02 "Sending"): how the
+/// account's Sent copy is produced.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum SentCopy {
+    ServerSaves,
+    Pending,
+    Filed,
+    Failed,
+}
+
+impl From<sb_service::SentCopy> for SentCopy {
+    fn from(value: sb_service::SentCopy) -> Self {
+        match value {
+            sb_service::SentCopy::ServerSaves => Self::ServerSaves,
+            sb_service::SentCopy::Pending => Self::Pending,
+            sb_service::SentCopy::Filed => Self::Filed,
+            sb_service::SentCopy::Failed => Self::Failed,
+        }
+    }
+}
+
+/// A recipient's address field (spec/02 `send_recipients.kind`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum RecipientKind {
+    To,
+    Cc,
+    Bcc,
+}
+
+impl From<sb_service::RecipientKind> for RecipientKind {
+    fn from(value: sb_service::RecipientKind) -> Self {
+        match value {
+            sb_service::RecipientKind::To => Self::To,
+            sb_service::RecipientKind::Cc => Self::Cc,
+            sb_service::RecipientKind::Bcc => Self::Bcc,
+        }
+    }
+}
+
+/// A recipient's stored state (spec/02 `send_recipients.state`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum RecipientState {
+    Pending,
+    RcptAccepted,
+    RejectedPermanent,
+    RejectedTransient,
+    Sent,
+    Unsent,
+    Unknown,
+}
+
+impl From<sb_service::RecipientState> for RecipientState {
+    fn from(value: sb_service::RecipientState) -> Self {
+        match value {
+            sb_service::RecipientState::Pending => Self::Pending,
+            sb_service::RecipientState::RcptAccepted => Self::RcptAccepted,
+            sb_service::RecipientState::RejectedPermanent => Self::RejectedPermanent,
+            sb_service::RecipientState::RejectedTransient => Self::RejectedTransient,
+            sb_service::RecipientState::Sent => Self::Sent,
+            sb_service::RecipientState::Unsent => Self::Unsent,
+            sb_service::RecipientState::Unknown => Self::Unknown,
+        }
+    }
+}
+
+/// One recipient on an Out Box row (spec/07): the address as first
+/// written, its field and its stored state.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct OutBoxRecipient {
+    pub address: String,
+    pub kind: RecipientKind,
+    pub state: RecipientState,
+}
+
+impl From<sb_service::OutBoxRecipient> for OutBoxRecipient {
+    fn from(value: sb_service::OutBoxRecipient) -> Self {
+        Self {
+            address: value.address,
+            kind: value.kind.into(),
+            state: value.state.into(),
+        }
+    }
+}
+
+/// One Out Box row (spec/07 `out_box()`): the attempt's frozen
+/// revision subject, recipients, state and stored times, plus the
+/// Sent-copy reconciliation and the Proton evidence observed since
+/// launch (spec/05 step 6).
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct OutBoxRow {
+    pub attempt_id: String,
+    pub draft_id: String,
+    pub account_id: String,
+    pub identity_id: String,
+    pub subject: String,
+    pub recipients: Vec<OutBoxRecipient>,
+    pub state: AttemptState,
+    pub created_at_ms: i64,
+    pub updated_at_ms: i64,
+    pub hold_until_ms: Option<i64>,
+    pub resolved_at_ms: Option<i64>,
+    pub send_requested_at_ms: Option<i64>,
+    /// The Proton draft the attempt created, which becomes the sent
+    /// message (spec/02, 05 "Drafts on the server").
+    pub proton_draft_id: Option<String>,
+    /// Proton's final reply, code and message (spec/02, 05).
+    pub final_reply: Option<String>,
+    pub resolution: Option<UnknownResolution>,
+    pub sent_copy: SentCopy,
+    /// A `queued` attempt whose `config_generation` differs from its
+    /// account's current one waits for `confirm_send_route`
+    /// (spec/05 step 3).
+    pub waits_for_confirmation: bool,
+    /// For an accepted attempt whose provider saves the Sent copy:
+    /// whether a message with the attempt's `proton_draft_id` has
+    /// appeared in the account (spec/05 "The Sent copy").
+    pub sent_copy_appeared: bool,
+    /// An accepted `server_saves` attempt with no Sent copy 24 h
+    /// after acceptance: a soft warning, never a resend (spec/05).
+    pub sent_copy_warning: bool,
+    /// The Proton evidence observed since launch (spec/05 step 6,
+    /// spec/07). Kept in the account worker's memory, so a relaunch
+    /// shows none until its next check.
+    pub evidence: Vec<String>,
+}
+
+impl From<sb_service::OutBoxRow> for OutBoxRow {
+    fn from(value: sb_service::OutBoxRow) -> Self {
+        Self {
+            attempt_id: value.attempt_id,
+            draft_id: value.draft_id,
+            account_id: value.account_id,
+            identity_id: value.identity_id,
+            subject: value.subject,
+            recipients: value.recipients.into_iter().map(Into::into).collect(),
+            state: value.state.into(),
+            created_at_ms: value.created_at_ms,
+            updated_at_ms: value.updated_at_ms,
+            hold_until_ms: value.hold_until_ms,
+            resolved_at_ms: value.resolved_at_ms,
+            send_requested_at_ms: value.send_requested_at_ms,
+            proton_draft_id: value.proton_draft_id,
+            final_reply: value.final_reply,
+            resolution: value.resolution.map(Into::into),
+            sent_copy: value.sent_copy.into(),
+            waits_for_confirmation: value.waits_for_confirmation,
+            sent_copy_appeared: value.sent_copy_appeared,
+            sent_copy_warning: value.sent_copy_warning,
+            evidence: value.evidence,
+        }
+    }
+}
+
+/// The Out Box (spec/07): live attempts, then history, each newest
+/// first.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct OutBox {
+    pub live: Vec<OutBoxRow>,
+    pub history: Vec<OutBoxRow>,
+}
+
+impl From<sb_service::OutBox> for OutBox {
+    fn from(value: sb_service::OutBox) -> Self {
+        Self {
+            live: value.live.into_iter().map(Into::into).collect(),
+            history: value.history.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+/// What `send_draft` answers: its receipt and the attempt id the
+/// receipt names, so a replayed key still names the first attempt.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct SendQueued {
+    pub receipt: Receipt,
+    pub attempt_id: String,
+}
+
+impl From<sb_service::SendQueued> for SendQueued {
+    fn from(value: sb_service::SendQueued) -> Self {
+        Self {
+            receipt: Receipt::from_service(&value.receipt),
+            attempt_id: value.attempt_id,
+        }
+    }
+}
+
+/// The user's answer to an `outcome_unknown` attempt (spec/05 step 6).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum UnknownResolution {
+    MarkedSent,
+    SendAgain,
+    KeptAsDraft,
+}
+
+impl From<sb_service::UnknownResolution> for UnknownResolution {
+    fn from(value: sb_service::UnknownResolution) -> Self {
+        match value {
+            sb_service::UnknownResolution::MarkedSent => Self::MarkedSent,
+            sb_service::UnknownResolution::SendAgain => Self::SendAgain,
+            sb_service::UnknownResolution::KeptAsDraft => Self::KeptAsDraft,
+        }
+    }
+}
+
+impl From<UnknownResolution> for sb_service::UnknownResolution {
+    fn from(value: UnknownResolution) -> Self {
+        match value {
+            UnknownResolution::MarkedSent => Self::MarkedSent,
+            UnknownResolution::SendAgain => Self::SendAgain,
+            UnknownResolution::KeptAsDraft => Self::KeptAsDraft,
+        }
+    }
+}
+
+/// What `resolve_unknown_send` answers.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct ResolvedUnknown {
+    pub receipt: Receipt,
+    pub resolution: UnknownResolution,
+    pub new_attempt_id: Option<String>,
+}
+
+impl From<sb_service::ResolvedUnknown> for ResolvedUnknown {
+    fn from(value: sb_service::ResolvedUnknown) -> Self {
+        Self {
+            receipt: Receipt::from_service(&value.receipt),
+            resolution: value.resolution.into(),
+            new_attempt_id: value.new_attempt_id,
+        }
+    }
+}
+
+#[uniffi::export]
+impl Core {
+    /// `send_draft(draft_id, revision_id, acks)` (spec/07 "Commands"):
+    /// queue the draft's current revision as a `held` attempt under an
+    /// idempotency key the shell made (`UUID()` in Swift); a repeated
+    /// key returns its receipt and the first attempt id. A
+    /// non-current revision, a `sent` or `discarded` draft, a live or
+    /// already-sent attempt, and a missing cross-account acknowledgement
+    /// are `Conflict`. Like every command it honours the token only
+    /// until it holds the core; once begun it runs to completion.
+    pub async fn send_draft(
+        &self,
+        token: Arc<CancelToken>,
+        idempotency_key: String,
+        draft_id: String,
+        revision_id: String,
+        acks: Vec<String>,
+    ) -> Result<SendQueued, CoreError> {
+        let queued = self
+            .command(&token, async |core| {
+                core.send_draft(&idempotency_key, &draft_id, &revision_id, acks)
+                    .await
+            })
+            .await?;
+        Ok(SendQueued::from(queued))
+    }
+
+    /// `cancel_send(attempt_id)` (spec/07 "Commands"): a `held` or
+    /// `queued` attempt becomes `cancelled` and its draft returns to
+    /// `editing`; any other state is `Conflict`, an unknown attempt
+    /// `NotFound`. The receipt answers `{"attempt_id": ...}`.
+    pub async fn cancel_send(
+        &self,
+        token: Arc<CancelToken>,
+        idempotency_key: String,
+        attempt_id: String,
+    ) -> Result<Receipt, CoreError> {
+        let receipt = self
+            .command(&token, async |core| {
+                core.cancel_send(&idempotency_key, &attempt_id).await
+            })
+            .await?;
+        Ok(Receipt::from_service(&receipt))
+    }
+
+    /// `resolve_unknown_send(attempt_id, resolution)` (spec/07
+    /// "Commands"): record the user's answer to an unresolved
+    /// `outcome_unknown` attempt, exactly once; a second resolution is
+    /// `Conflict`. `marked_sent` counts the unknown recipients as sent
+    /// and sets the draft `sent`; `kept_as_draft` returns it to
+    /// `editing`; `send_again` queues a new attempt and answers its id.
+    pub async fn resolve_unknown_send(
+        &self,
+        token: Arc<CancelToken>,
+        idempotency_key: String,
+        attempt_id: String,
+        resolution: UnknownResolution,
+    ) -> Result<ResolvedUnknown, CoreError> {
+        let resolved = self
+            .command(&token, async |core| {
+                core.resolve_unknown_send(&idempotency_key, &attempt_id, resolution.into())
+                    .await
+            })
+            .await?;
+        Ok(ResolvedUnknown::from(resolved))
+    }
+
+    /// `confirm_send_route(attempt_id)` (spec/07 "Commands"): a
+    /// `queued` attempt adopts the account's current generation. An
+    /// unsendable identity or any other state is `Conflict`. The
+    /// receipt answers `{"attempt_id": ...}`.
+    pub async fn confirm_send_route(
+        &self,
+        token: Arc<CancelToken>,
+        idempotency_key: String,
+        attempt_id: String,
+    ) -> Result<Receipt, CoreError> {
+        let receipt = self
+            .command(&token, async |core| {
+                core.confirm_send_route(&idempotency_key, &attempt_id).await
+            })
+            .await?;
+        Ok(Receipt::from_service(&receipt))
+    }
+
+    /// `retry_rejected_recipients(attempt_id)` (spec/07 "Commands"):
+    /// refused for a Proton attempt; nothing is sent. The receipt
+    /// answers `{"attempt_id": ...}`.
+    pub async fn retry_rejected_recipients(
+        &self,
+        token: Arc<CancelToken>,
+        idempotency_key: String,
+        attempt_id: String,
+    ) -> Result<Receipt, CoreError> {
+        let receipt = self
+            .command(&token, async |core| {
+                core.retry_rejected_recipients(&idempotency_key, &attempt_id)
+                    .await
+            })
+            .await?;
+        Ok(Receipt::from_service(&receipt))
+    }
+
+    /// `out_box()` (spec/07 "Other queries"): every live attempt, then
+    /// the last 30 days' history, each newest first by update time.
+    /// A query: the token races the core's read lock and the read
+    /// itself (spec/07).
+    pub async fn out_box(&self, token: Arc<CancelToken>) -> Result<OutBox, CoreError> {
+        Ok(self
+            .query(&token, async |core| core.out_box().await)
+            .await?
+            .into())
+    }
+}
+
+#[cfg(test)]
+mod tests;

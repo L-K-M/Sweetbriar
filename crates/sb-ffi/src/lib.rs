@@ -46,6 +46,7 @@ mod recovery;
 pub use recovery::{Recovery, RecoveryAnchor, RecoveryPage, RecoveryState};
 mod restore;
 mod search;
+mod send;
 mod sidebar;
 mod subscribe;
 mod views;
@@ -83,6 +84,10 @@ pub use restore::RestoreOutcome;
 pub use search::{
     Coverage, ParseContext, SearchIndexState, SearchIoCode, SearchLimitation, SearchRebuildPhase,
     SearchRebuildProgress, SearchRebuildStarted, SearchScope, SearchSort, SearchSpec, SearchStatus,
+};
+pub use send::{
+    OutBox, OutBoxRecipient, OutBoxRow, RecipientKind, RecipientState, ResolvedUnknown, SendQueued,
+    SentCopy, UnknownResolution,
 };
 pub use sidebar::{Account, AccountKind, AccountState, Mailbox, MailboxKind, Mailboxes};
 pub use subscribe::{Subscription, WindowEvent};
