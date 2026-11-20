@@ -168,10 +168,12 @@ async fn a_stalled_request_times_out_at_30s() {
         .await
         .expect_err("the stall times out");
     assert!(matches!(error, ProtonError::Timeout), "{error:?}");
+    // One deadline, not a retry: a second attempt would wait another
+    // 30 s, so the upper bound catches a POST that became retried.
+    let elapsed = start.elapsed();
     assert!(
-        start.elapsed() >= Duration::from_secs(30),
-        "elapsed {:?}",
-        start.elapsed()
+        (Duration::from_secs(30)..Duration::from_secs(50)).contains(&elapsed),
+        "elapsed {elapsed:?}"
     );
 }
 
