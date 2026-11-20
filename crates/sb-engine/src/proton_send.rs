@@ -505,13 +505,15 @@ fn reconcile_draft_uploads(
     let mut recovered = Vec::new();
     for (index, attachment) in draft.iter().enumerate().skip(recorded.len()) {
         let expected = &frozen[index];
-        let size = u64::try_from(attachment.size).unwrap_or(u64::MAX);
-        if attachment.name != expected.name
-            || attachment.mime_type != expected.media_type
-            || expected.size != Some(size)
-        {
+        // Name and type only: Proton receives just the encrypted data
+        // packet, so its Size is not the part's decoded length. Uploads
+        // run in order and stop at the first failure, so the unrecorded
+        // tail is this attempt's own uploads of these frozen parts.
+        if attachment.name != expected.name || attachment.mime_type != expected.media_type {
             return Err(mismatch());
         }
+        // Recorded as Proton reports it, like a confirmed upload.
+        let size = u64::try_from(attachment.size).unwrap_or(0);
         recovered.push(ProtonUpload {
             index,
             id: attachment.id.clone(),
@@ -883,5 +885,62 @@ mod tests {
         ] {
             assert!(matches!(sender_error_action(definite), Action::Failed(_)));
         }
+    }
+
+    fn frozen(name: &str, size: Option<u64>) -> FrozenAttachment {
+        FrozenAttachment {
+            name: name.to_owned(),
+            media_type: "text/plain".to_owned(),
+            size,
+            part_id: "2".to_owned(),
+        }
+    }
+
+    fn on_draft(id: &str, name: &str, size: i64) -> ProtonDraftAttachment {
+        ProtonDraftAttachment {
+            id: id.to_owned(),
+            name: name.to_owned(),
+            size,
+            mime_type: "text/plain".to_owned(),
+            key_packets: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn an_unrecorded_upload_is_adopted_whatever_size_proton_reports() {
+        // Proton receives only the encrypted data packet, so its Size
+        // is not the frozen part's decoded length (go-proton-api's
+        // server leaves it 0): adoption can't depend on it.
+        for reported in [0, 57] {
+            let adopted = reconcile_draft_uploads(
+                "draft-1",
+                &[on_draft("att-1", "notes.txt", reported)],
+                &[frozen("notes.txt", Some(12))],
+                &[],
+            )
+            .expect("the lost upload is adopted");
+            assert_eq!(adopted.len(), 1);
+            assert_eq!(adopted[0].id, "att-1");
+            assert_eq!(adopted[0].index, 0);
+        }
+        let adopted = reconcile_draft_uploads(
+            "draft-1",
+            &[on_draft("att-1", "notes.txt", 0)],
+            &[frozen("notes.txt", None)],
+            &[],
+        )
+        .expect("a frozen part without a size is adopted too");
+        assert_eq!(adopted.len(), 1);
+    }
+
+    #[test]
+    fn an_unrecorded_upload_of_another_name_is_a_mismatch() {
+        let refused = reconcile_draft_uploads(
+            "draft-1",
+            &[on_draft("att-1", "other.txt", 12)],
+            &[frozen("notes.txt", Some(12))],
+            &[],
+        );
+        assert!(refused.is_err());
     }
 }
