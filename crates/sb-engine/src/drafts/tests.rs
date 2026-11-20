@@ -1520,6 +1520,12 @@ fn a_reply_body_quotes_every_line_and_trims_the_rendition() {
         "\n\nOn Tue, 14 Nov 2023 22:13:20 +0000, Sender <sender@example.test> wrote:\n\
          > one\n>\n> two"
     );
+    // A CRLF or a lone CR ends a line like LF does.
+    assert_eq!(
+        reply_body(&source(), Some("one\r\ntwo\rthree\r")),
+        "\n\nOn Tue, 14 Nov 2023 22:13:20 +0000, Sender <sender@example.test> wrote:\n\
+         > one\n> two\n> three"
+    );
     assert_eq!(
         reply_body(&source(), Some("\n\n")),
         "\n\nOn Tue, 14 Nov 2023 22:13:20 +0000, Sender <sender@example.test> wrote:"

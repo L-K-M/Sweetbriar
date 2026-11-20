@@ -318,9 +318,11 @@ pub(crate) fn cross_account_decision(
     })
 }
 
-/// Whether `acks` carries the acknowledgement the warning needs. M4.3's
-/// `send_draft` calls this inside its revision check: a missing one is
-/// `Conflict` naming `cross_account`, and the core never stores it.
+/// Whether `acks` carries the acknowledgement the warning needs, by
+/// the same token [`cross_account_ack`] computes. `send_draft` checks
+/// `acks` against `cross_account_decision`'s ack, the one
+/// `cross_account_notice` hands out: a missing one is `Conflict` naming
+/// `cross_account`, and the core never stores it.
 pub fn cross_account_acknowledged(
     warning: Option<&CrossAccountWarning>,
     acks: &[String],

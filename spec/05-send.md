@@ -61,8 +61,9 @@ and [raw/plan-proton-bridge/codex.md](../research/raw/plan-proton-bridge/codex.m
       `---------- Forwarded message ----------` block with the original's
       From, Date, Subject, To and Cc lines (empty ones left out).
 
-    `<Date>` and `<From>` are the header values as stored, the From
-    shown as `Name <address>` or the bare address. An original whose body
+    `<Date>` is the stored Date as an RFC 5322 date in UTC (02 keeps
+    it as UTC milliseconds) and `<From>` the stored From, shown as
+    `Name <address>` or the bare address. An original whose body
     isn't acquired gets the attribution or block alone, and no
     acquisition is requested. Forwarded attachments are a later step.
 - **Cross-account check:** a reply whose identity's account differs from

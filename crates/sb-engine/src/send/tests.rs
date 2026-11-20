@@ -998,6 +998,55 @@ fn cross_account_notice_matches_send_draft() {
     block_on(engine.shutdown()).unwrap();
 }
 
+/// A cross-account reply-all's acknowledgement covers its Cc too:
+/// a reply's ack without the Cc doesn't send it (spec/05, 07).
+#[test]
+fn a_reply_all_notice_acknowledges_its_cc() {
+    let (_scratch, engine) = scratch_engine("engine-cross-account-reply-all");
+    seed(&engine);
+    seed_other_account(&engine);
+    sql(
+        &engine,
+        r#"UPDATE message_headers SET cc_json = '[{"address":"cc@example.test","name":null}]' WHERE message_id = 21;"#,
+    );
+    let created = block_on(engine.create_draft(
+        &engine.new_idempotency_key(),
+        DraftSource::ReplyAll { occurrence_id: 22 },
+    ))
+    .unwrap();
+    let draft_id = created.draft_id().to_owned();
+    let revision = block_on(engine.draft(&draft_id)).unwrap().revision.unwrap();
+    assert_eq!(revision.identity_id.as_deref(), Some("ident-1"));
+    assert_eq!(revision.cc.len(), 1, "{:?}", revision.cc);
+    let notice = block_on(engine.cross_account_notice(&draft_id, &revision.revision_id))
+        .unwrap()
+        .expect("a cross-account reply-all warns");
+    assert_eq!(
+        notice.ack,
+        crate::cross_account_ack("ident-1", &revision.to, &revision.cc, &revision.bcc)
+    );
+    let without_cc = crate::cross_account_ack("ident-1", &revision.to, &[], &revision.bcc);
+    assert_ne!(notice.ack, without_cc);
+    match block_on(engine.send_draft(
+        &engine.new_idempotency_key(),
+        &draft_id,
+        &revision.revision_id,
+        &[without_cc],
+    )) {
+        Err(EngineError::Conflict { detail }) => assert!(detail.contains("cross_account")),
+        other => panic!("an ack without the Cc must conflict: {other:?}"),
+    }
+    let queued = block_on(engine.send_draft(
+        &engine.new_idempotency_key(),
+        &draft_id,
+        &revision.revision_id,
+        std::slice::from_ref(&notice.ack),
+    ))
+    .unwrap();
+    assert!(!queued.attempt_id().is_empty());
+    block_on(engine.shutdown()).unwrap();
+}
+
 /// No warning for a same-account reply, a forward, or a local-archive
 /// source (spec/05).
 #[test]

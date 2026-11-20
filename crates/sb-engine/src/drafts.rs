@@ -198,7 +198,7 @@ impl Engine {
                         Err(StoreError::Unavailable { .. }) => None,
                         Err(error) => return Err(error.into()),
                     };
-                    Some((source, text))
+                    Some((occurrence_id, source, text))
                 }
                 None => None,
             };
@@ -210,11 +210,9 @@ impl Engine {
                         #[cfg(test)]
                         draft_write_point(&write_hook, DraftWritePoint::InsideBeforeEffect);
                         create_draft(tx, &id, &context, now)?;
-                        if let Some((source, text)) = prepared.as_ref() {
-                            let occurrence_id =
-                                occurrence_id.expect("a prepared source names its occurrence");
+                        if let Some((occurrence_id, source, text)) = prepared.as_ref() {
                             let inputs =
-                                identity_resolution_inputs(tx, Some(occurrence_id), None, None)?;
+                                identity_resolution_inputs(tx, Some(*occurrence_id), None, None)?;
                             let identity_id = match resolve_identity(compose_context, &inputs) {
                                 ResolvedIdentity::Chosen(identity) => Some(identity),
                                 ResolvedIdentity::ChooseSendingIdentity => None,
@@ -252,6 +250,8 @@ impl Engine {
                                     cc,
                                     bcc: Vec::new(),
                                     body_source,
+                                    // Forwarded attachments are a later
+                                    // step (spec/05).
                                     attachments: Vec::new(),
                                 },
                                 now,
@@ -662,9 +662,9 @@ fn address_text(addresses: &[ReaderAddress]) -> String {
 }
 
 /// The rendition quoted: trailing newlines trimmed, each line prefixed
-/// `> `, an empty line just `>`.
+/// `> `, an empty line just `>`. A CRLF or a lone CR ends a line too.
 fn quote_rendition(text: &str) -> String {
-    let normalized = text.replace("\r\n", "\n");
+    let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
     let trimmed = normalized.trim_end_matches(['\n', '\r']);
     if trimmed.is_empty() {
         return String::new();
