@@ -151,18 +151,29 @@ async fn retry_after_is_clamped_before_it_reaches_the_wire() {
     );
 }
 
-#[tokio::test(start_paused = true)]
+#[tokio::test]
 async fn a_stalled_request_times_out_at_30s() {
     let server = server_with(TestAccount::new(USER, PASSWORD)).await;
+    // Real time: under a paused clock the runtime can jump to the
+    // connect deadline before the socket's readiness is processed, so
+    // the connect timed out instead whenever this test ran on its own.
+    // Sign-in's first request is a POST, which the client never
+    // retries after a timeout, so the test waits the 30 s once (a GET
+    // would be retried five times).
     server.set_fault(Some(Fault::Stall(Duration::from_secs(60))));
     let client = client(&server);
     let start = tokio::time::Instant::now();
-    let error = client.ping().await.expect_err("the stall times out");
-    assert!(matches!(error, ProtonError::Timeout));
+    let error = client
+        .begin_sign_in(USER, SecretString::from(PASSWORD))
+        .await
+        .expect_err("the stall times out");
+    assert!(matches!(error, ProtonError::Timeout), "{error:?}");
+    // One deadline, not a retry: a second attempt would wait another
+    // 30 s, so the upper bound catches a POST that became retried.
+    let elapsed = start.elapsed();
     assert!(
-        start.elapsed() >= Duration::from_secs(30),
-        "elapsed {:?}",
-        start.elapsed()
+        (Duration::from_secs(30)..Duration::from_secs(50)).contains(&elapsed),
+        "elapsed {elapsed:?}"
     );
 }
 
