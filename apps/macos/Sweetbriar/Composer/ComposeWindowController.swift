@@ -614,6 +614,7 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
     private func observeSend() {
         withObservationTracking {
             _ = sendModel?.state
+            _ = sendModel?.undoError
         } onChange: { [weak self] in
             Task { @MainActor [weak self] in
                 guard let self, !finished else { return }
@@ -717,9 +718,11 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
 
     /// The window's existing admission checks: a selected identity that
     /// can actually send, at least one stored recipient, an editing draft,
-    /// no conflict or deciding sheet, and archive writes (spec/05).
+    /// no conflict or deciding sheet, no send already owning the window,
+    /// and archive writes (spec/05).
     private var canSendNow: Bool {
-        guard let content = model.content, sendModel != nil, canWrite(), !finished, !isClosing,
+        guard let content = model.content, let sendModel, !sendModel.isBusy, canWrite(), !finished,
+            !isClosing,
             abandonAlert == nil, !identityControls.isDeciding, !model.isSaving, model.conflict == nil,
             model.draft?.state == .editing,
             let identity = identityControls.model.selectedIdentity,
@@ -731,8 +734,8 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
         return !content.to.isEmpty || !content.cc.isEmpty || !content.bcc.isEmpty
     }
 
-    private func renderSendChrome(_ busy: Bool) {
-        sendButton.isEnabled = canSendNow && !busy
+    private func renderSendChrome() {
+        sendButton.isEnabled = canSendNow
         sendButton.toolTip =
             sendModel == nil
             ? "Sending needs an archive that can write and a sending identity."
@@ -770,7 +773,7 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
         for field in recipientFields { field.control.isEditable = editable }
         saveButton.isEnabled = editable && canWrite() && !model.isSaving && model.conflict == nil
         attachmentControls.render()
-        renderSendChrome(busy)
+        renderSendChrome()
         abandonButton.isEnabled = !isClosing && !finished && keepingBoth == nil
         keepBothButton.isHidden = model.conflict == nil || openCopy == nil
         keepBothButton.isEnabled = !isClosing && !finished && keepingBoth == nil && canWrite()

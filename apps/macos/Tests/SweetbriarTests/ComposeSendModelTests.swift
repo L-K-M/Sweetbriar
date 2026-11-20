@@ -156,6 +156,14 @@ private func eventually(_ predicate: @MainActor () async -> Bool) async -> Bool 
     return true
 }
 
+/// After the gate opens, gives any hold still running time to run out:
+/// a hold that Undo failed to stop would close the window once more.
+@MainActor
+private func closes(_ close: CloseSpy, stayAt count: Int) async -> Bool {
+    try? await Task.sleep(for: .milliseconds(100))
+    return close.calls == count
+}
+
 @MainActor
 @Suite(.serialized) struct ComposeSendModelTests {
     @Test func sendSettlesThenQueuesTheCurrentRevisionWithNoAcks() async throws {
@@ -234,6 +242,7 @@ private func eventually(_ predicate: @MainActor () async -> Bool) async -> Bool 
         #expect(await source.sends.count == 2)
         await sleepBox.release()
         #expect(await eventually({ close.calls == 1 }))
+        #expect(await closes(close, stayAt: 1), "the undone hold must never close the window")
     }
 
     @Test func aFailedCancelShowsItsErrorAndLeavesTheDraftEditable() async throws {
@@ -255,6 +264,7 @@ private func eventually(_ predicate: @MainActor () async -> Bool) async -> Bool 
         #expect(close.calls == 0)
 
         await sleepBox.release()
+        #expect(await closes(close, stayAt: 0), "the undone hold must never close the window")
     }
 
     /// A cancel that fails for any reason but `Conflict` leaves the
@@ -288,6 +298,7 @@ private func eventually(_ predicate: @MainActor () async -> Bool) async -> Bool 
         #expect(close.calls == 0)
 
         await sleepBox.release()
+        #expect(await closes(close, stayAt: 0), "the undone hold must never close the window")
     }
 
     @Test func anyOtherErrorShowsItsMessageAndKeepsTheDraftEditable() async throws {
@@ -334,6 +345,7 @@ private func eventually(_ predicate: @MainActor () async -> Bool) async -> Bool 
 
         await sleepBox.release()
         #expect(await eventually({ close.calls == 1 }))
+        #expect(await closes(close, stayAt: 1), "the undone hold must never close the window")
     }
 
     @Test func theUndoDelayIsReadAtSendTime() async throws {
@@ -357,5 +369,6 @@ private func eventually(_ predicate: @MainActor () async -> Bool) async -> Bool 
 
         await sleepBox.release()
         #expect(await eventually({ close.calls == 1 }))
+        #expect(await closes(close, stayAt: 1), "the undone hold must never close the window")
     }
 }

@@ -105,7 +105,15 @@ private actor FakeSendSafetySource: SendSafetySettingsSource {
 
         await source.gateReads()
         let load = Task { await model.load() }
-        while await source.waitingReads == 0 { await Task.yield() }
+        let deadline = ContinuousClock.now + .seconds(5)
+        while await source.waitingReads == 0 {
+            guard ContinuousClock.now < deadline else {
+                await source.openReads()
+                Issue.record("the gated load never reached its read")
+                return
+            }
+            await Task.yield()
+        }
         #expect(await model.setUndoSeconds(20))
         await source.openReads()
         _ = await load.value

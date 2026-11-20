@@ -28,7 +28,7 @@ struct SendingSettingsView: View {
                     }
                     .disabled(model.isLoading || model.isSaving || model.undoSeconds == nil)
                     .accessibilityIdentifier("sendingUndoDelay")
-                    Text("The window Undo Send has before the message is queued: \(Self.choicesText).")
+                    Text("How long Undo Send waits before the message is queued: \(Self.choicesText).")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                     if model.isLoading { ProgressView("Loading sending settings…") }

@@ -646,6 +646,7 @@ async fn undo_within_the_window_sends_no_request_to_proton() {
     let ident = identity(&h).await;
     let send_requests = |h: &Harness| {
         requests_with_prefix(h, "POST", "/mail/v4/messages")
+            + requests_with_prefix(h, "PUT", "/mail/v4/messages")
             + requests_with_prefix(h, "POST", "/mail/v4/attachments")
             + requests_with_prefix(h, "GET", "/core/v4/keys")
     };
