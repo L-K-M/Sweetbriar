@@ -635,6 +635,46 @@ async fn a_held_attempt_is_sent_by_a_poll_after_its_window_ends() {
     assert_eq!(h.server.sends(), 1);
 }
 
+/// M4.4's Undo acceptance: an Undo inside the window cancels the held
+/// attempt before the worker touches Proton, so the fake logs no send
+/// request of any kind (keys, draft, upload or send) for it, also
+/// after the window would have ended.
+#[tokio::test]
+async fn undo_within_the_window_sends_no_request_to_proton() {
+    let h = setup(vec![TestAccount::new(USER, PASSWORD)]).await;
+    let _id = sign_in(&h).await;
+    let ident = identity(&h).await;
+    let send_requests = |h: &Harness| {
+        requests_with_prefix(h, "POST", "/mail/v4/messages")
+            + requests_with_prefix(h, "POST", "/mail/v4/attachments")
+            + requests_with_prefix(h, "GET", "/core/v4/keys")
+    };
+    let before = send_requests(&h);
+    let (queued, _) = queue_with(
+        &h,
+        &ident,
+        &[INTERNAL],
+        &[("notes.txt", b"Sweetbriar synthetic attachment bytes.")],
+    )
+    .await;
+
+    advance(&h, UNDO_MS - 1_000).await;
+    h.core
+        .cancel_send(&h.core.engine().new_idempotency_key(), &queued.attempt_id)
+        .await
+        .expect("Undo inside the window cancels");
+    advance(&h, 2 * UNDO_MS).await;
+    advance(&h, 2 * UNDO_MS).await;
+
+    let row = row(&h, &queued.attempt_id).await.expect("the attempt");
+    assert_eq!(row.state, AttemptState::Cancelled);
+    assert_eq!(send_requests(&h), before, "{:?}", h.server.requests());
+    assert_eq!(h.server.sends(), 0);
+    assert!(h.server.draft_ids(USER).is_empty());
+    let draft = h.core.draft(&queued.draft_id).await.expect("the draft");
+    assert_eq!(draft.state, DraftState::Editing);
+}
+
 #[tokio::test]
 async fn an_attempt_with_an_attachment_is_sent() {
     let h = setup(vec![TestAccount::new(USER, PASSWORD)]).await;

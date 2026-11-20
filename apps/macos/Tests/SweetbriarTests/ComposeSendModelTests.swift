@@ -3,9 +3,8 @@ import SweetbriarBridge
 import Testing
 
 /// The compose window's send flow (spec/05, 07, 08): settle, queue the
-/// current revision under a fresh key, ask once for the cross-account
-/// acknowledgement, hold for the registered undo window and cancel on
-/// Undo. The core calls are faked; the sleeper is gated so the hold is
+/// current revision under a fresh key, hold for the registered undo
+/// window and cancel on Undo. The core calls are faked; the sleeper is gated so the hold is
 /// observable without waiting real seconds.
 private actor FakeSendSource: SendSource {
     struct Send: Equatable {
@@ -130,17 +129,6 @@ private final class SettleSpy {
 }
 
 @MainActor
-private final class ConfirmSpy {
-    private(set) var calls = 0
-    var answer = true
-
-    func ask() async -> Bool {
-        calls += 1
-        return answer
-    }
-}
-
-@MainActor
 private final class CloseSpy {
     private(set) var calls = 0
     func close() { calls += 1 }
@@ -149,12 +137,11 @@ private final class CloseSpy {
 @MainActor
 private func makeModel(
     _ source: FakeSendSource, _ settings: FakeSendSettingsSource, _ sleepBox: GatedSleep,
-    _ settle: SettleSpy, _ confirm: ConfirmSpy, _ close: CloseSpy
+    _ settle: SettleSpy, _ close: CloseSpy
 ) -> ComposeSendModel {
     ComposeSendModel(
         source: source, settingsSource: settings, draftId: "draft-1",
         settlePendingSave: { try await settle.settle() },
-        confirmCrossAccount: { await confirm.ask() },
         closeAfterHold: { close.close() },
         sleep: { duration in await sleepBox.sleep(duration) })
 }
@@ -176,9 +163,8 @@ private func eventually(_ predicate: @MainActor () async -> Bool) async -> Bool 
         let settings = FakeSendSettingsSource()
         let sleepBox = GatedSleep()
         let settle = SettleSpy()
-        let confirm = ConfirmSpy()
         let close = CloseSpy()
-        let model = makeModel(source, settings, sleepBox, settle, confirm, close)
+        let model = makeModel(source, settings, sleepBox, settle, close)
 
         #expect(await model.send())
 
@@ -189,7 +175,6 @@ private func eventually(_ predicate: @MainActor () async -> Bool) async -> Bool 
         #expect(await source.sends.count == 1)
         #expect(await source.cancels.isEmpty)
         #expect(settle.calls == 1)
-        #expect(confirm.calls == 0)
         #expect(await settings.reads == 1, "the undo delay is read at send time")
         #expect(model.state == .held(attemptId: "attempt-1", remaining: 7))
         #expect(model.isBusy)
@@ -199,49 +184,28 @@ private func eventually(_ predicate: @MainActor () async -> Bool) async -> Bool 
         #expect(model.state == .idle, "the hold ended without Undo")
     }
 
-    @Test func aCrossAccountConflictAsksOnceThenResendsWithTheAcknowledgement() async throws {
+    @Test func aCrossAccountConflictShowsItsMessageAndSendsNothingMore() async throws {
+        // The confirmation and its acknowledgement come with the banner
+        // (M4.4d); until then the core's refusal is shown as is.
         let source = FakeSendSource()
         await source.configure(conflictOnFirstSend: true)
         let settings = FakeSendSettingsSource()
         let sleepBox = GatedSleep()
         let settle = SettleSpy()
-        let confirm = ConfirmSpy()
-        confirm.answer = true
         let close = CloseSpy()
-        let model = makeModel(source, settings, sleepBox, settle, confirm, close)
-
-        #expect(await model.send())
-
-        #expect(await source.sends.count == 2)
-        let first = try #require(await source.sends.first)
-        let second = try #require(await source.sends.dropFirst().first)
-        #expect(second.key == first.key, "the confirmation retry reuses the action's key")
-        #expect(second.acks == ["cross_account"])
-        #expect(confirm.calls == 1, "the window asks exactly once")
-        #expect(model.state == .held(attemptId: "attempt-1", remaining: 7))
-
-        await sleepBox.release()
-        #expect(await eventually({ close.calls == 1 }))
-    }
-
-    @Test func aCancelledCrossAccountPromptSendsNothingMore() async throws {
-        let source = FakeSendSource()
-        await source.configure(conflictOnFirstSend: true)
-        let settings = FakeSendSettingsSource()
-        let sleepBox = GatedSleep()
-        let settle = SettleSpy()
-        let confirm = ConfirmSpy()
-        confirm.answer = false
-        let close = CloseSpy()
-        let model = makeModel(source, settings, sleepBox, settle, confirm, close)
+        let model = makeModel(source, settings, sleepBox, settle, close)
 
         #expect(!(await model.send()))
 
         #expect(await source.sends.count == 1)
+        #expect(await source.sends.first?.acks.isEmpty == true)
         #expect(await source.cancels.isEmpty)
-        #expect(confirm.calls == 1)
-        #expect(model.state == .idle)
-        #expect(!model.isBusy, "a cancelled send leaves the draft editable")
+        guard case .failed(let message) = model.state else {
+            Issue.record("expected the refusal to show, got \(model.state)")
+            return
+        }
+        #expect(message.contains("another account"))
+        #expect(!model.isBusy, "a refused send leaves the draft editable")
         #expect(close.calls == 0)
     }
 
@@ -250,9 +214,8 @@ private func eventually(_ predicate: @MainActor () async -> Bool) async -> Bool 
         let settings = FakeSendSettingsSource()
         let sleepBox = GatedSleep()
         let settle = SettleSpy()
-        let confirm = ConfirmSpy()
         let close = CloseSpy()
-        let model = makeModel(source, settings, sleepBox, settle, confirm, close)
+        let model = makeModel(source, settings, sleepBox, settle, close)
         #expect(await model.send())
 
         #expect(await model.undo())
@@ -279,9 +242,8 @@ private func eventually(_ predicate: @MainActor () async -> Bool) async -> Bool 
         let settings = FakeSendSettingsSource()
         let sleepBox = GatedSleep()
         let settle = SettleSpy()
-        let confirm = ConfirmSpy()
         let close = CloseSpy()
-        let model = makeModel(source, settings, sleepBox, settle, confirm, close)
+        let model = makeModel(source, settings, sleepBox, settle, close)
         #expect(await model.send())
 
         #expect(!(await model.undo()))
@@ -301,9 +263,8 @@ private func eventually(_ predicate: @MainActor () async -> Bool) async -> Bool 
         let settings = FakeSendSettingsSource()
         let sleepBox = GatedSleep()
         let settle = SettleSpy()
-        let confirm = ConfirmSpy()
         let close = CloseSpy()
-        let model = makeModel(source, settings, sleepBox, settle, confirm, close)
+        let model = makeModel(source, settings, sleepBox, settle, close)
 
         #expect(!(await model.send()))
 
@@ -319,9 +280,8 @@ private func eventually(_ predicate: @MainActor () async -> Bool) async -> Bool 
         let settings = FakeSendSettingsSource()
         let sleepBox = GatedSleep()
         let settle = SettleSpy()
-        let confirm = ConfirmSpy()
         let close = CloseSpy()
-        let model = makeModel(source, settings, sleepBox, settle, confirm, close)
+        let model = makeModel(source, settings, sleepBox, settle, close)
         #expect(!(await model.send()))
         await source.configure(error: nil)
 
@@ -349,9 +309,8 @@ private func eventually(_ predicate: @MainActor () async -> Bool) async -> Bool 
         await settings.answer(with: 10)
         let sleepBox = GatedSleep()
         let settle = SettleSpy()
-        let confirm = ConfirmSpy()
         let close = CloseSpy()
-        let model = makeModel(source, settings, sleepBox, settle, confirm, close)
+        let model = makeModel(source, settings, sleepBox, settle, close)
 
         #expect(await model.send())
         #expect(model.state == .held(attemptId: "attempt-1", remaining: 10))

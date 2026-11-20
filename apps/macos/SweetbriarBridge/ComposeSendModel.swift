@@ -1,16 +1,17 @@
 // Sending in the compose window across the L1 boundary (spec/05
 // "Outbox state machine", spec/08 "Sending"): settle the pending save,
 // queue the current revision under a fresh key, hold the attempt for the
-// registered undo window, and cancel it on Undo. The cross-account
-// acknowledgement lives only here and is never persisted (spec/05).
-// AppKit alerts and the window's own close stay in the shell.
+// registered undo window, and cancel it on Undo. The window's own close
+// stays in the shell. A reply's cross-account confirmation comes with
+// the banner in M4.4d: until then its `Conflict` shows as any other
+// failure.
 
 import Foundation
 import Observation
 
 /// One compose window's send flow over `SendSource` (spec/05, 07, 08).
-/// The window supplies its pending-save settle, its cross-account alert
-/// and its close; tests substitute fakes and a controllable sleeper.
+/// The window supplies its pending-save settle and its close; tests
+/// substitute fakes and a controllable sleeper.
 @MainActor
 @Observable
 public final class ComposeSendModel {
@@ -24,8 +25,6 @@ public final class ComposeSendModel {
     /// Settle the window's pending save the way Save/Close already do;
     /// answer the current saved revision id, nil when nothing is saved.
     public typealias SettlePendingSave = @MainActor () async throws -> String?
-    /// Ask once whether to send from the selected account anyway.
-    public typealias ConfirmCrossAccount = @MainActor () async -> Bool
     /// Close the compose window after the hold ends without Undo.
     public typealias CloseAfterHold = @MainActor () -> Void
 
@@ -35,7 +34,6 @@ public final class ComposeSendModel {
     private let settingsSource: any SendSafetySettingsSource
     private let draftId: String
     private let settlePendingSave: SettlePendingSave
-    private let confirmCrossAccount: ConfirmCrossAccount
     private let closeAfterHold: CloseAfterHold
     private let sleep: @Sendable (Duration) async throws -> Void
 
@@ -52,7 +50,6 @@ public final class ComposeSendModel {
         settingsSource: any SendSafetySettingsSource,
         draftId: String,
         settlePendingSave: @escaping SettlePendingSave,
-        confirmCrossAccount: @escaping ConfirmCrossAccount = { false },
         closeAfterHold: @escaping CloseAfterHold = {},
         sleep: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) }
     ) {
@@ -60,7 +57,6 @@ public final class ComposeSendModel {
         self.settingsSource = settingsSource
         self.draftId = draftId
         self.settlePendingSave = settlePendingSave
-        self.confirmCrossAccount = confirmCrossAccount
         self.closeAfterHold = closeAfterHold
         self.sleep = sleep
     }
@@ -74,10 +70,8 @@ public final class ComposeSendModel {
         }
     }
 
-    /// Settle, queue and hold the current saved revision. A `Conflict`
-    /// naming `cross_account` asks once, then resends the same action
-    /// under the same key with the window-only acknowledgement. Any
-    /// other failure keeps the draft editable and carries its message.
+    /// Settle, queue and hold the current saved revision. A failure
+    /// keeps the draft editable and carries its message.
     @discardableResult
     public func send() async -> Bool {
         guard !isBusy else { return false }
@@ -103,24 +97,6 @@ public final class ComposeSendModel {
         do {
             let queued = try await source.sendDraft(
                 idempotencyKey: key, draftId: draftId, revisionId: revision, acks: [])
-            await beginHold(queued.attemptId)
-            return true
-        } catch {
-            guard Self.namesCrossAccount(error) else {
-                fail(with: error)
-                return false
-            }
-        }
-        // The ask happens once; the confirmation retry is the same action
-        // under the same key, now carrying the acknowledgement.
-        guard await confirmCrossAccount() else {
-            state = .idle
-            return false
-        }
-        do {
-            let queued = try await source.sendDraft(
-                idempotencyKey: key, draftId: draftId, revisionId: revision,
-                acks: [Self.crossAccountAck])
             await beginHold(queued.attemptId)
             return true
         } catch {
@@ -206,15 +182,4 @@ public final class ComposeSendModel {
         state = .failed(
             message: (error as? CoreFailure)?.errorDescription ?? error.localizedDescription)
     }
-
-    /// The core names the missing acknowledgement in the `Conflict`
-    /// detail (spec/05, 07), so the window asks before sending again.
-    private static func namesCrossAccount(_ error: any Error) -> Bool {
-        guard case .conflict(let detail) = error as? CoreFailure else { return false }
-        return detail.contains("cross_account")
-    }
-
-    /// spec/07's acknowledgement name for a confirmed cross-account send;
-    /// it rides only on this request and is never persisted (spec/05).
-    private static let crossAccountAck = "cross_account"
 }

@@ -70,10 +70,6 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
                 guard let self else { return nil }
                 return try await self.settlePendingSaveForSend()
             },
-            confirmCrossAccount: { [weak self] in
-                guard let self else { return false }
-                return await self.confirmCrossAccount()
-            },
             closeAfterHold: { [weak self] in
                 Task { @MainActor [weak self] in _ = await self?.closeAndWait() }
             })
@@ -430,28 +426,6 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
     @objc private func undoSend() {
         guard case .held = sendModel?.state else { return }
         Task { [self] in _ = await sendModel?.undo() }
-    }
-
-    /// Ask once per send whether to send from the selected account anyway
-    /// (spec/05). Cancel is the default; the acknowledgement lives only
-    /// in this answer and is never persisted.
-    private func confirmCrossAccount() async -> Bool {
-        guard let window, window.attachedSheet == nil,
-            let identity = identityControls.model.selectedIdentity
-        else { return false }
-        let name = identity.accountName.isEmpty ? identity.email : identity.accountName
-        return await withCheckedContinuation { continuation in
-            let alert = NSAlert()
-            alert.messageText = "Send from \(name) anyway?"
-            alert.informativeText =
-                "This reply sends from \(identity.email). Its account differs from the one that received the message."
-            alert.alertStyle = .warning
-            alert.addButton(withTitle: "Cancel")
-            alert.addButton(withTitle: "Send")
-            alert.beginSheetModal(for: window) { response in
-                continuation.resume(returning: response == .alertSecondButtonReturn)
-            }
-        }
     }
 
     func windowDidResignKey(_ notification: Notification) {
