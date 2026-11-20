@@ -2,8 +2,8 @@
 // `NSOutlineView` over the bridge's `SidebarModel`. Section headings
 // are group rows; entries sit below them with their unread counts.
 // Choosing an entry that opens a window calls `onChoose`, Drafts
-// (local) `onChooseDrafts`; an entry that opens nothing shows disabled,
-// its note as the tooltip.
+// (local) `onChooseDrafts`, Out Box `onChooseOutBox`; an entry that
+// opens nothing shows disabled, its note as the tooltip.
 
 import AppKit
 import Observation
@@ -65,6 +65,8 @@ final class SidebarViewController: NSViewController, NSMenuDelegate {
     var onChoose: (@MainActor (WindowSpec) -> Void)?
     /// Choosing Drafts (local) (spec/08 "Drafts (local)").
     var onChooseDrafts: (@MainActor () -> Void)?
+    /// Choosing Out Box (spec/08 "Out Box").
+    var onChooseOutBox: (@MainActor () -> Void)?
     /// Clicking an account's health row (spec/08 "Activity / account
     /// health").
     var onOpenActivity: (@MainActor () -> Void)?
@@ -335,7 +337,7 @@ final class SidebarViewController: NSViewController, NSMenuDelegate {
 
     private static func isChoosable(_ entry: SidebarModel.Entry) -> Bool {
         switch entry.target {
-        case .window, .drafts: return true
+        case .window, .drafts, .outBox: return true
         case .unavailable: return false
         }
     }
@@ -344,6 +346,7 @@ final class SidebarViewController: NSViewController, NSMenuDelegate {
         switch entry.target {
         case .window(let spec): onChoose?(spec)
         case .drafts: onChooseDrafts?()
+        case .outBox: onChooseOutBox?()
         case .unavailable: break
         }
     }
@@ -701,7 +704,7 @@ private final class SidebarEntryCellView: NSTableCellView {
         unread.stringValue = count > 0 ? "\(count)" : ""
         unread.isHidden = count == 0
         switch entry.target {
-        case .window, .drafts:
+        case .window, .drafts, .outBox:
             title.textColor = .labelColor
             toolTip = nil
         case .unavailable(let note):
