@@ -721,7 +721,10 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
             abandonAlert == nil, !identityControls.isDeciding, !model.isSaving, model.conflict == nil,
             model.draft?.state == .editing,
             let identity = identityControls.model.selectedIdentity,
-            identity.sendable != .unavailable
+            identity.sendable != .unavailable,
+            // Only Proton sends in the pilot: SMTP is later (spec/05), so an
+            // IMAP attempt would wait in the queue with nothing to send it.
+            identity.accountKind == .proton
         else { return false }
         return !content.to.isEmpty || !content.cc.isEmpty || !content.bcc.isEmpty
     }
@@ -731,7 +734,7 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
         sendButton.toolTip =
             sendModel == nil
             ? "Sending needs an archive that can write and a sending identity."
-            : "Send this draft."
+            : "Send this draft from a Proton identity."
         guard let sendModel else {
             sendBar.isHidden = true
             return
