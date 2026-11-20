@@ -1042,6 +1042,49 @@ extension CoreBridge: ProtonSignInSource {
     }
 }
 
+/// Account settings (spec/07 "Account management", spec/10
+/// "Notifications"); the types and their mapping live in
+/// `AccountSettings.swift`.
+extension CoreBridge: AccountSettingsSource {
+    /// `update_account` under a shell-made idempotency key: the display
+    /// name only (spec/07).
+    public func updateAccount(accountId: String, displayName: String) async throws -> Receipt {
+        let token = SweetbriarCore.CancelToken()
+        let receipt = try await Self.withCancellation(token: token) {
+            try await self.core.updateAccount(
+                token: token, idempotencyKey: UUID().uuidString,
+                accountId: accountId, displayName: displayName
+            )
+        }
+        return Receipt(receipt)
+    }
+
+    /// `pause_account` under a shell-made idempotency key: an active
+    /// account's worker stops before the receipt (spec/07).
+    public func pauseAccount(accountId: String) async throws -> Receipt {
+        let token = SweetbriarCore.CancelToken()
+        let receipt = try await Self.withCancellation(token: token) {
+            try await self.core.pauseAccount(
+                token: token, idempotencyKey: UUID().uuidString, accountId: accountId
+            )
+        }
+        return Receipt(receipt)
+    }
+
+    /// `resume_account` under a shell-made idempotency key: a paused
+    /// account's worker starts once the state change commits
+    /// (spec/07).
+    public func resumeAccount(accountId: String) async throws -> Receipt {
+        let token = SweetbriarCore.CancelToken()
+        let receipt = try await Self.withCancellation(token: token) {
+            try await self.core.resumeAccount(
+                token: token, idempotencyKey: UUID().uuidString, accountId: accountId
+            )
+        }
+        return Receipt(receipt)
+    }
+}
+
 extension Receipt {
     /// Map the generated record field by field.
     init(_ generated: SweetbriarCore.Receipt) {

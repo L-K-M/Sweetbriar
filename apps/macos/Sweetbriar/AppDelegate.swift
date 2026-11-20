@@ -222,7 +222,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard !terminating, let session, let backups, let composeCues else { return }
         if settingsWindow == nil {
             settingsWindow = AppearanceSettingsWindow(
-                session: session, shared: appearance, cues: composeCues, backups: backups)
+                session: session, shared: appearance, cues: composeCues, backups: backups,
+                onSignInAgain: { [weak self] account in
+                    self?.mainWindow?.beginProtonSignIn(signingInAgain: account)
+                })
         }
         if let tab { settingsWindow?.select(tab) }
         settingsWindow?.showWindow(nil)

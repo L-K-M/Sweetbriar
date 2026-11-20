@@ -273,7 +273,8 @@ struct ComposeCueSettingsTests {
         probe.cues = cues
         let shared = SharedAppearance()
         let settings = AppearanceSettingsWindow(
-            session: session, shared: shared, cues: cues, backups: backups)
+            session: session, shared: shared, cues: cues, backups: backups,
+            onSignInAgain: { _ in })
         probe.settings = settings
         let result: Result<Void, any Error>
         do {
