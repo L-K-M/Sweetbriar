@@ -1085,6 +1085,30 @@ extension CoreBridge: AccountSettingsSource {
     }
 }
 
+/// Diagnostics (spec/07 "Queries", spec/10 "Privacy"); the protocol
+/// lives in `Diagnostics.swift`.
+extension CoreBridge: DiagnosticsSource {
+    public func diagnosticsPackage(appVersion: String, osVersion: String) async throws -> String {
+        let token = SweetbriarCore.CancelToken()
+        return try await Self.withCancellation(token: token) {
+            try await self.core.diagnosticsPackage(
+                token: token, appVersion: appVersion, osVersion: osVersion)
+        }
+    }
+}
+
+/// New mail (spec/07 "Subscriptions", spec/10 "Notifications");
+/// the types and their mapping live in `NewMail.swift`.
+extension CoreBridge: NewMailSource {
+    public func subscribeNewMail() async throws -> any NewMailStream {
+        let token = SweetbriarCore.CancelToken()
+        let subscription = try await Self.withCancellation(token: token) {
+            try await self.core.subscribeNewMail(token: token)
+        }
+        return NewMailSubscription(subscription)
+    }
+}
+
 extension Receipt {
     /// Map the generated record field by field.
     init(_ generated: SweetbriarCore.Receipt) {

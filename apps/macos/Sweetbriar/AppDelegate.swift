@@ -19,7 +19,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var backups: SharedBackups?
     private var composeWindows: ComposeWindows?
     private var composeCues: SharedComposeCue?
+    /// The new-mail notification loop, started once the session's core
+    /// is open and stopped with the archive or at termination
+    /// (spec/10 "Notifications").
+    private var newMailNotifier: NewMailNotifier?
     private var terminating = false
+    /// Set once the archive closed; no new-mail notifier starts after.
+    private var archiveIsClosed = false
 
     /// The menu builder is retained: `NSMenuItem.target` is weak, so
     /// the Debug items die with their builder otherwise.
@@ -61,6 +67,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         self.session = session
         observeAppActive()
+
+        // The notifier starts once the archive session is open, never
+        // at launch: a permission request waits for the first arrival.
+        Task { @MainActor [weak self] in
+            guard let self, !self.terminating else { return }
+            let bridge = try? await session.bridge()
+            // Re-check after the open: a quit or an archive close that
+            // ran meanwhile already stopped the (then absent) notifier,
+            // so starting one now would outlive the archive. A failed
+            // open surfaces in the main window; there is nothing to
+            // notify about without an archive.
+            guard let bridge, !self.terminating, !self.archiveIsClosed else { return }
+            let notifier = NewMailNotifier(
+                source: bridge, poster: UNUserNotificationCenterPoster())
+            self.newMailNotifier = notifier
+            notifier.start()
+        }
 
         let backups = SharedBackups(
             beforeRestore: { [weak self] in
@@ -166,7 +189,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// one over the main window's Activity model (spec/08).
     private func showActivity() {
         guard !terminating, let mainWindow,
-              let activity = mainWindow.activity, let bridge = mainWindow.bridge
+              let activity = mainWindow.activity, let bridge = mainWindow.bridge,
+              // A retired content leaves no model, and a model from an
+              // older bridge must not open over the current one.
+              mainWindow.activitySourceID == ObjectIdentifier(bridge)
         else { return }
         if activityWindow == nil {
             activityWindow = ActivityWindowController(model: activity, bridge: bridge) {
@@ -397,6 +423,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func archiveClosed() async {
+        archiveIsClosed = true
+        await newMailNotifier?.stop()
+        newMailNotifier = nil
         settingsWindow?.retireEditor()
         retireActivityWindow()
         await composeCues?.stopAndWait()
@@ -474,6 +503,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             await settingsWindow?.cancelAndWait()
             await composeCues?.stopAndWait()
             await prototypeController?.closeAndAwaitModel()
+            await newMailNotifier?.stop()
             await mainWindow?.retireContent()
             await appearance.reset()
             await session.shutdown()

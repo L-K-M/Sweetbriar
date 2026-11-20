@@ -7,6 +7,37 @@ use super::*;
 use crate::AccountKind;
 
 #[test]
+fn valid_json_without_a_refusal_key_contributes_no_refusal() {
+    // Unparseable JSON and JSON holding none of spec/02's refusal
+    // keys contribute no refusal, as the parser's doc says.
+    assert_eq!(parse_refusal("not json"), None);
+    assert_eq!(parse_refusal("{}"), None);
+    assert_eq!(parse_refusal(r#"{"v":1}"#), None);
+    // Valid JSON of another shape is not a refusal either.
+    assert_eq!(parse_refusal("[]"), None);
+    assert_eq!(parse_refusal("42"), None);
+
+    let refusal = parse_refusal(
+        r#"{"v":1,"code":2064,
+            "message":"Proton refused this version for owner@example.test",
+            "at":1735689600000}"#,
+    )
+    .expect("the refusal keys are present");
+    assert_eq!(refusal.code, Some(2064));
+    assert_eq!(
+        refusal.message.as_deref(),
+        Some("Proton refused this version for <address>")
+    );
+    assert_eq!(refusal.at_ms, Some(1735689600000));
+
+    // One key alone is still a refusal; an absent field stays absent.
+    let partial = parse_refusal(r#"{"code":2064}"#).expect("code is a refusal key");
+    assert_eq!(partial.code, Some(2064));
+    assert_eq!(partial.message, None);
+    assert_eq!(partial.at_ms, None);
+}
+
+#[test]
 fn a_fresh_store_reports_its_schema_and_the_shells_versions() {
     let scratch = ScratchDir::new("engine-diagnostics-fresh");
     let engine = block_on(Engine::open(scratch.path())).unwrap();

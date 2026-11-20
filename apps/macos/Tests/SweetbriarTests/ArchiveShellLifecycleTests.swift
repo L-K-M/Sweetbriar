@@ -343,6 +343,36 @@ struct ArchiveShellLifecycleTests {
     }
 
     @Test
+    func archiveClosedDropsTheActivityModelSoWindowActivityCannotOpen() async throws {
+        try await withShellBridge { bridge in
+            let appearance = SharedAppearance()
+            let backups = SharedBackups(didRestore: {}, didClose: {})
+            let controller = MainWindowController(
+                session: CoreSession { bridge }, appearance: appearance, backups: backups,
+                readingViewMemory: SharedReadingViewMemory()
+            )
+            do {
+                controller.start()
+                try #require(await shellEventually { controller.activity != nil })
+
+                await controller.archiveClosed()
+
+                // Window → Activity reads this model; a retired archive
+                // must leave none to open over the stopped one.
+                #expect(controller.activity == nil)
+                #expect(controller.activitySourceID == nil)
+            } catch {
+                await controller.retireContent()
+                await appearance.reset()
+                controller.window?.close()
+                throw error
+            }
+            await appearance.reset()
+            controller.window?.close()
+        }
+    }
+
+    @Test
     func closedCoreRetiresContentOnceAndQuitWaitsForThatRetirement() async throws {
         let gate = ShellGate()
         let state = ShellWaitState()

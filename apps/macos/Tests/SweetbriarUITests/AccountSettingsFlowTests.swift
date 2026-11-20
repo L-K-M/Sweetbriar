@@ -46,16 +46,9 @@ final class AccountSettingsFlowTests: XCTestCase {
         app.menuBars.menuBarItems["Sweetbriar"].click()
         app.menuBars.menuItems["Settings…"].click()
 
-        // The tab picker's items are tabs on macOS 27 and other button
-        // kinds on macOS 26, so the query takes any of them by label.
         let settings = app.windows["Settings"]
         XCTAssertTrue(settings.waitForExistence(timeout: Self.timeout))
-        let tabKinds: [XCUIElement.ElementType] = [.tab, .radioButton, .button]
-        let accountsTab = settings.descendants(matching: .any)
-            .matching(NSPredicate(
-                format: "label == %@ AND elementType IN %@", "Accounts",
-                tabKinds.map { $0.rawValue }))
-            .firstMatch
+        let accountsTab = Self.accountsTab(in: settings)
         XCTAssertTrue(accountsTab.waitForExistence(timeout: Self.timeout))
         accountsTab.click()
 
@@ -90,6 +83,61 @@ final class AccountSettingsFlowTests: XCTestCase {
         XCTAssertEqual(stored?.state, "paused")
     }
 
+    @MainActor
+    func testDiagnosticsPreviewShowsThePackageAndClosesWithoutSaving() throws {
+        continueAfterFailure = false
+        let roots = FileManager.default.temporaryDirectory
+            .appendingPathComponent("sweetbriar-diagnostics-\(UUID().uuidString)")
+        let dataRoot = roots.appendingPathComponent("data")
+        let cacheRoot = roots.appendingPathComponent("cache")
+        defer { try? FileManager.default.removeItem(at: roots) }
+
+        let app = XCUIApplication()
+        app.launchArguments = Self.launchArguments(dataRoot: dataRoot, cacheRoot: cacheRoot)
+        app.launch()
+        let window = app.windows["Sweetbriar"]
+        XCTAssertTrue(window.waitForExistence(timeout: Self.timeout))
+        XCTAssertTrue(window.outlines["sidebar"].staticTexts["Local Archive"]
+            .waitForExistence(timeout: Self.timeout))
+
+        app.menuBars.menuBarItems["Sweetbriar"].click()
+        app.menuBars.menuItems["Settings…"].click()
+
+        let settings = app.windows["Settings"]
+        XCTAssertTrue(settings.waitForExistence(timeout: Self.timeout))
+        let accountsTab = Self.accountsTab(in: settings)
+        XCTAssertTrue(accountsTab.waitForExistence(timeout: Self.timeout))
+        accountsTab.click()
+
+        let diagnostics = settings.buttons["accounts-diagnostics"]
+        XCTAssertTrue(diagnostics.waitForExistence(timeout: Self.timeout))
+        diagnostics.click()
+
+        // The document always holds a schema_version key (spec/10).
+        let preview = app.descendants(matching: .any)["diagnostics-preview"].firstMatch
+        XCTAssertTrue(preview.waitForExistence(timeout: Self.timeout))
+        XCTAssertTrue(waitForValue(preview, containing: "schema_version"))
+
+        app.buttons["diagnostics-close"].firstMatch.click()
+        XCTAssertTrue(diagnostics.waitForExistence(timeout: Self.timeout))
+
+        app.terminate()
+        XCTAssertTrue(app.wait(for: .notRunning, timeout: Self.timeout))
+    }
+
+    /// The Settings tab picker's Accounts item. Its items are tabs on
+    /// macOS 27 and other button kinds on macOS 26, so the query takes
+    /// any of them by label.
+    @MainActor
+    private static func accountsTab(in settings: XCUIElement) -> XCUIElement {
+        let tabKinds: [XCUIElement.ElementType] = [.tab, .radioButton, .button]
+        return settings.descendants(matching: .any)
+            .matching(NSPredicate(
+                format: "label == %@ AND elementType IN %@", "Accounts",
+                tabKinds.map { $0.rawValue }))
+            .firstMatch
+    }
+
     private static func launchArguments(dataRoot: URL, cacheRoot: URL) -> [String] {
         [
             "-dataRoot", dataRoot.path,
@@ -103,6 +151,14 @@ final class AccountSettingsFlowTests: XCTestCase {
     private func waitForValue(_ element: XCUIElement, _ value: String) -> Bool {
         let matched = expectation(
             for: NSPredicate(format: "value == %@", value), evaluatedWith: element)
+        return XCTWaiter().wait(for: [matched], timeout: Self.timeout) == .completed
+    }
+
+    /// The same, for a value that only contains the text.
+    @MainActor
+    private func waitForValue(_ element: XCUIElement, containing value: String) -> Bool {
+        let matched = expectation(
+            for: NSPredicate(format: "value CONTAINS %@", value), evaluatedWith: element)
         return XCTWaiter().wait(for: [matched], timeout: Self.timeout) == .completed
     }
 

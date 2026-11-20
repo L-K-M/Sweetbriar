@@ -37,7 +37,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     /// restarted after a restore; the sidebar and the Activity window
     /// share it.
     private(set) var activity: ActivityModel?
-    private var activitySourceID: ObjectIdentifier?
+    private(set) var activitySourceID: ObjectIdentifier?
     private var contentTasks = ArchiveViewTasks()
     private var contentSerial: UInt64 = 0
     private var retirement: Task<Void, Never>?
@@ -128,7 +128,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         contentTasks.retire()
         // The Activity model's reads and subscription must not outlive
         // this content; rebuildAfterRestore starts it again.
-        activity?.stop()
+        retireActivity()
         sidebar?.onChoose = nil
         sidebar?.onChooseDrafts = nil
         let drafts = self.drafts
@@ -159,6 +159,15 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         }
         retirement = task
         await task.value
+    }
+
+    /// Stop and drop the shared Activity model: Window → Activity must
+    /// not open a stopped model over a retired bridge and a closed
+    /// archive. `install` starts a fresh one for the new content.
+    func retireActivity() {
+        activity?.stop()
+        activity = nil
+        activitySourceID = nil
     }
 
     func rebuildAfterRestore() async {
