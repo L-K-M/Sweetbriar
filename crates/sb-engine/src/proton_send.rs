@@ -295,7 +295,7 @@ async fn submit_one(
             };
             let now = worker.resources().now();
             let id = claimed.attempt_id.clone();
-            fail(worker, &id, &failure, now).await?;
+            fail(worker, evidence, &id, &failure, now).await?;
             backoff.record_success(&claimed.attempt_id);
             return Ok(SubmitOutcome::Done);
         }
