@@ -1,10 +1,10 @@
 //! Proton send submission on the account worker (spec/05 "Outbox
-//! state machine" step 4; plan M4.3e2). One claimed attempt at a
-//! time: the recipient key lookups, the draft create or update, the
-//! packages, `send_requested_at`, the send and the reply's
-//! interpretation. A failure before the send request requeues the
-//! attempt under an in-memory backoff; a lost send reply becomes
-//! `outcome_unknown` and is never retried.
+//! state machine" step 4; plan M4.3e2, M4.3e3). One claimed attempt
+//! at a time: the recipient key lookups, the draft create or update,
+//! the attachment uploads, the packages, `send_requested_at`, the send
+//! and the reply's interpretation. A failure before the send request
+//! requeues the attempt under an in-memory backoff; a lost send reply
+//! becomes `outcome_unknown` and is never retried.
 //!
 //! Nothing here persists a backoff or a key: the backoff lives in the
 //! worker's memory (spec/05 step 7), and the sender key stays in the
@@ -15,13 +15,14 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use sb_resources::{
-    APP_IDENTITY_REFUSED_REASON, ClaimedRecipient, ClaimedSend, DraftAction, DraftAddress,
-    DraftCreate, DraftTemplate, FrozenSend, KeyStore, ProtonClient, RECIPIENT_TYPE_EXTERNAL,
-    RECIPIENT_TYPE_INTERNAL, RecipientKeys, RecipientKind, RefusalKind, SESSION_REFUSED_REASON,
-    SendAttachment, SendBody, SendError, SendFailure, SendFailureRejection, SendPackages,
-    SendParentKind, SendRecipient, SendRefusal, SendTransportError, Session, StoreError, Timestamp,
-    WritePriority, claim_send_attempt, commit_send_requested, mark_outcome_unknown,
-    mark_send_accepted, mark_send_failed, pause_for_reason, pause_for_session, record_proton_draft,
+    APP_IDENTITY_REFUSED_REASON, AttachmentUpload, ClaimedRecipient, ClaimedSend, DraftAction,
+    DraftAddress, DraftCreate, DraftTemplate, FrozenAttachment, FrozenSend, KeyStore, ProtonClient,
+    ProtonDraftAttachment, ProtonUpload, RECIPIENT_TYPE_EXTERNAL, RECIPIENT_TYPE_INTERNAL,
+    RecipientKeys, RecipientKind, RefusalKind, SESSION_REFUSED_REASON, SendBody, SendError,
+    SendFailure, SendFailureRejection, SendPackages, SendParentKind, SendRecipient, SendRefusal,
+    SendTransportError, Session, StoreError, Timestamp, WritePriority, claim_send_attempt,
+    commit_send_requested, mark_outcome_unknown, mark_send_accepted, mark_send_failed,
+    pause_for_reason, pause_for_session, record_proton_draft, record_proton_upload,
     requeue_before_request,
 };
 
@@ -142,8 +143,7 @@ pub(crate) async fn submit_queued_attempts(
 enum SubmitOutcome {
     /// A terminal state was committed (or another transition won).
     Done,
-    /// The attempt is back in `queued`, waiting out its backoff or for
-    /// M4.3e3's uploads.
+    /// The attempt is back in `queued`, waiting out its backoff.
     Requeued,
 }
 
@@ -194,19 +194,6 @@ async fn submit_one(
             return Ok(SubmitOutcome::Done);
         }
     };
-    if !frozen.attachments.is_empty() {
-        // M4.3e3 uploads them; until then the attempt waits in `queued`
-        // and nothing reaches Proton.
-        let now = worker.resources().now();
-        let id = claimed.attempt_id.clone();
-        worker
-            .resources()
-            .write(WritePriority::Sync, move |tx| {
-                requeue_before_request(tx, &id, now)
-            })
-            .await?;
-        return Ok(SubmitOutcome::Requeued);
-    }
     let (session, keys) = session_and_keys(sessions, account_id).await?;
 
     // Step 1: each recipient's key lookup. An external address whose
@@ -298,20 +285,152 @@ async fn submit_one(
         }
     };
 
-    // Step 4: the packages, then `send_requested_at` in its own write.
-    let bodies = [SendBody {
-        mime_type: &frozen.body.mime_type,
-        data: &frozen.body.data,
-    }];
-    let attachments: [SendAttachment; 0] = [];
-    let packages: SendPackages =
-        match keys.build_packages(&claimed.envelope_from, &recipients, &bodies, &attachments) {
-            Ok(packages) => packages,
+    // Step 3: upload the frozen attachments to the draft, in the
+    // frozen MIME's order, recording each before the next request. A
+    // retry with a recorded draft reads it first: an attachment whose
+    // reply was lost is adopted from the draft rather than uploaded
+    // again (spec/05 step 3).
+    let mut uploads = claimed.uploads.clone();
+    let mut key_packets: HashMap<String, Vec<u8>> = HashMap::new();
+    if let Some(recorded_draft) = claimed.proton_draft_id.clone() {
+        // Every retry reads its recorded draft, even with no frozen
+        // attachments: an attachment on the draft that the frozen
+        // message doesn't carry must fail rather than ride along.
+        let draft_attachments = match client.read_draft(&session, &recorded_draft).await {
+            Ok(attachments) => attachments,
+            Err(error) => {
+                record_diagnostics(worker, account_id, &error).await;
+                let mapped = interpret(&error, false);
+                return apply_action(worker, account_id, &claimed, mapped, false, backoff).await;
+            }
+        };
+        match reconcile_draft_uploads(
+            &recorded_draft,
+            &draft_attachments,
+            &frozen.attachments,
+            &uploads,
+        ) {
+            Ok(recovered) => {
+                for upload in recovered {
+                    let applied = worker
+                        .resources()
+                        .write(WritePriority::Sync, {
+                            let id = claimed.attempt_id.clone();
+                            let upload = upload.clone();
+                            move |tx| record_proton_upload(tx, &id, &upload)
+                        })
+                        .await?;
+                    if !applied {
+                        return Ok(SubmitOutcome::Done);
+                    }
+                    uploads.push(upload);
+                }
+            }
+            Err(message) => {
+                fail_definitely(worker, backoff, &claimed, message).await?;
+                return Ok(SubmitOutcome::Done);
+            }
+        }
+        for attachment in draft_attachments {
+            key_packets.insert(attachment.id, attachment.key_packets);
+        }
+    }
+    while uploads.len() < frozen.attachments.len() {
+        let index = uploads.len();
+        let attachment = &frozen.attachments[index];
+        // The bytes come from the frozen MIME; one that can't be read is
+        // a definite failure, never a send without it (spec/05 step 3).
+        let data = match attachment.extract(&bytes) {
+            Ok(data) => data,
+            Err(message) => {
+                fail_definitely(worker, backoff, &claimed, message).await?;
+                return Ok(SubmitOutcome::Done);
+            }
+        };
+        let encrypted = match keys.encrypt_attachment(&claimed.envelope_from, &data) {
+            Ok(encrypted) => encrypted,
             Err(error) => {
                 let action = sender_error_action(error);
                 return apply_action(worker, account_id, &claimed, action, false, backoff).await;
             }
         };
+        let upload = AttachmentUpload {
+            filename: attachment.name.clone(),
+            mime_type: attachment.media_type.clone(),
+            encrypted,
+            inline: false,
+            content_id: None,
+        };
+        let uploaded = match client.upload_attachment(&session, &draft_id, &upload).await {
+            Ok(uploaded) => uploaded,
+            Err(error) => {
+                record_diagnostics(worker, account_id, &error).await;
+                let mapped = interpret(&error, false);
+                return apply_action(worker, account_id, &claimed, mapped, false, backoff).await;
+            }
+        };
+        let recorded = ProtonUpload {
+            index,
+            id: uploaded.id.clone(),
+            name: attachment.name.clone(),
+            mime_type: attachment.media_type.clone(),
+            size: u64::try_from(uploaded.size).unwrap_or(data.len() as u64),
+        };
+        let applied = worker
+            .resources()
+            .write(WritePriority::Sync, {
+                let id = claimed.attempt_id.clone();
+                let recorded = recorded.clone();
+                move |tx| record_proton_upload(tx, &id, &recorded)
+            })
+            .await?;
+        if !applied {
+            return Ok(SubmitOutcome::Done);
+        }
+        key_packets.insert(uploaded.id, upload.encrypted.key_packets);
+        uploads.push(recorded);
+    }
+
+    // Step 4: the packages, then `send_requested_at` in its own write.
+    let bodies = [SendBody {
+        mime_type: &frozen.body.mime_type,
+        data: &frozen.body.data,
+    }];
+    let mut send_attachments = Vec::with_capacity(uploads.len());
+    for upload in &uploads {
+        let Some(packets) = key_packets.get(&upload.id) else {
+            fail_definitely(
+                worker,
+                backoff,
+                &claimed,
+                format!(
+                    "the draft didn't carry attachment {}'s key packets",
+                    upload.id
+                ),
+            )
+            .await?;
+            return Ok(SubmitOutcome::Done);
+        };
+        match keys.send_attachment(&claimed.envelope_from, &upload.id, packets) {
+            Ok(send) => send_attachments.push(send),
+            Err(error) => {
+                let action = sender_error_action(error);
+                return apply_action(worker, account_id, &claimed, action, false, backoff).await;
+            }
+        }
+    }
+    let packages: SendPackages = match keys.build_packages(
+        &claimed.envelope_from,
+        &recipients,
+        &bodies,
+        &send_attachments,
+    ) {
+        Ok(packages) => packages,
+        Err(error) => {
+            let action = sender_error_action(error);
+            return apply_action(worker, account_id, &claimed, action, false, backoff).await;
+        }
+    };
     let now = worker.resources().now();
     let id = claimed.attempt_id.clone();
     let committed = worker
@@ -346,6 +465,82 @@ async fn submit_one(
             apply_action(worker, account_id, &claimed, mapped, true, backoff).await
         }
     }
+}
+
+/// Reconciles a retry's draft read with the attempt's recorded uploads
+/// and the frozen attachments (spec/05 step 3). The recorded uploads
+/// occupy the draft's leading positions and must still carry their
+/// ids; an unrecorded draft attachment is adopted when its reported
+/// name, MIME type and size match the next pending frozen attachment.
+/// Any other shape fails the attempt before the send request, naming
+/// the draft.
+fn reconcile_draft_uploads(
+    draft_id: &str,
+    draft: &[ProtonDraftAttachment],
+    frozen: &[FrozenAttachment],
+    recorded: &[ProtonUpload],
+) -> Result<Vec<ProtonUpload>, String> {
+    let mismatch =
+        || format!("draft {draft_id} carries an attachment that doesn't match the frozen message");
+    if recorded.len() > frozen.len() {
+        return Err(format!(
+            "draft {draft_id} has fewer attachments than the attempt recorded"
+        ));
+    }
+    if draft.len() > frozen.len() {
+        return Err(format!(
+            "draft {draft_id} carries more attachments than the frozen message"
+        ));
+    }
+    if draft.len() < recorded.len() {
+        return Err(format!(
+            "draft {draft_id} carries fewer attachments than the attempt recorded"
+        ));
+    }
+    for (upload, attachment) in recorded.iter().zip(draft) {
+        if upload.id != attachment.id {
+            return Err(mismatch());
+        }
+    }
+    let mut recovered = Vec::new();
+    for (index, attachment) in draft.iter().enumerate().skip(recorded.len()) {
+        let expected = &frozen[index];
+        let size = u64::try_from(attachment.size).unwrap_or(u64::MAX);
+        if attachment.name != expected.name
+            || attachment.mime_type != expected.media_type
+            || expected.size != Some(size)
+        {
+            return Err(mismatch());
+        }
+        recovered.push(ProtonUpload {
+            index,
+            id: attachment.id.clone(),
+            name: attachment.name.clone(),
+            mime_type: attachment.mime_type.clone(),
+            size,
+        });
+    }
+    Ok(recovered)
+}
+
+/// A local failure that is never worth retrying: the attempt ends
+/// `failed`, so it can never be sent in this shape (spec/05 steps 3, 7).
+async fn fail_definitely(
+    worker: &crate::engine::Worker,
+    backoff: &mut SendBackoff,
+    claimed: &ClaimedSend,
+    message: String,
+) -> Result<(), Halt> {
+    let now = worker.resources().now();
+    let id = claimed.attempt_id.clone();
+    let failure = SendFailure {
+        code: None,
+        message,
+        rejected: None,
+    };
+    fail(worker, &id, &failure, now).await?;
+    backoff.record_success(&claimed.attempt_id);
+    Ok(())
 }
 
 /// The account's current session and unlocked keys, copied out of the

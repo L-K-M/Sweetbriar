@@ -11,7 +11,7 @@ use crate::{
     AttemptState, ComposeFormat, DraftAttachment, DraftContent, DraftRecipient, DraftSource,
     DraftState, IdentitySendable, RecipientState,
 };
-use sb_test_support::{Fault, execute_sql};
+use sb_test_support::{FakeAttachment, FakeMessage, Fault, execute_sql};
 use std::time::Duration;
 
 /// The account's primary address, which is also the internal recipient
@@ -114,6 +114,34 @@ struct Queued {
 /// Create, save and queue a draft to `to`, returning while it is
 /// `held`.
 async fn queue(h: &Harness, identity_id: &str, to: &[&str]) -> Queued {
+    queue_with(h, identity_id, to, &[]).await.0
+}
+
+/// [`queue`] with attachments, also returning each attachment's frozen
+/// bytes so a test can compare what the fake received.
+async fn queue_with(
+    h: &Harness,
+    identity_id: &str,
+    to: &[&str],
+    attachments: &[(&str, &[u8])],
+) -> (Queued, Vec<Vec<u8>>) {
+    let mut frozen = Vec::with_capacity(attachments.len());
+    let mut draft_attachments = Vec::with_capacity(attachments.len());
+    for (filename, bytes) in attachments {
+        let object = h
+            .core
+            .publish_draft_attachment(std::io::Cursor::new(bytes.to_vec()))
+            .await
+            .expect("the attachment publishes");
+        draft_attachments.push(DraftAttachment::New {
+            object,
+            filename: (*filename).to_owned(),
+            media_type: "text/plain".to_owned(),
+        });
+        frozen.push(bytes.to_vec());
+    }
+    let mut body = content(identity_id, to);
+    body.attachments = draft_attachments;
     let created = h
         .core
         .create_draft(&h.core.engine().new_idempotency_key(), DraftSource::New)
@@ -125,7 +153,7 @@ async fn queue(h: &Harness, identity_id: &str, to: &[&str]) -> Queued {
             &h.core.engine().new_idempotency_key(),
             &created.draft_id,
             None,
-            content(identity_id, to),
+            body,
         )
         .await
         .expect("the revision is saved");
@@ -139,11 +167,14 @@ async fn queue(h: &Harness, identity_id: &str, to: &[&str]) -> Queued {
         )
         .await
         .expect("the attempt is queued");
-    Queued {
-        draft_id: created.draft_id,
-        revision_id: saved.revision_id,
-        attempt_id: queued.attempt_id,
-    }
+    (
+        Queued {
+            draft_id: created.draft_id,
+            revision_id: saved.revision_id,
+            attempt_id: queued.attempt_id,
+        },
+        frozen,
+    )
 }
 
 /// Let the runtime run the background tasks.
@@ -605,58 +636,262 @@ async fn a_held_attempt_is_sent_by_a_poll_after_its_window_ends() {
 }
 
 #[tokio::test]
-async fn an_attempt_with_an_attachment_waits_for_the_upload_step() {
+async fn an_attempt_with_an_attachment_is_sent() {
     let h = setup(vec![TestAccount::new(USER, PASSWORD)]).await;
     let _id = sign_in(&h).await;
     let ident = identity(&h).await;
-    let object = h
-        .core
-        .publish_draft_attachment(std::io::Cursor::new(
-            b"Sweetbriar synthetic attachment bytes.".to_vec(),
-        ))
-        .await
-        .expect("the attachment publishes");
-    let created = h
-        .core
-        .create_draft(&h.core.engine().new_idempotency_key(), DraftSource::New)
-        .await
-        .expect("the draft is created");
-    let mut attached = content(&ident, &[INTERNAL]);
-    attached.attachments = vec![DraftAttachment::New {
-        object,
-        filename: "notes.txt".to_owned(),
-        media_type: "text/plain".to_owned(),
-    }];
-    let saved = h
-        .core
-        .save_draft(
-            &h.core.engine().new_idempotency_key(),
-            &created.draft_id,
-            None,
-            attached,
-        )
-        .await
-        .expect("the revision saves");
-    let queued = h
-        .core
-        .send_draft(
-            &h.core.engine().new_idempotency_key(),
-            &created.draft_id,
-            &saved.revision_id,
-            Vec::new(),
-        )
-        .await
-        .expect("the attempt queues");
+    let (queued, _) = queue_with(
+        &h,
+        &ident,
+        &[INTERNAL],
+        &[("notes.txt", b"Sweetbriar synthetic attachment bytes.")],
+    )
+    .await;
 
     advance(&h, UNDO_MS).await;
-    let row = until_row(&h, &queued.attempt_id, TIMEOUT, |row| {
-        row.state == AttemptState::Queued
+    let row = until_state(&h, &queued.attempt_id, AttemptState::Accepted).await;
+    assert_recipients(&row, RecipientState::Sent);
+    assert_eq!(h.server.sends(), 1);
+    assert_eq!(requests(&h, "POST", "/mail/v4/attachments"), 1);
+}
+
+#[tokio::test]
+async fn an_attachment_is_carried_in_the_package_and_decrypts_to_the_frozen_bytes() {
+    let h = setup(vec![TestAccount::new(USER, PASSWORD)]).await;
+    let _id = sign_in(&h).await;
+    let ident = identity(&h).await;
+    let frozen = b"Sweetbriar synthetic attachment bytes.";
+    let (queued, frozen) = queue_with(&h, &ident, &[INTERNAL], &[("notes.txt", frozen)]).await;
+
+    advance(&h, UNDO_MS).await;
+    let row = until_state(&h, &queued.attempt_id, AttemptState::Accepted).await;
+    assert_eq!(h.server.sends(), 1);
+    assert_eq!(requests(&h, "POST", "/mail/v4/attachments"), 1);
+
+    // The sent message carries the one uploaded attachment, whose
+    // packets decrypt with the recipient's key to the frozen bytes.
+    let draft_id = row.proton_draft_id.as_deref().expect("the draft id");
+    let uploads = h.server.message_attachments(USER, draft_id);
+    assert_eq!(uploads.len(), 1, "the sent message carries it once");
+    let uploaded = &uploads[0];
+    assert_eq!(uploaded.name, "notes.txt");
+    assert_eq!(uploaded.size, frozen[0].len() as i64);
+    let recipient = h.server.recipient_key(USER, INTERNAL).expect("the key");
+    assert_eq!(
+        recipient
+            .decrypt_body(&uploaded.key_packets, &uploaded.data_packet)
+            .expect("the upload decrypts"),
+        frozen[0].as_slice()
+    );
+
+    // The package carries that attachment's session key encrypted to
+    // the recipient.
+    let recorded = h.server.recorded_sends();
+    let entry = recorded[0].packages[0]
+        .recipients
+        .iter()
+        .find(|entry| entry.address == INTERNAL)
+        .expect("the recipient's entry");
+    let packet = entry
+        .attachment_key_packets
+        .get(&uploaded.id)
+        .expect("the package carries the attachment key packet");
+    assert_eq!(
+        recipient
+            .decrypt_session_key(packet)
+            .expect("the package session key decrypts"),
+        recipient
+            .decrypt_session_key(&uploaded.key_packets)
+            .expect("the upload session key decrypts")
+    );
+}
+
+#[tokio::test]
+async fn a_retry_reuses_its_draft_and_recorded_upload_without_repeating_it() {
+    let h = setup(vec![TestAccount::new(USER, PASSWORD)]).await;
+    let _id = sign_in(&h).await;
+    let ident = identity(&h).await;
+    // The upload applies and serves its reply, so the attempt records
+    // it; every later connection is refused, so the send never reaches
+    // Proton and the attempt waits out its backoff.
+    h.server.set_fault(Some(Fault::OnceAt {
+        path: "/mail/v4/attachments".to_owned(),
+        fault: Box::new(Fault::ApplyThenRefuseConnection),
+    }));
+    let (queued, _) = queue_with(
+        &h,
+        &ident,
+        &[INTERNAL],
+        &[("notes.txt", b"Sweetbriar synthetic attachment bytes.")],
+    )
+    .await;
+
+    advance(&h, UNDO_MS).await;
+    until_cond(&h, "applied the upload", |h| {
+        requests(h, "POST", "/mail/v4/attachments") == 1
     })
     .await;
-    assert_eq!(row.state, AttemptState::Queued, "M4.3e3 uploads it");
-    assert_eq!(row.send_requested_at_ms, None);
+    let row = until_state_slow(&h, &queued.attempt_id, AttemptState::Queued).await;
     assert_eq!(h.server.sends(), 0);
-    assert_eq!(requests(&h, "POST", "/mail/v4/messages"), 0);
+    assert_eq!(h.server.draft_ids(USER).len(), 1, "one draft was created");
+    assert_eq!(requests(&h, "POST", "/mail/v4/attachments"), 1);
+    let draft_id = row
+        .proton_draft_id
+        .as_deref()
+        .expect("the draft id")
+        .to_owned();
+    let first_upload = h.server.message_attachments(USER, &draft_id);
+    assert_eq!(first_upload.len(), 1, "the upload applied and was recorded");
+
+    // The refusal lifts; the retry reads the draft, keeps the recorded
+    // upload and sends once.
+    h.server.set_fault(None);
+    advance(&h, BACKOFF_MS).await;
+    let row = until_state(&h, &queued.attempt_id, AttemptState::Accepted).await;
+    assert_recipients(&row, RecipientState::Sent);
+    assert_eq!(h.server.sends(), 1);
+    assert_eq!(requests(&h, "POST", "/mail/v4/messages"), 1, "one draft");
+    assert_eq!(
+        requests_with_prefix(&h, "PUT", "/mail/v4/messages/"),
+        1,
+        "the retry updated the recorded draft"
+    );
+    assert_eq!(
+        requests(&h, "POST", "/mail/v4/attachments"),
+        1,
+        "the recorded upload wasn't repeated"
+    );
+    let uploads = h.server.message_attachments(USER, &draft_id);
+    assert_eq!(uploads.len(), 1);
+    assert_eq!(uploads[0].id, first_upload[0].id, "the same upload");
+}
+
+#[tokio::test]
+async fn a_dropped_upload_reply_is_recorded_from_the_draft_on_retry() {
+    let h = setup(vec![TestAccount::new(USER, PASSWORD)]).await;
+    let _id = sign_in(&h).await;
+    let ident = identity(&h).await;
+    // The upload applies but its reply is lost, so nothing is recorded
+    // before the send request.
+    h.server.set_fault(Some(Fault::OnceAt {
+        path: "/mail/v4/attachments".to_owned(),
+        fault: Box::new(Fault::DropAfterApply),
+    }));
+    let (queued, frozen) = queue_with(
+        &h,
+        &ident,
+        &[INTERNAL],
+        &[("notes.txt", b"Sweetbriar synthetic attachment bytes.")],
+    )
+    .await;
+
+    advance(&h, UNDO_MS).await;
+    until_cond(&h, "applied the upload", |h| {
+        requests(h, "POST", "/mail/v4/attachments") == 1
+    })
+    .await;
+    let _ = until_state(&h, &queued.attempt_id, AttemptState::Queued).await;
+    let draft_id = row(&h, &queued.attempt_id)
+        .await
+        .expect("the attempt")
+        .proton_draft_id
+        .expect("the draft id");
+
+    h.server.set_fault(None);
+    advance(&h, BACKOFF_MS).await;
+    let row = until_state(&h, &queued.attempt_id, AttemptState::Accepted).await;
+    assert_recipients(&row, RecipientState::Sent);
+    assert_eq!(h.server.sends(), 1);
+    assert_eq!(
+        requests(&h, "POST", "/mail/v4/attachments"),
+        1,
+        "the recovered upload wasn't repeated"
+    );
+    let uploads = h.server.message_attachments(USER, &draft_id);
+    assert_eq!(uploads.len(), 1, "the sent message carries it once");
+    assert_eq!(uploads[0].name, "notes.txt");
+    assert_eq!(uploads[0].size, frozen[0].len() as i64);
+
+    // The retry recorded the draft's attachment on the attempt.
+    let db = h.scratch.path().join("store/state.sqlite");
+    assert_eq!(
+        count_rows(
+            &db,
+            &format!(
+                "SELECT COUNT(*) FROM send_attempts
+                 WHERE attempt_id = '{}' AND proton_uploads_json LIKE '%notes.txt%'",
+                queued.attempt_id
+            ),
+        ),
+        1,
+        "the recovered upload was recorded"
+    );
+
+    let recorded = h.server.recorded_sends();
+    let entry = recorded[0].packages[0]
+        .recipients
+        .iter()
+        .find(|entry| entry.address == INTERNAL)
+        .expect("the recipient's entry");
+    assert!(
+        entry.attachment_key_packets.contains_key(&uploads[0].id),
+        "the package carries the recovered attachment"
+    );
+}
+
+#[tokio::test]
+async fn an_unrecorded_draft_attachment_that_matches_nothing_fails_before_the_send() {
+    let h = setup(vec![TestAccount::new(USER, PASSWORD)]).await;
+    let _id = sign_in(&h).await;
+    let ident = identity(&h).await;
+    // The upload applies but its reply is lost, leaving the draft with
+    // an attachment the attempt didn't record.
+    h.server.set_fault(Some(Fault::OnceAt {
+        path: "/mail/v4/attachments".to_owned(),
+        fault: Box::new(Fault::DropAfterApply),
+    }));
+    let (queued, _) = queue_with(
+        &h,
+        &ident,
+        &[INTERNAL],
+        &[("notes.txt", b"Sweetbriar synthetic attachment bytes.")],
+    )
+    .await;
+
+    advance(&h, UNDO_MS).await;
+    until_cond(&h, "applied the upload", |h| {
+        requests(h, "POST", "/mail/v4/attachments") == 1
+    })
+    .await;
+    let _ = until_state(&h, &queued.attempt_id, AttemptState::Queued).await;
+    let draft_id = row(&h, &queued.attempt_id)
+        .await
+        .expect("the attempt")
+        .proton_draft_id
+        .expect("the draft id");
+    // Replace the draft's attachment with one the frozen message
+    // doesn't carry.
+    h.server.update_message(
+        USER,
+        FakeMessage::new(&draft_id)
+            .with_labels(&["8", "5"])
+            .with_attachment(FakeAttachment::new(
+                "unexpected.bin",
+                "application/octet-stream",
+                b"other bytes",
+            )),
+    );
+
+    h.server.set_fault(None);
+    advance(&h, BACKOFF_MS).await;
+    let row = until_state(&h, &queued.attempt_id, AttemptState::Failed).await;
+    let reply = row.final_reply.as_deref().expect("the failure's reply");
+    assert!(
+        reply.contains(&draft_id),
+        "the reply names the draft: {reply}"
+    );
+    assert_eq!(h.server.sends(), 0, "nothing was sent");
+    assert_eq!(requests(&h, "POST", "/mail/v4/attachments"), 1);
 }
 
 #[tokio::test]
