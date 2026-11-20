@@ -53,6 +53,8 @@ final class OutBoxViewController: NSViewController, NSTableViewDataSource, NSTab
         scroll.hasVerticalScroller = true
 
         contextMenu.delegate = self
+        // Items follow the buttons: disabled while an action runs.
+        contextMenu.autoenablesItems = false
 
         errorLabel.textColor = .secondaryLabelColor
         errorLabel.setAccessibilityIdentifier("outBoxError")
@@ -302,7 +304,10 @@ final class OutBoxViewController: NSViewController, NSTableViewDataSource, NSTab
             alert.addButton(withTitle: "Keep as Draft")
             alert.addButton(withTitle: "Cancel")
         default:
-            confirm(true)
+            // Fail safe: an action marked as asking without a dialog
+            // here is a programming error, never a silent yes.
+            assertionFailure("\(action) needs a confirmation dialog")
+            confirm(false)
             return
         }
         guard let window = view.window else {
@@ -400,6 +405,7 @@ final class OutBoxViewController: NSViewController, NSTableViewDataSource, NSTab
                 title: Self.label(for: action).title, action: #selector(menuAction(_:)),
                 keyEquivalent: "")
             item.target = self
+            item.isEnabled = !model.isActing
             item.representedObject = action
             menu.addItem(item)
         }
