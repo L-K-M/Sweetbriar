@@ -517,6 +517,13 @@ pub struct OutBoxRow {
     /// account's current one waits for `confirm_send_route`
     /// (spec/05 step 3).
     pub waits_for_confirmation: bool,
+    /// For an accepted attempt whose provider saves the Sent copy:
+    /// whether a message with the attempt's `proton_draft_id` has
+    /// appeared in the account (spec/05 "The Sent copy").
+    pub sent_copy_appeared: bool,
+    /// An accepted `server_saves` attempt with no Sent copy 24 h
+    /// after acceptance: a soft warning, never a resend (spec/05).
+    pub sent_copy_warning: bool,
     /// The Proton evidence observed since launch (spec/05 step 6,
     /// spec/07). Kept in the account worker's memory, so a relaunch
     /// shows none until its next check. M4.3f fills this from those
@@ -545,6 +552,8 @@ impl OutBoxRow {
             resolution: row.resolution,
             sent_copy: row.sent_copy,
             waits_for_confirmation: row.waits_for_confirmation,
+            sent_copy_appeared: row.sent_copy_appeared,
+            sent_copy_warning: row.sent_copy_warning,
             evidence,
         }
     }

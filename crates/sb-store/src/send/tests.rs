@@ -1159,6 +1159,63 @@ fn out_box_splits_live_and_history_orders_each_and_cuts_at_30_days() {
 }
 
 #[test]
+fn out_box_reports_the_sent_copy_and_warns_24_hours_after_acceptance() {
+    let (_scratch, _paths, store) = scratch();
+    seed(&store);
+    insert_revision(&store, "d1", "r2", "accepted with a draft");
+    let accepted_at = 1_700_000_000_000_i64;
+    writing(&store, move |tx| {
+        tx.execute(
+            "INSERT INTO send_attempts
+             (attempt_id, draft_id, revision_id, account_id, config_generation, identity_id,
+              mime_sha256, message_id_header, envelope_from, state, sent_copy, created_at,
+              updated_at, proton_draft_id)
+             VALUES ('a1', 'd1', 'r2', 'acct', 1, 'id', 'sha', 'm', 'me@example.test',
+                     'accepted', 'server_saves', ?1, ?1, 'pd')",
+            params![accepted_at],
+        )
+        .map_err(|e| StoreError::internal(e.to_string()))?;
+        Ok(())
+    });
+    let day = 24 * 60 * 60 * 1000;
+    let accepted_row = |store: &Store, now_ms: i64| {
+        let out_box = read_out_box(store, now_ms);
+        out_box
+            .history
+            .iter()
+            .find(|row| row.attempt_id == "a1")
+            .expect("the accepted attempt is history")
+            .clone()
+    };
+
+    // A Sent copy missing 23 h 59 min after acceptance is only absent.
+    let row = accepted_row(&store, accepted_at + day - 1);
+    assert!(!row.sent_copy_appeared);
+    assert!(!row.sent_copy_warning);
+
+    // At 24 h exactly it warns, still without any resend.
+    let row = accepted_row(&store, accepted_at + day);
+    assert!(!row.sent_copy_appeared);
+    assert!(row.sent_copy_warning);
+
+    // The sync inserts the Sent message by the attempt's Proton draft
+    // id; then it has appeared and the warning clears.
+    writing(&store, move |tx| {
+        tx.execute(
+            "INSERT INTO logical_messages (account_id, provider_key, created_at)
+             VALUES ('acct', 'pd', ?1)",
+            params![accepted_at],
+        )
+        .map_err(|e| StoreError::internal(e.to_string()))?;
+        Ok(())
+    });
+    let row = accepted_row(&store, accepted_at + 2 * day);
+    assert!(row.sent_copy_appeared);
+    assert!(!row.sent_copy_warning);
+    store.close().unwrap();
+}
+
+#[test]
 fn a_failed_attempt_is_live_until_a_newer_attempt_replaces_it() {
     let (_scratch, _paths, store) = scratch();
     seed(&store);

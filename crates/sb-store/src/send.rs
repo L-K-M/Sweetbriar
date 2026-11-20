@@ -1426,6 +1426,15 @@ pub struct OutBoxRow {
     /// account's current one waits for `confirm_send_route`
     /// (spec/05 step 3).
     pub waits_for_confirmation: bool,
+    /// For an accepted attempt whose provider saves the Sent copy:
+    /// whether a message whose Proton id is the attempt's
+    /// `proton_draft_id` has appeared in the account (spec/05 "The
+    /// Sent copy"). False for every other row.
+    pub sent_copy_appeared: bool,
+    /// An accepted `server_saves` attempt with no Sent copy 24 h
+    /// after acceptance: a soft warning, never a resend or a request
+    /// (spec/05 "The Sent copy").
+    pub sent_copy_warning: bool,
 }
 
 /// The Out Box (spec/07 `out_box()`): every live attempt, then the
@@ -1439,6 +1448,9 @@ pub struct OutBox {
 /// The history part's window, in days (spec/07).
 const OUT_BOX_HISTORY_DAYS: i64 = 30;
 const MILLIS_PER_DAY: i64 = 24 * 60 * 60 * 1000;
+/// How long an accepted `server_saves` attempt may lack its Sent copy
+/// before the Out Box warns (spec/05 "The Sent copy").
+const SENT_COPY_WARNING_AFTER_MS: i64 = MILLIS_PER_DAY;
 /// Recipients are read in bounded parameter chunks, well under
 /// SQLite's host-parameter limit.
 const OUT_BOX_RECIPIENT_CHUNK: usize = 400;
@@ -1466,6 +1478,9 @@ pub fn out_box(tx: &Transaction, now: Timestamp) -> Result<OutBox, StoreError> {
                        s.state, s.created_at, s.updated_at, s.hold_until, s.resolved_at,
                        s.send_requested_at, s.proton_draft_id, s.final_reply, s.resolution,
                        s.sent_copy, s.config_generation, a.config_generation AS account_generation,
+                       (SELECT count(*) FROM logical_messages lm
+                        WHERE lm.account_id = s.account_id
+                          AND lm.provider_key = s.proton_draft_id) AS sent_copy_hits,
                        (SELECT count(*) FROM send_attempts n
                         WHERE n.draft_id = s.draft_id
                           AND (n.created_at > s.created_at
@@ -1479,7 +1494,7 @@ pub fn out_box(tx: &Transaction, now: Timestamp) -> Result<OutBox, StoreError> {
              SELECT attempt_id, draft_id, account_id, identity_id, subject, state,
                     created_at, updated_at, hold_until, resolved_at, send_requested_at,
                     proton_draft_id, final_reply, resolution, sent_copy, newer_attempts,
-                    config_generation, account_generation
+                    config_generation, account_generation, sent_copy_hits
              FROM candidates
              WHERE state IN ('held','queued','submitting')
                 OR (state = 'outcome_unknown' AND resolution IS NULL)
@@ -1510,7 +1525,20 @@ pub fn out_box(tx: &Transaction, now: Timestamp) -> Result<OutBox, StoreError> {
             AttemptState::Failed => newer_attempts == 0,
             AttemptState::Accepted | AttemptState::Cancelled => false,
         };
-        let sent_copy: String = row.get(14).map_err(err)?;
+        let sent_copy = SentCopy::from_stored(&row.get::<_, String>(14).map_err(err)?)?;
+        let sent_copy_hits: i64 = row.get(18).map_err(err)?;
+        let proton_draft_id: Option<String> = row.get(11).map_err(err)?;
+        let updated_at = Timestamp::from_millis(row.get(7).map_err(err)?);
+        // The Sent copy question only applies to an accepted attempt
+        // whose provider saves it, and only when a draft id can name
+        // the message the sync inserted.
+        let reconciles_sent_copy = state == AttemptState::Accepted
+            && sent_copy == SentCopy::ServerSaves
+            && proton_draft_id.is_some();
+        let sent_copy_appeared = reconciles_sent_copy && sent_copy_hits > 0;
+        let sent_copy_warning = reconciles_sent_copy
+            && sent_copy_hits == 0
+            && now.as_millis().saturating_sub(updated_at.as_millis()) >= SENT_COPY_WARNING_AFTER_MS;
         candidates.push((
             live,
             OutBoxRow {
@@ -1522,7 +1550,7 @@ pub fn out_box(tx: &Transaction, now: Timestamp) -> Result<OutBox, StoreError> {
                 subject: row.get(4).map_err(err)?,
                 state,
                 created_at: Timestamp::from_millis(row.get(6).map_err(err)?),
-                updated_at: Timestamp::from_millis(row.get(7).map_err(err)?),
+                updated_at,
                 hold_until: row
                     .get::<_, Option<i64>>(8)
                     .map_err(err)?
@@ -1535,12 +1563,14 @@ pub fn out_box(tx: &Transaction, now: Timestamp) -> Result<OutBox, StoreError> {
                     .get::<_, Option<i64>>(10)
                     .map_err(err)?
                     .map(Timestamp::from_millis),
-                proton_draft_id: row.get(11).map_err(err)?,
+                proton_draft_id,
                 final_reply: row.get(12).map_err(err)?,
                 resolution,
-                sent_copy: SentCopy::from_stored(&sent_copy)?,
+                sent_copy,
                 waits_for_confirmation: state == AttemptState::Queued
                     && config_generation != account_generation,
+                sent_copy_appeared,
+                sent_copy_warning,
             },
         ));
     }
