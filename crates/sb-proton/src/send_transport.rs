@@ -11,6 +11,7 @@ use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use base64::Engine as _;
 use bytes::Bytes;
 use hyper::header::{HeaderName, HeaderValue};
 use hyper::{Method, StatusCode};
@@ -296,6 +297,47 @@ pub struct UploadedAttachment {
     pub size: i64,
 }
 
+/// One attachment a draft read reports (spec/05 step 3): Proton's id,
+/// the name, type and size it reports, and the upload's key packets,
+/// which the sender's unlocked key decrypts to the session key the
+/// send packages carry (step 4).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProtonDraftAttachment {
+    pub id: String,
+    pub name: String,
+    pub size: i64,
+    pub mime_type: String,
+    pub key_packets: Vec<u8>,
+}
+
+#[derive(Deserialize)]
+struct DraftReadResponse {
+    #[serde(rename = "Message")]
+    message: DraftReadMessage,
+}
+
+#[derive(Deserialize)]
+struct DraftReadMessage {
+    #[serde(rename = "ID")]
+    id: String,
+    #[serde(rename = "Attachments", default)]
+    attachments: Vec<DraftReadAttachment>,
+}
+
+#[derive(Deserialize)]
+struct DraftReadAttachment {
+    #[serde(rename = "ID")]
+    id: String,
+    #[serde(rename = "Name", default)]
+    name: String,
+    #[serde(rename = "Size", default)]
+    size: i64,
+    #[serde(rename = "MIMEType", default)]
+    mime_type: String,
+    #[serde(rename = "KeyPackets", default)]
+    key_packets: String,
+}
+
 #[derive(Deserialize)]
 struct UploadResponse {
     #[serde(rename = "Attachment")]
@@ -471,6 +513,50 @@ impl Client {
             .await?;
         let response: UploadResponse = decode_reply(ATTACHMENT_PATH, &bytes)?;
         Ok(response.attachment)
+    }
+
+    /// `GET /mail/v4/messages/{id}` (spec/05 step 3; research
+    /// `mail-sync.md` §4): reads a recorded draft's attachments, so a
+    /// retry can record one whose upload reply was lost and recover
+    /// each attachment's session key from its key packets. A reply that
+    /// doesn't decode is an unknown outcome, never a partial read.
+    pub async fn read_draft(
+        &self,
+        session: &Session,
+        draft_id: &str,
+    ) -> Result<Vec<ProtonDraftAttachment>, SendTransportError> {
+        validate_path_id(draft_id).map_err(|error| SendTransportError::InvalidInput {
+            message: error.to_string(),
+        })?;
+        let path = format!("{MESSAGES_PATH}/{draft_id}");
+        let bytes = self
+            .send_request(Method::GET, &path, None, None, session, Replies::Retry)
+            .await?;
+        let response: DraftReadResponse = decode_reply(&path, &bytes)?;
+        if response.message.id != draft_id {
+            return Err(SendTransportError::OutcomeUnknown {
+                message: "the draft read answered a different message".to_owned(),
+            });
+        }
+        response
+            .message
+            .attachments
+            .into_iter()
+            .map(|attachment| {
+                let key_packets = base64::engine::general_purpose::STANDARD
+                    .decode(attachment.key_packets.as_bytes())
+                    .map_err(|_| SendTransportError::OutcomeUnknown {
+                        message: format!("the {path} attachment key packets didn't decode"),
+                    })?;
+                Ok(ProtonDraftAttachment {
+                    id: attachment.id,
+                    name: attachment.name,
+                    size: attachment.size,
+                    mime_type: attachment.mime_type,
+                    key_packets,
+                })
+            })
+            .collect()
     }
 
     /// `POST /mail/v4/messages/{id}` (spec/05 step 4; research
@@ -1308,6 +1394,17 @@ mod tests {
             text.contains("name=\"ContentID\""),
             "a non-inline upload still carries the field Proton reads: {text}"
         );
+    }
+
+    #[test]
+    fn a_timeout_after_the_request_began_is_an_unknown_outcome() {
+        // The deferred #456 pin: a deadline is a request that may have
+        // reached Proton, so the worker must treat it as unknown, never
+        // as a connection that was never established (spec/05 step 5).
+        assert!(matches!(
+            SendTransportError::from_transport(TransportFailure::Timeout),
+            SendTransportError::OutcomeUnknown { .. }
+        ));
     }
 
     #[test]

@@ -40,7 +40,7 @@ pub use proton::{
     ATTACHMENT_PLAINTEXT, CLEAR_SCHEME, FakeAttachment, FakeLabel, FakeMessage, FakeProtonServer,
     Fault, INTERNAL_SCHEME, KeyFault, MESSAGE_PLAINTEXT, MODULUS_B64, ModulusSignatureVerifier,
     ModulusVerifyError, RecipientKey, RecordedPackage, RecordedRecipient, RecordedRequest,
-    RecordedSend, RecordedSessionKey, TestAccount,
+    RecordedSend, RecordedSessionKey, StoredAttachment, TestAccount,
 };
 pub use secret::{FakeSecrets, SecretOp};
 pub use sim::SimFs;

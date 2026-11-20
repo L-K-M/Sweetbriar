@@ -18,11 +18,23 @@ pub struct FrozenBody {
 }
 
 /// One attachment the frozen MIME carries (spec/05 step 3), as the
-/// reader describes it. M4.3e3 uploads these.
+/// reader describes it, with the part id its bytes are extracted by.
 pub struct FrozenAttachment {
     pub name: String,
     pub media_type: String,
     pub size: Option<u64>,
+    /// The reader's part id, which `extract_attachment` takes.
+    pub part_id: String,
+}
+
+impl FrozenAttachment {
+    /// The transfer-decoded bytes of this attachment from the frozen
+    /// message (spec/05 step 3). A damaged part is an error: the
+    /// caller fails the attempt rather than send without it.
+    pub fn extract(&self, bytes: &[u8]) -> Result<Vec<u8>, String> {
+        sb_mime::extract_attachment(bytes, &self.part_id, &Limits::default())
+            .map_err(|_| "the frozen message's attachment can't be extracted".to_owned())
+    }
 }
 
 /// The frozen message's subject, body and attachments (spec/05).
@@ -67,6 +79,7 @@ pub fn frozen_send(bytes: &[u8]) -> Result<FrozenSend, String> {
             name: attachment.display_name().to_owned(),
             media_type: attachment.media_type().to_owned(),
             size: attachment.decoded_length(),
+            part_id: attachment.part_id().as_str().to_owned(),
         })
         .collect();
     Ok(FrozenSend {
