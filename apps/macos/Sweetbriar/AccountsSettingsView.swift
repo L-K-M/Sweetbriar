@@ -27,7 +27,7 @@ struct AccountsSettingsView: View {
                 }
                 if model.isLoading && model.accounts.isEmpty {
                     ProgressView("Loading accounts…")
-                } else if model.accounts.isEmpty {
+                } else if model.accounts.isEmpty && model.loadError == nil {
                     Text("No accounts available.").foregroundStyle(.secondary)
                 } else {
                     ForEach(model.accounts, id: \.accountId) { account in
