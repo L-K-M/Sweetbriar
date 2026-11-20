@@ -788,6 +788,14 @@ the provider policies (`proton_bridge`, `generic_imap`) live in
 - **Acceptance:** UI tests rename and pause an account and show the
   diagnostics preview; a notification's text without previews holds no
   sender or subject (unit test on the formatter).
+- **Split (2026-11-20):** the step lands as two PRs, following one
+  another:
+  - M2.7e1: Settings → Accounts (rename, pause and resume, disconnect
+    with confirmation, sign in again) and the notification previews
+    toggle, with the rename-and-pause UI test (866 changed lines);
+  - M2.7e2: the diagnostics preview and save panel, new-mail
+    notifications through `UNUserNotificationCenter`, and the
+    notification formatter unit test.
 
 ### M2.8 Real-Bridge CI lane — cancelled 2026-11-15 (replaced by M2.17)
 
