@@ -130,6 +130,10 @@ with `SB_SEARCH_TIMINGS_OUT=<file>` for the report and
   pauses it, a relaunch keeps it paused, Resume completes it; then an
   unreadable object store pauses the index phase on I/O, the retries
   move the note on an open Search, and Retry Now finishes it;
+- the activity flow XCUITest (M2.7d2, `SweetbriarUITests/
+  ActivityFlowTests`): over a store seeded with two breaker events,
+  the Activity window's Accept and Keep leave them `accepted` and
+  `kept`;
 - the M0.10 list benchmark: the Release app launches with
   `-runListBenchmark <report.json>` after the Release zip step; the
   step passes when all four runs happened without a generation abort

@@ -13,6 +13,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var mainWindow: MainWindowController?
     private var session: CoreSession?
     private var settingsWindow: AppearanceSettingsWindow?
+    private var activityWindow: ActivityWindowController?
     private let appearance = SharedAppearance()
     private let readingViewMemory = SharedReadingViewMemory()
     private var backups: SharedBackups?
@@ -59,9 +60,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return try await CoreBridge.open(snapshots: batcher)
         }
         self.session = session
+        observeAppActive()
 
         let backups = SharedBackups(
             beforeRestore: { [weak self] in
+                // Close the Activity window before the swap, so its
+                // reads end with the old core.
+                self?.retireActivityWindow()
                 self?.composeCues?.freezeForRestore()
                 self?.settingsWindow?.retireEditor()
                 self?.mainWindow?.retireWritersForRestore()
@@ -89,6 +94,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                               openDraft: { [weak self] in self?.composeWindows?.open(draftId: $0) })
         composeWindows?.onWindowsChanged = { [weak mainWindow] in mainWindow?.draftsChanged() }
         self.mainWindow = mainWindow
+        mainWindow.onOpenActivity = { [weak self] in self?.showActivity() }
         mainWindow.showWindow(nil)
         mainWindow.start()
 
@@ -144,6 +150,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.mainWindow?.beginProtonSignIn()
             },
             onSettings: { [weak self] in self?.showSettings() },
+            onShowActivity: { [weak self] in self?.showActivity() },
             isWriteEnabled: { [weak self] in self?.backups?.canWrite == true },
             onNewMessage: { [weak self] in
                 guard let self, !terminating else { return }
@@ -153,6 +160,62 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         NSApplication.shared.mainMenu = builder.makeMainMenu()
         menuBuilder = builder
+    }
+
+    /// Window → Activity: bring the shared window forward, else make
+    /// one over the main window's Activity model (spec/08).
+    private func showActivity() {
+        guard !terminating, let mainWindow,
+              let activity = mainWindow.activity, let bridge = mainWindow.bridge
+        else { return }
+        if activityWindow == nil {
+            activityWindow = ActivityWindowController(model: activity, bridge: bridge) {
+                [weak self] account in
+                self?.mainWindow?.beginProtonSignIn(signingInAgain: account)
+            }
+        }
+        activityWindow?.showWindow(nil)
+        activityWindow?.window?.makeKeyAndOrderFront(nil)
+    }
+
+    /// The Activity window holds the old core's model and bridge, so a
+    /// restore or close drops it; Window → Activity builds a new one.
+    private func retireActivityWindow() {
+        activityWindow?.close()
+        activityWindow = nil
+    }
+
+    /// spec/07 "Lifecycle": report the app's active state to the core's
+    /// workers. A failure is logged, never shown.
+    private func observeAppActive() {
+        let center = NotificationCenter.default
+        center.addObserver(
+            self, selector: #selector(applicationDidBecomeActive),
+            name: NSApplication.didBecomeActiveNotification, object: NSApplication.shared)
+        center.addObserver(
+            self, selector: #selector(applicationDidResignActive),
+            name: NSApplication.didResignActiveNotification, object: NSApplication.shared)
+        Task { @MainActor in
+            await self.reportAppActive(NSApplication.shared.isActive)
+        }
+    }
+
+    @objc private func applicationDidBecomeActive() {
+        Task { @MainActor in await self.reportAppActive(true) }
+    }
+
+    @objc private func applicationDidResignActive() {
+        Task { @MainActor in await self.reportAppActive(false) }
+    }
+
+    private func reportAppActive(_ active: Bool) async {
+        guard let session else { return }
+        do {
+            let bridge = try await session.bridge()
+            try await bridge.setAppActive(active)
+        } catch {
+            print("set_app_active(\(active)): \(error.localizedDescription)")
+        }
     }
 
     private func showSettings(tab: SettingsTab? = nil) {
@@ -321,6 +384,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// All old-context handles must finish before any replacement pane opens.
     private func archiveRestored() async {
         settingsWindow?.retireEditor()
+        retireActivityWindow()
         await composeCues?.reset()
         await prototypeController?.closeAndAwaitModel()
         prototypeController = nil
@@ -331,6 +395,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func archiveClosed() async {
         settingsWindow?.retireEditor()
+        retireActivityWindow()
         await composeCues?.stopAndWait()
         await prototypeController?.closeAndAwaitModel()
         prototypeController = nil
@@ -401,6 +466,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             composeCues?.stop()
             settingsWindow?.close()
+            activityWindow?.close()
             await backups?.cancelAndWait()
             await settingsWindow?.cancelAndWait()
             await composeCues?.stopAndWait()

@@ -198,6 +198,20 @@ jobs:
             CODE_SIGN_IDENTITY=- \
             test
 
+      # M2.7d2: breaker Accept and Keep through the Activity window over
+      # a seeded store, leaving the events `accepted` and `kept`.
+      - name: XCUITest activity flow
+        timeout-minutes: 10
+        run: |
+          xcodebuild -project apps/macos/Sweetbriar.xcodeproj \
+            -scheme SweetbriarSmoke \
+            -destination 'platform=macOS,arch=arm64' \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+            -resultBundlePath "$RUNNER_TEMP/Sweetbriar-activity.xcresult" \
+            -only-testing:SweetbriarUITests/ActivityFlowTests \
+            CODE_SIGN_IDENTITY=- \
+            test
+
       - name: Upload the test result bundles on failure
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -208,6 +222,7 @@ jobs:
             ${{ runner.temp }}/Sweetbriar-import.xcresult
             ${{ runner.temp }}/Sweetbriar-search.xcresult
             ${{ runner.temp }}/Sweetbriar-compose.xcresult
+            ${{ runner.temp }}/Sweetbriar-activity.xcresult
             ${{ runner.temp }}/Sweetbriar-index.xcresult
             ${{ runner.temp }}/Sweetbriar-reader.xcresult
           if-no-files-found: ignore

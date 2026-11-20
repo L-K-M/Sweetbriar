@@ -32,7 +32,12 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     private let openBackups: @MainActor () -> Void
     private let openDraft: @MainActor (String) -> Void
     private let writes = ArchiveWriteTasks()
-    private var bridge: CoreBridge?
+    private(set) var bridge: CoreBridge?
+    /// The app's one Activity model, started with the core and
+    /// restarted after a restore; the sidebar and the Activity window
+    /// share it.
+    private(set) var activity: ActivityModel?
+    private var activitySourceID: ObjectIdentifier?
     private var contentTasks = ArchiveViewTasks()
     private var contentSerial: UInt64 = 0
     private var retirement: Task<Void, Never>?
@@ -121,6 +126,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         if let retirement { await retirement.value; return }
         contentSerial &+= 1
         contentTasks.retire()
+        // The Activity model's reads and subscription must not outlive
+        // this content; rebuildAfterRestore starts it again.
+        activity?.stop()
         sidebar?.onChoose = nil
         sidebar?.onChooseDrafts = nil
         let drafts = self.drafts
@@ -209,6 +217,10 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         signIn?.begin(signingInAgain: account)
     }
 
+    /// The sidebar's health row asks for the Activity window (spec/08
+    /// "Activity / account health").
+    var onOpenActivity: (@MainActor () -> Void)?
+
     /// File → Import…, once the core is up.
     func beginImport() {
         guard backups.canWrite else { return }
@@ -223,10 +235,13 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         retirement = nil
         contentSerial &+= 1
         let serial = contentSerial
+        let activity = startActivity(bridge)
         let sidebarModel = SidebarModel(source: bridge)
         let appearanceModel = appearance.model(source: bridge)
-        let sidebar = SidebarViewController(model: sidebarModel, appearance: appearanceModel)
+        let sidebar = SidebarViewController(
+            model: sidebarModel, appearance: appearanceModel, activity: activity)
         sidebar.onSignInAgain = { [weak self] account in self?.beginProtonSignIn(signingInAgain: account) }
+        sidebar.onOpenActivity = { [weak self] in self?.onOpenActivity?() }
         let policy = backups
         sidebar.canWrite = { policy.canWrite }
         let messageList = MessageListViewController(bridge: bridge, sidebar: sidebarModel, appearance: appearanceModel,
@@ -316,6 +331,23 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
             sidebar.choose(entryID: SidebarModel.unifiedInboxID)
             await imports?.reattach()
         }
+    }
+
+    /// The shared Activity model for this core session: started on the
+    /// first install, restarted after a restore, and kept across
+    /// rebuilds so an open Activity window keeps observing it.
+    private func startActivity(_ bridge: CoreBridge) -> ActivityModel {
+        let identity = ObjectIdentifier(bridge)
+        if let activity, activitySourceID == identity {
+            activity.start()
+            return activity
+        }
+        activity?.stop()
+        let model = ActivityModel(source: bridge)
+        activitySourceID = identity
+        activity = model
+        model.start()
+        return model
     }
 
     private func configureWriters() {

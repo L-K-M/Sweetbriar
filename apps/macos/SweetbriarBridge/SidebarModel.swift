@@ -60,6 +60,13 @@ public final class SidebarModel {
         /// Unread messages, for mailboxes; nil where none is shown.
         public var unread: UInt64?
         public var target: Target
+
+        public init(id: String, title: String, unread: UInt64?, target: Target) {
+            self.id = id
+            self.title = title
+            self.unread = unread
+            self.target = target
+        }
     }
 
     /// What choosing an entry does.

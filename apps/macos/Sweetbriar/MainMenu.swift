@@ -71,6 +71,7 @@ final class MainMenuBuilder: NSObject {
     private let isComposeEnabled: @MainActor () -> Bool
     private let onAddProtonAccount: @MainActor () -> Void
     private let onSettings: @MainActor () -> Void
+    private let onShowActivity: @MainActor () -> Void
     private let isWriteEnabled: @MainActor () -> Bool
 
     /// `NSMenuItem.identifier`s that `validateMenuItem` treats
@@ -116,6 +117,7 @@ final class MainMenuBuilder: NSObject {
         onImport: @escaping @MainActor () -> Void,
         onAddProtonAccount: @escaping @MainActor () -> Void = {},
         onSettings: @escaping @MainActor () -> Void = {},
+        onShowActivity: @escaping @MainActor () -> Void = {},
         isWriteEnabled: @escaping @MainActor () -> Bool = { true },
         onNewMessage: @escaping @MainActor () -> Void = {},
         isComposeEnabled: @escaping @MainActor () -> Bool = { true }
@@ -133,6 +135,7 @@ final class MainMenuBuilder: NSObject {
         self.isComposeEnabled = isComposeEnabled
         self.onAddProtonAccount = onAddProtonAccount
         self.onSettings = onSettings
+        self.onShowActivity = onShowActivity
         self.isWriteEnabled = isWriteEnabled
         super.init()
     }
@@ -189,6 +192,9 @@ final class MainMenuBuilder: NSObject {
     }
 
     @objc private func showSettings(_ sender: Any?) { onSettings() }
+
+    /// Window → Activity (spec/08 "Activity / account health").
+    @objc private func showActivity(_ sender: NSMenuItem) { onShowActivity() }
 
     /// File: local composition, account setup and import (spec/08–09).
     private func makeFileMenu() -> NSMenuItem {
@@ -271,6 +277,13 @@ final class MainMenuBuilder: NSObject {
             "Close",
             action: #selector(NSWindow.performClose(_:)),
             key: "w"
+        ))
+        menu.addItem(Self.item(
+            "Activity",
+            action: #selector(showActivity(_:)),
+            key: "0",
+            modifiers: [.option, .command],
+            target: self
         ))
         NSApplication.shared.windowsMenu = menu
         item.submenu = menu
