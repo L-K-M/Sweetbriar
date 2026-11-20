@@ -573,6 +573,36 @@ uint64_t uniffi_sb_ffi_fn_method_core_start_search_rebuild(uint64_t ptr, uint64_
 uint64_t uniffi_sb_ffi_fn_method_core_coverage(uint64_t ptr, uint64_t token, RustBuffer scope
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_CANCEL_SEND
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_CANCEL_SEND
+uint64_t uniffi_sb_ffi_fn_method_core_cancel_send(uint64_t ptr, uint64_t token, RustBuffer idempotency_key, RustBuffer attempt_id
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_CONFIRM_SEND_ROUTE
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_CONFIRM_SEND_ROUTE
+uint64_t uniffi_sb_ffi_fn_method_core_confirm_send_route(uint64_t ptr, uint64_t token, RustBuffer idempotency_key, RustBuffer attempt_id
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_OUT_BOX
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_OUT_BOX
+uint64_t uniffi_sb_ffi_fn_method_core_out_box(uint64_t ptr, uint64_t token
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_RESOLVE_UNKNOWN_SEND
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_RESOLVE_UNKNOWN_SEND
+uint64_t uniffi_sb_ffi_fn_method_core_resolve_unknown_send(uint64_t ptr, uint64_t token, RustBuffer idempotency_key, RustBuffer attempt_id, RustBuffer resolution
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_RETRY_REJECTED_RECIPIENTS
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_RETRY_REJECTED_RECIPIENTS
+uint64_t uniffi_sb_ffi_fn_method_core_retry_rejected_recipients(uint64_t ptr, uint64_t token, RustBuffer idempotency_key, RustBuffer attempt_id
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_SEND_DRAFT
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_SEND_DRAFT
+uint64_t uniffi_sb_ffi_fn_method_core_send_draft(uint64_t ptr, uint64_t token, RustBuffer idempotency_key, RustBuffer draft_id, RustBuffer revision_id, RustBuffer acks
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_ACCOUNTS
 #define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_ACCOUNTS
 uint64_t uniffi_sb_ffi_fn_method_core_accounts(uint64_t ptr, uint64_t token
@@ -1424,6 +1454,42 @@ uint16_t uniffi_sb_ffi_checksum_method_core_start_search_rebuild(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_COVERAGE
 #define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_COVERAGE
 uint16_t uniffi_sb_ffi_checksum_method_core_coverage(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_CANCEL_SEND
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_CANCEL_SEND
+uint16_t uniffi_sb_ffi_checksum_method_core_cancel_send(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_CONFIRM_SEND_ROUTE
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_CONFIRM_SEND_ROUTE
+uint16_t uniffi_sb_ffi_checksum_method_core_confirm_send_route(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_OUT_BOX
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_OUT_BOX
+uint16_t uniffi_sb_ffi_checksum_method_core_out_box(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_RESOLVE_UNKNOWN_SEND
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_RESOLVE_UNKNOWN_SEND
+uint16_t uniffi_sb_ffi_checksum_method_core_resolve_unknown_send(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_RETRY_REJECTED_RECIPIENTS
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_RETRY_REJECTED_RECIPIENTS
+uint16_t uniffi_sb_ffi_checksum_method_core_retry_rejected_recipients(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_SEND_DRAFT
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_SEND_DRAFT
+uint16_t uniffi_sb_ffi_checksum_method_core_send_draft(void
     
 );
 #endif
