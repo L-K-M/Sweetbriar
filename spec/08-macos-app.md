@@ -208,6 +208,52 @@ is up. Choosing any other entry brings its message list back.
   dropped and a retired row opens nothing; the rebuilt window lists the
   restored archive's drafts.
 
+## Out Box
+
+M4.4c. Choosing Out Box shows the Out Box in the list pane, as Drafts
+(local) does; the reader shows nothing while it is up.
+
+- **Rows** are `out_box()` (07): the live attempts, then a History
+  group, each in the core's order. A row shows the frozen subject or
+  "No Subject", the To then Cc addresses (Bcc is not shown; the frozen
+  recipients carry no names), the state ("Sending in N s" while `held`, "Queued",
+  "Account changed; confirm sending with the new settings" (05),
+  "Sending", "Outcome unknown", "Failed",
+  "Sent", "Cancelled", and for a resolved unknown "Marked as sent",
+  "Sent again" or "Kept as draft") and the last update time.
+- **Details:** the selected row's details show below the list: each
+  recipient with its address field and state, Proton's code and message
+  (`final_reply`), the Proton evidence observed since launch, the
+  Proton draft it left in Proton's Drafts (05 "Drafts on the server"),
+  and after `accepted` the soft warning when the Sent copy has not
+  appeared (05). Evidence is shown, never acted on by the shell.
+- **Actions** act on the selected row and are buttons in the details
+  and items in the row's context menu; each is offered only in the
+  state that admits it:
+  - `held` or `queued`: **Cancel Send** (`cancel_send`, 05 step 2);
+  - `queued` waiting for confirmation: **Confirm and Send**
+    (`confirm_send_route`);
+  - unresolved `outcome_unknown`: **Mark as Sent**, **Send Again…** and
+    **Keep as Draft…** (`resolve_unknown_send`, 05 step 6). Send Again
+    asks first with the duplicate warning; Keep as Draft asks first
+    with the warning that sending the same revision again may duplicate
+    it. A resolution can't be changed;
+  - an attempt with `rejected_*` recipients: **Retry Rejected
+    Recipients** (`retry_rejected_recipients`). Only generic accounts
+    have them (05), so Proton attempts never offer it.
+
+  Each action runs under one idempotency key per user action, one at a
+  time; a refusal or failure shows its message under the details and
+  the list reloads. Actions are refused while archive writes are
+  unavailable, like the composer's.
+- **Refresh:** the list reloads when chosen, after each action, when a
+  compose window closes, and on Retry; while it is shown and has live
+  rows it also reloads every 2 s, so states move without input. One
+  reload runs at a time, as for Drafts (local); a failed reload keeps
+  the previous rows and shows the error with Retry.
+- **Old archive:** it retires with the main window's content on
+  restore, as Drafts (local) does; a retired row offers no action.
+
 ## Message list
 
 - **Built with** `NSTableView` (view-based), backed by a `ListWindowModel`
