@@ -78,13 +78,14 @@ final class ComposeFromSwitchTests: XCTestCase {
         try Self.choose(identity: Self.firstPopupTitle, in: popup, app: app)
         XCTAssertTrue(waitForLabel(strip, Self.firstStripLabel))
         XCTAssertTrue(waitForValue(strip, Self.firstColor))
+        // The recorder keeps only the latest announcement: check each.
+        let announcement = compose.descendants(matching: .any)["composeRouteAnnouncement"]
+        XCTAssertTrue(announcement.waitForExistence(timeout: Self.timeout))
+        XCTAssertTrue(waitForValue(announcement, "From: \(Self.firstStripLabel)"))
 
         try Self.choose(identity: Self.secondPopupTitle, in: popup, app: app)
         XCTAssertTrue(waitForLabel(strip, Self.secondStripLabel))
         XCTAssertTrue(waitForValue(strip, Self.secondColor))
-
-        let announcement = compose.descendants(matching: .any)["composeRouteAnnouncement"]
-        XCTAssertTrue(announcement.waitForExistence(timeout: Self.timeout))
         XCTAssertTrue(waitForValue(announcement, "From: \(Self.secondStripLabel)"))
     }
 
