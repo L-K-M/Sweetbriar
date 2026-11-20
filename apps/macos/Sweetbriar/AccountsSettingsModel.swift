@@ -94,8 +94,9 @@ final class AccountsSettingsModel {
             accounts = try await source.accounts()
         } catch {
             loadError = error.localizedDescription
-            return
         }
+        // The previews toggle reads its own setting, so a failed list
+        // read doesn't leave it showing a default.
         await loadPreviews()
     }
 
@@ -152,6 +153,11 @@ final class AccountsSettingsModel {
             commandStatus = nil
             return
         }
+        guard Self.canTogglePause(account) else {
+            commandError = "Only an active or paused account can be paused or resumed."
+            commandStatus = nil
+            return
+        }
         let pausing = account.state != .paused
         await run(accountId: accountId, status: pausing ? "Paused" : "Resumed") {
             if pausing {
@@ -175,7 +181,11 @@ final class AccountsSettingsModel {
     private func run(
         accountId: String, status: String, _ work: @escaping @MainActor () async throws -> Void
     ) async {
-        guard busyAccountId == nil else { return }
+        guard busyAccountId == nil else {
+            commandError = "Wait for the current change to finish."
+            commandStatus = nil
+            return
+        }
         busyAccountId = accountId
         commandError = nil
         commandStatus = nil
@@ -192,7 +202,9 @@ final class AccountsSettingsModel {
         do {
             accounts = try await source.accounts()
         } catch {
-            commandError = error.localizedDescription
+            // The command landed; only the list is stale.
+            commandError = "\(status), but the account list didn't refresh: "
+                + error.localizedDescription
             return
         }
         // The status lands only once the stored list has replaced the

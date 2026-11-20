@@ -112,6 +112,40 @@ struct AccountsSettingsTests {
         #expect(await source.reads == 1, "a failed command keeps the last good list")
     }
 
+    @Test func aFailedListReadStillLoadsThePreviewsSetting() async {
+        let source = FakeAccountSettingsSource(accounts: [])
+        await source.storePreviews("on")
+        await source.setListFailure(CoreFailure.internalError(detail: "the list is unreadable"))
+        let model = AccountsSettingsModel(source: source)
+        await model.load()
+        #expect(model.loadError != nil)
+        #expect(model.previewsEnabled == true, "the toggle shows the stored value")
+        #expect(model.previewsError == nil)
+    }
+
+    @Test func aCommandThatLandedSaysSoWhenTheListDoesNotRefresh() async {
+        let account = Self.account(state: .active)
+        let source = FakeAccountSettingsSource(accounts: [account])
+        let model = AccountsSettingsModel(source: source)
+        await model.load()
+        await source.setListFailure(CoreFailure.internalError(detail: "the list is unreadable"))
+
+        await model.rename(accountId: account.accountId, displayName: "Renamed")
+        #expect(model.commandError?.hasPrefix("Renamed, but") == true, "\(model.commandError ?? "")")
+        #expect(model.commandStatus == nil)
+    }
+
+    @Test func aStaleListCannotPauseAnAccountThatNeedsSignIn() async {
+        let account = Self.account(state: .needsAttention)
+        let source = FakeAccountSettingsSource(accounts: [account])
+        let model = AccountsSettingsModel(source: source)
+        await model.load()
+
+        await model.togglePause(accountId: account.accountId)
+        #expect(model.commandError != nil)
+        #expect(await source.calls.isEmpty, "no pause or resume call")
+    }
+
     @Test func previewsToggleWritesOnAndOff() async {
         let source = FakeAccountSettingsSource(accounts: [])
         let model = AccountsSettingsModel(source: source)
@@ -164,10 +198,17 @@ private actor FakeAccountSettingsSource: AccountSettingsSource {
         settingsList = [Setting(key: "notifications.previews", value: "off", isDefault: true)]
     }
 
+    private var listFailure: (any Error)?
+
     func setFailure(_ failure: (any Error)?) { self.failure = failure }
+    func setListFailure(_ failure: (any Error)?) { listFailure = failure }
+    func storePreviews(_ value: String) {
+        settingsList = [Setting(key: "notifications.previews", value: value, isDefault: false)]
+    }
 
     func accounts() async throws -> [Account] {
         reads += 1
+        if let listFailure { throw listFailure }
         return stored
     }
 
