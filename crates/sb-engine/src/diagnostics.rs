@@ -200,13 +200,22 @@ fn proton_diagnostics(account: &ProtonAccount) -> DiagnosticsProton {
 /// whole package.
 fn parse_refusal(raw: &str) -> Option<DiagnosticsRefusal> {
     let value: Json = serde_json::from_str(raw).ok()?;
+    let code = value.get("code").and_then(Json::as_i64);
+    let message = value
+        .get("message")
+        .and_then(Json::as_str)
+        .map(redact_addresses);
+    let at_ms = value.get("at").and_then(Json::as_i64);
+    // Valid JSON with none of spec/02's refusal keys is not a
+    // refusal at all: an all-null row would read as one that lost
+    // every field.
+    if code.is_none() && message.is_none() && at_ms.is_none() {
+        return None;
+    }
     Some(DiagnosticsRefusal {
-        code: value.get("code").and_then(Json::as_i64),
-        message: value
-            .get("message")
-            .and_then(Json::as_str)
-            .map(redact_addresses),
-        at_ms: value.get("at").and_then(Json::as_i64),
+        code,
+        message,
+        at_ms,
     })
 }
 
