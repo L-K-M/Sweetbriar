@@ -475,10 +475,12 @@ pub struct RecordedRequest {
 /// response; `RateLimit` answers 429/503 with an optional
 /// `Retry-After`; `Code` answers a status and Proton code;
 /// `DropAfterApply` applies a send call then drops the reply;
-/// `RefuseConnection` closes the next accepted connection before any
-/// TLS byte; `StallHandshake` sends nothing for a duration before the
-/// TLS handshake; a bad server proof makes `/auth/v4` return a proof
-/// that cannot match.
+/// `ApplyThenRefuseConnection` applies it, closes the connection and
+/// refuses every later one; `RefuseConnection` closes the next
+/// accepted connection before any TLS byte; `RefuseConnections` closes
+/// every one; `OnceSend` waits for the next send; `StallHandshake`
+/// sends nothing for a duration before the TLS handshake; a bad server
+/// proof makes `/auth/v4` return a proof that cannot match.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Fault {
     Drop,
@@ -500,14 +502,29 @@ pub enum Fault {
         path: String,
         fault: Box<Fault>,
     },
+    /// Applies to the next send (`POST /mail/v4/messages/{id}`) only,
+    /// then clears itself; a draft creation (`POST
+    /// /mail/v4/messages`) passes meanwhile, so a test can fault the
+    /// send without naming the draft id the server will choose.
+    OnceSend(Box<Fault>),
     /// Applies a draft creation, attachment upload or send, then drops
     /// the reply: the effect stays, the client sees a lost reply
     /// (05's `outcome_unknown`). One-shot through [`Fault::Once`].
     DropAfterApply,
+    /// Applies a draft creation, attachment upload or send, serves the
+    /// reply with `connection: close`, and refuses every later accepted
+    /// connection. The client's pool discards the closed connection, so
+    /// its next request finds one that was never established (05's
+    /// pre-request retry), and the transport's own connect retries all
+    /// fail. One-shot through [`Fault::Once`] or [`Fault::OnceAt`].
+    ApplyThenRefuseConnection,
     /// Closes the next accepted TCP connection before any TLS byte, so
     /// a client's handshake fails: it can tell the connection was never
     /// established from one lost after the request began. One-shot.
     RefuseConnection,
+    /// Closes every accepted TCP connection before any TLS byte, until
+    /// replaced: the client's connect retries all fail.
+    RefuseConnections,
     /// Accepts the next TCP connection and sends nothing for `Duration`
     /// before the TLS handshake, so a client with a deadline sees a
     /// connect timeout. One-shot.
@@ -522,9 +539,17 @@ fn take_connection_fault(faults: &Mutex<Option<Fault>>) -> Option<Fault> {
     let mut slot = faults.lock().unwrap_or_else(|e| e.into_inner());
     match slot.take()? {
         Fault::RefuseConnection => Some(Fault::RefuseConnection),
+        fault @ Fault::RefuseConnections => {
+            *slot = Some(fault.clone());
+            Some(fault)
+        }
         fault @ Fault::StallHandshake(_) => Some(fault),
         Fault::Once(inner) => match *inner {
             Fault::RefuseConnection => Some(Fault::RefuseConnection),
+            fault @ Fault::RefuseConnections => {
+                *slot = Some(fault.clone());
+                Some(fault)
+            }
             fault @ Fault::StallHandshake(_) => Some(fault),
             other => {
                 *slot = Some(Fault::Once(Box::new(other)));
@@ -959,6 +984,7 @@ impl FakeProtonServer {
                             // any TLS byte, so the client's handshake
                             // fails as a connect error.
                             Some(Fault::RefuseConnection) => return,
+                            Some(Fault::RefuseConnections) => return,
                             Some(Fault::StallHandshake(delay)) => {
                                 tokio::time::sleep(delay).await;
                             }
@@ -1366,6 +1392,7 @@ async fn dispatch(
     // requests can't both take it.
     let fault = {
         let mut slot = faults.lock().unwrap_or_else(|e| e.into_inner());
+        let is_send = method == "POST" && path.starts_with("/mail/v4/messages/");
         match slot.take() {
             Some(Fault::Once(inner)) => Some(*inner),
             Some(Fault::OnceAt { path: at, fault }) if at == path => Some(*fault),
@@ -1373,6 +1400,11 @@ async fn dispatch(
                 *slot = Some(waiting);
                 None
             }
+            Some(waiting @ Fault::OnceSend(_)) if !is_send => {
+                *slot = Some(waiting);
+                None
+            }
+            Some(Fault::OnceSend(inner)) => Some(*inner),
             other => {
                 slot.clone_from(&other);
                 other
@@ -1380,12 +1412,14 @@ async fn dispatch(
         }
     };
     let mut drop_reply_after_apply = false;
+    let mut close_and_refuse_next = false;
     if let Some(fault) = fault {
         match fault {
             Fault::Drop => {
                 return Err(io::Error::new(io::ErrorKind::ConnectionAborted, "drop"));
             }
             Fault::DropAfterApply => drop_reply_after_apply = true,
+            Fault::ApplyThenRefuseConnection => close_and_refuse_next = true,
             Fault::Stall(delay) => tokio::time::sleep(delay).await,
             Fault::RateLimit {
                 status,
@@ -1410,10 +1444,10 @@ async fn dispatch(
             // Connection-level faults are consumed by the accept loop
             // before the handshake; if one reaches here it was never
             // triggered, so let the request through.
-            Fault::RefuseConnection | Fault::StallHandshake(_) => {}
+            Fault::RefuseConnection | Fault::RefuseConnections | Fault::StallHandshake(_) => {}
             // One-shot faults are unwrapped into their inner fault
             // before the match.
-            Fault::Once(_) | Fault::OnceAt { .. } => {}
+            Fault::Once(_) | Fault::OnceAt { .. } | Fault::OnceSend(_) => {}
         }
     }
 
@@ -1479,6 +1513,24 @@ async fn dispatch(
             io::ErrorKind::ConnectionAborted,
             "drop after apply",
         ));
+    }
+    if close_and_refuse_next
+        && is_apply_call(method.as_str(), path)
+        && outcome
+            .as_ref()
+            .map(|response| response.status().is_success())
+            .unwrap_or(false)
+    {
+        // The reply is served, then the connection closes; the next
+        // accepted connection is refused, so the client's next request
+        // sees a connection that was never established.
+        *faults.lock().unwrap_or_else(|e| e.into_inner()) = Some(Fault::RefuseConnections);
+        let mut response = outcome?;
+        response.headers_mut().insert(
+            hyper::header::CONNECTION,
+            hyper::header::HeaderValue::from_static("close"),
+        );
+        return Ok(response);
     }
     outcome
 }

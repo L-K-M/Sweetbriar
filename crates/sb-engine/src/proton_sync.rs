@@ -17,6 +17,7 @@ use crate::account_sync::AccountJobs;
 use crate::engine::{Engine, Spawn, Worker, validate_idempotency_key};
 use crate::policy::proton_api;
 use crate::proton::{Sessions, mark_session_refused, restore_proton_account};
+use crate::proton_send::{SendBackoff, submit_queued_attempts};
 use sb_resources::proton_bodies::{
     BodyFailure, MAX_PENDING_BODIES, PendingBody, acquire_proton_body, bump_key_generation,
     pending_proton_bodies, record_body_failure,
@@ -99,7 +100,7 @@ impl ProtonOpened {
 
 /// Why an attempt stopped short of finishing the listing.
 #[derive(Debug)]
-enum Halt {
+pub(crate) enum Halt {
     /// The worker was told to stop (shutdown or a restore's quiesce).
     Stopped,
     /// Proton asked for the listing again (spec/04 "Refresh").
@@ -395,6 +396,8 @@ async fn run_loop(
     // The messages this run refused as another message's response
     // (spec/04 step 3); a restart re-reads them once.
     let mut skipped = HashSet::new();
+    // The pre-request send backoff, in memory only (spec/05 step 7).
+    let mut send_backoff = SendBackoff::default();
     loop {
         let mut attempt = Attempt {
             worker,
@@ -408,6 +411,7 @@ async fn run_loop(
             wake: Arc::clone(&wake),
             advanced: AtomicBool::new(false),
             skipped: &mut skipped,
+            send_backoff: &mut send_backoff,
         };
         // A stop doesn't wait for a request in flight: a write already
         // submitted commits or not as a whole, and the next attempt
@@ -462,6 +466,9 @@ struct Attempt<'a> {
     advanced: AtomicBool,
     /// Provider keys this run refused as another message's response.
     skipped: &'a mut HashSet<String>,
+    /// The send attempts' pre-request backoff, in memory only
+    /// (spec/05 step 7).
+    send_backoff: &'a mut SendBackoff,
 }
 
 impl Attempt<'_> {
@@ -669,14 +676,33 @@ impl Attempt<'_> {
             if let Err(halt) = self.queue_due_held().await {
                 return halt;
             }
+            // The outbox's queued attempts, one at a time, before the
+            // body batch (spec/05 step 4).
+            if let Err(halt) = submit_queued_attempts(
+                self.worker,
+                self.sessions,
+                self.client,
+                self.account_id,
+                self.send_backoff,
+            )
+            .await
+            {
+                return halt;
+            }
             if let Err(halt) = self.drain_bodies().await {
                 return halt;
             }
             let start = self.worker.resources().now();
-            let due = match self.earliest_held_window().await {
-                Ok(due) => due,
+            let held = match self.earliest_held_window().await {
+                Ok(held) => held,
                 Err(halt) => return halt,
             };
+            // A send backoff that elapses sooner also ends the wait
+            // (spec/05 step 7).
+            let due = [held, self.send_backoff.earliest_deadline()]
+                .into_iter()
+                .flatten()
+                .min();
             let now = || self.worker.resources().now();
             if let Some(halt) = wait_for_next_poll(
                 now,
