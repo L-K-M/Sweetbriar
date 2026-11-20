@@ -82,10 +82,15 @@ private struct ActivityView: View {
         .task(id: model.accounts) {
             now = Date()
             do {
-                accounts = try await bridge.accounts()
+                let read = try await bridge.accounts()
+                // A newer model change restarted this task; its read
+                // supersedes this one, so this result must not land.
+                guard !Task.isCancelled else { return }
+                accounts = read
                 accountsError = nil
             } catch is CancellationError {
             } catch {
+                guard !Task.isCancelled else { return }
                 // Keep the names and "Sign in again" from the last good
                 // read, and say why they may be stale.
                 accountsError = error
