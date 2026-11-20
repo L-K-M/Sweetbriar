@@ -50,7 +50,7 @@ pub enum ResolvedIdentity {
 /// The comparison key matching a header address to an identity's
 /// address (spec/06's received-address policy: written local, lowercased
 /// domain). An unparseable spelling matches nothing.
-fn address_key(address: &str) -> Option<String> {
+pub(crate) fn address_key(address: &str) -> Option<String> {
     AddressOperand::parse(address)
         .ok()
         .map(|parsed| parsed.key().to_owned())
@@ -291,9 +291,38 @@ pub fn cross_account_ack(
     format!("cross_account:{parts}")
 }
 
-/// Whether `acks` carries the acknowledgement the warning needs. M4.3's
-/// `send_draft` calls this inside its revision check: a missing one is
-/// `Conflict` naming `cross_account`, and the core never stores it.
+/// The warning and the acknowledgement `send_draft` requires for one
+/// revision's identity and recipients. [`Engine::cross_account_notice`]
+/// and `send_draft` share it, so the notice's `ack` and the send's
+/// check cannot drift (spec/05, 07).
+pub(crate) struct CrossAccountDecision {
+    pub warning: CrossAccountWarning,
+    pub ack: String,
+}
+
+/// The warning and acknowledgement for one revision's route identity
+/// and recipients; `None` when none applies (spec/05).
+pub(crate) fn cross_account_decision(
+    context: ComposeContext,
+    route: Option<&IdentityRoute>,
+    source: Option<&SourceIdentityInputs>,
+    identity_id: &str,
+    to: &[DraftRecipient],
+    cc: &[DraftRecipient],
+    bcc: &[DraftRecipient],
+) -> Option<CrossAccountDecision> {
+    let warning = cross_account_warning(context, route, source)?;
+    Some(CrossAccountDecision {
+        warning,
+        ack: cross_account_ack(identity_id, to, cc, bcc),
+    })
+}
+
+/// Whether `acks` carries the acknowledgement the warning needs, by
+/// the same token [`cross_account_ack`] computes. `send_draft` checks
+/// `acks` against `cross_account_decision`'s ack, the one
+/// `cross_account_notice` hands out: a missing one is `Conflict` naming
+/// `cross_account`, and the core never stores it.
 pub fn cross_account_acknowledged(
     warning: Option<&CrossAccountWarning>,
     acks: &[String],

@@ -583,6 +583,11 @@ uint64_t uniffi_sb_ffi_fn_method_core_cancel_send(uint64_t ptr, uint64_t token, 
 uint64_t uniffi_sb_ffi_fn_method_core_confirm_send_route(uint64_t ptr, uint64_t token, RustBuffer idempotency_key, RustBuffer attempt_id
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_CROSS_ACCOUNT_NOTICE
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_CROSS_ACCOUNT_NOTICE
+uint64_t uniffi_sb_ffi_fn_method_core_cross_account_notice(uint64_t ptr, uint64_t token, RustBuffer draft_id, RustBuffer revision_id
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_OUT_BOX
 #define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_OUT_BOX
 uint64_t uniffi_sb_ffi_fn_method_core_out_box(uint64_t ptr, uint64_t token
@@ -1466,6 +1471,12 @@ uint16_t uniffi_sb_ffi_checksum_method_core_cancel_send(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_CONFIRM_SEND_ROUTE
 #define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_CONFIRM_SEND_ROUTE
 uint16_t uniffi_sb_ffi_checksum_method_core_confirm_send_route(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_CROSS_ACCOUNT_NOTICE
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_CROSS_ACCOUNT_NOTICE
+uint16_t uniffi_sb_ffi_checksum_method_core_cross_account_notice(void
     
 );
 #endif

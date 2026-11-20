@@ -66,7 +66,7 @@ async fn Core::shutdown(self);   // flush writer, release the lease
 | Import/export | `start_import(paths, target)` → job id, `confirm_import(job_id, variants)` (09), `cancel_job(id)`, `start_export(scope, format, destination)` |
 | Search index | `start_search_rebuild()` → job id, `resume_search_rebuild(job_id)`, `retry_search_index()`; `cancel_job(id)` also routes to rebuild jobs |
 | Messages | `set_flags(selection, add, remove)`, `move_messages(selection, to_mailbox)`, `delete_to_trash(selection)`, `add_label(selection, label_mailbox)` (server label, 04), `add_tag(selection, tag)` and `remove_tag(selection, tag)` (local only), `set_note(message_id, text)` (one note per message; empty text removes it), `undo(token)` |
-| Drafts | `create_draft(context)` → draft id (`context` is new, reply, reply-all or forward, with source occurrence), `save_draft(draft_id, base_revision_id, content)` → revision id, `discard_draft(id)` (refused while an attempt is live, 05) |
+| Drafts | `create_draft(context)` → draft id (`context` is new, reply, reply-all or forward, with source occurrence; a reply or forward also writes its first revision, 05, whose id `draft(draft_id)` reads as the first `save_draft`'s base), `save_draft(draft_id, base_revision_id, content)` → revision id, `discard_draft(id)` (refused while an attempt is live, 05) |
 | Sending | `send_draft(draft_id, revision_id, acks)` → attempt id (the current revision only; `acks` lists warnings the user confirmed for that revision, e.g. `cross_account`; a missing one gets `Conflict` naming it, 05), `cancel_send(attempt_id)` (in `held` or `queued`), `resolve_unknown_send(attempt_id, resolution)`, `retry_rejected_recipients(attempt_id)` (05), `confirm_send_route(attempt_id)` (after an account reconfiguration, 05) |
 | Intents | `release_intents(ids)`, `retarget_intent(id, occurrence_id)` (after an epoch change; the new target must be the same logical message), `cancel_intents(ids)` |
 | Safety | `resolve_breaker_event(id, resolution)` |
@@ -699,6 +699,15 @@ a receipt or file-export command; Service/FFI exposure remains M1.7e/f.
     observed since launch (05; kept in memory, so a relaunch shows
     none until the worker's next check) and, after `accepted`, whether
     the Sent copy has appeared (05 "The Sent copy").
+  - `cross_account_notice(draft_id, revision_id)` (M4.4d) → none, or
+    the cross-account warning for that revision of a reply or
+    reply-all (05): the receiving occurrence's account, the route
+    identity's account, and the acknowledgement `send_draft`'s `acks`
+    takes for exactly that revision's identity and recipients. A
+    revision that isn't the draft's current one is `Conflict`. The
+    compose window shows the banner from it and passes the
+    acknowledgement once the user keeps the account; the core never
+    stores it.
   - `drafts()` → local drafts with state, route, subject, recipients,
     update time and any live attempt's state (the sidebar's Drafts
     (local), 08);

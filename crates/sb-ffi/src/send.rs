@@ -179,6 +179,28 @@ impl From<sb_service::OutBox> for OutBox {
     }
 }
 
+/// The cross-account warning for one draft revision (spec/05, 07):
+/// the receiving occurrence's account, the route identity's account,
+/// and the acknowledgement `send_draft` accepts for exactly that
+/// revision's identity and recipients. The acknowledgement is not
+/// persisted.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct CrossAccountNotice {
+    pub source_account_id: String,
+    pub route_account_id: String,
+    pub ack: String,
+}
+
+impl From<sb_service::CrossAccountNotice> for CrossAccountNotice {
+    fn from(value: sb_service::CrossAccountNotice) -> Self {
+        Self {
+            source_account_id: value.source_account_id,
+            route_account_id: value.route_account_id,
+            ack: value.ack,
+        }
+    }
+}
+
 /// What `send_draft` answers: its receipt and the attempt id the
 /// receipt names, so a replayed key still names the first attempt.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
@@ -347,6 +369,26 @@ impl Core {
             })
             .await?;
         Ok(Receipt::from_service(&receipt))
+    }
+
+    /// `cross_account_notice(draft_id, revision_id)` (spec/07 "Other
+    /// queries"): the cross-account warning for that revision of a
+    /// reply or reply-all, or `None` when none applies (spec/05). A
+    /// revision that isn't the draft's current one is `Conflict`, an
+    /// unknown draft `NotFound`. A query: the token races the core's
+    /// read lock and the read itself (spec/07).
+    pub async fn cross_account_notice(
+        &self,
+        token: Arc<CancelToken>,
+        draft_id: String,
+        revision_id: String,
+    ) -> Result<Option<CrossAccountNotice>, CoreError> {
+        let notice = self
+            .query(&token, async |core| {
+                core.cross_account_notice(&draft_id, &revision_id).await
+            })
+            .await?;
+        Ok(notice.map(Into::into))
     }
 
     /// `out_box()` (spec/07 "Other queries"): every live attempt, then

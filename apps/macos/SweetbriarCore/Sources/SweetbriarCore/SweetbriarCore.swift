@@ -1718,6 +1718,16 @@ public protocol CoreProtocol: AnyObject, Sendable {
     func confirmSendRoute(token: CancelToken, idempotencyKey: String, attemptId: String) async throws  -> Receipt
     
     /**
+     * `cross_account_notice(draft_id, revision_id)` (spec/07 "Other
+     * queries"): the cross-account warning for that revision of a
+     * reply or reply-all, or `None` when none applies (spec/05). A
+     * revision that isn't the draft's current one is `Conflict`, an
+     * unknown draft `NotFound`. A query: the token races the core's
+     * read lock and the read itself (spec/07).
+     */
+    func crossAccountNotice(token: CancelToken, draftId: String, revisionId: String) async throws  -> CrossAccountNotice?
+    
+    /**
      * `out_box()` (spec/07 "Other queries"): every live attempt, then
      * the last 30 days' history, each newest first by update time.
      * A query: the token races the core's read lock and the read
@@ -3246,6 +3256,30 @@ open func confirmSendRoute(token: CancelToken, idempotencyKey: String, attemptId
             completeFunc: ffi_sb_ffi_rust_future_complete_rust_buffer,
             freeFunc: ffi_sb_ffi_rust_future_free_rust_buffer,
             liftFunc: FfiConverterTypeReceipt_lift,
+            errorHandler: FfiConverterTypeCoreError_lift
+        )
+}
+    
+    /**
+     * `cross_account_notice(draft_id, revision_id)` (spec/07 "Other
+     * queries"): the cross-account warning for that revision of a
+     * reply or reply-all, or `None` when none applies (spec/05). A
+     * revision that isn't the draft's current one is `Conflict`, an
+     * unknown draft `NotFound`. A query: the token races the core's
+     * read lock and the read itself (spec/07).
+     */
+open func crossAccountNotice(token: CancelToken, draftId: String, revisionId: String)async throws  -> CrossAccountNotice?  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_sb_ffi_fn_method_core_cross_account_notice(
+                        self.uniffiCloneHandle(),FfiConverterTypeCancelToken_lower(token),FfiConverterString.lower(draftId),FfiConverterString.lower(revisionId)
+                )
+            },
+            pollFunc: ffi_sb_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_sb_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_sb_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterOptionTypeCrossAccountNotice.lift,
             errorHandler: FfiConverterTypeCoreError_lift
         )
 }
@@ -5772,6 +5806,71 @@ public func FfiConverterTypeCoverage_lift(_ buf: RustBuffer) throws -> Coverage 
 #endif
 public func FfiConverterTypeCoverage_lower(_ value: Coverage) -> RustBuffer {
     return FfiConverterTypeCoverage.lower(value)
+}
+
+
+/**
+ * The cross-account warning for one draft revision (spec/05, 07):
+ * the receiving occurrence's account, the route identity's account,
+ * and the acknowledgement `send_draft` accepts for exactly that
+ * revision's identity and recipients. The acknowledgement is not
+ * persisted.
+ */
+public struct CrossAccountNotice: Equatable, Hashable {
+    public var sourceAccountId: String
+    public var routeAccountId: String
+    public var ack: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(sourceAccountId: String, routeAccountId: String, ack: String) {
+        self.sourceAccountId = sourceAccountId
+        self.routeAccountId = routeAccountId
+        self.ack = ack
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension CrossAccountNotice: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeCrossAccountNotice: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> CrossAccountNotice {
+        return
+            try CrossAccountNotice(
+                sourceAccountId: FfiConverterString.read(from: &buf), 
+                routeAccountId: FfiConverterString.read(from: &buf), 
+                ack: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: CrossAccountNotice, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.sourceAccountId, into: &buf)
+        FfiConverterString.write(value.routeAccountId, into: &buf)
+        FfiConverterString.write(value.ack, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeCrossAccountNotice_lift(_ buf: RustBuffer) throws -> CrossAccountNotice {
+    return try FfiConverterTypeCrossAccountNotice.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeCrossAccountNotice_lower(_ value: CrossAccountNotice) -> RustBuffer {
+    return FfiConverterTypeCrossAccountNotice.lower(value)
 }
 
 
@@ -16220,6 +16319,30 @@ fileprivate struct FfiConverterOptionTypeBackupVerification: FfiConverterRustBuf
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterOptionTypeCrossAccountNotice: FfiConverterRustBuffer {
+    typealias SwiftType = CrossAccountNotice?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeCrossAccountNotice.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeCrossAccountNotice.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterOptionTypeDraftRevision: FfiConverterRustBuffer {
     typealias SwiftType = DraftRevision?
 
@@ -17706,6 +17829,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sb_ffi_checksum_method_core_confirm_send_route() != 34635) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sb_ffi_checksum_method_core_cross_account_notice() != 30878) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sb_ffi_checksum_method_core_out_box() != 29312) {
