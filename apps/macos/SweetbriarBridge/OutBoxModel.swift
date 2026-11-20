@@ -207,7 +207,7 @@ public final class OutBoxModel {
         }
     }
 
-    private static func status(of row: OutBoxRow, now: Date) -> String {
+    nonisolated private static func status(of row: OutBoxRow, now: Date) -> String {
         switch row.state {
         case .held:
             let left = Double(row.holdUntilMs ?? 0) / 1000 - now.timeIntervalSince1970

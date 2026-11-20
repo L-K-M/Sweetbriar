@@ -296,7 +296,7 @@ func aFailedActionShowsItsMessageAndStillReloads() async throws {
     let model = OutBoxModel(source: fake)
     await model.reload()
 
-    await fake.failActions(.unavailable(reason: "offline"))
+    await fake.failActions(CoreFailure.unavailable(reason: "offline"))
     await model.perform(.cancelSend, on: "held")
     #expect(model.actionError == "Unavailable: offline")
     #expect(await fake.reads == 2, "a failure still reloads the list")
@@ -356,8 +356,8 @@ func anActionIsRefusedWhileWritesAreUnavailable() async throws {
     let fake = FakeOutBoxSource()
     await fake.set(
         OutBox(live: [outBoxRow("held", state: .held, holdUntilMs: 1)], history: []))
-    var canWrite = false
-    let model = OutBoxModel(source: fake, canWrite: { canWrite })
+    let writes = WriteFlag()
+    let model = OutBoxModel(source: fake, canWrite: { writes.allowed })
     await model.reload()
 
     await model.perform(.cancelSend, on: "held")
@@ -366,7 +366,7 @@ func anActionIsRefusedWhileWritesAreUnavailable() async throws {
     #expect(model.actionError == nil)
     #expect(!model.isActing)
 
-    canWrite = true
+    writes.allowed = true
     await model.perform(.cancelSend, on: "held")
     #expect(await fake.calls.count == 1)
     #expect(await fake.reads == 2)
@@ -464,7 +464,7 @@ func aFailedOutBoxReloadKeepsTheRows() async throws {
     let model = OutBoxModel(source: fake)
     await model.reload()
 
-    await fake.failOutBox(.unavailable(reason: "offline"))
+    await fake.failOutBox(CoreFailure.unavailable(reason: "offline"))
     await model.reload()
     #expect(model.rows.map(\.id) == ["a"])
     #expect(model.lastError as? CoreFailure == .unavailable(reason: "offline"))
@@ -472,4 +472,10 @@ func aFailedOutBoxReloadKeepsTheRows() async throws {
     await fake.failOutBox(nil)
     await model.reload()
     #expect(model.lastError == nil)
+}
+
+/// Whether archive writes are available, flipped by a test.
+@MainActor
+private final class WriteFlag {
+    var allowed = false
 }
