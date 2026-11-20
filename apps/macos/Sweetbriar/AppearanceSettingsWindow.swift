@@ -3,7 +3,7 @@ import Observation
 import SwiftUI
 import SweetbriarBridge
 
-enum SettingsTab: Hashable { case appearance, accounts, backups }
+enum SettingsTab: Hashable { case appearance, accounts, sending, backups }
 
 @MainActor
 @Observable
@@ -59,6 +59,7 @@ private struct AppearanceSettingsLoader: View {
     @State private var model: BackupsModel?
     @State private var accountsModel: AccountsSettingsModel?
     @State private var diagnosticsModel: DiagnosticsModel?
+    @State private var sendingModel: SendSafetySettingsModel?
     @State private var failure: String?
 
     var body: some View {
@@ -102,6 +103,20 @@ private struct AppearanceSettingsLoader: View {
                     }
                     .disabled(!backups.canWrite)
                     .tabItem { Label("Accounts", systemImage: "person.crop.circle") }.tag(SettingsTab.accounts)
+                    Group {
+                        if model.isClosed {
+                            ContentUnavailableView("Archive closed", systemImage: "exclamationmark.triangle",
+                                                   description: Text("Quit and reopen Sweetbriar to settle the restore."))
+                        } else if backups.isRestoring {
+                            ProgressView("Waiting for the restore outcome…")
+                        } else if let sendingModel {
+                            SendingSettingsView(model: sendingModel).id(editor.revision)
+                        } else {
+                            ProgressView("Opening sending settings…")
+                        }
+                    }
+                    .disabled(!backups.canWrite)
+                    .tabItem { Label("Sending", systemImage: "paperplane") }.tag(SettingsTab.sending)
                     BackupsSettingsView(model: model, restoreBlockedReason: backups.restoreBlockedReason) {
                         guard backups.confirmRestore() else { return false }
                         // Synchronous, before the newly scheduled restore task can run.
@@ -125,6 +140,7 @@ private struct AppearanceSettingsLoader: View {
                 model = backups.model(source: bridge)
                 accountsModel = AccountsSettingsModel(source: bridge)
                 diagnosticsModel = DiagnosticsModel(source: bridge)
+                sendingModel = SendSafetySettingsModel(source: bridge)
                 if model == nil { failure = "Settings are unavailable while quitting." }
             } catch { failure = error.localizedDescription }
         }
