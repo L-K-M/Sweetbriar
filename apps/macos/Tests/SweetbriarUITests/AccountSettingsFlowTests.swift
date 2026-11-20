@@ -46,11 +46,16 @@ final class AccountSettingsFlowTests: XCTestCase {
         app.menuBars.menuBarItems["Sweetbriar"].click()
         app.menuBars.menuItems["Settings…"].click()
 
-        // The tab picker's items are tabs, as in the Backups suite.
+        // The tab picker's items are tabs on macOS 27 and other button
+        // kinds on macOS 26, so the query takes any of them by label.
         let settings = app.windows["Settings"]
         XCTAssertTrue(settings.waitForExistence(timeout: Self.timeout))
-        let accountsTab = settings.descendants(matching: .tab)
-            .matching(NSPredicate(format: "label == %@", "Accounts")).firstMatch
+        let tabKinds: [XCUIElement.ElementType] = [.tab, .radioButton, .button]
+        let accountsTab = settings.descendants(matching: .any)
+            .matching(NSPredicate(
+                format: "label == %@ AND elementType IN %@", "Accounts",
+                tabKinds.map { $0.rawValue }))
+            .firstMatch
         XCTAssertTrue(accountsTab.waitForExistence(timeout: Self.timeout))
         accountsTab.click()
 
