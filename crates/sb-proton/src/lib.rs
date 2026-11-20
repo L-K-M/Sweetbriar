@@ -38,6 +38,12 @@ pub use send_transport::{
     AttachmentUpload, Draft, DraftAction, DraftAddress, DraftCreate, DraftTemplate, KEYS_PATH,
     RefusalKind, SendRefusal, SendTransportError, SentMessage, UploadedAttachment,
 };
+// The send lane's sender-key generation (M4.3g): like the fake-server
+// tests, the lane builds its own sender key rather than using the
+// account's, which the server never reads back.
+pub use proton_crypto::ProtonPGP;
+pub use proton_crypto::crypto::{KeyGenerator, KeyGeneratorSync, PGPProviderSync};
+pub use proton_crypto_account::keys::{DecryptedAddressKey, KeyFlag, KeyId, UnlockedAddressKey};
 // Trust types the layers above name for their transport seam (spec/01
 // rule 3).
 pub use proton_srp::{ModulusSignatureVerifier, ModulusVerifyError};

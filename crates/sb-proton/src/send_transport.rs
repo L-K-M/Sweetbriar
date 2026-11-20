@@ -607,9 +607,16 @@ fn multipart_upload(boundary: &str, draft_id: &str, attachment: &AttachmentUploa
         "attachment"
     };
     push_field(&mut body, boundary, "Disposition", disposition.as_bytes());
-    if let Some(content_id) = &attachment.content_id {
-        push_field(&mut body, boundary, "ContentID", content_id.as_bytes());
-    }
+    // Proton's clients always send `ContentID`, empty when the
+    // attachment isn't inline; its server reads the field
+    // unconditionally and panics when it is absent. The fake server
+    // defaults a missing field to empty, so only the lane caught this.
+    push_field(
+        &mut body,
+        boundary,
+        "ContentID",
+        attachment.content_id.as_deref().unwrap_or("").as_bytes(),
+    );
     for (name, value) in [
         ("KeyPackets", attachment.encrypted.key_packets.as_slice()),
         ("DataPacket", attachment.encrypted.data_packet.as_slice()),
@@ -1056,7 +1063,11 @@ mod tests {
         assert_eq!(send_requests, 1, "the send POST went out once");
     }
 
-    #[tokio::test(start_paused = true)]
+    // Real time: under paused time the runtime auto-advances while it
+    // waits on the fake's socket, and a loaded machine then reaches the
+    // 30 s request deadline before the 429 arrives. The 429 is returned
+    // at once, so nothing here waits.
+    #[tokio::test]
     async fn a_rate_limited_send_is_not_waited_out_and_replayed() {
         let server = server().await;
         let client = test_client(&server);
@@ -1122,13 +1133,17 @@ mod tests {
         assert_eq!(creates, 1, "the draft POST went out once");
     }
 
-    #[tokio::test(start_paused = true)]
+    #[tokio::test]
     async fn a_refused_connection_is_never_established_and_records_nothing() {
         let server = Arc::new(server().await);
+        // Sign in in real time: paused time auto-advances while the
+        // runtime waits on a socket, so a loaded machine would time
+        // the sign-in out. Only the faulted call runs paused.
         let session = session(&test_client(&server)).await;
         // A fresh client, so no pooled sign-in connection bypasses the
         // connection-level fault.
         let client = test_client(&server);
+        tokio::time::pause();
 
         // `Fault::RefuseConnection` is one-shot, and the client retries
         // a connect failure (nothing was sent), so keep it armed until
@@ -1162,13 +1177,17 @@ mod tests {
         );
     }
 
-    #[tokio::test(start_paused = true)]
+    #[tokio::test]
     async fn a_stalled_handshake_is_a_connect_timeout_never_established() {
         let server = Arc::new(server().await);
+        // Sign in in real time: paused time auto-advances while the
+        // runtime waits on a socket, so a loaded machine would time
+        // the sign-in out. Only the faulted call runs paused.
         let session = session(&test_client(&server)).await;
         // A fresh client, so no pooled sign-in connection bypasses the
         // connection-level fault.
         let client = test_client(&server);
+        tokio::time::pause();
 
         let stalls = tokio::spawn({
             let server = Arc::clone(&server);
@@ -1266,6 +1285,28 @@ mod tests {
                 SendTransportError::PreRequest(ProtonError::Unavailable { .. })
             ),
             "{error:?}"
+        );
+    }
+
+    #[test]
+    fn the_upload_always_carries_a_content_id_field() {
+        let attachment = AttachmentUpload {
+            filename: "notes.txt".to_owned(),
+            mime_type: "text/plain".to_owned(),
+            encrypted: EncryptedAttachment {
+                key_packets: Vec::new(),
+                data_packet: Vec::new(),
+                signature: Vec::new(),
+                session_key: SendSessionKey::new(Vec::new(), SessionKeyAlgorithm::Aes256),
+            },
+            inline: false,
+            content_id: None,
+        };
+        let body = multipart_upload("boundary", "draft-1", &attachment);
+        let text = String::from_utf8_lossy(&body);
+        assert!(
+            text.contains("name=\"ContentID\""),
+            "a non-inline upload still carries the field Proton reads: {text}"
         );
     }
 

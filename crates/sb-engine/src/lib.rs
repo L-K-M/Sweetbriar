@@ -125,6 +125,16 @@ pub use sb_resources::{RestoreArtifact, RestoreArtifactKind};
 pub use search::SearchScope;
 pub use send::{OutBox, OutBoxRow, ResolvedUnknown, SendQueued};
 pub use settings::Setting;
+
+// The `go-proton-api` send lane (M4.3g): the transport items the lane
+// drives, re-exported only under the test-only `test-seams` feature.
+#[cfg(feature = "test-seams")]
+pub use sb_resources::{
+    AttachmentUpload, DecryptedAddressKey, DraftAddress, DraftCreate, DraftTemplate, KeyFlag,
+    KeyGenerator, KeyGeneratorSync, KeyId, PGPProviderSync, ProtonClient, ProtonPGP, RecipientKeys,
+    SendAttachment, SendBody, SendRecipient, SendTransportError, Session, UnlockedAddressKey,
+    build_packages, encrypt_attachment, encrypt_draft_body,
+};
 pub use tags::MessageSelection;
 pub use views::SavedViewParams;
 pub use windows::{

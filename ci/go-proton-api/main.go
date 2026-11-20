@@ -32,6 +32,7 @@ import (
 	"os/signal"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -44,8 +45,10 @@ import (
 )
 
 const (
-	defaultUsername = "laneuser"
-	defaultPassword = "lane-password"
+	defaultUsername     = "laneuser"
+	defaultPassword     = "lane-password"
+	defaultSendUsername = "lanesender"
+	defaultPeerUsername = "lanepeer"
 )
 
 // One seeded message, as the Rust lane asserts it: the server's message
@@ -71,6 +74,15 @@ type report struct {
 	// Set only with -request-log: the file the server appends every
 	// lane-phase call to, so the test can show reading mutated nothing.
 	RequestLog string `json:"request_log,omitempty"`
+	// The send suite's synthetic sender and internal recipient (M4.3g).
+	// Both share the lane password; the recipient's inbox is the read-back.
+	SendUsername string `json:"send_username"`
+	SendEmail    string `json:"send_email"`
+	PeerEmail    string `json:"peer_email"`
+	// Set only with -send-log: one JSON record per send-suite call, with
+	// its HTTP status, Proton code/error and whether the recipient's
+	// inbox grew, so the lane can tell a refusal that sent nothing.
+	SendLog string `json:"send_log,omitempty"`
 }
 
 // The user labels and folders the driver creates.
@@ -99,7 +111,10 @@ func main() {
 func run() error {
 	username := flag.String("username", defaultUsername, "synthetic user name")
 	password := flag.String("password", defaultPassword, "synthetic password")
+	sendUsername := flag.String("send-username", defaultSendUsername, "synthetic send-suite sender user name")
+	peerUsername := flag.String("peer-username", defaultPeerUsername, "synthetic send-suite recipient user name")
 	requestLog := flag.String("request-log", "", "append every server call after the JSON line to this file")
+	sendLogPath := flag.String("send-log", "", "append one JSON record per send-suite call to this file")
 	flag.Parse()
 
 	s := server.New(server.WithTLS(true))
@@ -136,6 +151,28 @@ func run() error {
 		return err
 	}
 
+	// The send suite's sender and internal recipient: a second and
+	// third synthetic account, so the send suite never mutates the
+	// read-only suite's account. The driver reads the recipient's inbox
+	// back after every send-suite call (the lane's read-back).
+	if _, _, err := s.CreateUser(*sendUsername, []byte(*password)); err != nil {
+		return fmt.Errorf("create the send-suite sender: %w", err)
+	}
+	if _, _, err := s.CreateUser(*peerUsername, []byte(*password)); err != nil {
+		return fmt.Errorf("create the send-suite recipient: %w", err)
+	}
+	peerClient, err := signInClient(ctx, s.GetHostURL(), *peerUsername, *password)
+	if err != nil {
+		return fmt.Errorf("sign in as the send-suite recipient: %w", err)
+	}
+	defer peerClient.Close()
+
+	sends, err := newSendLog(*sendLogPath, peerClient)
+	if err != nil {
+		return err
+	}
+	defer sends.close()
+
 	// The development server's own TLS identity is httptest's self-signed
 	// CA:TRUE certificate, which rustls refuses as an end entity
 	// (`CaUsedAsEndEntity`). The lane terminates TLS itself with an
@@ -145,7 +182,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	frontend, err := startFrontend(s.GetHostURL(), cert)
+	frontend, err := startFrontend(s.GetHostURL(), cert, sends)
 	if err != nil {
 		return err
 	}
@@ -160,6 +197,10 @@ func run() error {
 		SRPSaltBytes: session.srpSaltBytes,
 		LabelCounts:  counts,
 		Messages:     seeded,
+		SendUsername: *sendUsername,
+		SendEmail:    *sendUsername + "@" + s.GetDomain(),
+		PeerEmail:    *peerUsername + "@" + s.GetDomain(),
+		SendLog:      *sendLogPath,
 	}
 
 	// The watcher starts before the line is printed, so no lane request
@@ -276,6 +317,149 @@ func signIn(
 		keyRings:     keyRings,
 		srpSaltBytes: len(salt),
 	}, nil
+}
+
+// Signs in a synthetic user with the Go client, without unlocking its
+// keys: the send suite's recipient read-back only reads metadata.
+func signInClient(
+	ctx context.Context,
+	host, username, password string,
+) (*proton.Client, error) {
+	manager := proton.New(
+		proton.WithHostURL(host),
+		proton.WithTransport(proton.InsecureTransport()),
+	)
+	client, _, err := manager.NewClientWithLogin(ctx, username, []byte(password))
+	if err != nil {
+		manager.Close()
+		return nil, fmt.Errorf("sign in as %s: %w", username, err)
+	}
+	return client, nil
+}
+
+// One send-suite call's record: the HTTP status and Proton's code/error
+// the proxy saw, and whether the recipient's inbox grew as a result.
+// The lane reads these to tell a refusal that sent nothing from one
+// that delivered (M4.3g).
+
+type sendRecord struct {
+	Sequence int64  `json:"sequence"`
+	Method   string `json:"method"`
+	Path     string `json:"path"`
+	Status   int    `json:"status"`
+	Code     *int64 `json:"code"`
+	Error    string `json:"error"`
+	Inbox    int    `json:"inbox"`
+	Sent     bool   `json:"sent"`
+	ReadBack string `json:"read_back"`
+}
+
+// The append-only send log. The proxy calls record after each
+// send-suite call; the recipient's inbox is read directly from the
+// development server, so the record holds the read-back the lane
+// asserts on.
+
+type sendLog struct {
+	mu       sync.Mutex
+	file     *os.File
+	sequence int64
+	inbox    int
+	peer     *proton.Client
+}
+
+func newSendLog(path string, peer *proton.Client) (*sendLog, error) {
+	if path == "" {
+		return nil, nil
+	}
+	file, err := os.Create(path)
+	if err != nil {
+		return nil, fmt.Errorf("create the send log: %w", err)
+	}
+	log := &sendLog{file: file, peer: peer}
+	log.inbox = log.readInbox()
+	if log.inbox < 0 {
+		_ = file.Close()
+		return nil, fmt.Errorf("read the recipient's inbox before the send suite")
+	}
+	return log, nil
+}
+
+func (l *sendLog) close() {
+	if l != nil && l.file != nil {
+		_ = l.file.Close()
+	}
+}
+
+// readInbox counts the recipient's Inbox messages. -1 means the read
+// failed; the caller keeps the previous count and says so.
+func (l *sendLog) readInbox() int {
+	if l == nil || l.peer == nil {
+		return 0
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	metadata, err := l.peer.GetMessageMetadata(ctx, proton.MessageFilter{LabelID: proton.InboxLabel})
+	if err != nil {
+		return -1
+	}
+	return len(metadata)
+}
+
+func (l *sendLog) record(request *http.Request, status int, body []byte) {
+	if l == nil || !isSendPath(request.Method, request.URL.Path) {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	code, text := responseCodeError(body)
+	inbox := l.readInbox()
+	readBack := "ok"
+	if inbox < 0 {
+		readBack = "failed"
+		inbox = l.inbox
+	}
+	sent := inbox > l.inbox
+	l.inbox = inbox
+	l.sequence++
+	_ = json.NewEncoder(l.file).Encode(sendRecord{
+		Sequence: l.sequence,
+		Method:   request.Method,
+		Path:     request.URL.Path,
+		Status:   status,
+		Code:     code,
+		Error:    text,
+		Inbox:    inbox,
+		Sent:     sent,
+		ReadBack: readBack,
+	})
+}
+
+// The calls the send suite drives: the recipient key lookup, draft
+// create and update, attachment upload and send.
+func isSendPath(method, path string) bool {
+	if method == http.MethodGet && path == "/core/v4/keys" {
+		return true
+	}
+	if method == http.MethodPost && (path == "/mail/v4/messages" || path == "/mail/v4/attachments") {
+		return true
+	}
+	return strings.HasPrefix(path, "/mail/v4/messages/") &&
+		(method == http.MethodPost || method == http.MethodPut)
+}
+
+// responseCodeError reads Proton's `Code` and `Error` from a reply. A
+// bare status (the development server's 422s carry no body) has
+// neither; the lane records that honestly.
+func responseCodeError(body []byte) (*int64, string) {
+	var response struct {
+		Code  *int64 `json:"Code"`
+		Error string `json:"Error"`
+	}
+	if err := json.Unmarshal(body, &response); err != nil {
+		return nil, ""
+	}
+	return response.Code, response.Error
 }
 
 func seedMessages(
@@ -438,7 +622,7 @@ func certificatePEM(cert tls.Certificate) string {
 
 // An HTTPS listener in front of the development server, so the lane's
 // Rust client sees the generated leaf rather than httptest's CA.
-func startFrontend(upstream string, cert tls.Certificate) (net.Listener, error) {
+func startFrontend(upstream string, cert tls.Certificate, sends *sendLog) (net.Listener, error) {
 	target, err := url.Parse(upstream)
 	if err != nil {
 		return nil, fmt.Errorf("parse the development server URL: %w", err)
@@ -454,7 +638,7 @@ func startFrontend(upstream string, cert tls.Certificate) (net.Listener, error) 
 		Certificates: []tls.Certificate{cert},
 		NextProtos:   []string{"http/1.1"},
 	})
-	server := &http.Server{Handler: laneProxy(proxy)}
+	server := &http.Server{Handler: laneProxy(proxy, sends)}
 	go func() {
 		_ = server.Serve(tlsListener)
 	}()
@@ -467,7 +651,7 @@ func startFrontend(upstream string, cert tls.Certificate) (net.Listener, error) 
 // address arrays where the server sends nulls. Only 2xx JSON object
 // responses are rewritten; raw bodies such as attachment packets pass
 // through untouched.
-func laneProxy(next http.Handler) http.Handler {
+func laneProxy(next http.Handler, sends *sendLog) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		recorder := httptest.NewRecorder()
 		next.ServeHTTP(recorder, r)
@@ -482,6 +666,10 @@ func laneProxy(next http.Handler) http.Handler {
 				header.Set("Content-Length", strconv.Itoa(len(body)))
 			}
 		}
+
+		// Before the reply reaches the lane, so a record is always
+		// there when its call returns.
+		sends.record(r, recorder.Code, body)
 
 		for name, values := range header {
 			for _, value := range values {

@@ -13,6 +13,7 @@ on:
       - 'apps/macos/project.yml'
       - 'ci/go-proton-api/**'
       - 'crates/sb-service/src/accounts/proton_tests/lane.rs'
+      - 'crates/sb-service/src/accounts/proton_tests/lane_send.rs'
       - 'apps/macos/Tests/SweetbriarUITests/**'
       - 'crates/sb-mime/**'
       - 'crates/sb-store/Cargo.toml'
@@ -104,6 +105,7 @@ jobs:
           mkdir -p "$RUNNER_TEMP/gpa"
           mkfifo "$RUNNER_TEMP/gpa/stdin"
           "$RUNNER_TEMP/gpa-driver" -request-log "$RUNNER_TEMP/gpa/requests.log" \
+            -send-log "$RUNNER_TEMP/gpa/send.log" \
             < "$RUNNER_TEMP/gpa/stdin" > "$RUNNER_TEMP/gpa/line.json" \
             2> "$RUNNER_TEMP/gpa/driver.log" &
           driver=$!
@@ -133,6 +135,7 @@ jobs:
             ${{ runner.temp }}/gpa/line.json
             ${{ runner.temp }}/gpa/summary.json
             ${{ runner.temp }}/gpa/requests.log
+            ${{ runner.temp }}/gpa/send.log
             ${{ runner.temp }}/gpa/test.log
             ${{ runner.temp }}/gpa/driver.log
           if-no-files-found: warn
