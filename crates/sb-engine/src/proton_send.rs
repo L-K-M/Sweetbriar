@@ -115,6 +115,8 @@ pub(crate) enum Evidence {
     Sent,
     /// The draft still carries Drafts, so it wasn't sent.
     Drafts,
+    /// Neither Sent-without-Drafts nor Drafts: proves nothing.
+    Other,
     /// Proton has no such draft.
     NotFound,
     /// The read failed; nothing is known either way.
@@ -130,6 +132,7 @@ impl Evidence {
                 format!("Proton shows draft {draft_id} sent (Sent, no Drafts)")
             }
             Self::Drafts => format!("Proton still shows draft {draft_id} in Drafts"),
+            Self::Other => format!("Proton shows draft {draft_id} neither sent nor in Drafts"),
             Self::NotFound => format!("Proton has no draft {draft_id}"),
             Self::ReadFailed => format!("Reading draft {draft_id} failed"),
         }

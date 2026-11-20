@@ -577,8 +577,10 @@ impl Attempt<'_> {
                             })
                             .await?;
                         Evidence::Sent
-                    } else {
+                    } else if drafts {
                         Evidence::Drafts
+                    } else {
+                        Evidence::Other
                     }
                 }
                 Ok(None) => Evidence::NotFound,
