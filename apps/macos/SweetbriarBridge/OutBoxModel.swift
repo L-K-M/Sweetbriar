@@ -79,6 +79,8 @@ public final class OutBoxModel {
     private var reloading = false
     @ObservationIgnored
     private var reloadAgain = false
+    @ObservationIgnored
+    private var actionSettling = false
 
     public init(
         source: any SendSource,
@@ -158,7 +160,10 @@ public final class OutBoxModel {
                     ?? error.localizedDescription
             }
         }
-        isActing = false
+        // The rows still show the pre-action state until the reload
+        // lands, so the action holds the model until then; a reload
+        // already running reads once more and releases it.
+        actionSettling = true
         await reload()
     }
 
@@ -172,17 +177,30 @@ public final class OutBoxModel {
     /// Re-read the Out Box. A call during a reload makes it run once
     /// more when it ends, and returns at once.
     public func reload() async {
-        guard !isRetired else { return }
+        guard !isRetired else {
+            settleAction()
+            return
+        }
         guard !reloading else {
             reloadAgain = true
             return
         }
         reloading = true
-        defer { reloading = false }
+        defer {
+            reloading = false
+            settleAction()
+        }
         repeat {
             reloadAgain = false
             await readOnce()
         } while reloadAgain && !isRetired
+    }
+
+    /// End the action whose reload just landed.
+    private func settleAction() {
+        guard actionSettling else { return }
+        actionSettling = false
+        isActing = false
     }
 
     /// The old archive is going away (spec/08 "Out Box").

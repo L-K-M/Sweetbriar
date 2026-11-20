@@ -398,6 +398,62 @@ func aSecondActionWhileOneRunsIsRefused() async throws {
     #expect(await fake.reads == 2)
 }
 
+/// The action's reload is part of the action: until it lands, the rows
+/// still show the pre-action state, so a second action is refused.
+@MainActor
+@Test(.timeLimit(.minutes(1)))
+func aSecondActionDuringTheActionsReloadIsRefused() async throws {
+    let fake = FakeOutBoxSource()
+    await fake.set(OutBox(live: [outBoxRow("u", state: .outcomeUnknown)], history: []))
+    let model = OutBoxModel(source: fake)
+    await model.reload()
+
+    let gate = Gate()
+    await fake.gateNextRead(gate)
+    let first = Task { await model.perform(.markAsSent, on: "u") }
+    try #require(await eventually { await fake.reads == 2 })
+    #expect(model.isActing)
+
+    await model.perform(.sendAgain, on: "u")
+    #expect(await fake.calls.count == 1, "the action owns the model until its reload")
+
+    await gate.open()
+    await first.value
+    #expect(!model.isActing)
+}
+
+/// When the action's reload joins one already running, the action
+/// holds the model until that reload's extra read has landed.
+@MainActor
+@Test(.timeLimit(.minutes(1)))
+func anActionWhoseReloadJoinsARunningOneHoldsUntilItLands() async throws {
+    let fake = FakeOutBoxSource()
+    await fake.set(OutBox(live: [outBoxRow("u", state: .outcomeUnknown)], history: []))
+    let model = OutBoxModel(source: fake)
+    await model.reload()
+
+    let actionGate = Gate()
+    await fake.gateNextAction(actionGate)
+    let first = Task { await model.perform(.markAsSent, on: "u") }
+    try #require(await eventually { await fake.calls.count == 1 })
+
+    let readGate = Gate()
+    await fake.gateNextRead(readGate)
+    let poll = Task { await model.reload() }
+    try #require(await eventually { await fake.reads == 2 })
+
+    await actionGate.open()
+    await first.value
+    #expect(model.isActing, "the joined reload hasn't read the action's result yet")
+    await model.perform(.sendAgain, on: "u")
+    #expect(await fake.calls.count == 1)
+
+    await readGate.open()
+    await poll.value
+    #expect(await fake.reads == 3)
+    #expect(!model.isActing)
+}
+
 /// A reload asked for during a reload runs once more after it, however
 /// many were asked for.
 @MainActor

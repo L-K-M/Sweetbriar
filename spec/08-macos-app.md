@@ -243,9 +243,11 @@ M4.4c. Choosing Out Box shows the Out Box in the list pane, as Drafts
     have them (05), so Proton attempts never offer it.
 
   Each action runs under one idempotency key per user action, one at a
-  time; a refusal or failure shows its message under the details and
-  the list reloads. Actions are refused while archive writes are
-  unavailable, like the composer's.
+  time, until the reload after it lands; a call the core refuses or
+  that fails shows its message under the details, and the list
+  reloads. An action the pane refuses itself (archive writes are
+  unavailable, like the composer's, another action is running, or the
+  row doesn't admit it) calls nothing and shows nothing.
 - **Refresh:** the list reloads when chosen, after each action, when a
   compose window closes, and on Retry; while it is shown and has live
   rows it also reloads every 2 s, so states move without input. One

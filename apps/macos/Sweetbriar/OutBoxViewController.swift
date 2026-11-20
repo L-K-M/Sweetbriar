@@ -22,6 +22,13 @@ final class OutBoxViewController: NSViewController, NSTableViewDataSource, NSTab
     private var menuAttemptID: String?
     private var detailActions: [OutBoxModel.Action] = []
     private var reloads: [UUID: Task<Void, Never>] = [:]
+    /// Actions in flight; a restore waits for them, as they write the
+    /// archive it is about to swap.
+    private var actions: [UUID: Task<Void, Never>] = [:]
+    /// The attempt the user selected. The table's selected row can't
+    /// stand in for it: by the time a reload renders, the rows it
+    /// indexed have already changed.
+    private var selectedID: String?
     private var polling: Task<Void, Never>?
     private var shown = false
     private static let columnID = NSUserInterfaceItemIdentifier("outBox")
@@ -156,6 +163,7 @@ final class OutBoxViewController: NSViewController, NSTableViewDataSource, NSTab
     }
 
     func waitForRetirement() async {
+        for task in Array(actions.values) { await task.value }
         for task in Array(reloads.values) { await task.value }
     }
 
@@ -189,7 +197,7 @@ final class OutBoxViewController: NSViewController, NSTableViewDataSource, NSTab
         guard isViewLoaded else { return }
         // The selection is held by attempt id, so a reload keeps it even
         // when rows are added or removed above it.
-        let selected = selectedAttemptID()
+        let selected = selectedID
         tableView.reloadData()
         if let id = selected, let index = model.rows.firstIndex(where: { $0.id == id }) {
             tableView.selectRowIndexes(
@@ -275,10 +283,12 @@ final class OutBoxViewController: NSViewController, NSTableViewDataSource, NSTab
         }
     }
 
-    private func perform(_ action: OutBoxModel.Action, on id: String) {
-        Task { [weak self] in
+    func perform(_ action: OutBoxModel.Action, on id: String) {
+        let task = UUID()
+        actions[task] = Task { [weak self] in
             guard let self else { return }
             await model.perform(action, on: id)
+            actions[task] = nil
             render()
         }
     }
@@ -319,7 +329,7 @@ final class OutBoxViewController: NSViewController, NSTableViewDataSource, NSTab
 
     @objc private func actionClicked(_ sender: NSButton) {
         guard sender.tag >= 0, sender.tag < detailActions.count,
-              let id = selectedAttemptID()
+              let id = selectedID
         else { return }
         run(detailActions[sender.tag], on: id)
     }
@@ -390,7 +400,8 @@ final class OutBoxViewController: NSViewController, NSTableViewDataSource, NSTab
     }
 
     func tableViewSelectionDidChange(_ notification: Notification) {
-        renderDetails(selectedAttemptID())
+        selectedID = selectedAttemptID()
+        renderDetails(selectedID)
     }
 
     /// The clicked row's context menu offers exactly its actions.
