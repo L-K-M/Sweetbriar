@@ -1063,7 +1063,11 @@ mod tests {
         assert_eq!(send_requests, 1, "the send POST went out once");
     }
 
-    #[tokio::test(start_paused = true)]
+    // Real time: under paused time the runtime auto-advances while it
+    // waits on the fake's socket, and a loaded machine then reaches the
+    // 30 s request deadline before the 429 arrives. The 429 is returned
+    // at once, so nothing here waits.
+    #[tokio::test]
     async fn a_rate_limited_send_is_not_waited_out_and_replayed() {
         let server = server().await;
         let client = test_client(&server);
@@ -1129,13 +1133,17 @@ mod tests {
         assert_eq!(creates, 1, "the draft POST went out once");
     }
 
-    #[tokio::test(start_paused = true)]
+    #[tokio::test]
     async fn a_refused_connection_is_never_established_and_records_nothing() {
         let server = Arc::new(server().await);
+        // Sign in in real time: paused time auto-advances while the
+        // runtime waits on a socket, so a loaded machine would time
+        // the sign-in out. Only the faulted call runs paused.
         let session = session(&test_client(&server)).await;
         // A fresh client, so no pooled sign-in connection bypasses the
         // connection-level fault.
         let client = test_client(&server);
+        tokio::time::pause();
 
         // `Fault::RefuseConnection` is one-shot, and the client retries
         // a connect failure (nothing was sent), so keep it armed until
@@ -1169,13 +1177,17 @@ mod tests {
         );
     }
 
-    #[tokio::test(start_paused = true)]
+    #[tokio::test]
     async fn a_stalled_handshake_is_a_connect_timeout_never_established() {
         let server = Arc::new(server().await);
+        // Sign in in real time: paused time auto-advances while the
+        // runtime waits on a socket, so a loaded machine would time
+        // the sign-in out. Only the faulted call runs paused.
         let session = session(&test_client(&server)).await;
         // A fresh client, so no pooled sign-in connection bypasses the
         // connection-level fault.
         let client = test_client(&server);
+        tokio::time::pause();
 
         let stalls = tokio::spawn({
             let server = Arc::clone(&server);
