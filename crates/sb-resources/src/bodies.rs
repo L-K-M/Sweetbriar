@@ -303,6 +303,21 @@ impl Resources {
         })
     }
 
+    /// The acquired message's plain-text rendition, rendered in memory
+    /// without publishing a lease file (spec/05 "Reply and forward
+    /// drafts"): a reply quote never creates a cache file. A missing
+    /// body is `Unavailable` and a parse failure is `Unavailable`
+    /// naming it, like [`Self::publish_body`].
+    pub fn acquired_plain_text(&self, message: i64) -> Result<String, StoreError> {
+        let bytes = self.acquired_body(message)?;
+        let input = render_input(&bytes, &Limits::default())
+            .map_err(|e| unavailable(format!("cannot render body: {e:?}")))?;
+        // The token only names the in-memory rendition; nothing is
+        // published and no lease exists.
+        let rendition = render(&input, &"0".repeat(64), RenderKind::PlainText);
+        Ok(rendition.content().to_owned())
+    }
+
     /// The semantic reading document for one message (spec/08 Reader:
     /// Reading view), or [`DocumentSupport::Unsupported`] for sender
     /// layout. The acquisition lookup, budgets and error mapping are

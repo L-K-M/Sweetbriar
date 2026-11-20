@@ -50,7 +50,7 @@ pub enum ResolvedIdentity {
 /// The comparison key matching a header address to an identity's
 /// address (spec/06's received-address policy: written local, lowercased
 /// domain). An unparseable spelling matches nothing.
-fn address_key(address: &str) -> Option<String> {
+pub(crate) fn address_key(address: &str) -> Option<String> {
     AddressOperand::parse(address)
         .ok()
         .map(|parsed| parsed.key().to_owned())
@@ -289,6 +289,33 @@ pub fn cross_account_ack(
     let parts =
         serde_json::to_string(&(identity_id, keys)).expect("strings always serialise as JSON");
     format!("cross_account:{parts}")
+}
+
+/// The warning and the acknowledgement `send_draft` requires for one
+/// revision's identity and recipients. [`Engine::cross_account_notice`]
+/// and `send_draft` share it, so the notice's `ack` and the send's
+/// check cannot drift (spec/05, 07).
+pub(crate) struct CrossAccountDecision {
+    pub warning: CrossAccountWarning,
+    pub ack: String,
+}
+
+/// The warning and acknowledgement for one revision's route identity
+/// and recipients; `None` when none applies (spec/05).
+pub(crate) fn cross_account_decision(
+    context: ComposeContext,
+    route: Option<&IdentityRoute>,
+    source: Option<&SourceIdentityInputs>,
+    identity_id: &str,
+    to: &[DraftRecipient],
+    cc: &[DraftRecipient],
+    bcc: &[DraftRecipient],
+) -> Option<CrossAccountDecision> {
+    let warning = cross_account_warning(context, route, source)?;
+    Some(CrossAccountDecision {
+        warning,
+        ack: cross_account_ack(identity_id, to, cc, bcc),
+    })
 }
 
 /// Whether `acks` carries the acknowledgement the warning needs. M4.3's

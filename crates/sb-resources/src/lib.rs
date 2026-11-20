@@ -166,8 +166,8 @@ pub use sb_store::compose::{
 };
 pub use sb_store::drafts::{
     AttachmentRef, AttemptState, ComposeFormat, DraftAttachment, DraftRecipient, DraftSource,
-    DraftState, DraftSummary, LiveAttempt, RevisionInput, StoredDraft, StoredRevision,
-    create_draft, discard_draft, draft, drafts, save_draft,
+    DraftState, DraftSummary, LiveAttempt, ReplySource, RevisionInput, StoredDraft, StoredRevision,
+    create_draft, discard_draft, draft, drafts, reply_source, save_draft,
 };
 pub use sb_store::exports::{
     ExportCaptureRequest, ExportChunkWriter, ExportFormat, ExportJob, ExportJobState, ExportScope,

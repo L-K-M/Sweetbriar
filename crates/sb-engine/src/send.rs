@@ -13,15 +13,15 @@ use sb_resources::{
     AccountKind, AttemptState, ComposeAddress, ComposeAttachment, ComposeError, ComposeFormat,
     ComposeIdentity, ComposeInput, DraftState, IdentityRoute, MimeComposeFormat, OutBoxRecipient,
     PublishedObject, Receipt, Resources, SendAttempt, SentCopy, SourceIdentityInputs,
-    SourceMessageHeaders, StoreError, StoredRevision, Timestamp, Transaction, UnknownResolution,
-    WritePriority, cancel_send, compose, compose_catalog, confirm_send_route, draft,
-    out_box as stored_out_box, replay, resolve_unknown_send, retry_rejected_recipients, run_once,
-    send_draft,
+    SourceMessageHeaders, StoreError, StoredDraft, StoredRevision, Timestamp, Transaction,
+    UnknownResolution, WritePriority, cancel_send, compose, compose_catalog, confirm_send_route,
+    draft, out_box as stored_out_box, replay, resolve_unknown_send, retry_rejected_recipients,
+    run_once, send_draft,
 };
 
 use crate::drafts::{encode_receipt_id, receipt_id};
 use crate::engine::validate_idempotency_key;
-use crate::identity::{ComposeContext, cross_account_acknowledged, cross_account_warning};
+use crate::identity::{ComposeContext, CrossAccountDecision, cross_account_decision};
 use crate::settings::{Setting, UNDO_SECONDS_KEY};
 use crate::{Engine, EngineError};
 
@@ -53,6 +53,18 @@ impl SendQueued {
     pub fn attempt_id(&self) -> &str {
         &self.attempt_id
     }
+}
+
+/// The cross-account warning for one draft revision (spec/05, 07):
+/// the receiving occurrence's account, the route identity's account,
+/// and the acknowledgement `send_draft` accepts for exactly that
+/// revision's identity and recipients. The core never stores the
+/// acknowledgement (spec/05).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CrossAccountNotice {
+    pub source_account_id: String,
+    pub route_account_id: String,
+    pub ack: String,
 }
 
 /// What `resolve_unknown_send` answers.
@@ -176,45 +188,13 @@ impl Engine {
         // acknowledgement for this revision's identity and recipients.
         // Local-archive sources are exempt; the store's own rule
         // handles them here.
-        let source_account = match stored.reply_to_occurrence_id {
-            Some(occurrence_id) => Some(
-                self.read_through(move |resources| {
-                    resources.read(|tx| sb_resources::reply_source_account(tx, occurrence_id))
-                })
-                .await?,
-            ),
-            None => None,
-        };
-        let context = if stored.reply_to_occurrence_id.is_some() {
-            ComposeContext::Reply
-        } else if stored.forward_of_message_id.is_some() {
-            ComposeContext::Forward
-        } else {
-            ComposeContext::New
-        };
-        let route = IdentityRoute {
-            identity_id: identity_id.clone(),
-            account_id: account_id.clone(),
-            email: identity.email().to_owned(),
-            is_default: identity.is_default(),
-            sendable: identity.sendable(),
-            account_kind: identity.account_kind(),
-        };
-        let source = source_account.map(|(account_id, account_kind)| SourceIdentityInputs {
-            account_id,
-            account_kind,
-            headers: SourceMessageHeaders::default(),
-            sent_identity_id: None,
-        });
-        let warning = cross_account_warning(context, Some(&route), source.as_ref());
-        if !cross_account_acknowledged(
-            warning.as_ref(),
-            acks,
-            &identity_id,
-            &revision.to,
-            &revision.cc,
-            &revision.bcc,
-        ) {
+        let route = identity_route(&identity, &account_id);
+        let decision = self
+            .revision_cross_account(&stored, &revision, &route)
+            .await?;
+        if let Some(decision) = decision.as_ref()
+            && !acks.iter().any(|ack| ack == &decision.ack)
+        {
             return Err(EngineError::Conflict {
                 detail: "this reply sends from another account; acknowledge cross_account"
                     .to_owned(),
@@ -279,6 +259,111 @@ impl Engine {
             attempt_id: receipt_id(&receipt, "attempt_id")?,
             receipt,
         })
+    }
+
+    /// `cross_account_notice(draft_id, revision_id)` (spec/07): the
+    /// cross-account warning for that revision of a reply or reply-all,
+    /// or `None` when none applies (spec/05). A revision that isn't the
+    /// draft's current one is `Conflict`, an unknown draft `NotFound`.
+    /// The acknowledgement is the token `send_draft`'s `acks` takes for
+    /// the same revision, computed by the same helper.
+    pub async fn cross_account_notice(
+        &self,
+        draft_id: &str,
+        revision_id: &str,
+    ) -> Result<Option<CrossAccountNotice>, EngineError> {
+        let (draft_id, revision_id) = (draft_id.to_owned(), revision_id.to_owned());
+        let read_id = draft_id.clone();
+        let stored = self
+            .read_through(move |resources| resources.read(|tx| draft(tx, &read_id)))
+            .await?
+            .ok_or_else(|| EngineError::NotFound {
+                what: format!("draft {draft_id}"),
+            })?;
+        let revision = stored
+            .revision
+            .clone()
+            .ok_or_else(|| EngineError::Conflict {
+                detail: format!("draft {} has no revision to send", stored.draft_id),
+            })?;
+        if revision.revision_id != revision_id {
+            return Err(EngineError::Conflict {
+                detail: format!(
+                    "draft {}'s current revision is not {revision_id}",
+                    stored.draft_id
+                ),
+            });
+        }
+        let catalog = self
+            .read_through(|resources| resources.read(|tx| compose_catalog(tx, None)))
+            .await?;
+        // Without a routed identity there is nothing to warn about yet:
+        // `send_draft` refuses such a revision on its own (spec/07).
+        let route = match (
+            revision.identity_id.as_deref(),
+            revision.account_id.as_deref(),
+        ) {
+            (Some(identity_id), Some(account_id)) => catalog
+                .identities()
+                .iter()
+                .find(|identity| identity.identity_id() == identity_id)
+                .map(|identity| identity_route(identity, account_id)),
+            _ => None,
+        };
+        let Some(route) = route else {
+            return Ok(None);
+        };
+        let decision = self
+            .revision_cross_account(&stored, &revision, &route)
+            .await?;
+        Ok(decision.map(|decision| CrossAccountNotice {
+            source_account_id: decision.warning.source_account_id,
+            route_account_id: decision.warning.route_account_id,
+            ack: decision.ack,
+        }))
+    }
+
+    /// The cross-account decision for one draft revision sent through
+    /// `route` (spec/05). `send_draft` checks its `acks` against it and
+    /// `cross_account_notice` hands out its `ack`, so the two cannot
+    /// drift.
+    async fn revision_cross_account(
+        &self,
+        stored: &StoredDraft,
+        revision: &StoredRevision,
+        route: &IdentityRoute,
+    ) -> Result<Option<CrossAccountDecision>, EngineError> {
+        let source_account = match stored.reply_to_occurrence_id {
+            Some(occurrence_id) => Some(
+                self.read_through(move |resources| {
+                    resources.read(|tx| sb_resources::reply_source_account(tx, occurrence_id))
+                })
+                .await?,
+            ),
+            None => None,
+        };
+        let context = if stored.reply_to_occurrence_id.is_some() {
+            ComposeContext::Reply
+        } else if stored.forward_of_message_id.is_some() {
+            ComposeContext::Forward
+        } else {
+            ComposeContext::New
+        };
+        let source = source_account.map(|(account_id, account_kind)| SourceIdentityInputs {
+            account_id,
+            account_kind,
+            headers: SourceMessageHeaders::default(),
+            sent_identity_id: None,
+        });
+        Ok(cross_account_decision(
+            context,
+            Some(route),
+            source.as_ref(),
+            &route.identity_id,
+            &revision.to,
+            &revision.cc,
+            &revision.bcc,
+        ))
     }
 
     /// `cancel_send(attempt_id)` (spec/05, 07): a `held` or `queued`
@@ -708,6 +793,19 @@ fn compose_error(error: ComposeError) -> EngineError {
         ComposeError::InvalidInput(_) => "draft",
     };
     EngineError::invalid_input(field, error.to_string())
+}
+
+/// The route `send_draft` sends a revision through: the catalog
+/// identity and the account the revision recorded (spec/07).
+fn identity_route(identity: &ComposeIdentity, account_id: &str) -> IdentityRoute {
+    IdentityRoute {
+        identity_id: identity.identity_id().to_owned(),
+        account_id: account_id.to_owned(),
+        email: identity.email().to_owned(),
+        is_default: identity.is_default(),
+        sendable: identity.sendable(),
+        account_kind: identity.account_kind(),
+    }
 }
 
 #[cfg(test)]

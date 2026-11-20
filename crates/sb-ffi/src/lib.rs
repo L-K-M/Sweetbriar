@@ -86,8 +86,8 @@ pub use search::{
     SearchRebuildProgress, SearchRebuildStarted, SearchScope, SearchSort, SearchSpec, SearchStatus,
 };
 pub use send::{
-    OutBox, OutBoxRecipient, OutBoxRow, RecipientKind, RecipientState, ResolvedUnknown, SendQueued,
-    SentCopy, UnknownResolution,
+    CrossAccountNotice, OutBox, OutBoxRecipient, OutBoxRow, RecipientKind, RecipientState,
+    ResolvedUnknown, SendQueued, SentCopy, UnknownResolution,
 };
 pub use sidebar::{Account, AccountKind, AccountState, Mailbox, MailboxKind, Mailboxes};
 pub use subscribe::{Subscription, WindowEvent};

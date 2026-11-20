@@ -11,10 +11,12 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use sb_resources::{StoreError, WritePriority};
+use sb_resources::{ReaderAddress, ReplySource, StoreError, WritePriority};
 use sb_test_support::{CutFs, ScratchDir, block_on, real_fs};
 
-use super::{DraftWriteHook, DraftWritePoint};
+use super::{
+    DraftWriteHook, DraftWritePoint, forward_body, forward_subject, reply_body, reply_subject,
+};
 use crate::{
     AttemptState, ComposeFormat, DraftAttachment, DraftContent, DraftRecipient, DraftSource,
     DraftState, Engine, EngineError, LiveAttempt,
@@ -1245,4 +1247,310 @@ fn fresh_draft_validation_preserves_fields_and_retry() {
     assert_eq!(draft_counts(&engine), before);
     block_on(engine.discard_draft(&discard_key, &id)).unwrap();
     block_on(engine.shutdown()).unwrap();
+}
+
+/// The source message's stored headers, plus an acquired plain body
+/// when `body` is `Some`, so a reply or forward draft has something to
+/// quote (spec/05).
+fn seed_source(engine: &Engine, body: Option<&[u8]>) {
+    let acquisition = body.map(|body| {
+        let object = engine.resources().publish_object(body.to_vec()).unwrap();
+        (object.id().sha256_hex(), object.id().byte_length())
+    });
+    let mut batch = String::from(
+        "INSERT INTO message_headers (message_id, raw_fields, header_message_id, subject, from_json, reply_to_json, to_json, cc_json, delivered_to_json, date_header, in_reply_to, references_json, fetched_at) VALUES (9, x'', '<9@example.test>', 'hello', \
+            '[{\"address\":\"sender@example.test\",\"name\":\"Sender\"}]', NULL, \
+            '[{\"address\":\"other@example.test\",\"name\":null},{\"address\":\"me@example.test\",\"name\":null}]', \
+            '[{\"address\":\"third@example.test\",\"name\":\"Third\"},{\"address\":\"other@example.test\",\"name\":null}]', NULL, 1700000000000, NULL, NULL, 0);",
+    );
+    if let Some((hash, size)) = acquisition {
+        batch.push_str(&format!(
+            "INSERT INTO acquisitions (acquisition_id, content_sha256, byte_length, object_state, first_acquired_at) VALUES (1, '{hash}', {size}, 'published', 0); \
+             UPDATE logical_messages SET acquisition_id = 1 WHERE message_id = 9;"
+        ));
+    }
+    block_on(engine.resources().write(WritePriority::User, move |tx| {
+        tx.execute_batch(&batch)
+            .map_err(|e| StoreError::internal(e.to_string()))?;
+        Ok(())
+    }))
+    .unwrap();
+}
+
+/// A reply draft opens on its first revision: the resolved identity,
+/// the From recipient, the prefixed subject and the quoted body
+/// (spec/05 "Reply and forward drafts").
+#[test]
+fn a_reply_draft_writes_its_first_revision_and_quotes_the_body() {
+    let (_scratch, engine) = scratch_engine("engine-draft-reply");
+    seed(&engine);
+    seed_source(
+        &engine,
+        Some(
+            b"From: sender@example.test\nSubject: hello\nContent-Type: text/plain; charset=utf-8\n\noriginal line one\n\noriginal line two\n",
+        ),
+    );
+    let created = create(&engine, DraftSource::Reply { occurrence_id: 11 });
+    let draft = block_on(engine.draft(created.draft_id())).unwrap();
+    let revision = draft
+        .revision
+        .as_ref()
+        .expect("a reply draft opens on its first revision");
+    assert_eq!(revision.seq, 1);
+    assert_eq!(revision.base_revision_id, None);
+    assert_eq!(revision.account_id.as_deref(), Some("acct-1"));
+    assert_eq!(revision.identity_id.as_deref(), Some("ident-1"));
+    assert_eq!(revision.format, ComposeFormat::Plain);
+    assert!(revision.plain_flowed);
+    assert_eq!(revision.subject, "Re: hello");
+    assert_eq!(
+        revision.to,
+        vec![DraftRecipient {
+            address: "sender@example.test".to_owned(),
+            name: Some("Sender".to_owned()),
+        }]
+    );
+    assert!(revision.cc.is_empty());
+    assert_eq!(
+        revision.body_source,
+        "\n\nOn Tue, 14 Nov 2023 22:13:20 +0000, Sender <sender@example.test> wrote:\n\
+         > original line one\n>\n> original line two"
+    );
+    block_on(engine.shutdown()).unwrap();
+}
+
+/// Reply All puts the reply list and the original's To in To, the
+/// original's Cc in Cc, minus the identity's address and repeats
+/// (spec/05).
+#[test]
+fn reply_all_splits_to_and_cc_excludes_the_identity_and_deduplicates() {
+    let (_scratch, engine) = scratch_engine("engine-draft-reply-all");
+    seed(&engine);
+    seed_source(&engine, None);
+    let created = create(&engine, DraftSource::ReplyAll { occurrence_id: 11 });
+    let revision = block_on(engine.draft(created.draft_id()))
+        .unwrap()
+        .revision
+        .unwrap();
+    assert_eq!(revision.subject, "Re: hello");
+    assert_eq!(
+        revision.to,
+        vec![
+            DraftRecipient {
+                address: "sender@example.test".to_owned(),
+                name: Some("Sender".to_owned()),
+            },
+            DraftRecipient {
+                address: "other@example.test".to_owned(),
+                name: None,
+            },
+        ]
+    );
+    assert_eq!(
+        revision.cc,
+        vec![DraftRecipient {
+            address: "third@example.test".to_owned(),
+            name: Some("Third".to_owned()),
+        }]
+    );
+    block_on(engine.shutdown()).unwrap();
+}
+
+/// A forward has no recipients and quotes the original under the
+/// forwarded-message block (spec/05).
+#[test]
+fn a_forward_draft_has_no_recipients_and_writes_the_forward_block() {
+    let (_scratch, engine) = scratch_engine("engine-draft-forward");
+    seed(&engine);
+    seed_source(
+        &engine,
+        Some(
+            b"From: sender@example.test\nSubject: hello\nContent-Type: text/plain; charset=utf-8\n\nforwarded text\n",
+        ),
+    );
+    let created = create(&engine, DraftSource::Forward { occurrence_id: 11 });
+    let revision = block_on(engine.draft(created.draft_id()))
+        .unwrap()
+        .revision
+        .unwrap();
+    assert_eq!(revision.identity_id.as_deref(), Some("ident-1"));
+    assert!(revision.to.is_empty());
+    assert!(revision.cc.is_empty());
+    assert_eq!(revision.subject, "Fwd: hello");
+    assert_eq!(
+        revision.body_source,
+        "\n\n---------- Forwarded message ----------\n\
+         From: Sender <sender@example.test>\n\
+         Date: Tue, 14 Nov 2023 22:13:20 +0000\n\
+         Subject: hello\n\
+         To: other@example.test, me@example.test\n\
+         Cc: Third <third@example.test>, other@example.test\n\
+         \n\
+         forwarded text"
+    );
+    block_on(engine.shutdown()).unwrap();
+}
+
+/// Without an acquired body the attribution stands alone; no
+/// acquisition is requested (spec/05).
+#[test]
+fn a_reply_draft_without_an_acquired_body_gets_the_attribution_alone() {
+    let (_scratch, engine) = scratch_engine("engine-draft-reply-no-body");
+    seed(&engine);
+    seed_source(&engine, None);
+    let created = create(&engine, DraftSource::Reply { occurrence_id: 11 });
+    let revision = block_on(engine.draft(created.draft_id()))
+        .unwrap()
+        .revision
+        .unwrap();
+    assert_eq!(
+        revision.body_source,
+        "\n\nOn Tue, 14 Nov 2023 22:13:20 +0000, Sender <sender@example.test> wrote:"
+    );
+    block_on(engine.shutdown()).unwrap();
+}
+
+/// No valid identity leaves the first revision unrouted (spec/05).
+#[test]
+fn an_unresolved_identity_leaves_the_reply_revision_unrouted() {
+    let (_scratch, engine) = scratch_engine("engine-draft-reply-unrouted");
+    seed(&engine);
+    seed_source(&engine, None);
+    block_on(engine.resources().write(WritePriority::User, |tx| {
+        tx.execute_batch(
+            "UPDATE identities SET sendable = 'unavailable', is_default = 0
+             WHERE identity_id = 'ident-1'",
+        )
+        .map_err(|e| StoreError::internal(e.to_string()))?;
+        Ok(())
+    }))
+    .unwrap();
+    let created = create(&engine, DraftSource::Reply { occurrence_id: 11 });
+    let revision = block_on(engine.draft(created.draft_id()))
+        .unwrap()
+        .revision
+        .unwrap();
+    assert_eq!(revision.identity_id, None);
+    assert_eq!(revision.account_id, None);
+    block_on(engine.shutdown()).unwrap();
+}
+
+/// A replayed create answers the stored draft and writes no second
+/// revision (spec/07).
+#[test]
+fn replaying_a_reply_create_writes_one_revision() {
+    let (_scratch, engine) = scratch_engine("engine-draft-reply-replay");
+    seed(&engine);
+    seed_source(&engine, None);
+    let key = engine.new_idempotency_key();
+    let first =
+        block_on(engine.create_draft(&key, DraftSource::Reply { occurrence_id: 11 })).unwrap();
+    let replayed =
+        block_on(engine.create_draft(&key, DraftSource::Reply { occurrence_id: 11 })).unwrap();
+    assert_eq!(replayed.draft_id(), first.draft_id());
+    assert_eq!(replayed.receipt(), first.receipt());
+    assert_eq!(revision_ids(&engine, first.draft_id()).len(), 1);
+    assert_eq!(block_on(engine.drafts()).unwrap().len(), 1);
+    block_on(engine.shutdown()).unwrap();
+}
+
+/// A new draft still has no revision (spec/05: only a reply or forward
+/// writes its first one).
+#[test]
+fn a_new_draft_still_has_no_revision() {
+    let (_scratch, engine) = scratch_engine("engine-draft-new-no-revision");
+    let created = create(&engine, DraftSource::New);
+    let draft = block_on(engine.draft(created.draft_id())).unwrap();
+    assert!(draft.revision.is_none());
+    block_on(engine.shutdown()).unwrap();
+}
+
+#[test]
+fn reply_and_forward_subjects_follow_the_prefix_rule() {
+    for (subject, expected) in [
+        (Some("hello"), "Re: hello"),
+        (Some("  hello  "), "Re: hello"),
+        (Some("RE: hello"), "RE: hello"),
+        (Some("re: hello"), "re: hello"),
+        (Some(""), "Re:"),
+        (Some("   "), "Re:"),
+        (None, "Re:"),
+    ] {
+        assert_eq!(reply_subject(subject), expected);
+    }
+    for (subject, expected) in [
+        (Some("hello"), "Fwd: hello"),
+        (Some("FWD: hello"), "FWD: hello"),
+        (Some(""), "Fwd:"),
+        (Some("   "), "Fwd:"),
+        (None, "Fwd:"),
+    ] {
+        assert_eq!(forward_subject(subject), expected);
+    }
+}
+
+fn address(address: &str, name: Option<&str>) -> ReaderAddress {
+    ReaderAddress {
+        address: Some(address.to_owned()),
+        name: name.map(str::to_owned),
+    }
+}
+
+fn source() -> ReplySource {
+    ReplySource {
+        message_id: 9,
+        subject: Some("hello".to_owned()),
+        date_text: Some("Tue, 14 Nov 2023 22:13:20 +0000".to_owned()),
+        from: vec![address("sender@example.test", Some("Sender"))],
+        to: vec![
+            address("other@example.test", None),
+            address("me@example.test", None),
+        ],
+        cc: vec![
+            address("third@example.test", Some("Third")),
+            address("other@example.test", None),
+        ],
+    }
+}
+
+#[test]
+fn a_reply_body_quotes_every_line_and_trims_the_rendition() {
+    assert_eq!(
+        reply_body(&source(), Some("one\n\ntwo\n\n")),
+        "\n\nOn Tue, 14 Nov 2023 22:13:20 +0000, Sender <sender@example.test> wrote:\n\
+         > one\n>\n> two"
+    );
+    assert_eq!(
+        reply_body(&source(), Some("\n\n")),
+        "\n\nOn Tue, 14 Nov 2023 22:13:20 +0000, Sender <sender@example.test> wrote:"
+    );
+    assert_eq!(
+        reply_body(&source(), None),
+        "\n\nOn Tue, 14 Nov 2023 22:13:20 +0000, Sender <sender@example.test> wrote:"
+    );
+}
+
+#[test]
+fn a_forward_body_omits_empty_header_lines_and_leaves_text_unquoted() {
+    assert_eq!(
+        forward_body(&source(), Some("text\n")),
+        "\n\n---------- Forwarded message ----------\n\
+         From: Sender <sender@example.test>\n\
+         Date: Tue, 14 Nov 2023 22:13:20 +0000\n\
+         Subject: hello\n\
+         To: other@example.test, me@example.test\n\
+         Cc: Third <third@example.test>, other@example.test\n\
+         \n\
+         text"
+    );
+    let mut bare = source();
+    bare.from = Vec::new();
+    bare.date_text = None;
+    bare.subject = None;
+    bare.to = Vec::new();
+    bare.cc = Vec::new();
+    assert_eq!(
+        forward_body(&bare, None),
+        "\n\n---------- Forwarded message ----------"
+    );
 }

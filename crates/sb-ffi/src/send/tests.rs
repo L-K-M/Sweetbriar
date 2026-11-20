@@ -561,3 +561,67 @@ fn send_again_replays_and_the_route_and_retry_commands_refuse() {
     assert_eq!(old.resolution, Some(UnknownResolution::SendAgain));
     block_on(core.shutdown());
 }
+
+/// Two Proton accounts and a message `acct-2` received, addressed to
+/// `acct-1`'s identity, so a reply draft resolves across accounts.
+fn seed_cross_account(state_db: &Path) {
+    execute_sql(
+        state_db,
+        "INSERT INTO accounts (account_id, kind, provider, display_name, state, sort_order, created_at) VALUES ('acct-1', 'proton', 'proton_api', 'One', 'active', 1, 0); \
+         INSERT INTO identities (identity_id, account_id, email, display_name, is_default, sendable) VALUES ('ident-1', 'acct-1', 'me@example.test', 'Me', 1, 'validated'); \
+         INSERT INTO accounts (account_id, kind, provider, display_name, state, sort_order, created_at) VALUES ('acct-2', 'proton', 'proton_api', 'Two', 'active', 2, 0); \
+         INSERT INTO identities (identity_id, account_id, email, display_name, is_default, sendable) VALUES ('ident-2', 'acct-2', 'two@example.test', 'Two', 1, 'validated'); \
+         INSERT INTO mailboxes (mailbox_id, account_id, remote_name, kind, selectable, sync_state) VALUES (7, 'acct-2', 'Inbox', 'folder', 1, 'synced'); \
+         INSERT INTO logical_messages (message_id, account_id, created_at) VALUES (9, 'acct-2', 0); \
+         INSERT INTO occurrences (occurrence_id, account_id, mailbox_id, message_id, first_seen_at, last_seen_at, state) VALUES (11, 'acct-2', 7, 9, 0, 0, 'present'); \
+         INSERT INTO message_headers (message_id, raw_fields, subject, from_json, to_json, cc_json, date_header, fetched_at) VALUES (9, x'', 'hello', \
+            '[{\"address\":\"sender@example.test\",\"name\":null}]', \
+            '[{\"address\":\"me@example.test\",\"name\":null}]', NULL, 1700000000000, 0);",
+    );
+}
+
+/// The notice crosses with every field and `send_draft` accepts exactly
+/// its acknowledgement (spec/05, 07).
+#[test]
+fn cross_account_notice_answers_a_reply_and_send_accepts_its_ack() {
+    let (scratch, core) = scratch_core("ffi-send-cross-account-notice");
+    block_on(core.shutdown());
+    seed_cross_account(&state_db(&scratch));
+    let core = reopen(&scratch);
+
+    let created = block_on(core.create_draft(
+        CancelToken::new(),
+        "create-1".into(),
+        DraftSource::Reply { occurrence_id: 11 },
+    ))
+    .unwrap();
+    let draft_id = created.draft_id;
+    let revision_id = block_on(core.draft(CancelToken::new(), draft_id.clone()))
+        .unwrap()
+        .revision
+        .expect("a reply draft opens on its first revision")
+        .revision_id;
+
+    let notice = block_on(core.cross_account_notice(
+        CancelToken::new(),
+        draft_id.clone(),
+        revision_id.clone(),
+    ))
+    .unwrap()
+    .expect("a cross-account reply warns");
+    assert_eq!(notice.source_account_id, "acct-2");
+    assert_eq!(notice.route_account_id, "acct-1");
+    assert!(notice.ack.starts_with("cross_account:"));
+    assert_eq!(round_trip(notice.clone()), notice);
+
+    let queued = block_on(core.send_draft(
+        CancelToken::new(),
+        "send-1".into(),
+        draft_id,
+        revision_id,
+        vec![notice.ack],
+    ))
+    .unwrap();
+    assert_eq!(queued.receipt.command, "send_draft");
+    block_on(core.shutdown());
+}

@@ -186,6 +186,18 @@ impl OutBox {
     }
 }
 
+/// The cross-account warning for one draft revision (spec/05, 07):
+/// the receiving occurrence's account, the route identity's account,
+/// and the acknowledgement `send_draft` accepts for exactly that
+/// revision's identity and recipients. The acknowledgement is not
+/// persisted.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CrossAccountNotice {
+    pub source_account_id: String,
+    pub route_account_id: String,
+    pub ack: String,
+}
+
 /// What `send_draft` answers: its receipt and the attempt id the
 /// receipt names, so a replayed key still names the first attempt.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -249,6 +261,28 @@ impl Core {
             receipt: Receipt::from_engine(queued.receipt()),
             attempt_id: queued.attempt_id().to_owned(),
         })
+    }
+
+    /// `cross_account_notice(draft_id, revision_id)` (spec/07): the
+    /// cross-account warning for that revision of a reply or reply-all,
+    /// or `None` when none applies (spec/05). A revision that isn't the
+    /// draft's current one is `Conflict`; an unknown draft is
+    /// `NotFound`. The acknowledgement is the token `send_draft`'s
+    /// `acks` takes for the same revision.
+    pub async fn cross_account_notice(
+        &self,
+        draft_id: &str,
+        revision_id: &str,
+    ) -> Result<Option<CrossAccountNotice>, CoreError> {
+        let notice = self
+            .engine()
+            .cross_account_notice(draft_id, revision_id)
+            .await?;
+        Ok(notice.map(|notice| CrossAccountNotice {
+            source_account_id: notice.source_account_id,
+            route_account_id: notice.route_account_id,
+            ack: notice.ack,
+        }))
     }
 
     /// `cancel_send(attempt_id)` (spec/07 "Commands"): a `held` or

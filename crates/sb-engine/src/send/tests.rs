@@ -334,7 +334,20 @@ fn cross_account_ack_is_required_and_bound_to_the_revision() {
     ))
     .unwrap();
     let draft_id = draft.draft_id().to_owned();
-    let saved = save(&engine, &draft_id, None);
+    // A reply draft opens on its first revision (spec/05); this test
+    // saves the routed revision over it.
+    let first_revision = block_on(engine.draft(&draft_id))
+        .unwrap()
+        .revision
+        .expect("a reply draft writes its first revision")
+        .revision_id;
+    let saved = block_on(engine.save_draft(
+        &engine.new_idempotency_key(),
+        &draft_id,
+        Some(&first_revision),
+        content("hello"),
+    ))
+    .unwrap();
     let revision = saved.revision_id().to_owned();
     let base = content("hello");
     let ack = crate::cross_account_ack("ident-1", &base.to, &base.cc, &base.bcc);
@@ -902,5 +915,164 @@ fn held_attempts_past_their_window_queue_at_startup() {
         ),
         "held"
     );
+    block_on(engine.shutdown()).unwrap();
+}
+
+/// The second Proton account and a message it received, addressed to
+/// `acct-1`'s identity; `seed` must have run first.
+fn seed_other_account(engine: &Engine) {
+    sql(
+        engine,
+        r#"INSERT INTO accounts (account_id, kind, provider, display_name, state, sort_order, created_at) VALUES ('acct-2', 'proton', 'proton_api', 'Two', 'active', 2, 0);
+         INSERT INTO identities (identity_id, account_id, email, display_name, is_default, sendable) VALUES ('ident-2', 'acct-2', 'two@example.test', 'Two', 1, 'validated');
+         INSERT INTO mailboxes (mailbox_id, account_id, remote_name, kind, selectable, sync_state) VALUES (8, 'acct-2', 'Inbox', 'folder', 1, 'synced');
+         INSERT INTO logical_messages (message_id, account_id, created_at) VALUES (21, 'acct-2', 0);
+         INSERT INTO occurrences (occurrence_id, account_id, mailbox_id, message_id, first_seen_at, last_seen_at, state) VALUES (22, 'acct-2', 8, 21, 0, 0, 'present');
+         INSERT INTO message_headers (message_id, raw_fields, subject, from_json, to_json, cc_json, date_header, fetched_at)
+         VALUES (21, x'', 'hello', '[{"address":"sender@example.test","name":null}]',
+            '[{"address":"me@example.test","name":null}]', NULL, 1700000000000, 0);"#,
+    );
+}
+
+/// A message `account` received, addressed to `to`.
+fn seed_received(
+    engine: &Engine,
+    account: &str,
+    mailbox: i64,
+    message: i64,
+    occurrence: i64,
+    to: &str,
+) {
+    sql(
+        engine,
+        &format!(
+            r#"INSERT INTO mailboxes (mailbox_id, account_id, remote_name, kind, selectable, sync_state) VALUES ({mailbox}, '{account}', 'Inbox', 'folder', 1, 'synced');
+         INSERT INTO logical_messages (message_id, account_id, created_at) VALUES ({message}, '{account}', 0);
+         INSERT INTO occurrences (occurrence_id, account_id, mailbox_id, message_id, first_seen_at, last_seen_at, state) VALUES ({occurrence}, '{account}', {mailbox}, {message}, 0, 0, 'present');
+         INSERT INTO message_headers (message_id, raw_fields, subject, from_json, to_json, cc_json, date_header, fetched_at)
+         VALUES ({message}, x'', 'hello', '[{{"address":"sender@example.test","name":null}}]',
+            '[{{"address":"{to}","name":null}}]', NULL, 1700000000000, 0);"#
+        ),
+    );
+}
+
+/// A reply draft's id and first revision, as `create_draft` writes it.
+fn reply(engine: &Engine, occurrence_id: i64) -> (String, crate::StoredRevision) {
+    let created = block_on(engine.create_draft(
+        &engine.new_idempotency_key(),
+        DraftSource::Reply { occurrence_id },
+    ))
+    .unwrap();
+    let draft_id = created.draft_id().to_owned();
+    let revision = block_on(engine.draft(&draft_id)).unwrap().revision.unwrap();
+    (draft_id, revision)
+}
+
+/// The notice answers a cross-account reply with exactly the
+/// acknowledgement `send_draft` accepts for that revision (spec/05,
+/// 07).
+#[test]
+fn cross_account_notice_matches_send_draft() {
+    let (_scratch, engine) = scratch_engine("engine-cross-account-notice");
+    seed(&engine);
+    seed_other_account(&engine);
+    let (draft_id, revision) = reply(&engine, 22);
+    assert_eq!(revision.identity_id.as_deref(), Some("ident-1"));
+    let notice = block_on(engine.cross_account_notice(&draft_id, &revision.revision_id))
+        .unwrap()
+        .expect("a cross-account reply warns");
+    assert_eq!(notice.source_account_id, "acct-2");
+    assert_eq!(notice.route_account_id, "acct-1");
+    assert_eq!(
+        notice.ack,
+        crate::cross_account_ack("ident-1", &revision.to, &revision.cc, &revision.bcc)
+    );
+    let queued = block_on(engine.send_draft(
+        &engine.new_idempotency_key(),
+        &draft_id,
+        &revision.revision_id,
+        std::slice::from_ref(&notice.ack),
+    ))
+    .unwrap();
+    assert!(!queued.attempt_id().is_empty());
+    block_on(engine.shutdown()).unwrap();
+}
+
+/// No warning for a same-account reply, a forward, or a local-archive
+/// source (spec/05).
+#[test]
+fn cross_account_notice_is_none_without_a_warning() {
+    let (_scratch, engine) = scratch_engine("engine-cross-account-none");
+    seed(&engine);
+    seed_received(&engine, "acct-1", 7, 9, 11, "me@example.test");
+    let (draft_id, revision) = reply(&engine, 11);
+    assert_eq!(revision.identity_id.as_deref(), Some("ident-1"));
+    assert!(
+        block_on(engine.cross_account_notice(&draft_id, &revision.revision_id))
+            .unwrap()
+            .is_none()
+    );
+
+    seed_other_account(&engine);
+    let forward = block_on(engine.create_draft(
+        &engine.new_idempotency_key(),
+        DraftSource::Forward { occurrence_id: 22 },
+    ))
+    .unwrap();
+    let draft_id = forward.draft_id().to_owned();
+    let revision = block_on(engine.draft(&draft_id)).unwrap().revision.unwrap();
+    assert_eq!(revision.identity_id.as_deref(), Some("ident-1"));
+    assert!(
+        block_on(engine.cross_account_notice(&draft_id, &revision.revision_id))
+            .unwrap()
+            .is_none()
+    );
+
+    // A local-archive source can't send, so answering from the Proton
+    // account is expected and carries no banner (spec/05).
+    let local_account = one(
+        &engine,
+        "SELECT account_id FROM accounts WHERE provider = 'local_archive'",
+    );
+    seed_received(&engine, &local_account, 90, 120, 130, "me@example.test");
+    let (draft_id, revision) = reply(&engine, 130);
+    assert_eq!(revision.identity_id.as_deref(), Some("ident-1"));
+    assert!(
+        block_on(engine.cross_account_notice(&draft_id, &revision.revision_id))
+            .unwrap()
+            .is_none()
+    );
+    block_on(engine.shutdown()).unwrap();
+}
+
+/// A revision that isn't the draft's current one is `Conflict`; an
+/// unknown draft is `NotFound` (spec/07).
+#[test]
+fn cross_account_notice_conflicts_on_a_stale_revision() {
+    let (_scratch, engine) = scratch_engine("engine-cross-account-stale");
+    seed(&engine);
+    seed_other_account(&engine);
+    let (draft_id, first) = reply(&engine, 22);
+    let saved = block_on(engine.save_draft(
+        &engine.new_idempotency_key(),
+        &draft_id,
+        Some(&first.revision_id),
+        content("edited"),
+    ))
+    .unwrap();
+    let error = block_on(engine.cross_account_notice(&draft_id, &first.revision_id)).unwrap_err();
+    assert!(
+        matches!(&error, EngineError::Conflict { detail } if detail.contains("current revision")),
+        "{error:?}"
+    );
+    assert!(
+        block_on(engine.cross_account_notice(&draft_id, saved.revision_id()))
+            .unwrap()
+            .is_some()
+    );
+    match block_on(engine.cross_account_notice("no-such-draft", saved.revision_id())) {
+        Err(EngineError::NotFound { what }) => assert_eq!(what, "draft no-such-draft"),
+        other => panic!("an unknown draft must be NotFound: {other:?}"),
+    }
     block_on(engine.shutdown()).unwrap();
 }

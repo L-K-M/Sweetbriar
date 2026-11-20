@@ -9,15 +9,21 @@
 //! blocking pool, before the revision that references them: no file
 //! I/O ever runs inside a write transaction.
 
+use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex};
 
 use sb_resources::{
     AttachmentRef, ComposeFormat, DraftAttachment, DraftRecipient, DraftSource, DraftSummary,
-    PublishedObject, Receipt, RevisionInput, StoreError, StoredDraft, WritePriority, create_draft,
-    discard_draft, draft, drafts, run_once, save_draft,
+    IdentityResolutionInputs, PublishedObject, ReaderAddress, Receipt, ReplySource, RevisionInput,
+    StoreError, StoredDraft, WritePriority, create_draft, discard_draft, draft, drafts,
+    identity_resolution_inputs, replay, reply_source, run_once, save_draft,
 };
 
 use crate::engine::validate_idempotency_key;
+use crate::identity::{
+    ComposeContext, ResolvedIdentity, address_key, reply_all_recipients, reply_recipients,
+    resolve_identity,
+};
 use crate::{Engine, EngineError};
 
 /// The commands' names in `command_receipts` (spec/07).
@@ -135,8 +141,19 @@ impl Engine {
     ) -> Result<DraftCreated, EngineError> {
         validate_idempotency_key(idempotency_key)?;
         let draft_id = self.resources().new_uuid_string();
+        let revision_id = self.resources().new_uuid_string();
         let now = self.resources().now();
         let key = idempotency_key.to_owned();
+        let (compose_context, occurrence_id) = match context {
+            DraftSource::New => (ComposeContext::New, None),
+            DraftSource::Reply { occurrence_id } => (ComposeContext::Reply, Some(occurrence_id)),
+            DraftSource::ReplyAll { occurrence_id } => {
+                (ComposeContext::ReplyAll, Some(occurrence_id))
+            }
+            DraftSource::Forward { occurrence_id } => {
+                (ComposeContext::Forward, Some(occurrence_id))
+            }
+        };
         #[cfg(test)]
         let hook = self.drafts_write_hook();
         self.command(move |worker| async move {
@@ -144,6 +161,47 @@ impl Engine {
             draft_write_point(&hook, DraftWritePoint::BeforeWrite);
             #[cfg(test)]
             let write_hook = hook.clone();
+            // A replayed key answers its first draft before any source
+            // read, which a changed context would now refuse (spec/07).
+            let replay_key = key.clone();
+            let replayed = worker
+                .blocking(move |resources| {
+                    resources.read(|tx| replay(tx, &replay_key, CREATE_DRAFT))
+                })
+                .await??;
+            if let Some(receipt) = replayed {
+                return Ok(DraftCreated {
+                    draft_id: receipt_id(&receipt, "draft_id")?,
+                    receipt,
+                });
+            }
+            // A reply or forward gathers its source's stored headers
+            // and its acquired plain text before the write: the
+            // rendition is rendered in memory, never published as a
+            // lease, and a missing occurrence stays `NotFound`
+            // (spec/05).
+            let prepared = match occurrence_id {
+                Some(occurrence_id) => {
+                    let source = worker
+                        .blocking(move |resources| {
+                            resources.read(|tx| reply_source(tx, occurrence_id))
+                        })
+                        .await??;
+                    let message_id = source.message_id;
+                    // Not acquired is the attribution alone (spec/05);
+                    // any other failure is the command's.
+                    let text = match worker
+                        .blocking(move |resources| resources.acquired_plain_text(message_id))
+                        .await?
+                    {
+                        Ok(text) => Some(text),
+                        Err(StoreError::Unavailable { .. }) => None,
+                        Err(error) => return Err(error.into()),
+                    };
+                    Some((source, text))
+                }
+                None => None,
+            };
             let id = draft_id.clone();
             let receipt = worker
                 .resources()
@@ -152,6 +210,53 @@ impl Engine {
                         #[cfg(test)]
                         draft_write_point(&write_hook, DraftWritePoint::InsideBeforeEffect);
                         create_draft(tx, &id, &context, now)?;
+                        if let Some((source, text)) = prepared.as_ref() {
+                            let occurrence_id =
+                                occurrence_id.expect("a prepared source names its occurrence");
+                            let inputs =
+                                identity_resolution_inputs(tx, Some(occurrence_id), None, None)?;
+                            let identity_id = match resolve_identity(compose_context, &inputs) {
+                                ResolvedIdentity::Chosen(identity) => Some(identity),
+                                ResolvedIdentity::ChooseSendingIdentity => None,
+                            };
+                            let email = identity_id.as_ref().and_then(|identity| {
+                                inputs
+                                    .identities
+                                    .iter()
+                                    .find(|route| &route.identity_id == identity)
+                                    .map(|route| route.email.clone())
+                            });
+                            let (to, cc) =
+                                draft_recipients(compose_context, &inputs, email.as_deref());
+                            let (subject, body_source) = match compose_context {
+                                ComposeContext::Forward => (
+                                    forward_subject(source.subject.as_deref()),
+                                    forward_body(source, text.as_deref()),
+                                ),
+                                _ => (
+                                    reply_subject(source.subject.as_deref()),
+                                    reply_body(source, text.as_deref()),
+                                ),
+                            };
+                            save_draft(
+                                tx,
+                                &id,
+                                None,
+                                RevisionInput {
+                                    revision_id: revision_id.clone(),
+                                    identity_id,
+                                    format: ComposeFormat::Plain,
+                                    plain_flowed: true,
+                                    subject,
+                                    to,
+                                    cc,
+                                    bcc: Vec::new(),
+                                    body_source,
+                                    attachments: Vec::new(),
+                                },
+                                now,
+                            )?;
+                        }
                         #[cfg(test)]
                         draft_write_point(&write_hook, DraftWritePoint::InsideBeforeReceipt);
                         Ok(encode_receipt_id("draft_id", &id))
@@ -387,6 +492,194 @@ impl Engine {
             .expect("a panicking thread held the drafts hook")
             .clone()
     }
+}
+
+/// A reply or reply-all first revision's recipients (spec/05): Reply
+/// puts its whole list in To; Reply All puts the reply list and the
+/// original's To in To and only the entries that appear in the original
+/// Cc and nowhere else in Cc. The identity's address is excluded by
+/// [`reply_all_recipients`]; an entry without an address is dropped.
+fn draft_recipients(
+    context: ComposeContext,
+    inputs: &IdentityResolutionInputs,
+    exclude: Option<&str>,
+) -> (Vec<DraftRecipient>, Vec<DraftRecipient>) {
+    let Some(source) = inputs.source.as_ref() else {
+        return (Vec::new(), Vec::new());
+    };
+    let headers = &source.headers;
+    match context {
+        ComposeContext::Reply => (
+            reply_recipients(headers)
+                .iter()
+                .filter_map(reader_recipient)
+                .collect(),
+            Vec::new(),
+        ),
+        ComposeContext::ReplyAll => {
+            let reply_list = reply_recipients(headers);
+            let reply_keys = address_keys(&reply_list);
+            let to_keys = address_keys(&headers.to);
+            let cc_keys = address_keys(&headers.cc);
+            let mut to = Vec::new();
+            let mut cc = Vec::new();
+            for entry in reply_all_recipients(headers, exclude.unwrap_or("")) {
+                let key = entry.address.as_deref().and_then(address_key);
+                let cc_only = key
+                    .as_deref()
+                    .map(|key| {
+                        cc_keys.contains(key) && !reply_keys.contains(key) && !to_keys.contains(key)
+                    })
+                    .unwrap_or(false);
+                if cc_only {
+                    if let Some(recipient) = reader_recipient(&entry) {
+                        cc.push(recipient);
+                    }
+                } else if let Some(recipient) = reader_recipient(&entry) {
+                    to.push(recipient);
+                }
+            }
+            (to, cc)
+        }
+        _ => (Vec::new(), Vec::new()),
+    }
+}
+
+fn address_keys(addresses: &[ReaderAddress]) -> BTreeSet<String> {
+    addresses
+        .iter()
+        .filter_map(|entry| entry.address.as_deref().and_then(address_key))
+        .collect()
+}
+
+/// One stored header address as a draft recipient; an entry without
+/// an address has nothing to send to and is dropped (spec/05).
+fn reader_recipient(entry: &ReaderAddress) -> Option<DraftRecipient> {
+    let address = entry
+        .address
+        .clone()
+        .filter(|address| !address.is_empty())?;
+    Some(DraftRecipient {
+        address,
+        name: entry.name.clone(),
+    })
+}
+
+/// A reply's subject: trimmed, after `Re: ` unless it already starts
+/// with that prefix compared without case; empty becomes `Re:`
+/// (spec/05). A forward's is the same rule with `Fwd: `.
+fn reply_subject(subject: Option<&str>) -> String {
+    prefixed_subject(subject, "Re: ", "re:")
+}
+
+fn forward_subject(subject: Option<&str>) -> String {
+    prefixed_subject(subject, "Fwd: ", "fwd:")
+}
+
+fn prefixed_subject(subject: Option<&str>, prefix: &str, marker: &str) -> String {
+    let trimmed = subject.unwrap_or("").trim();
+    if trimmed.is_empty() {
+        return prefix.trim_end().to_owned();
+    }
+    let already = trimmed
+        .get(..marker.len())
+        .is_some_and(|head| head.eq_ignore_ascii_case(marker));
+    if already {
+        trimmed.to_owned()
+    } else {
+        format!("{prefix}{trimmed}")
+    }
+}
+
+/// A reply's body: two empty lines, the attribution line, then each
+/// rendition line prefixed `> ` (an empty line becomes `>`); without a
+/// rendition the attribution stands alone (spec/05).
+fn reply_body(source: &ReplySource, text: Option<&str>) -> String {
+    let attribution = format!(
+        "\n\nOn {}, {} wrote:",
+        source.date_text.as_deref().unwrap_or(""),
+        address_text(&source.from)
+    );
+    let quoted = text.map(quote_rendition).unwrap_or_default();
+    if quoted.is_empty() {
+        attribution
+    } else {
+        format!("{attribution}\n{quoted}")
+    }
+}
+
+/// A forward's body: two empty lines, the forwarded-message block with
+/// the original's non-empty From, Date, Subject, To and Cc lines, then
+/// the rendition unquoted; without one the block stands alone
+/// (spec/05).
+fn forward_body(source: &ReplySource, text: Option<&str>) -> String {
+    let mut lines = vec!["---------- Forwarded message ----------".to_owned()];
+    address_line(&mut lines, "From:", &source.from);
+    if let Some(date) = source.date_text.as_deref().filter(|date| !date.is_empty()) {
+        lines.push(format!("Date: {date}"));
+    }
+    if let Some(subject) = source
+        .subject
+        .as_deref()
+        .map(str::trim)
+        .filter(|subject| !subject.is_empty())
+    {
+        lines.push(format!("Subject: {subject}"));
+    }
+    address_line(&mut lines, "To:", &source.to);
+    address_line(&mut lines, "Cc:", &source.cc);
+    let mut body = format!("\n\n{}", lines.join("\n"));
+    let text = text.map(|text| text.trim_end_matches(['\n', '\r']));
+    if let Some(text) = text.filter(|text| !text.is_empty()) {
+        body.push_str("\n\n");
+        body.push_str(text);
+    }
+    body
+}
+
+fn address_line(lines: &mut Vec<String>, label: &str, addresses: &[ReaderAddress]) {
+    let text = address_text(addresses);
+    if !text.is_empty() {
+        lines.push(format!("{label} {text}"));
+    }
+}
+
+/// `Name <address>` or the bare address, joined with `, ` (spec/05);
+/// entries without an address are skipped.
+fn address_text(addresses: &[ReaderAddress]) -> String {
+    addresses
+        .iter()
+        .filter_map(|entry| {
+            let address = entry.address.as_deref()?;
+            let name = entry.name.as_deref().filter(|name| !name.is_empty());
+            Some(match name {
+                Some(name) => format!("{name} <{address}>"),
+                None => address.to_owned(),
+            })
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// The rendition quoted: trailing newlines trimmed, each line prefixed
+/// `> `, an empty line just `>`.
+fn quote_rendition(text: &str) -> String {
+    let normalized = text.replace("\r\n", "\n");
+    let trimmed = normalized.trim_end_matches(['\n', '\r']);
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    trimmed
+        .split('\n')
+        .map(|line| {
+            if line.is_empty() {
+                ">".to_owned()
+            } else {
+                format!("> {line}")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// `save_draft`'s fresh-command validation: the fields the store would

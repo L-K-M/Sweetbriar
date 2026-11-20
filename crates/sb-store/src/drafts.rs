@@ -9,6 +9,7 @@ use rusqlite::{OptionalExtension, Transaction, params};
 use sb_types::time::Timestamp;
 
 use crate::StoreError;
+use crate::messages::{self, ReaderAddress};
 use crate::objects::{ObjectId, PublishedObject, ReservationRelease, release_reservation};
 use crate::schema::classify;
 
@@ -263,6 +264,71 @@ pub fn create_draft(
     )
     .map_err(|e| classify(e, "create a draft"))?;
     Ok(())
+}
+
+/// The source occurrence's stored header values a reply or forward
+/// draft quotes (spec/05): the logical message id the body read names,
+/// the subject, the Date rendered from the stored UTC milliseconds,
+/// and the From/To/Cc lists as `message_headers` holds them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReplySource {
+    pub message_id: i64,
+    pub subject: Option<String>,
+    pub date_text: Option<String>,
+    pub from: Vec<ReaderAddress>,
+    pub to: Vec<ReaderAddress>,
+    pub cc: Vec<ReaderAddress>,
+}
+
+/// Read one source occurrence's stored header values (`NotFound` for
+/// an unknown occurrence, like `create_draft`'s own check). Header
+/// fields are left-joined: no header yet means empty lists.
+pub fn reply_source(tx: &Transaction, occurrence_id: i64) -> Result<ReplySource, StoreError> {
+    let err = |e| classify(e, "read a draft's source headers");
+    let row = tx
+        .query_row(
+            "SELECT o.message_id, h.subject, h.date_header, h.from_json, h.to_json, h.cc_json
+             FROM occurrences o
+             LEFT JOIN message_headers h ON h.message_id = o.message_id
+             WHERE o.occurrence_id = ?1",
+            params![occurrence_id],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                    row.get::<_, Option<i64>>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                    row.get::<_, Option<String>>(4)?,
+                    row.get::<_, Option<String>>(5)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(err)?
+        .ok_or_else(|| StoreError::not_found(format!("occurrence {occurrence_id}")))?;
+    let (message_id, subject, date, from, to, cc) = row;
+    Ok(ReplySource {
+        message_id,
+        subject,
+        date_text: match date {
+            Some(millis) => Some(date_header_text(millis)?),
+            None => None,
+        },
+        from: messages::addresses(from)?,
+        to: messages::addresses(to)?,
+        cc: messages::addresses(cc)?,
+    })
+}
+
+/// The stored UTC milliseconds as the RFC 2822 text a quoted
+/// attribution shows (spec/05 "the header values as stored"): the
+/// instant is fixed, so the text never depends on the host zone.
+fn date_header_text(millis: i64) -> Result<String, StoreError> {
+    let timestamp = jiff::Timestamp::from_millisecond(millis)
+        .map_err(|e| StoreError::corrupt(format!("invalid Date header: {e}")))?;
+    let zoned = timestamp.to_zoned(jiff::tz::TimeZone::UTC);
+    jiff::fmt::rfc2822::to_string(&zoned)
+        .map_err(|e| StoreError::corrupt(format!("unrenderable Date header: {e}")))
 }
 
 /// `save_draft`'s revision insert (spec/02, 07): `base` must be the
