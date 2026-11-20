@@ -19,7 +19,7 @@ use sb_resources::{
     DraftCreate, DraftTemplate, FrozenSend, KeyStore, ProtonClient, RECIPIENT_TYPE_EXTERNAL,
     RECIPIENT_TYPE_INTERNAL, RecipientKeys, RecipientKind, RefusalKind, SESSION_REFUSED_REASON,
     SendAttachment, SendBody, SendError, SendFailure, SendFailureRejection, SendPackages,
-    SendParentKind, SendRecipient, SendRefusal, SendTransportError, Session, Timestamp,
+    SendParentKind, SendRecipient, SendRefusal, SendTransportError, Session, StoreError, Timestamp,
     WritePriority, claim_send_attempt, commit_send_requested, mark_outcome_unknown,
     mark_send_accepted, mark_send_failed, pause_for_reason, pause_for_session, record_proton_draft,
     requeue_before_request,
@@ -161,6 +161,21 @@ async fn submit_one(
         .await
     {
         Ok(Ok(bytes)) => bytes,
+        // The frozen bytes are gone or damaged, so the attempt can never
+        // be sent as frozen: it fails, rather than halting the account's
+        // worker on every pass. Any other read failure is a retry.
+        Ok(Err(StoreError::NotFound { .. } | StoreError::Corrupt { .. })) => {
+            let failure = SendFailure {
+                code: None,
+                message: "the frozen message can't be read from the store".to_owned(),
+                rejected: None,
+            };
+            let now = worker.resources().now();
+            let id = claimed.attempt_id.clone();
+            fail(worker, &id, &failure, now).await?;
+            backoff.record_success(&claimed.attempt_id);
+            return Ok(SubmitOutcome::Done);
+        }
         Ok(Err(error)) => return Err(error.into()),
         Err(_) => return Err(Halt::Stopped),
     };

@@ -381,7 +381,7 @@ async fn a_dropped_send_reply_is_outcome_unknown_and_never_retried() {
 }
 
 #[tokio::test]
-async fn a_refusal_of_the_send_is_outcome_unknown_while_the_list_is_empty() {
+async fn a_refusal_of_the_send_is_outcome_unknown_while_the_qualified_list_is_empty() {
     let h = setup(vec![TestAccount::new(USER, PASSWORD)]).await;
     let _id = sign_in(&h).await;
     let ident = identity(&h).await;
@@ -682,4 +682,29 @@ async fn no_sent_copy_is_uploaded_or_imported() {
         "no attachment upload reached Proton: {requests:?}"
     );
     assert_eq!(h.server.sends(), 1);
+}
+
+#[tokio::test]
+async fn a_missing_frozen_message_fails_its_attempt_and_the_worker_goes_on() {
+    let h = setup(vec![TestAccount::new(USER, PASSWORD)]).await;
+    let _id = sign_in(&h).await;
+    let ident = identity(&h).await;
+    let lost = queue(&h, &ident, &[INTERNAL]).await;
+    let db = h.scratch.path().join("store/state.sqlite");
+    execute_sql(
+        &db,
+        &format!(
+            "UPDATE send_attempts SET mime_sha256 = '{}' WHERE attempt_id = '{}'",
+            "0".repeat(64),
+            lost.attempt_id
+        ),
+    );
+    let sent = queue(&h, &ident, &[INTERNAL]).await;
+
+    advance(&h, UNDO_MS).await;
+    let row = until_state(&h, &lost.attempt_id, AttemptState::Failed).await;
+    let reply = row.final_reply.as_deref().expect("the failure's reply");
+    assert!(reply.contains("frozen message"), "{reply}");
+    until_state(&h, &sent.attempt_id, AttemptState::Accepted).await;
+    assert_eq!(h.server.sends(), 1, "only the readable attempt is sent");
 }
