@@ -195,7 +195,10 @@ public final class ComposeSendModel {
         cancelAttemptId = nil
     }
 
+    /// The send or its hold has ended, so an earlier Undo failure no
+    /// longer applies.
     private func fail(with error: any Error) {
+        undoError = nil
         state = .failed(
             message: (error as? CoreFailure)?.errorDescription ?? error.localizedDescription)
     }
