@@ -46,21 +46,39 @@ final class ComposeWindows {
     }
 
     func newMessage(preferredAccountId: String? = nil) {
+        create(source: .new, preferredAccountId: preferredAccountId)
+    }
+
+    /// A reply, reply-all or forward draft from the message list's
+    /// single selection (spec/08 "Cross-account check"). The core
+    /// writes the draft's first revision, so the installed window opens
+    /// on that stored revision like any draft (spec/05).
+    func compose(source: DraftSource) {
+        create(source: source, preferredAccountId: nil)
+    }
+
+    /// Create a draft and install its window under one admission: the
+    /// same restore fence, cue check, error report and quit handling
+    /// for a new message and a reply or forward.
+    private func create(source: DraftSource, preferredAccountId: String?) {
         guard !isQuitting, backups.beginCompose() else { return }
         let request = UUID()
         pending[request] = Task { [self] in
             defer { pending[request] = nil }
             do {
-                let source = try await openCore()
+                let core = try await openCore()
                 // Restore is excluded by compose admission. A refused cue means
                 // the shared context is fenced or mismatched; do not create an
                 // orphan draft or a window that cannot ever follow its cue.
-                guard let cue = cues.model(source: source) else {
+                guard let cue = cues.model(source: core) else {
                     throw CoreFailure.unavailable(
                         reason: "Compose appearance is unavailable. Try again after the current operation.")
                 }
-                let created = try await source.createDraft(idempotencyKey: request.uuidString, source: .new)
-                install(created.draftId, source: source, cue: cue, preferredAccountId: preferredAccountId)
+                let created = try await core.createDraft(
+                    idempotencyKey: request.uuidString, source: source)
+                install(
+                    created.draftId, source: core, cue: cue,
+                    preferredAccountId: preferredAccountId)
             } catch {
                 backups.endCompose()
                 if !isQuitting { reportError(.create, error) }

@@ -168,4 +168,56 @@ struct BenchmarkMenuTests {
         #expect(probe.searchRuns == 1)
     }
 }
+
+@MainActor
+private final class MessageMenuProbe {
+    var enabled = false
+    var replyRuns = 0
+    var replyAllRuns = 0
+    var forwardRuns = 0
+}
+
+@Suite("message commands", .serialized)
+@MainActor
+struct MessageMenuTests {
+    @Test("Reply, Reply All and Forward carry their identifiers, shortcuts and selection gate")
+    func messageCommands() throws {
+        let probe = MessageMenuProbe()
+        let builder = MainMenuBuilder(
+            onFillSynthetic: {}, onShowPrototype: {}, onImplementationChanged: { _ in },
+            onRunBenchmark: {}, onRunStoreBenchmark: {}, onRunSearchBenchmark: {},
+            isBenchmarkEnabled: { true }, onShowComposerProbe: {}, onImport: {},
+            onReply: { probe.replyRuns += 1 },
+            onReplyAll: { probe.replyAllRuns += 1 },
+            onForward: { probe.forwardRuns += 1 },
+            isReplyEnabled: { probe.enabled })
+        let menu = builder.makeMainMenu()
+        let message = try #require(
+            menu.items.compactMap(\.submenu).first { $0.title == "Message" })
+        let reply = try #require(message.items.first { $0.title == "Reply" })
+        let replyAll = try #require(message.items.first { $0.title == "Reply All" })
+        let forward = try #require(message.items.first { $0.title == "Forward" })
+
+        #expect(reply.identifier?.rawValue == "ch.lkmc.Sweetbriar.cmd.reply")
+        #expect(replyAll.identifier?.rawValue == "ch.lkmc.Sweetbriar.cmd.replyAll")
+        #expect(forward.identifier?.rawValue == "ch.lkmc.Sweetbriar.cmd.forward")
+        #expect(reply.keyEquivalent == "r")
+        #expect(replyAll.keyEquivalent == "R")
+        #expect(forward.keyEquivalent == "F")
+        #expect(replyAll.keyEquivalentModifierMask == .command)
+        #expect(forward.keyEquivalentModifierMask == .command)
+
+        for item in [reply, replyAll, forward] {
+            #expect(!builder.validateMenuItem(item))
+        }
+        probe.enabled = true
+        for item in [reply, replyAll, forward] {
+            #expect(builder.validateMenuItem(item))
+            #expect(NSApp.sendAction(try #require(item.action), to: builder, from: item))
+        }
+        #expect(probe.replyRuns == 1)
+        #expect(probe.replyAllRuns == 1)
+        #expect(probe.forwardRuns == 1)
+    }
+}
 #endif

@@ -2,9 +2,10 @@
 // "Outbox state machine", spec/08 "Sending"): settle the pending save,
 // queue the current revision under a fresh key, hold the attempt for the
 // registered undo window, and cancel it on Undo. The window's own close
-// stays in the shell. A reply's cross-account confirmation comes with
-// the banner in M4.4d: until then its `Conflict` shows as any other
-// failure.
+// stays in the shell. A cross-account reply queries the core's notice
+// first: a Keep-remembered acknowledgement is passed without asking,
+// otherwise the window confirms and its answer is sent as the ack
+// (spec/08 "Cross-account check").
 
 import Foundation
 import Observation
@@ -27,6 +28,12 @@ public final class ComposeSendModel {
     public typealias SettlePendingSave = @MainActor () async throws -> String?
     /// Close the compose window after the hold ends without Undo.
     public typealias CloseAfterHold = @MainActor () -> Void
+    /// The window's answer to a cross-account notice at Send (spec/08):
+    /// true sends with its acknowledgement, false cancels the send.
+    public typealias ConfirmCrossAccount = @MainActor (CrossAccountNotice) async -> Bool
+    /// Whether this window already remembered `ack` via the banner's
+    /// Keep (spec/05: memory only, never persisted).
+    public typealias CrossAccountAcknowledged = @MainActor (String) -> Bool
 
     public private(set) var state: State = .idle
     /// Why the last Undo failed while the attempt stayed held; cleared
@@ -38,6 +45,8 @@ public final class ComposeSendModel {
     private let draftId: String
     private let settlePendingSave: SettlePendingSave
     private let closeAfterHold: CloseAfterHold
+    private let confirmCrossAccount: ConfirmCrossAccount
+    private let isCrossAccountAcknowledged: CrossAccountAcknowledged
     private let sleep: @Sendable (Duration) async throws -> Void
 
     /// The action's key and revision: a retry of the same action replays
@@ -54,6 +63,8 @@ public final class ComposeSendModel {
         draftId: String,
         settlePendingSave: @escaping SettlePendingSave,
         closeAfterHold: @escaping CloseAfterHold = {},
+        confirmCrossAccount: @escaping ConfirmCrossAccount = { _ in true },
+        isCrossAccountAcknowledged: @escaping CrossAccountAcknowledged = { _ in false },
         sleep: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) }
     ) {
         self.source = source
@@ -61,6 +72,8 @@ public final class ComposeSendModel {
         self.draftId = draftId
         self.settlePendingSave = settlePendingSave
         self.closeAfterHold = closeAfterHold
+        self.confirmCrossAccount = confirmCrossAccount
+        self.isCrossAccountAcknowledged = isCrossAccountAcknowledged
         self.sleep = sleep
     }
 
@@ -98,14 +111,35 @@ public final class ComposeSendModel {
             return false
         }
         do {
+            guard let acks = try await crossAccountAcks(for: revision) else {
+                return false
+            }
             let queued = try await source.sendDraft(
-                idempotencyKey: key, draftId: draftId, revisionId: revision, acks: [])
+                idempotencyKey: key, draftId: draftId, revisionId: revision, acks: acks)
             await beginHold(queued.attemptId)
             return true
         } catch {
             fail(with: error)
             return false
         }
+    }
+
+    /// The acknowledgements for the revision being sent (spec/05, 08):
+    /// none without a notice; a Keep-remembered ack passes without
+    /// asking; otherwise the window confirms and its answer is the ack.
+    /// A query failure throws, so the send fails without queueing; a
+    /// cancelled confirmation answers nil and sends nothing.
+    private func crossAccountAcks(for revision: String) async throws -> [String]? {
+        let notice = try await source.crossAccountNotice(
+            draftId: draftId, revisionId: revision)
+        guard let notice else { return [] }
+        if isCrossAccountAcknowledged(notice.ack) { return [notice.ack] }
+        guard await confirmCrossAccount(notice) else {
+            // Cancel does nothing: the action and its key stay for a retry.
+            state = .idle
+            return nil
+        }
+        return [notice.ack]
     }
 
     /// Cancel a held attempt exactly once. Success returns the draft to

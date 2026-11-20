@@ -195,6 +195,30 @@ public struct OutBox: Sendable, Equatable {
     }
 }
 
+/// The cross-account warning for one draft revision (spec/05, 07):
+/// the receiving occurrence's account, the route identity's account,
+/// and the acknowledgement `send_draft` accepts for exactly that
+/// revision's identity and recipients. The acknowledgement is not
+/// persisted.
+public struct CrossAccountNotice: Sendable, Equatable {
+    public var sourceAccountId: String
+    public var routeAccountId: String
+    public var ack: String
+
+    public init(sourceAccountId: String, routeAccountId: String, ack: String) {
+        self.sourceAccountId = sourceAccountId
+        self.routeAccountId = routeAccountId
+        self.ack = ack
+    }
+
+    /// Map the generated record field by field.
+    init(_ g: SweetbriarCore.CrossAccountNotice) {
+        sourceAccountId = g.sourceAccountId
+        routeAccountId = g.routeAccountId
+        ack = g.ack
+    }
+}
+
 /// What `sendDraft` answers: its receipt and the attempt id the
 /// receipt names (spec/07).
 public struct SendQueued: Sendable, Equatable {
@@ -278,5 +302,10 @@ public protocol SendSource: Sendable {
     func retryRejectedRecipients(idempotencyKey: String, attemptId: String) async throws -> Receipt
     /// `out_box()`: live attempts, then history.
     func outBox() async throws -> OutBox
+    /// `cross_account_notice(draft_id, revision_id)`: the cross-account
+    /// warning for that revision of a reply or reply-all, or none.
+    func crossAccountNotice(
+        draftId: String, revisionId: String
+    ) async throws -> CrossAccountNotice?
 }
 

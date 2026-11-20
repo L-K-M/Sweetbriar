@@ -69,6 +69,10 @@ final class MainMenuBuilder: NSObject {
     private let onImport: @MainActor () -> Void
     private let onNewMessage: @MainActor () -> Void
     private let isComposeEnabled: @MainActor () -> Bool
+    private let onReply: @MainActor () -> Void
+    private let onReplyAll: @MainActor () -> Void
+    private let onForward: @MainActor () -> Void
+    private let isReplyEnabled: @MainActor () -> Bool
     private let onAddProtonAccount: @MainActor () -> Void
     private let onSettings: @MainActor () -> Void
     private let onShowActivity: @MainActor () -> Void
@@ -80,6 +84,18 @@ final class MainMenuBuilder: NSObject {
         /// Both "List Implementation" submenu items — the radio pair.
         static let implementation = NSUserInterfaceItemIdentifier(
             "debug.listImplementation"
+        )
+        /// Message → Reply (spec/08 "Cross-account check").
+        static let reply = NSUserInterfaceItemIdentifier(
+            "ch.lkmc.Sweetbriar.cmd.reply"
+        )
+        /// Message → Reply All.
+        static let replyAll = NSUserInterfaceItemIdentifier(
+            "ch.lkmc.Sweetbriar.cmd.replyAll"
+        )
+        /// Message → Forward.
+        static let forward = NSUserInterfaceItemIdentifier(
+            "ch.lkmc.Sweetbriar.cmd.forward"
         )
         /// "Run List Benchmark" — disabled while a run is in flight.
         static let benchmark = NSUserInterfaceItemIdentifier(
@@ -105,6 +121,11 @@ final class MainMenuBuilder: NSObject {
     ///   - onImport: File → Import… (spec/09 "In the app").
     ///   - onAddProtonAccount: File → Add Proton Account… (plan
     ///     M2.14b; the Bridge sheet is no longer offered, spec/08).
+    ///   - onReply: Message → Reply, from the message list's single
+    ///     selection (spec/08 "Cross-account check").
+    ///   - onReplyAll: Message → Reply All.
+    ///   - onForward: Message → Forward.
+    ///   - isReplyEnabled: whether exactly one occurrence is selected.
     init(
         onFillSynthetic: @escaping @MainActor () -> Void,
         onShowPrototype: @escaping @MainActor () -> Void,
@@ -120,7 +141,11 @@ final class MainMenuBuilder: NSObject {
         onShowActivity: @escaping @MainActor () -> Void = {},
         isWriteEnabled: @escaping @MainActor () -> Bool = { true },
         onNewMessage: @escaping @MainActor () -> Void = {},
-        isComposeEnabled: @escaping @MainActor () -> Bool = { true }
+        isComposeEnabled: @escaping @MainActor () -> Bool = { true },
+        onReply: @escaping @MainActor () -> Void = {},
+        onReplyAll: @escaping @MainActor () -> Void = {},
+        onForward: @escaping @MainActor () -> Void = {},
+        isReplyEnabled: @escaping @MainActor () -> Bool = { false }
     ) {
         self.onFillSynthetic = onFillSynthetic
         self.onShowPrototype = onShowPrototype
@@ -133,6 +158,10 @@ final class MainMenuBuilder: NSObject {
         self.onImport = onImport
         self.onNewMessage = onNewMessage
         self.isComposeEnabled = isComposeEnabled
+        self.onReply = onReply
+        self.onReplyAll = onReplyAll
+        self.onForward = onForward
+        self.isReplyEnabled = isReplyEnabled
         self.onAddProtonAccount = onAddProtonAccount
         self.onSettings = onSettings
         self.onShowActivity = onShowActivity
@@ -147,6 +176,7 @@ final class MainMenuBuilder: NSObject {
         menu.addItem(makeAppMenu())
         menu.addItem(makeFileMenu())
         menu.addItem(makeEditMenu())
+        menu.addItem(makeMessageMenu())
         menu.addItem(makeFormatMenu())
         menu.addItem(makeWindowMenu())
         menu.addItem(makeDebugMenu())
@@ -239,6 +269,26 @@ final class MainMenuBuilder: NSObject {
             action: #selector(NSText.selectAll(_:)),
             key: "a"
         ))
+        item.submenu = menu
+        return item
+    }
+
+    /// Message: Reply, Reply All and Forward, each from the message
+    /// list's single selection (spec/08 "Cross-account check").
+    private func makeMessageMenu() -> NSMenuItem {
+        let item = NSMenuItem()
+        let menu = NSMenu(title: "Message")
+        let reply = Self.item("Reply", action: #selector(reply(_:)), key: "r", target: self)
+        reply.identifier = ItemID.reply
+        menu.addItem(reply)
+        let replyAll = Self.item(
+            "Reply All", action: #selector(replyAll(_:)), key: "R", target: self)
+        replyAll.identifier = ItemID.replyAll
+        menu.addItem(replyAll)
+        let forward = Self.item(
+            "Forward", action: #selector(forward(_:)), key: "F", target: self)
+        forward.identifier = ItemID.forward
+        menu.addItem(forward)
         item.submenu = menu
         return item
     }
@@ -393,6 +443,12 @@ final class MainMenuBuilder: NSObject {
 
     @objc private func newMessage(_ sender: NSMenuItem) { onNewMessage() }
 
+    @objc private func reply(_ sender: NSMenuItem) { onReply() }
+
+    @objc private func replyAll(_ sender: NSMenuItem) { onReplyAll() }
+
+    @objc private func forward(_ sender: NSMenuItem) { onForward() }
+
     @objc
     private func importMail(_ sender: NSMenuItem) {
         onImport()
@@ -445,6 +501,13 @@ extension MainMenuBuilder: NSMenuItemValidation {
     /// the stored choice each time the menu opens.
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         if menuItem.action == #selector(newMessage(_:)) { return isWriteEnabled() && isComposeEnabled() }
+        if let action = menuItem.action,
+           [#selector(reply(_:)), #selector(replyAll(_:)), #selector(forward(_:))]
+            .contains(action) {
+            // A reply or forward creates a draft: the same write and
+            // compose admission as New Message, plus one selection.
+            return isWriteEnabled() && isComposeEnabled() && isReplyEnabled()
+        }
         if let action = menuItem.action,
            [#selector(importMail(_:)), #selector(addProtonAccount(_:)), #selector(fillSyntheticRows(_:))]
             .contains(action) {

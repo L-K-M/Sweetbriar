@@ -72,6 +72,12 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
             },
             closeAfterHold: { [weak self] in
                 Task { @MainActor [weak self] in _ = await self?.closeAndWait() }
+            },
+            confirmCrossAccount: { [weak self] notice in
+                await self?.confirmCrossAccountSend(notice) ?? false
+            },
+            isCrossAccountAcknowledged: { [weak self] ack in
+                self?.crossAccount.isAcknowledged(ack) == true
             })
     }()
     private(set) lazy var identityControls: ComposeIdentityControls = {
@@ -85,6 +91,32 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
             changed: { [weak self] in self?.identityChanged($0) })
     }()
     let publications: DraftAttachmentPublications
+    /// This window's cross-account banner state (spec/08 "Cross-account
+    /// check"): the current revision's notice and its memory-only
+    /// acknowledgements, shared with Send's confirmation.
+    let crossAccount = CrossAccountBannerModel()
+    private let crossAccountLabel = NSTextField(wrappingLabelWithString: "")
+    private let crossAccountUseButton = NSButton(title: "", target: nil, action: nil)
+    private let crossAccountKeepButton = NSButton(title: "", target: nil, action: nil)
+    private lazy var crossAccountBannerView: NSStackView = {
+        crossAccountLabel.textColor = .labelColor
+        crossAccountLabel.setAccessibilityIdentifier("crossAccountBannerLabel")
+        crossAccountUseButton.target = self
+        crossAccountUseButton.action = #selector(useCrossAccountSource)
+        crossAccountUseButton.setAccessibilityIdentifier("crossAccountUse")
+        crossAccountKeepButton.target = self
+        crossAccountKeepButton.action = #selector(keepCrossAccountRoute)
+        crossAccountKeepButton.setAccessibilityIdentifier("crossAccountKeep")
+        let stack = NSStackView(
+            views: [crossAccountLabel, crossAccountUseButton, crossAccountKeepButton])
+        stack.orientation = .horizontal
+        stack.spacing = 8
+        stack.alignment = .centerY
+        stack.setAccessibilityIdentifier("crossAccountBanner")
+        crossAccountLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        stack.isHidden = true
+        return stack
+    }()
     private(set) lazy var attachmentControls: ComposeAttachmentControls = {
         guard let window else { preconditionFailure("the compose window is installed before its controls") }
         return ComposeAttachmentControls(
@@ -97,6 +129,12 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
     private var closing: Task<Bool, Never>?
     private var closeIntent: CloseMode?
     private var abandonAlert: NSAlert?
+    /// Send's cross-account confirmation, while its sheet is up: the
+    /// window's close ends it and cancels the send. The flag fences the
+    /// handler and the close against resuming the continuation twice.
+    private var crossAccountConfirmation: (
+        alert: NSAlert, continuation: CheckedContinuation<Bool, Never>)?
+    private var crossAccountConfirmationResumed = false
     var isClosing: Bool { closeIntent != nil }
     private var finished = false
     var onClosed: (@MainActor () -> Void)?
@@ -152,6 +190,7 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
         buildContent(window)
         render()
         observeModel()
+        observeBanner()
         observeSend()
         observeAppearance()
         observeCue()
@@ -237,7 +276,7 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
             width: scroll.contentSize.width, height: CGFloat.greatestFiniteMagnitude)
         textView.textContainer?.widthTracksTextView = true
         let stack = NSStackView(
-            views: [identity as NSView] + recipientRows + [
+            views: [crossAccountBannerView, identity as NSView] + recipientRows + [
                 subjectField, attachmentControls.list, controls, sendBar, scroll, statusLabel,
                 cueStatusLabel,
             ])
@@ -258,6 +297,7 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
                 item: stack, attribute: .top, relatedBy: .equal,
                 toItem: contentGuide, attribute: .top, multiplier: 1, constant: 16),
             stack.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -12),
+            crossAccountBannerView.widthAnchor.constraint(equalTo: stack.widthAnchor),
             identity.widthAnchor.constraint(equalTo: stack.widthAnchor),
             subjectField.widthAnchor.constraint(equalTo: stack.widthAnchor),
             attachmentControls.list.widthAnchor.constraint(equalTo: stack.widthAnchor),
@@ -530,6 +570,7 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
     private func beginClose(mode: CloseMode) -> Task<Bool, Never>? {
         if let closing { return closing }
         guard !finished else { return nil }
+        cancelCrossAccountConfirmation()
         if mode == .save {
             identityControls.cancelDecision()
             autosave.suspendDebounce()
@@ -606,9 +647,118 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
             Task { @MainActor [weak self] in
                 guard let self, !finished else { return }
                 render()
+                // Re-register before the notice query awaits, so a save
+                // landing meanwhile still triggers its own refresh.
                 observeModel()
+                await refreshCrossAccountNotice()
             }
         }
+    }
+
+    private func observeBanner() {
+        withObservationTracking {
+            _ = crossAccount.isVisible
+        } onChange: { [weak self] in
+            Task { @MainActor [weak self] in
+                guard let self, !finished else { return }
+                render()
+                observeBanner()
+            }
+        }
+    }
+
+    /// Re-query the cross-account notice when a load or a successful
+    /// save moved the current revision (spec/08 "Cross-account check").
+    /// A stale answer is dropped inside the banner model; a query
+    /// failure hides the banner.
+    private func refreshCrossAccountNotice() async {
+        guard !finished, !isClosing, let sendSource,
+            let revision = crossAccount.nextRevision(toQuery: model.baseRevisionId)
+        else { return }
+        await crossAccount.refresh(
+            source: sendSource, draftId: model.draftId, revisionId: revision)
+        guard !finished else { return }
+        render()
+    }
+
+    /// The account's display name, as the identity catalog knows it;
+    /// the id itself when no identity names it.
+    private func accountDisplayName(_ accountId: String) -> String {
+        identityControls.model.catalog?.identities.first { $0.accountId == accountId }?
+            .accountName ?? accountId
+    }
+
+    /// The banner's text and buttons for the current notice (spec/08).
+    private func renderCrossAccountBanner() {
+        guard let notice = crossAccount.notice, crossAccount.isVisible else {
+            crossAccountBannerView.isHidden = true
+            return
+        }
+        crossAccountBannerView.isHidden = false
+        crossAccountLabel.stringValue =
+            "This reply goes out from \(accountDisplayName(notice.routeAccountId)), but "
+            + "\(accountDisplayName(notice.sourceAccountId)) received the original."
+        crossAccountUseButton.title = "Use \(accountDisplayName(notice.sourceAccountId))"
+        crossAccountKeepButton.title = "Keep \(accountDisplayName(notice.routeAccountId))"
+        // A send in flight owns the window, From included.
+        crossAccountUseButton.isEnabled =
+            sendModel?.isBusy != true
+            && CrossAccountBannerModel.useIdentity(
+                for: notice, in: identityControls.model.catalog?.identities ?? []) != nil
+    }
+
+    /// Use the source account's default sendable identity (spec/08): the
+    /// identity picker's normal route change saves a new revision, whose
+    /// notice is then nil and the banner hides.
+    @objc private func useCrossAccountSource() {
+        guard sendModel?.isBusy != true, let notice = crossAccount.notice,
+            let identity = CrossAccountBannerModel.useIdentity(
+                for: notice, in: identityControls.model.catalog?.identities ?? [])
+        else { return }
+        identityControls.choose(identityId: identity.identityId)
+    }
+
+    /// Keep the route account: remember this notice's acknowledgement in
+    /// memory for this window only (spec/05, 08).
+    @objc private func keepCrossAccountRoute() {
+        crossAccount.keepCurrentNotice()
+        render()
+    }
+
+    /// Send's cross-account confirmation (spec/08): the window asks once
+    /// more before the acknowledgement is passed.
+    private func confirmCrossAccountSend(_ notice: CrossAccountNotice) async -> Bool {
+        guard let window, !finished else { return false }
+        return await withCheckedContinuation { continuation in
+            let alert = NSAlert()
+            alert.messageText = "Send from \(accountDisplayName(notice.routeAccountId))?"
+            alert.informativeText =
+                "The original arrived at \(accountDisplayName(notice.sourceAccountId))."
+            alert.alertStyle = .warning
+            alert.addButton(withTitle: "Send")
+            alert.addButton(withTitle: "Cancel")
+            crossAccountConfirmation = (alert, continuation)
+            crossAccountConfirmationResumed = false
+            alert.beginSheetModal(for: window) { [weak self] response in
+                guard let self, !self.crossAccountConfirmationResumed else { return }
+                self.crossAccountConfirmationResumed = true
+                self.crossAccountConfirmation = nil
+                continuation.resume(returning: response == .alertFirstButtonReturn)
+            }
+        }
+    }
+
+    /// End a confirmation sheet the window's close interrupted: the
+    /// send is cancelled rather than left awaiting a dismissed alert.
+    private func cancelCrossAccountConfirmation() {
+        guard let confirmation = crossAccountConfirmation,
+            !crossAccountConfirmationResumed
+        else { return }
+        crossAccountConfirmationResumed = true
+        crossAccountConfirmation = nil
+        window?.endSheet(confirmation.alert.window, returnCode: .alertSecondButtonReturn)
+        confirmation.alert.window.orderOut(nil)
+        confirmation.continuation.resume(returning: false)
     }
 
     private func observeSend() {
@@ -773,6 +923,7 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
         for field in recipientFields { field.control.isEditable = editable }
         saveButton.isEnabled = editable && canWrite() && !model.isSaving && model.conflict == nil
         attachmentControls.render()
+        renderCrossAccountBanner()
         renderSendChrome()
         abandonButton.isEnabled = !isClosing && !finished && keepingBoth == nil
         keepBothButton.isHidden = model.conflict == nil || openCopy == nil
