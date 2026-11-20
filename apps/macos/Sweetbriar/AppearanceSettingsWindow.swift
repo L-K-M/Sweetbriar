@@ -3,7 +3,7 @@ import Observation
 import SwiftUI
 import SweetbriarBridge
 
-enum SettingsTab: Hashable { case appearance, backups }
+enum SettingsTab: Hashable { case appearance, accounts, backups }
 
 @MainActor
 @Observable
@@ -16,14 +16,19 @@ final class AppearanceSettingsWindow: NSWindowController {
     private let selection = SettingsSelection()
     private let editor = ArchiveWriteTasks()
 
-    init(session: CoreSession, shared: SharedAppearance, cues: SharedComposeCue, backups: SharedBackups) {
+    init(
+        session: CoreSession, shared: SharedAppearance, cues: SharedComposeCue,
+        backups: SharedBackups,
+        onSignInAgain: @escaping @MainActor (Account) -> Void
+    ) {
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 780, height: 680),
                               styleMask: [.titled, .closable, .miniaturizable, .resizable],
                               backing: .buffered, defer: false)
         window.title = "Settings"
         window.center()
         window.contentView = NSHostingView(rootView: AppearanceSettingsLoader(
-            session: session, shared: shared, cues: cues, backups: backups, selection: selection, editor: editor
+            session: session, shared: shared, cues: cues, backups: backups,
+            selection: selection, editor: editor, onSignInAgain: onSignInAgain
         ))
         super.init(window: window)
     }
@@ -49,8 +54,10 @@ private struct AppearanceSettingsLoader: View {
     let backups: SharedBackups
     @Bindable var selection: SettingsSelection
     let editor: ArchiveWriteTasks
+    let onSignInAgain: @MainActor (Account) -> Void
     @State private var bridge: CoreBridge?
     @State private var model: BackupsModel?
+    @State private var accountsModel: AccountsSettingsModel?
     @State private var failure: String?
 
     var body: some View {
@@ -75,6 +82,24 @@ private struct AppearanceSettingsLoader: View {
                         }
                     }
                     .tabItem { Label("Appearance", systemImage: "paintpalette") }.tag(SettingsTab.appearance)
+                    Group {
+                        if model.isClosed {
+                            ContentUnavailableView("Archive closed", systemImage: "exclamationmark.triangle",
+                                                   description: Text("Quit and reopen Sweetbriar to settle the restore."))
+                        } else if backups.isRestoring {
+                            ProgressView("Waiting for the restore outcome…")
+                        } else if let accountsModel {
+                            AccountsSettingsView(
+                                model: accountsModel, editor: editor, editorRevision: editor.revision,
+                                onSignInAgain: onSignInAgain
+                            )
+                            .id(editor.revision)
+                        } else {
+                            ProgressView("Opening accounts…")
+                        }
+                    }
+                    .disabled(!backups.canWrite)
+                    .tabItem { Label("Accounts", systemImage: "person.crop.circle") }.tag(SettingsTab.accounts)
                     BackupsSettingsView(model: model, restoreBlockedReason: backups.restoreBlockedReason) {
                         guard backups.confirmRestore() else { return false }
                         // Synchronous, before the newly scheduled restore task can run.
@@ -96,6 +121,7 @@ private struct AppearanceSettingsLoader: View {
                 try Task.checkCancellation()
                 self.bridge = bridge
                 model = backups.model(source: bridge)
+                accountsModel = AccountsSettingsModel(source: bridge)
                 if model == nil { failure = "Settings are unavailable while quitting." }
             } catch { failure = error.localizedDescription }
         }
