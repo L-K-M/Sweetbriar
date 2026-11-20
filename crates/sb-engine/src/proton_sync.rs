@@ -17,7 +17,9 @@ use crate::account_sync::AccountJobs;
 use crate::engine::{Engine, Spawn, Worker, validate_idempotency_key};
 use crate::policy::proton_api;
 use crate::proton::{Sessions, mark_session_refused, restore_proton_account};
-use crate::proton_send::{SendBackoff, submit_queued_attempts};
+use crate::proton_send::{
+    DRAFTS_LABEL, Evidence, SENT_LABEL, SendBackoff, SendEvidence, submit_queued_attempts,
+};
 use sb_resources::proton_bodies::{
     BodyFailure, MAX_PENDING_BODIES, PendingBody, acquire_proton_body, bump_key_generation,
     pending_proton_bodies, record_body_failure,
@@ -32,8 +34,9 @@ use sb_resources::{
     APP_IDENTITY_REFUSED_REASON, AccountState, ApiCode, BackoffKind, EventAction, EventBatch,
     EventId, HUMAN_VERIFICATION_REASON, KeyStore, ListingAnchor, PROTON_MAX_PAGE_SIZE,
     ProtonClient, ProtonError, Receipt, Secret, Session, StoreError, StoredAccount, Transaction,
-    WritePriority, accounts, earliest_hold_until, pause_for_reason, proton_account,
-    proton_identities, queue_due_held, run_once,
+    WritePriority, accounts, earliest_hold_until, mark_send_accepted, pause_for_reason,
+    proton_account, proton_identities, queue_due_held, recover_proton_submitting, run_once,
+    unknown_proton_attempts,
 };
 
 use std::collections::{BTreeSet, HashSet};
@@ -162,10 +165,11 @@ impl Engine {
         let jobs = Arc::clone(self.account_jobs());
         let sessions = Arc::clone(&self.proton_sessions);
         let opened = Arc::clone(&self.proton_opened);
+        let evidence = Arc::clone(&self.send_evidence);
         let _ = self.spawn_worker(move |worker| async move {
             let accounts = worker.blocking(|resources| resources.read(accounts)).await;
             if let Ok(Ok(accounts)) = accounts {
-                start_all(&worker, &jobs, &sessions, &opened, &accounts).await;
+                start_all(&worker, &jobs, &sessions, &opened, &evidence, &accounts).await;
             }
         });
     }
@@ -262,8 +266,10 @@ pub(crate) async fn start_all(
     jobs: &Arc<AccountJobs>,
     sessions: &Arc<Sessions>,
     opened: &Arc<ProtonOpened>,
+    evidence: &Arc<SendEvidence>,
     accounts: &[StoredAccount],
 ) {
+    recover_proton_submitting_at_startup(worker).await;
     queue_due_held_at_startup(worker).await;
     let skipping: HashSet<&str> = accounts
         .iter()
@@ -280,8 +286,24 @@ pub(crate) async fn start_all(
         if skipping.contains(account_id.as_str()) {
             continue;
         }
-        start(worker, jobs, sessions, opened, account_id);
+        start(worker, jobs, sessions, opened, evidence, account_id);
     }
+}
+
+/// Recover every Proton attempt a crash or shutdown left `submitting`
+/// (spec/05 step 3), all accounts, before any worker claims one: one
+/// whose `send_requested_at` was committed becomes `outcome_unknown`
+/// and is never retried; one without it returns to `queued` with its
+/// recorded draft. Best effort, like the `held` sweep below.
+async fn recover_proton_submitting_at_startup(worker: &Worker) {
+    let now = worker.resources().now();
+    let _ = worker
+        .resources()
+        .write(WritePriority::Sync, move |tx| {
+            recover_proton_submitting(tx, now)?;
+            Ok(())
+        })
+        .await;
 }
 
 /// Move every `held` attempt whose undo window has passed to `queued`
@@ -306,6 +328,7 @@ pub(crate) fn start(
     jobs: &Arc<AccountJobs>,
     sessions: &Arc<Sessions>,
     opened: &Arc<ProtonOpened>,
+    evidence: &Arc<SendEvidence>,
     account_id: String,
 ) {
     let Some(stop) = jobs.claim(&account_id) else {
@@ -314,6 +337,7 @@ pub(crate) fn start(
     let owner = Arc::clone(jobs);
     let sessions = Arc::clone(sessions);
     let opened = Arc::clone(opened);
+    let evidence = Arc::clone(evidence);
     let id = account_id.clone();
     let signals = PollSignals {
         poll: jobs.poll_signal(),
@@ -321,7 +345,7 @@ pub(crate) fn start(
         wake: jobs.poll_wait(),
     };
     let spawned = spawner.spawn_worker(move |worker| async move {
-        run(&worker, &sessions, &opened, &id, stop, signals).await;
+        run(&worker, &sessions, &opened, &evidence, &id, stop, signals).await;
         owner.release(&id);
     });
     if spawned.is_err() {
@@ -342,11 +366,15 @@ async fn run(
     worker: &Worker,
     sessions: &Sessions,
     opened: &ProtonOpened,
+    evidence: &Arc<SendEvidence>,
     account_id: &str,
     stop: watch::Receiver<bool>,
     signals: PollSignals,
 ) {
-    run_loop(worker, sessions, opened, account_id, stop, signals).await;
+    run_loop(
+        worker, sessions, opened, evidence, account_id, stop, signals,
+    )
+    .await;
     // The worker is done (paused, disconnected, a refusal that ended
     // it, or shutdown): the account's live status goes with it and its
     // condition comes from the stored state.
@@ -357,6 +385,7 @@ async fn run_loop(
     worker: &Worker,
     sessions: &Sessions,
     opened: &ProtonOpened,
+    evidence: &Arc<SendEvidence>,
     account_id: &str,
     stop: watch::Receiver<bool>,
     signals: PollSignals,
@@ -412,6 +441,7 @@ async fn run_loop(
             advanced: AtomicBool::new(false),
             skipped: &mut skipped,
             send_backoff: &mut send_backoff,
+            send_evidence: evidence,
         };
         // A stop doesn't wait for a request in flight: a write already
         // submitted commits or not as a whole, and the next attempt
@@ -469,6 +499,9 @@ struct Attempt<'a> {
     /// The send attempts' pre-request backoff, in memory only
     /// (spec/05 step 7).
     send_backoff: &'a mut SendBackoff,
+    /// The latest Proton evidence observed per unresolved attempt,
+    /// shared with the engine's `out_box()` (spec/05 step 6).
+    send_evidence: &'a Arc<SendEvidence>,
 }
 
 impl Attempt<'_> {
@@ -506,6 +539,55 @@ impl Attempt<'_> {
                 Ok(())
             })
             .await?;
+        Ok(())
+    }
+
+    /// spec/05 step 6: read each unresolved Proton attempt's draft and
+    /// observe what Proton holds. A draft carrying Sent and no Drafts
+    /// is Proton's own record that the message was sent, so the attempt
+    /// becomes accepted through the store's guarded transition; any
+    /// other observation is reported and changes nothing. A read
+    /// failure is never a reason to send.
+    async fn check_proton_evidence(&self) -> Result<(), Halt> {
+        let id = self.account_id.to_owned();
+        let attempts = self
+            .worker
+            .blocking(move |resources| resources.read(|tx| unknown_proton_attempts(tx, &id)))
+            .await
+            .map_err(|_| Halt::Stopped)??;
+        for attempt in attempts {
+            let draft_id = attempt.proton_draft_id;
+            let observed = match self
+                .call_classified(|client, session| {
+                    let draft_id = draft_id.clone();
+                    async move { client.message_metadata(&session, &draft_id).await }
+                })
+                .await
+            {
+                Ok(Some(metadata)) => {
+                    let sent = metadata.label_ids.iter().any(|label| label == SENT_LABEL);
+                    let drafts = metadata.label_ids.iter().any(|label| label == DRAFTS_LABEL);
+                    if sent && !drafts {
+                        let now = self.worker.resources().now();
+                        let id = attempt.attempt_id.clone();
+                        self.worker
+                            .resources()
+                            .write(WritePriority::Sync, move |tx| {
+                                mark_send_accepted(tx, &id, now)
+                            })
+                            .await?;
+                        Evidence::Sent
+                    } else {
+                        Evidence::Drafts
+                    }
+                }
+                Ok(None) => Evidence::NotFound,
+                Err(FetchError::Ended) => return Err(Halt::Ended),
+                Err(_) => Evidence::ReadFailed,
+            };
+            self.send_evidence
+                .record(&attempt.attempt_id, observed.line(&draft_id));
+        }
         Ok(())
     }
 
@@ -687,6 +769,13 @@ impl Attempt<'_> {
             )
             .await
             {
+                return halt;
+            }
+            // Each poll also reads the unresolved Proton attempts'
+            // drafts (spec/05 step 6), including one a reply just made
+            // unknown. The check only observes and resolves as sent; it
+            // never sends.
+            if let Err(halt) = self.check_proton_evidence().await {
                 return halt;
             }
             if let Err(halt) = self.drain_bodies().await {

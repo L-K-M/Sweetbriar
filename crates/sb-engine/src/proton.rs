@@ -94,6 +94,7 @@ impl Engine {
         let sessions = Arc::clone(&self.proton_sessions);
         let jobs = Arc::clone(self.account_jobs());
         let opened = Arc::clone(&self.proton_opened);
+        let evidence = Arc::clone(&self.send_evidence);
         self.command(move |worker| async move {
             let now = worker.resources().now().as_millis();
             let mut table = conversations.lock().await;
@@ -165,6 +166,7 @@ impl Engine {
                         &jobs,
                         &sessions,
                         &opened,
+                        &evidence,
                         completed.clone(),
                     );
                     Ok(BeginProtonSignIn::Open {
@@ -210,6 +212,7 @@ impl Engine {
         let sessions = Arc::clone(&self.proton_sessions);
         let jobs = Arc::clone(self.account_jobs());
         let opened = Arc::clone(&self.proton_opened);
+        let evidence = Arc::clone(&self.send_evidence);
         self.command(move |worker| async move {
             let now = worker.resources().now().as_millis();
             let mut table = conversations.lock().await;
@@ -264,6 +267,7 @@ impl Engine {
                         &jobs,
                         &sessions,
                         &opened,
+                        &evidence,
                         completed.clone(),
                     );
                     Ok(ProtonSignInState::Complete {
@@ -311,6 +315,7 @@ impl Engine {
         let done = Arc::clone(&self.proton_restore_done);
         let jobs = Arc::clone(self.account_jobs());
         let opened = Arc::clone(&self.proton_opened);
+        let evidence = Arc::clone(&self.send_evidence);
         let _ = self.spawn_worker(move |worker| async move {
             let accounts = worker.blocking(|resources| resources.read(accounts)).await;
             if let Ok(Ok(accounts)) = accounts {
@@ -323,7 +328,10 @@ impl Engine {
                     }
                     restore_proton_account(&worker, &sessions, &account.account_id).await;
                 }
-                crate::proton_sync::start_all(&worker, &jobs, &sessions, &opened, &accounts).await;
+                crate::proton_sync::start_all(
+                    &worker, &jobs, &sessions, &opened, &evidence, &accounts,
+                )
+                .await;
             }
             done.notify_one();
         });

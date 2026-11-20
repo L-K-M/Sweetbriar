@@ -98,6 +98,9 @@ pub struct Engine {
     /// The provider keys the user opened, per Proton account, most
     /// recent first (spec/04 "Acquire bodies"). In memory only.
     pub(crate) proton_opened: Arc<crate::proton_sync::ProtonOpened>,
+    /// The latest Proton evidence observed per unresolved send
+    /// attempt, in memory only (spec/05 step 6, spec/07 `out_box()`).
+    pub(crate) send_evidence: Arc<crate::proton_send::SendEvidence>,
     leases: Arc<crate::bodies::Leases>,
     search_memo: Arc<crate::search::SearchMemo>,
     /// Fires each draft-write point inside a draft command's write,
@@ -665,6 +668,7 @@ impl Engine {
                         proton_sessions: Arc::default(),
                         proton_restore_done: Arc::new(tokio::sync::Notify::new()),
                         proton_opened: Arc::default(),
+                        send_evidence: Arc::default(),
                         leases: Arc::default(),
                         search_memo: Arc::default(),
                         #[cfg(test)]

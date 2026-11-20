@@ -895,6 +895,140 @@ async fn an_unrecorded_draft_attachment_that_matches_nothing_fails_before_the_se
 }
 
 #[tokio::test]
+async fn a_dropped_send_the_fake_applied_becomes_accepted_by_evidence() {
+    let h = setup(vec![TestAccount::new(USER, PASSWORD)]).await;
+    let _id = sign_in(&h).await;
+    let ident = identity(&h).await;
+    h.server
+        .set_fault(Some(Fault::OnceSend(Box::new(Fault::DropAfterApply))));
+    let queued = queue(&h, &ident, &[INTERNAL]).await;
+
+    advance(&h, UNDO_MS).await;
+    let row = until_state(&h, &queued.attempt_id, AttemptState::Accepted).await;
+    assert_recipients(&row, RecipientState::Sent);
+    assert_eq!(h.server.sends(), 1, "the fake applied the send once");
+    assert_eq!(
+        requests_with_prefix(&h, "POST", "/mail/v4/messages/"),
+        1,
+        "the evidence check sent nothing"
+    );
+    assert!(
+        row.evidence.iter().any(|line| line.contains("sent")),
+        "the row shows the evidence: {:?}",
+        row.evidence
+    );
+}
+
+#[tokio::test]
+async fn a_dropped_send_the_fake_did_not_apply_stays_unknown_with_an_observation() {
+    let h = setup(vec![TestAccount::new(USER, PASSWORD)]).await;
+    let _id = sign_in(&h).await;
+    let ident = identity(&h).await;
+    h.server
+        .set_fault(Some(Fault::OnceSend(Box::new(Fault::Drop))));
+    let queued = queue(&h, &ident, &[INTERNAL]).await;
+
+    advance(&h, UNDO_MS).await;
+    let observed = until_row(&h, &queued.attempt_id, TIMEOUT, |row| {
+        row.state == AttemptState::OutcomeUnknown && !row.evidence.is_empty()
+    })
+    .await;
+    assert_recipients(&observed, RecipientState::Unknown);
+    assert_eq!(h.server.sends(), 0, "the fake did not apply the send");
+    assert_eq!(
+        requests_with_prefix(&h, "POST", "/mail/v4/messages/"),
+        1,
+        "the send request went out once"
+    );
+    assert!(
+        observed.evidence[0].contains("Drafts"),
+        "the observation says the draft remains: {:?}",
+        observed.evidence
+    );
+    for _ in 0..3 {
+        advance(&h, 1_000).await;
+    }
+    assert_eq!(
+        requests_with_prefix(&h, "POST", "/mail/v4/messages/"),
+        1,
+        "an unresolved unknown outcome is never retried"
+    );
+    let later = row(&h, &queued.attempt_id).await.expect("the attempt");
+    assert_eq!(later.state, AttemptState::OutcomeUnknown);
+}
+
+#[tokio::test]
+async fn startup_recovery_marks_a_requested_send_unknown_and_never_retries_it() {
+    let h = setup(vec![TestAccount::new(USER, PASSWORD)]).await;
+    let _id = sign_in(&h).await;
+    let ident = identity(&h).await;
+    let queued = queue(&h, &ident, &[INTERNAL]).await;
+    let attempt_id = queued.attempt_id.clone();
+    h.core.shutdown().await;
+    let db = h.scratch.path().join("store/state.sqlite");
+    execute_sql(
+        &db,
+        &format!(
+            "UPDATE send_attempts SET state = 'submitting', proton_draft_id = 'pd',
+                 send_requested_at = 1
+             WHERE attempt_id = '{attempt_id}'"
+        ),
+    );
+
+    let core = reopen(&h.scratch, &h.secrets, &h.server, &h.clock).await;
+    let h = Harness { core, ..h };
+    let recovered = until_state(&h, &attempt_id, AttemptState::OutcomeUnknown).await;
+    assert_recipients(&recovered, RecipientState::Unknown);
+    assert_eq!(h.server.sends(), 0, "an unknown outcome is never retried");
+    for _ in 0..3 {
+        advance(&h, 1_000).await;
+    }
+    let later = row(&h, &attempt_id).await.expect("the attempt");
+    assert_eq!(later.state, AttemptState::OutcomeUnknown);
+    assert_eq!(h.server.sends(), 0, "still never retried");
+}
+
+#[tokio::test]
+async fn startup_recovery_requeues_an_unrequested_send_and_reuses_its_draft() {
+    let h = setup(vec![TestAccount::new(USER, PASSWORD)]).await;
+    let _id = sign_in(&h).await;
+    let ident = identity(&h).await;
+    h.server.add_message(
+        USER,
+        FakeMessage::new("recover-draft").with_labels(&["8", "5"]),
+    );
+    let queued = queue(&h, &ident, &[INTERNAL]).await;
+    let attempt_id = queued.attempt_id.clone();
+    h.core.shutdown().await;
+    let db = h.scratch.path().join("store/state.sqlite");
+    execute_sql(
+        &db,
+        &format!(
+            "UPDATE send_attempts SET state = 'submitting', proton_draft_id = 'recover-draft',
+                 send_requested_at = NULL
+             WHERE attempt_id = '{attempt_id}'"
+        ),
+    );
+
+    let core = reopen(&h.scratch, &h.secrets, &h.server, &h.clock).await;
+    let h = Harness { core, ..h };
+    let row = until_state(&h, &attempt_id, AttemptState::Accepted).await;
+    assert_recipients(&row, RecipientState::Sent);
+    assert_eq!(row.proton_draft_id.as_deref(), Some("recover-draft"));
+    assert_eq!(h.server.sends(), 1, "the recovered attempt sent once");
+    assert_eq!(
+        requests(&h, "POST", "/mail/v4/messages"),
+        0,
+        "the recorded draft was reused, not recreated"
+    );
+    assert_eq!(
+        requests_with_prefix(&h, "PUT", "/mail/v4/messages/"),
+        1,
+        "the retry updated the recorded draft"
+    );
+}
+
+#[tokio::test]
 async fn no_sent_copy_is_uploaded_or_imported() {
     let h = setup(vec![TestAccount::new(USER, PASSWORD)]).await;
     let _id = sign_in(&h).await;

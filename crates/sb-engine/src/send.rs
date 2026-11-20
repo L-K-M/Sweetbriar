@@ -436,25 +436,22 @@ impl Engine {
     }
 
     /// `out_box()` (spec/07): every live attempt, then the last 30
-    /// days' history, each newest first by update time. The Proton
-    /// evidence is in-memory and not yet produced (M4.3f), so every
-    /// row's evidence is empty for now.
+    /// days' history, each newest first by update time, each row
+    /// carrying the latest Proton evidence observed since launch
+    /// (spec/05 step 6).
     pub async fn out_box(&self) -> Result<OutBox, EngineError> {
         let now = self.resources().now();
+        let evidence = self.send_evidence.snapshot();
         let stored = self
             .read_through(move |resources| resources.read(move |tx| stored_out_box(tx, now)))
             .await?;
+        let row = |row: sb_resources::OutBoxRow| {
+            let observed = evidence.get(&row.attempt_id).cloned().unwrap_or_default();
+            OutBoxRow::from_stored(row, observed)
+        };
         Ok(OutBox {
-            live: stored
-                .live
-                .into_iter()
-                .map(|row| OutBoxRow::from_stored(row, Vec::new()))
-                .collect(),
-            history: stored
-                .history
-                .into_iter()
-                .map(|row| OutBoxRow::from_stored(row, Vec::new()))
-                .collect(),
+            live: stored.live.into_iter().map(row).collect(),
+            history: stored.history.into_iter().map(row).collect(),
         })
     }
 
@@ -526,8 +523,7 @@ pub struct OutBoxRow {
     pub sent_copy_warning: bool,
     /// The Proton evidence observed since launch (spec/05 step 6,
     /// spec/07). Kept in the account worker's memory, so a relaunch
-    /// shows none until its next check. M4.3f fills this from those
-    /// observations; it is empty until then.
+    /// shows none until its next check.
     pub evidence: Vec<String>,
 }
 

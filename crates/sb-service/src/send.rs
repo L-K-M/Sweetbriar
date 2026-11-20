@@ -126,8 +126,7 @@ pub struct OutBoxRow {
     pub sent_copy_warning: bool,
     /// The Proton evidence observed since launch (spec/05 step 6,
     /// spec/07). Kept in the account worker's memory, so a relaunch
-    /// shows none until its next check. M4.3f fills this from those
-    /// observations; it is empty until then.
+    /// shows none until its next check.
     pub evidence: Vec<String>,
 }
 
@@ -321,9 +320,9 @@ impl Core {
     }
 
     /// `out_box()` (spec/07 "Other queries"): every live attempt, then
-    /// the last 30 days' history, each newest first by update time.
-    /// The Proton evidence is in-memory and not yet produced (M4.3f),
-    /// so every row's evidence is empty for now.
+    /// the last 30 days' history, each newest first by update time, each
+    /// row carrying the latest Proton evidence observed since launch
+    /// (spec/05 step 6).
     pub async fn out_box(&self) -> Result<OutBox, CoreError> {
         Ok(OutBox::from_engine(self.engine().out_box().await?))
     }

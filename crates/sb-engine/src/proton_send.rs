@@ -11,7 +11,7 @@
 //! session's unlocked key set.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use sb_resources::{
@@ -25,6 +25,69 @@ use sb_resources::{
     pause_for_reason, pause_for_session, record_proton_draft, record_proton_upload,
     requeue_before_request,
 };
+
+/// Proton's Sent and Drafts system labels (spec/05 step 6): the
+/// evidence check reads a draft's metadata and treats Sent (`7`) with
+/// no Drafts (`8`) as Proton's own record that the message was sent.
+pub(crate) const SENT_LABEL: &str = "7";
+pub(crate) const DRAFTS_LABEL: &str = "8";
+
+/// The latest Proton evidence observed per unresolved attempt, in
+/// memory only (spec/05 step 6, spec/07 `out_box()`). A relaunch
+/// starts empty; the account worker fills it as it reads drafts.
+#[derive(Default)]
+pub(crate) struct SendEvidence {
+    latest: Mutex<HashMap<String, Vec<String>>>,
+}
+
+impl SendEvidence {
+    /// Record the latest observation for one attempt, replacing an
+    /// earlier one: the Out Box shows what the worker last saw.
+    pub(crate) fn record(&self, attempt_id: &str, observation: String) {
+        self.latest
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(attempt_id.to_owned(), vec![observation]);
+    }
+
+    /// Every attempt's latest observation, for `out_box()`.
+    pub(crate) fn snapshot(&self) -> HashMap<String, Vec<String>> {
+        self.latest
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+}
+
+/// What one draft read observed (spec/05 step 6). Only [`Sent`] acts:
+/// the attempt becomes accepted through the store's guarded
+/// transition. Every other observation is reported and changes
+/// nothing.
+pub(crate) enum Evidence {
+    /// Proton shows the draft sent: it carries Sent and no Drafts.
+    Sent,
+    /// The draft still carries Drafts, so it wasn't sent.
+    Drafts,
+    /// Proton has no such draft.
+    NotFound,
+    /// The read failed; nothing is known either way.
+    ReadFailed,
+}
+
+impl Evidence {
+    /// The line the Out Box shows for this observation. It names the
+    /// draft and the labels, never a body or key (spec/10).
+    pub(crate) fn line(&self, draft_id: &str) -> String {
+        match self {
+            Self::Sent => {
+                format!("Proton shows draft {draft_id} sent (Sent, no Drafts)")
+            }
+            Self::Drafts => format!("Proton still shows draft {draft_id} in Drafts"),
+            Self::NotFound => format!("Proton has no draft {draft_id}"),
+            Self::ReadFailed => format!("Reading draft {draft_id} failed"),
+        }
+    }
+}
 
 use crate::proton::Sessions;
 use crate::proton_sync::Halt;
