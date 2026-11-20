@@ -22,6 +22,7 @@ use zeroize::Zeroizing;
 use crate::auth::Session;
 use crate::client::{Client, Priority, expect_success, read_response};
 use crate::error::ProtonError;
+use crate::send::{SendAttachment, SendBody, SendError, SendPackages, SendRecipient};
 
 /// `GET /core/v4/keys/salts` (research `auth-session.md` §7).
 pub const KEY_SALTS_PATH: &str = "/core/v4/keys/salts";
@@ -208,6 +209,10 @@ pub struct KeySet<P: PGPProviderSync> {
     provider: P,
     user_keys: UnlockedUserKeys<P>,
     address_keys: Vec<UnlockedAddressKey<P>>,
+    /// Each enabled address's email (lowercased) and the index of the
+    /// unlocked key that sends for it, the primary one preferred
+    /// (spec/05 steps 2 and 4).
+    sender_keys: Vec<(String, usize)>,
     /// Key ids that failed to unlock (spec/04: recorded and shown).
     pub failed: Vec<String>,
     pub identities: Vec<Identity>,
@@ -242,6 +247,22 @@ pub trait KeyStore: Send + Sync + fmt::Debug {
         key_packets: &[u8],
         data_packet: &[u8],
     ) -> Result<SecretBuffer, DecryptError>;
+
+    /// Encrypts and signs a draft body with the unlocked address key
+    /// for `email`, the attempt's sending identity (spec/05 step 2).
+    /// [`SendError::SenderKey`] when no key unlocked for it.
+    fn encrypt_draft_body(&self, email: &str, body: &[u8]) -> Result<Vec<u8>, SendError>;
+
+    /// Builds the send packages with the unlocked address key for
+    /// `email` (spec/05 step 4). [`SendError::SenderKey`] when no
+    /// key unlocked for it.
+    fn build_packages(
+        &self,
+        email: &str,
+        recipients: &[SendRecipient],
+        bodies: &[SendBody<'_>],
+        attachments: &[SendAttachment],
+    ) -> Result<SendPackages, SendError>;
 }
 
 impl<P: PGPProviderSync> KeyStore for KeySet<P> {
@@ -263,6 +284,22 @@ impl<P: PGPProviderSync> KeyStore for KeySet<P> {
         data_packet: &[u8],
     ) -> Result<SecretBuffer, DecryptError> {
         KeySet::decrypt_attachment(self, key_packets, data_packet)
+    }
+
+    fn encrypt_draft_body(&self, email: &str, body: &[u8]) -> Result<Vec<u8>, SendError> {
+        let key = self.sender_key(email).ok_or(SendError::SenderKey)?;
+        crate::send::encrypt_draft_body(&self.provider, key, body)
+    }
+
+    fn build_packages(
+        &self,
+        email: &str,
+        recipients: &[SendRecipient],
+        bodies: &[SendBody<'_>],
+        attachments: &[SendAttachment],
+    ) -> Result<SendPackages, SendError> {
+        let key = self.sender_key(email).ok_or(SendError::SenderKey)?;
+        crate::send::build_packages(&self.provider, key, recipients, bodies, attachments)
     }
 }
 
@@ -340,13 +377,29 @@ impl<P: PGPProviderSync> KeySet<P> {
             return Err(KeyUnlockError::NoAddressKey);
         }
         let failed = failed.into_iter().map(|error| error.to_string()).collect();
+        let mut sender_keys: Vec<(String, usize)> = Vec::new();
         let identities = addresses
             .iter()
             .filter(|address| address.status == ADDRESS_STATUS_ENABLED)
             .map(|address| {
-                let unlocked_key = address_keys
+                let mut unlocked: Vec<usize> = address_keys
                     .iter()
-                    .any(|key| address.keys.0.iter().any(|locked| locked.id == key.id));
+                    .enumerate()
+                    .filter(|(_, key)| address.keys.0.iter().any(|locked| locked.id == key.id))
+                    .map(|(index, _)| index)
+                    .collect();
+                let unlocked_key = !unlocked.is_empty();
+                if unlocked_key {
+                    // The primary key signs and encrypts; the first
+                    // unlocked one is the fallback.
+                    if let Some(position) = unlocked
+                        .iter()
+                        .position(|&index| address_keys[index].primary)
+                    {
+                        unlocked.swap(0, position);
+                    }
+                    sender_keys.push((address.email.to_ascii_lowercase(), unlocked[0]));
+                }
                 Identity {
                     id: address.id.clone(),
                     email: address.email.clone(),
@@ -365,9 +418,21 @@ impl<P: PGPProviderSync> KeySet<P> {
             provider,
             user_keys,
             address_keys,
+            sender_keys,
             failed,
             identities,
         })
+    }
+
+    /// The unlocked address key that sends for `email`, the primary one
+    /// preferred (spec/05 steps 2 and 4). `None` when the address has
+    /// no unlocked key.
+    fn sender_key(&self, email: &str) -> Option<&UnlockedAddressKey<P>> {
+        let email = email.to_ascii_lowercase();
+        self.sender_keys
+            .iter()
+            .find(|(address, _)| address == &email)
+            .map(|&(_, index)| &self.address_keys[index])
     }
 
     /// Decrypts an armored message body (M2.16). The plaintext is a

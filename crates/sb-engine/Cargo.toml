@@ -34,3 +34,6 @@ sb-test-support = { version = "0.0.1", path = "../sb-test-support" }
 sb-resources = { version = "0.0.1", path = "../sb-resources", features = ["test-seams"] }
 # The M1.6q search timing report (spec/11); already pinned by sb-store.
 serde_json = "=1.0.154"
+# The poll wait's deadline on tokio's paused clock (plan M4.3e2a); the
+# same pinned tokio, plus `test-util`, as sb-proton's tests.
+tokio = { version = "=1.54.1", default-features = false, features = ["test-util"] }

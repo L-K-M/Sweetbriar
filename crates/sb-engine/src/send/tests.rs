@@ -385,6 +385,58 @@ fn cross_account_ack_is_required_and_bound_to_the_revision() {
 }
 
 #[test]
+fn every_command_that_queues_an_attempt_wakes_the_workers() {
+    // A worker waiting out a poll interval reads the new undo window
+    // or claims the attempt on the pass this wake starts (spec/05
+    // steps 2 and 3).
+    let (_scratch, engine) = scratch_engine("engine-send-wakes");
+    seed(&engine);
+    let mut poll = engine.account_jobs().poll_signal();
+    let woke = |poll: &mut tokio::sync::watch::Receiver<()>| {
+        let changed = poll.has_changed().expect("the jobs live");
+        poll.mark_unchanged();
+        changed
+    };
+
+    let draft = create(&engine);
+    let saved = save(&engine, draft.draft_id(), None);
+    assert!(!woke(&mut poll), "saving a draft queues nothing");
+    let queued = send(&engine, draft.draft_id(), saved.revision_id()).unwrap();
+    assert!(woke(&mut poll), "send_draft");
+    let attempt_id = queued.attempt_id().to_owned();
+
+    force(&engine, &attempt_id, "queued", None);
+    sql(
+        &engine,
+        "UPDATE accounts SET config_generation = 2 WHERE account_id = 'acct-1';",
+    );
+    block_on(engine.confirm_send_route(&engine.new_idempotency_key(), &attempt_id)).unwrap();
+    assert!(woke(&mut poll), "confirm_send_route");
+
+    force(&engine, &attempt_id, "outcome_unknown", Some("unknown"));
+    block_on(engine.resolve_unknown_send(
+        &engine.new_idempotency_key(),
+        &attempt_id,
+        UnknownResolution::KeptAsDraft,
+    ))
+    .unwrap();
+    assert!(!woke(&mut poll), "keeping a draft queues nothing");
+    let saved = save(&engine, draft.draft_id(), Some(saved.revision_id()));
+    let queued = send(&engine, draft.draft_id(), saved.revision_id()).unwrap();
+    assert!(woke(&mut poll));
+    let attempt_id = queued.attempt_id().to_owned();
+    force(&engine, &attempt_id, "outcome_unknown", Some("unknown"));
+    block_on(engine.resolve_unknown_send(
+        &engine.new_idempotency_key(),
+        &attempt_id,
+        UnknownResolution::SendAgain,
+    ))
+    .unwrap();
+    assert!(woke(&mut poll), "Send again");
+    block_on(engine.shutdown()).unwrap();
+}
+
+#[test]
 fn confirm_send_route_and_retry_conflict() {
     let (_scratch, engine) = scratch_engine("engine-confirm-route");
     seed(&engine);

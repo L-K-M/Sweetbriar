@@ -1226,6 +1226,34 @@ fn unknown(store: &Store) -> bool {
 }
 
 #[test]
+fn earliest_hold_until_is_the_account_s_first_open_window() {
+    let (_scratch, _paths, store) = scratch();
+    seed(&store);
+    let earliest = |account: &'static str| {
+        reading(&store, move |tx| earliest_hold_until(tx, account)).map(|t| t.as_millis())
+    };
+    assert_eq!(earliest("acct"), None, "no attempt is held yet");
+
+    queue(&store);
+    let held = one_i64(
+        &store,
+        "SELECT hold_until FROM send_attempts WHERE attempt_id = 'a1'",
+    );
+    assert_eq!(earliest("acct"), Some(held));
+    assert_eq!(
+        earliest("other"),
+        None,
+        "another account's window is not this one's"
+    );
+
+    // A queued attempt's window is over.
+    writing(&store, move |tx| {
+        queue_due_held(tx, Timestamp::from_millis(held)).map(|_| ())
+    });
+    assert_eq!(earliest("acct"), None);
+}
+
+#[test]
 fn queue_due_held_moves_only_attempts_past_their_window() {
     let (_scratch, _paths, store) = scratch();
     seed(&store);

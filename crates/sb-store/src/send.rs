@@ -500,6 +500,25 @@ pub fn queue_due_held(tx: &Transaction, now: Timestamp) -> Result<usize, StoreEr
     Ok(moved)
 }
 
+/// The earliest `hold_until` among the account's `held` attempts, or
+/// `None` (spec/05 step 2). The account worker's poll deadline: a
+/// window that ends between two polls is observed without waiting the
+/// whole interval.
+pub fn earliest_hold_until(
+    tx: &Transaction,
+    account_id: &str,
+) -> Result<Option<Timestamp>, StoreError> {
+    let hold_until: Option<i64> = tx
+        .query_row(
+            "SELECT MIN(hold_until) FROM send_attempts
+             WHERE account_id = ?1 AND state = 'held' AND hold_until IS NOT NULL",
+            params![account_id],
+            |row| row.get(0),
+        )
+        .map_err(|e| classify(e, "read the earliest held send window"))?;
+    Ok(hold_until.map(Timestamp::from_millis))
+}
+
 /// `claim_send_attempt(account_id, now)` (spec/05 step 3): the oldest
 /// `queued` attempt of the account whose `config_generation` is still
 /// the account's current one becomes `submitting`, committed before any

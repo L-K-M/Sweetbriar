@@ -45,6 +45,9 @@ pub const SIGNATURE_DETACHED: u8 = 1;
 /// no key material).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SendError {
+    /// No unlocked address key sends for the identity: the keys are
+    /// not unlocked yet, a wait rather than a refusal (spec/05 step 7).
+    SenderKey,
     /// A recipient's public key could not be selected or imported.
     RecipientKey,
     /// The OpenPGP provider refused an operation.
@@ -59,6 +62,7 @@ pub enum SendError {
 impl fmt::Display for SendError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
+            Self::SenderKey => "no unlocked key sends for this address",
             Self::RecipientKey => "a recipient's public key is missing or unusable",
             Self::Crypto => "the OpenPGP provider refused the operation",
             Self::NoRecipients => "a package needs at least one recipient",

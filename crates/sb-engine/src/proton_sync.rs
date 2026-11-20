@@ -31,8 +31,8 @@ use sb_resources::{
     APP_IDENTITY_REFUSED_REASON, AccountState, ApiCode, BackoffKind, EventAction, EventBatch,
     EventId, HUMAN_VERIFICATION_REASON, KeyStore, ListingAnchor, PROTON_MAX_PAGE_SIZE,
     ProtonClient, ProtonError, Receipt, Secret, Session, StoreError, StoredAccount, Transaction,
-    WritePriority, accounts, pause_for_reason, proton_account, proton_identities, queue_due_held,
-    run_once,
+    WritePriority, accounts, earliest_hold_until, pause_for_reason, proton_account,
+    proton_identities, queue_due_held, run_once,
 };
 
 use std::collections::{BTreeSet, HashSet};
@@ -673,12 +673,40 @@ impl Attempt<'_> {
                 return halt;
             }
             let start = self.worker.resources().now();
+            let due = match self.earliest_held_window().await {
+                Ok(due) => due,
+                Err(halt) => return halt,
+            };
             let now = || self.worker.resources().now();
-            if let Some(halt) =
-                wait_for_next_poll(now, &mut stop, &mut poll, &mut active, &self.wake, start).await
+            if let Some(halt) = wait_for_next_poll(
+                now,
+                &mut stop,
+                &mut poll,
+                &mut active,
+                &self.wake,
+                start,
+                due,
+            )
+            .await
             {
                 return halt;
             }
+        }
+    }
+
+    /// When the account's first open undo window ends, so the wait
+    /// between polls wakes for it rather than a whole interval later
+    /// (spec/05 step 2).
+    async fn earliest_held_window(&self) -> Result<Option<sb_resources::Timestamp>, Halt> {
+        let id = self.account_id.to_owned();
+        match self
+            .worker
+            .blocking(move |resources| resources.read(|tx| earliest_hold_until(tx, &id)))
+            .await
+        {
+            Ok(Ok(held)) => Ok(held),
+            Ok(Err(error)) => Err(error.into()),
+            Err(_) => Err(Halt::Stopped),
         }
     }
 
@@ -1214,6 +1242,7 @@ async fn wait_for_next_poll(
     active: &mut watch::Receiver<bool>,
     wake: &tokio::sync::Notify,
     start: sb_resources::Timestamp,
+    due: Option<sb_resources::Timestamp>,
 ) -> Option<Halt> {
     loop {
         let interval = if *active.borrow() {
@@ -1222,6 +1251,8 @@ async fn wait_for_next_poll(
             INACTIVE_POLL_INTERVAL
         };
         let deadline = start.as_millis() + interval.as_millis() as i64;
+        // An undo window that ends sooner ends the wait (spec/05 step 2).
+        let deadline = due.map_or(deadline, |due| due.as_millis().min(deadline));
         let remaining = deadline - now().as_millis();
         if remaining <= 0 {
             return None;
@@ -1365,4 +1396,51 @@ fn changes(batch: &EventBatch) -> Result<Vec<ProtonChange>, Halt> {
             _ => Err(Halt::Retry),
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const START_MS: i64 = 1_000_000;
+
+    /// How long one wait lasts on tokio's paused clock, the store's
+    /// clock standing at the wait's start.
+    async fn waited(due_ms: Option<i64>) -> Duration {
+        let (_stop_tx, mut stop) = watch::channel(false);
+        let (_poll_tx, mut poll) = watch::channel(());
+        let (_active_tx, mut active) = watch::channel(false);
+        let wake = tokio::sync::Notify::new();
+        let start = sb_resources::Timestamp::from_millis(START_MS);
+        let due = due_ms.map(sb_resources::Timestamp::from_millis);
+        let began = tokio::time::Instant::now();
+        let halt = wait_for_next_poll(
+            || start,
+            &mut stop,
+            &mut poll,
+            &mut active,
+            &wake,
+            start,
+            due,
+        )
+        .await;
+        assert!(halt.is_none(), "the wait ended on its deadline");
+        began.elapsed()
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn an_undo_window_that_ends_first_ends_the_wait() {
+        let window = waited(Some(START_MS + 7_000)).await;
+        assert!(
+            (Duration::from_secs(7)..Duration::from_secs(8)).contains(&window),
+            "the wait ended with the window: {window:?}"
+        );
+        let interval = waited(None).await;
+        assert!(interval >= INACTIVE_POLL_INTERVAL, "{interval:?}");
+        let later = waited(Some(START_MS + 10 * 60_000)).await;
+        assert!(
+            later < INACTIVE_POLL_INTERVAL + Duration::from_secs(1),
+            "a later window doesn't extend the wait: {later:?}"
+        );
+    }
 }

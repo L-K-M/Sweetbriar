@@ -272,6 +272,9 @@ impl Engine {
                 Ok(receipt)
             })
             .await?;
+        // The account's worker may be waiting out a poll interval; a
+        // queued attempt is worth claiming now (spec/05 step 2).
+        self.account_jobs().wake();
         Ok(SendQueued {
             attempt_id: receipt_id(&receipt, "attempt_id")?,
             receipt,
@@ -378,6 +381,11 @@ impl Engine {
             })
             .await?;
         let (_, resolution, new_attempt_id) = resolution_from_receipt(&receipt)?;
+        if resolution == UnknownResolution::SendAgain {
+            // "Send again" queues a new attempt; the worker may be
+            // waiting out a poll interval (spec/05 step 2).
+            self.account_jobs().wake();
+        }
         Ok(ResolvedUnknown {
             receipt,
             resolution,
@@ -395,13 +403,18 @@ impl Engine {
         attempt_id: &str,
     ) -> Result<Receipt, EngineError> {
         let id = attempt_id.to_owned();
-        self.attempt_command(
-            idempotency_key,
-            attempt_id,
-            CONFIRM_SEND_ROUTE,
-            move |tx, now| confirm_send_route(tx, &id, now),
-        )
-        .await
+        let receipt = self
+            .attempt_command(
+                idempotency_key,
+                attempt_id,
+                CONFIRM_SEND_ROUTE,
+                move |tx, now| confirm_send_route(tx, &id, now),
+            )
+            .await?;
+        // The attempt's generation now matches; the worker may be
+        // waiting out a poll interval (spec/05 step 3).
+        self.account_jobs().wake();
+        Ok(receipt)
     }
 
     /// `retry_rejected_recipients(attempt_id)` (spec/05 step 5, 07):
