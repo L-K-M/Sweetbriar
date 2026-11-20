@@ -1700,6 +1700,63 @@ public protocol CoreProtocol: AnyObject, Sendable {
     func coverage(token: CancelToken, scope: SearchScope) async throws  -> Coverage
     
     /**
+     * `cancel_send(attempt_id)` (spec/07 "Commands"): a `held` or
+     * `queued` attempt becomes `cancelled` and its draft returns to
+     * `editing`; any other state is `Conflict`, an unknown attempt
+     * `NotFound`. A repeated key replays its receipt rather than
+     * meeting the cancelled state. The receipt answers
+     * `{"attempt_id": ...}`.
+     */
+    func cancelSend(token: CancelToken, idempotencyKey: String, attemptId: String) async throws  -> Receipt
+    
+    /**
+     * `confirm_send_route(attempt_id)` (spec/07 "Commands"): a
+     * `queued` attempt adopts the account's current generation. An
+     * unsendable identity or any other state is `Conflict`. A repeated
+     * key replays its receipt. The receipt answers `{"attempt_id": ...}`.
+     */
+    func confirmSendRoute(token: CancelToken, idempotencyKey: String, attemptId: String) async throws  -> Receipt
+    
+    /**
+     * `out_box()` (spec/07 "Other queries"): every live attempt, then
+     * the last 30 days' history, each newest first by update time.
+     * A query: the token races the core's read lock and the read
+     * itself (spec/07).
+     */
+    func outBox(token: CancelToken) async throws  -> OutBox
+    
+    /**
+     * `resolve_unknown_send(attempt_id, resolution)` (spec/07
+     * "Commands"): record the user's answer to an unresolved
+     * `outcome_unknown` attempt, exactly once; a second resolution is
+     * `Conflict`. `marked_sent` counts the unknown recipients as sent
+     * and sets the draft `sent`; `kept_as_draft` returns it to
+     * `editing`; `send_again` queues a new attempt and answers its id.
+     * A repeated key replays the first answer, new attempt included.
+     */
+    func resolveUnknownSend(token: CancelToken, idempotencyKey: String, attemptId: String, resolution: UnknownResolution) async throws  -> ResolvedUnknown
+    
+    /**
+     * `retry_rejected_recipients(attempt_id)` (spec/07 "Commands"):
+     * a Proton attempt is `Conflict`, having no partially accepted
+     * recipients; an unknown attempt is `NotFound`. A repeated key
+     * replays its receipt. The receipt answers `{"attempt_id": ...}`.
+     */
+    func retryRejectedRecipients(token: CancelToken, idempotencyKey: String, attemptId: String) async throws  -> Receipt
+    
+    /**
+     * `send_draft(draft_id, revision_id, acks)` (spec/07 "Commands"):
+     * queue the draft's current revision as a `held` attempt under an
+     * idempotency key the shell made (`UUID()` in Swift); a repeated
+     * key returns its receipt and the first attempt id. A
+     * non-current revision, a `sent` or `discarded` draft, a live or
+     * already-sent attempt, and a missing cross-account acknowledgement
+     * are `Conflict`. Like every command it honours the token only
+     * until it holds the core; once begun it runs to completion.
+     */
+    func sendDraft(token: CancelToken, idempotencyKey: String, draftId: String, revisionId: String, acks: [String]) async throws  -> SendQueued
+    
+    /**
      * `accounts()` (spec/07): every account, by sort order then id.
      */
     func accounts(token: CancelToken) async throws  -> [Account]
@@ -3143,6 +3200,147 @@ open func coverage(token: CancelToken, scope: SearchScope)async throws  -> Cover
             completeFunc: ffi_sb_ffi_rust_future_complete_rust_buffer,
             freeFunc: ffi_sb_ffi_rust_future_free_rust_buffer,
             liftFunc: FfiConverterTypeCoverage_lift,
+            errorHandler: FfiConverterTypeCoreError_lift
+        )
+}
+    
+    /**
+     * `cancel_send(attempt_id)` (spec/07 "Commands"): a `held` or
+     * `queued` attempt becomes `cancelled` and its draft returns to
+     * `editing`; any other state is `Conflict`, an unknown attempt
+     * `NotFound`. A repeated key replays its receipt rather than
+     * meeting the cancelled state. The receipt answers
+     * `{"attempt_id": ...}`.
+     */
+open func cancelSend(token: CancelToken, idempotencyKey: String, attemptId: String)async throws  -> Receipt  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_sb_ffi_fn_method_core_cancel_send(
+                        self.uniffiCloneHandle(),FfiConverterTypeCancelToken_lower(token),FfiConverterString.lower(idempotencyKey),FfiConverterString.lower(attemptId)
+                )
+            },
+            pollFunc: ffi_sb_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_sb_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_sb_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeReceipt_lift,
+            errorHandler: FfiConverterTypeCoreError_lift
+        )
+}
+    
+    /**
+     * `confirm_send_route(attempt_id)` (spec/07 "Commands"): a
+     * `queued` attempt adopts the account's current generation. An
+     * unsendable identity or any other state is `Conflict`. A repeated
+     * key replays its receipt. The receipt answers `{"attempt_id": ...}`.
+     */
+open func confirmSendRoute(token: CancelToken, idempotencyKey: String, attemptId: String)async throws  -> Receipt  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_sb_ffi_fn_method_core_confirm_send_route(
+                        self.uniffiCloneHandle(),FfiConverterTypeCancelToken_lower(token),FfiConverterString.lower(idempotencyKey),FfiConverterString.lower(attemptId)
+                )
+            },
+            pollFunc: ffi_sb_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_sb_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_sb_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeReceipt_lift,
+            errorHandler: FfiConverterTypeCoreError_lift
+        )
+}
+    
+    /**
+     * `out_box()` (spec/07 "Other queries"): every live attempt, then
+     * the last 30 days' history, each newest first by update time.
+     * A query: the token races the core's read lock and the read
+     * itself (spec/07).
+     */
+open func outBox(token: CancelToken)async throws  -> OutBox  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_sb_ffi_fn_method_core_out_box(
+                        self.uniffiCloneHandle(),FfiConverterTypeCancelToken_lower(token)
+                )
+            },
+            pollFunc: ffi_sb_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_sb_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_sb_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeOutBox_lift,
+            errorHandler: FfiConverterTypeCoreError_lift
+        )
+}
+    
+    /**
+     * `resolve_unknown_send(attempt_id, resolution)` (spec/07
+     * "Commands"): record the user's answer to an unresolved
+     * `outcome_unknown` attempt, exactly once; a second resolution is
+     * `Conflict`. `marked_sent` counts the unknown recipients as sent
+     * and sets the draft `sent`; `kept_as_draft` returns it to
+     * `editing`; `send_again` queues a new attempt and answers its id.
+     * A repeated key replays the first answer, new attempt included.
+     */
+open func resolveUnknownSend(token: CancelToken, idempotencyKey: String, attemptId: String, resolution: UnknownResolution)async throws  -> ResolvedUnknown  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_sb_ffi_fn_method_core_resolve_unknown_send(
+                        self.uniffiCloneHandle(),FfiConverterTypeCancelToken_lower(token),FfiConverterString.lower(idempotencyKey),FfiConverterString.lower(attemptId),FfiConverterTypeUnknownResolution_lower(resolution)
+                )
+            },
+            pollFunc: ffi_sb_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_sb_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_sb_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeResolvedUnknown_lift,
+            errorHandler: FfiConverterTypeCoreError_lift
+        )
+}
+    
+    /**
+     * `retry_rejected_recipients(attempt_id)` (spec/07 "Commands"):
+     * a Proton attempt is `Conflict`, having no partially accepted
+     * recipients; an unknown attempt is `NotFound`. A repeated key
+     * replays its receipt. The receipt answers `{"attempt_id": ...}`.
+     */
+open func retryRejectedRecipients(token: CancelToken, idempotencyKey: String, attemptId: String)async throws  -> Receipt  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_sb_ffi_fn_method_core_retry_rejected_recipients(
+                        self.uniffiCloneHandle(),FfiConverterTypeCancelToken_lower(token),FfiConverterString.lower(idempotencyKey),FfiConverterString.lower(attemptId)
+                )
+            },
+            pollFunc: ffi_sb_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_sb_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_sb_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeReceipt_lift,
+            errorHandler: FfiConverterTypeCoreError_lift
+        )
+}
+    
+    /**
+     * `send_draft(draft_id, revision_id, acks)` (spec/07 "Commands"):
+     * queue the draft's current revision as a `held` attempt under an
+     * idempotency key the shell made (`UUID()` in Swift); a repeated
+     * key returns its receipt and the first attempt id. A
+     * non-current revision, a `sent` or `discarded` draft, a live or
+     * already-sent attempt, and a missing cross-account acknowledgement
+     * are `Conflict`. Like every command it honours the token only
+     * until it holds the core; once begun it runs to completion.
+     */
+open func sendDraft(token: CancelToken, idempotencyKey: String, draftId: String, revisionId: String, acks: [String])async throws  -> SendQueued  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_sb_ffi_fn_method_core_send_draft(
+                        self.uniffiCloneHandle(),FfiConverterTypeCancelToken_lower(token),FfiConverterString.lower(idempotencyKey),FfiConverterString.lower(draftId),FfiConverterString.lower(revisionId),FfiConverterSequenceString.lower(acks)
+                )
+            },
+            pollFunc: ffi_sb_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_sb_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_sb_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeSendQueued_lift,
             errorHandler: FfiConverterTypeCoreError_lift
         )
 }
@@ -7552,6 +7750,310 @@ public func FfiConverterTypeNewMail_lower(_ value: NewMail) -> RustBuffer {
 
 
 /**
+ * The Out Box (spec/07): live attempts, then history, each newest
+ * first.
+ */
+public struct OutBox: Equatable, Hashable {
+    public var live: [OutBoxRow]
+    public var history: [OutBoxRow]
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(live: [OutBoxRow], history: [OutBoxRow]) {
+        self.live = live
+        self.history = history
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension OutBox: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeOutBox: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> OutBox {
+        return
+            try OutBox(
+                live: FfiConverterSequenceTypeOutBoxRow.read(from: &buf), 
+                history: FfiConverterSequenceTypeOutBoxRow.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: OutBox, into buf: inout [UInt8]) {
+        FfiConverterSequenceTypeOutBoxRow.write(value.live, into: &buf)
+        FfiConverterSequenceTypeOutBoxRow.write(value.history, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeOutBox_lift(_ buf: RustBuffer) throws -> OutBox {
+    return try FfiConverterTypeOutBox.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeOutBox_lower(_ value: OutBox) -> RustBuffer {
+    return FfiConverterTypeOutBox.lower(value)
+}
+
+
+/**
+ * One recipient on an Out Box row (spec/07): the address as first
+ * written, its field and its stored state.
+ */
+public struct OutBoxRecipient: Equatable, Hashable {
+    public var address: String
+    public var kind: RecipientKind
+    public var state: RecipientState
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(address: String, kind: RecipientKind, state: RecipientState) {
+        self.address = address
+        self.kind = kind
+        self.state = state
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension OutBoxRecipient: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeOutBoxRecipient: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> OutBoxRecipient {
+        return
+            try OutBoxRecipient(
+                address: FfiConverterString.read(from: &buf), 
+                kind: FfiConverterTypeRecipientKind.read(from: &buf), 
+                state: FfiConverterTypeRecipientState.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: OutBoxRecipient, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.address, into: &buf)
+        FfiConverterTypeRecipientKind.write(value.kind, into: &buf)
+        FfiConverterTypeRecipientState.write(value.state, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeOutBoxRecipient_lift(_ buf: RustBuffer) throws -> OutBoxRecipient {
+    return try FfiConverterTypeOutBoxRecipient.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeOutBoxRecipient_lower(_ value: OutBoxRecipient) -> RustBuffer {
+    return FfiConverterTypeOutBoxRecipient.lower(value)
+}
+
+
+/**
+ * One Out Box row (spec/07 `out_box()`): the attempt's frozen
+ * revision subject, recipients, state and stored times, plus the
+ * Sent-copy reconciliation and the Proton evidence observed since
+ * launch (spec/05 step 6).
+ */
+public struct OutBoxRow: Equatable, Hashable {
+    public var attemptId: String
+    public var draftId: String
+    public var accountId: String
+    public var identityId: String
+    public var subject: String
+    public var recipients: [OutBoxRecipient]
+    public var state: AttemptState
+    public var createdAtMs: Int64
+    public var updatedAtMs: Int64
+    public var holdUntilMs: Int64?
+    public var resolvedAtMs: Int64?
+    public var sendRequestedAtMs: Int64?
+    /**
+     * The Proton draft the attempt created, which becomes the sent
+     * message (spec/02, 05 "Drafts on the server").
+     */
+    public var protonDraftId: String?
+    /**
+     * Proton's final reply, code and message (spec/02, 05).
+     */
+    public var finalReply: String?
+    public var resolution: UnknownResolution?
+    public var sentCopy: SentCopy
+    /**
+     * A `queued` attempt whose `config_generation` differs from its
+     * account's current one waits for `confirm_send_route`
+     * (spec/05 step 3).
+     */
+    public var waitsForConfirmation: Bool
+    /**
+     * For an accepted attempt whose provider saves the Sent copy:
+     * whether a message with the attempt's `proton_draft_id` has
+     * appeared in the account (spec/05 "The Sent copy").
+     */
+    public var sentCopyAppeared: Bool
+    /**
+     * An accepted `server_saves` attempt with no Sent copy 24 h
+     * after acceptance: a soft warning, never a resend (spec/05).
+     */
+    public var sentCopyWarning: Bool
+    /**
+     * The Proton evidence observed since launch (spec/05 step 6,
+     * spec/07). Kept in the account worker's memory, so a relaunch
+     * shows none until its next check.
+     */
+    public var evidence: [String]
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(attemptId: String, draftId: String, accountId: String, identityId: String, subject: String, recipients: [OutBoxRecipient], state: AttemptState, createdAtMs: Int64, updatedAtMs: Int64, holdUntilMs: Int64?, resolvedAtMs: Int64?, sendRequestedAtMs: Int64?, 
+        /**
+         * The Proton draft the attempt created, which becomes the sent
+         * message (spec/02, 05 "Drafts on the server").
+         */protonDraftId: String?, 
+        /**
+         * Proton's final reply, code and message (spec/02, 05).
+         */finalReply: String?, resolution: UnknownResolution?, sentCopy: SentCopy, 
+        /**
+         * A `queued` attempt whose `config_generation` differs from its
+         * account's current one waits for `confirm_send_route`
+         * (spec/05 step 3).
+         */waitsForConfirmation: Bool, 
+        /**
+         * For an accepted attempt whose provider saves the Sent copy:
+         * whether a message with the attempt's `proton_draft_id` has
+         * appeared in the account (spec/05 "The Sent copy").
+         */sentCopyAppeared: Bool, 
+        /**
+         * An accepted `server_saves` attempt with no Sent copy 24 h
+         * after acceptance: a soft warning, never a resend (spec/05).
+         */sentCopyWarning: Bool, 
+        /**
+         * The Proton evidence observed since launch (spec/05 step 6,
+         * spec/07). Kept in the account worker's memory, so a relaunch
+         * shows none until its next check.
+         */evidence: [String]) {
+        self.attemptId = attemptId
+        self.draftId = draftId
+        self.accountId = accountId
+        self.identityId = identityId
+        self.subject = subject
+        self.recipients = recipients
+        self.state = state
+        self.createdAtMs = createdAtMs
+        self.updatedAtMs = updatedAtMs
+        self.holdUntilMs = holdUntilMs
+        self.resolvedAtMs = resolvedAtMs
+        self.sendRequestedAtMs = sendRequestedAtMs
+        self.protonDraftId = protonDraftId
+        self.finalReply = finalReply
+        self.resolution = resolution
+        self.sentCopy = sentCopy
+        self.waitsForConfirmation = waitsForConfirmation
+        self.sentCopyAppeared = sentCopyAppeared
+        self.sentCopyWarning = sentCopyWarning
+        self.evidence = evidence
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension OutBoxRow: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeOutBoxRow: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> OutBoxRow {
+        return
+            try OutBoxRow(
+                attemptId: FfiConverterString.read(from: &buf), 
+                draftId: FfiConverterString.read(from: &buf), 
+                accountId: FfiConverterString.read(from: &buf), 
+                identityId: FfiConverterString.read(from: &buf), 
+                subject: FfiConverterString.read(from: &buf), 
+                recipients: FfiConverterSequenceTypeOutBoxRecipient.read(from: &buf), 
+                state: FfiConverterTypeAttemptState.read(from: &buf), 
+                createdAtMs: FfiConverterInt64.read(from: &buf), 
+                updatedAtMs: FfiConverterInt64.read(from: &buf), 
+                holdUntilMs: FfiConverterOptionInt64.read(from: &buf), 
+                resolvedAtMs: FfiConverterOptionInt64.read(from: &buf), 
+                sendRequestedAtMs: FfiConverterOptionInt64.read(from: &buf), 
+                protonDraftId: FfiConverterOptionString.read(from: &buf), 
+                finalReply: FfiConverterOptionString.read(from: &buf), 
+                resolution: FfiConverterOptionTypeUnknownResolution.read(from: &buf), 
+                sentCopy: FfiConverterTypeSentCopy.read(from: &buf), 
+                waitsForConfirmation: FfiConverterBool.read(from: &buf), 
+                sentCopyAppeared: FfiConverterBool.read(from: &buf), 
+                sentCopyWarning: FfiConverterBool.read(from: &buf), 
+                evidence: FfiConverterSequenceString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: OutBoxRow, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.attemptId, into: &buf)
+        FfiConverterString.write(value.draftId, into: &buf)
+        FfiConverterString.write(value.accountId, into: &buf)
+        FfiConverterString.write(value.identityId, into: &buf)
+        FfiConverterString.write(value.subject, into: &buf)
+        FfiConverterSequenceTypeOutBoxRecipient.write(value.recipients, into: &buf)
+        FfiConverterTypeAttemptState.write(value.state, into: &buf)
+        FfiConverterInt64.write(value.createdAtMs, into: &buf)
+        FfiConverterInt64.write(value.updatedAtMs, into: &buf)
+        FfiConverterOptionInt64.write(value.holdUntilMs, into: &buf)
+        FfiConverterOptionInt64.write(value.resolvedAtMs, into: &buf)
+        FfiConverterOptionInt64.write(value.sendRequestedAtMs, into: &buf)
+        FfiConverterOptionString.write(value.protonDraftId, into: &buf)
+        FfiConverterOptionString.write(value.finalReply, into: &buf)
+        FfiConverterOptionTypeUnknownResolution.write(value.resolution, into: &buf)
+        FfiConverterTypeSentCopy.write(value.sentCopy, into: &buf)
+        FfiConverterBool.write(value.waitsForConfirmation, into: &buf)
+        FfiConverterBool.write(value.sentCopyAppeared, into: &buf)
+        FfiConverterBool.write(value.sentCopyWarning, into: &buf)
+        FfiConverterSequenceString.write(value.evidence, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeOutBoxRow_lift(_ buf: RustBuffer) throws -> OutBoxRow {
+    return try FfiConverterTypeOutBoxRow.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeOutBoxRow_lower(_ value: OutBoxRow) -> RustBuffer {
+    return FfiConverterTypeOutBoxRow.lower(value)
+}
+
+
+/**
  * One v1 palette preset (spec/02 "The palette"): its slot — what a
  * palette pick carries — the picker's display name and `#rrggbb`
  * color.
@@ -9108,6 +9610,67 @@ public func FfiConverterTypeRenderWarning_lower(_ value: RenderWarning) -> RustB
 
 
 /**
+ * What `resolve_unknown_send` answers.
+ */
+public struct ResolvedUnknown: Equatable, Hashable {
+    public var receipt: Receipt
+    public var resolution: UnknownResolution
+    public var newAttemptId: String?
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(receipt: Receipt, resolution: UnknownResolution, newAttemptId: String?) {
+        self.receipt = receipt
+        self.resolution = resolution
+        self.newAttemptId = newAttemptId
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension ResolvedUnknown: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeResolvedUnknown: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ResolvedUnknown {
+        return
+            try ResolvedUnknown(
+                receipt: FfiConverterTypeReceipt.read(from: &buf), 
+                resolution: FfiConverterTypeUnknownResolution.read(from: &buf), 
+                newAttemptId: FfiConverterOptionString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: ResolvedUnknown, into buf: inout [UInt8]) {
+        FfiConverterTypeReceipt.write(value.receipt, into: &buf)
+        FfiConverterTypeUnknownResolution.write(value.resolution, into: &buf)
+        FfiConverterOptionString.write(value.newAttemptId, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeResolvedUnknown_lift(_ buf: RustBuffer) throws -> ResolvedUnknown {
+    return try FfiConverterTypeResolvedUnknown.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeResolvedUnknown_lower(_ value: ResolvedUnknown) -> RustBuffer {
+    return FfiConverterTypeResolvedUnknown.lower(value)
+}
+
+
+/**
  * A name, not proof of ownership, type, completeness or readiness.
  */
 public struct RestoreArtifact: Equatable, Hashable {
@@ -9535,6 +10098,64 @@ public func FfiConverterTypeSearchStatus_lift(_ buf: RustBuffer) throws -> Searc
 #endif
 public func FfiConverterTypeSearchStatus_lower(_ value: SearchStatus) -> RustBuffer {
     return FfiConverterTypeSearchStatus.lower(value)
+}
+
+
+/**
+ * What `send_draft` answers: its receipt and the attempt id the
+ * receipt names, so a replayed key still names the first attempt.
+ */
+public struct SendQueued: Equatable, Hashable {
+    public var receipt: Receipt
+    public var attemptId: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(receipt: Receipt, attemptId: String) {
+        self.receipt = receipt
+        self.attemptId = attemptId
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension SendQueued: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeSendQueued: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SendQueued {
+        return
+            try SendQueued(
+                receipt: FfiConverterTypeReceipt.read(from: &buf), 
+                attemptId: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: SendQueued, into buf: inout [UInt8]) {
+        FfiConverterTypeReceipt.write(value.receipt, into: &buf)
+        FfiConverterString.write(value.attemptId, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSendQueued_lift(_ buf: RustBuffer) throws -> SendQueued {
+    return try FfiConverterTypeSendQueued.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSendQueued_lower(_ value: SendQueued) -> RustBuffer {
+    return FfiConverterTypeSendQueued.lower(value)
 }
 
 
@@ -13820,6 +14441,186 @@ public func FfiConverterTypeReadingSupport_lower(_ value: ReadingSupport) -> Rus
 
 
 /**
+ * A recipient's address field (spec/02 `send_recipients.kind`).
+ */
+
+public enum RecipientKind: Equatable, Hashable {
+    
+    case to
+    case cc
+    case bcc
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension RecipientKind: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeRecipientKind: FfiConverterRustBuffer {
+    typealias SwiftType = RecipientKind
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> RecipientKind {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .to
+        
+        case 2: return .cc
+        
+        case 3: return .bcc
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: RecipientKind, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .to:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .cc:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .bcc:
+            writeInt(&buf, Int32(3))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeRecipientKind_lift(_ buf: RustBuffer) throws -> RecipientKind {
+    return try FfiConverterTypeRecipientKind.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeRecipientKind_lower(_ value: RecipientKind) -> RustBuffer {
+    return FfiConverterTypeRecipientKind.lower(value)
+}
+
+
+
+/**
+ * A recipient's stored state (spec/02 `send_recipients.state`).
+ */
+
+public enum RecipientState: Equatable, Hashable {
+    
+    case pending
+    case rcptAccepted
+    case rejectedPermanent
+    case rejectedTransient
+    case sent
+    case unsent
+    case unknown
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension RecipientState: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeRecipientState: FfiConverterRustBuffer {
+    typealias SwiftType = RecipientState
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> RecipientState {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .pending
+        
+        case 2: return .rcptAccepted
+        
+        case 3: return .rejectedPermanent
+        
+        case 4: return .rejectedTransient
+        
+        case 5: return .sent
+        
+        case 6: return .unsent
+        
+        case 7: return .unknown
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: RecipientState, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .pending:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .rcptAccepted:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .rejectedPermanent:
+            writeInt(&buf, Int32(3))
+        
+        
+        case .rejectedTransient:
+            writeInt(&buf, Int32(4))
+        
+        
+        case .sent:
+            writeInt(&buf, Int32(5))
+        
+        
+        case .unsent:
+            writeInt(&buf, Int32(6))
+        
+        
+        case .unknown:
+            writeInt(&buf, Int32(7))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeRecipientState_lift(_ buf: RustBuffer) throws -> RecipientState {
+    return try FfiConverterTypeRecipientState.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeRecipientState_lower(_ value: RecipientState) -> RustBuffer {
+    return FfiConverterTypeRecipientState.lower(value)
+}
+
+
+
+/**
  * Where a Recovery page starts. Cursors are the core's opaque strings.
  */
 
@@ -14919,6 +15720,166 @@ public func FfiConverterTypeSearchSort_lower(_ value: SearchSort) -> RustBuffer 
 
 
 /**
+ * The `sent_copy` column's words (spec/02 "Sending"): how the
+ * account's Sent copy is produced.
+ */
+
+public enum SentCopy: Equatable, Hashable {
+    
+    case serverSaves
+    case pending
+    case filed
+    case failed
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension SentCopy: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeSentCopy: FfiConverterRustBuffer {
+    typealias SwiftType = SentCopy
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SentCopy {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .serverSaves
+        
+        case 2: return .pending
+        
+        case 3: return .filed
+        
+        case 4: return .failed
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: SentCopy, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .serverSaves:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .pending:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .filed:
+            writeInt(&buf, Int32(3))
+        
+        
+        case .failed:
+            writeInt(&buf, Int32(4))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSentCopy_lift(_ buf: RustBuffer) throws -> SentCopy {
+    return try FfiConverterTypeSentCopy.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSentCopy_lower(_ value: SentCopy) -> RustBuffer {
+    return FfiConverterTypeSentCopy.lower(value)
+}
+
+
+
+/**
+ * The user's answer to an `outcome_unknown` attempt (spec/05 step 6).
+ */
+
+public enum UnknownResolution: Equatable, Hashable {
+    
+    case markedSent
+    case sendAgain
+    case keptAsDraft
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension UnknownResolution: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeUnknownResolution: FfiConverterRustBuffer {
+    typealias SwiftType = UnknownResolution
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> UnknownResolution {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .markedSent
+        
+        case 2: return .sendAgain
+        
+        case 3: return .keptAsDraft
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: UnknownResolution, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .markedSent:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .sendAgain:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .keptAsDraft:
+            writeInt(&buf, Int32(3))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeUnknownResolution_lift(_ buf: RustBuffer) throws -> UnknownResolution {
+    return try FfiConverterTypeUnknownResolution.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeUnknownResolution_lower(_ value: UnknownResolution) -> RustBuffer {
+    return FfiConverterTypeUnknownResolution.lower(value)
+}
+
+
+
+/**
  * What a window's subscription reports (spec/07).
  */
 
@@ -15523,6 +16484,30 @@ fileprivate struct FfiConverterOptionTypeQuarantineReason: FfiConverterRustBuffe
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterOptionTypeUnknownResolution: FfiConverterRustBuffer {
+    typealias SwiftType = UnknownResolution?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeUnknownResolution.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeUnknownResolution.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterSequenceInt64: FfiConverterRustBuffer {
     typealias SwiftType = [Int64]
 
@@ -15965,6 +16950,56 @@ fileprivate struct FfiConverterSequenceTypeMailbox: FfiConverterRustBuffer {
         seq.reserveCapacity(Int(len))
         for _ in 0 ..< len {
             seq.append(try FfiConverterTypeMailbox.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeOutBoxRecipient: FfiConverterRustBuffer {
+    typealias SwiftType = [OutBoxRecipient]
+
+    public static func write(_ value: [OutBoxRecipient], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeOutBoxRecipient.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [OutBoxRecipient] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [OutBoxRecipient]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeOutBoxRecipient.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeOutBoxRow: FfiConverterRustBuffer {
+    typealias SwiftType = [OutBoxRow]
+
+    public static func write(_ value: [OutBoxRow], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeOutBoxRow.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [OutBoxRow] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [OutBoxRow]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeOutBoxRow.read(from: &buf))
         }
         return seq
     }
@@ -16665,6 +17700,24 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sb_ffi_checksum_method_core_coverage() != 60982) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sb_ffi_checksum_method_core_cancel_send() != 23657) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sb_ffi_checksum_method_core_confirm_send_route() != 34635) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sb_ffi_checksum_method_core_out_box() != 29312) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sb_ffi_checksum_method_core_resolve_unknown_send() != 878) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sb_ffi_checksum_method_core_retry_rejected_recipients() != 65200) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sb_ffi_checksum_method_core_send_draft() != 30998) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sb_ffi_checksum_method_core_accounts() != 35560) {

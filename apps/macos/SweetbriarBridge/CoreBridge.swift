@@ -1109,6 +1109,88 @@ extension CoreBridge: NewMailSource {
     }
 }
 
+/// Sending (spec/07 "Commands", "Other queries"); the types and
+/// their mapping live in `Send.swift`.
+extension CoreBridge: SendSource {
+    /// `send_draft(draft_id, revision_id, acks)` under a shell-made
+    /// key: a repeated key replays its receipt and the first attempt
+    /// id. Once begun the command runs to completion (spec/07).
+    public func sendDraft(
+        idempotencyKey: String, draftId: String, revisionId: String, acks: [String]
+    ) async throws -> SendQueued {
+        let token = SweetbriarCore.CancelToken()
+        let queued = try await Self.withCancellation(token: token) {
+            try await self.core.sendDraft(
+                token: token, idempotencyKey: idempotencyKey, draftId: draftId,
+                revisionId: revisionId, acks: acks
+            )
+        }
+        return SendQueued(queued)
+    }
+
+    /// `cancel_send(attempt_id)` under a shell-made key.
+    public func cancelSend(idempotencyKey: String, attemptId: String) async throws -> Receipt {
+        let token = SweetbriarCore.CancelToken()
+        let receipt = try await Self.withCancellation(token: token) {
+            try await self.core.cancelSend(
+                token: token, idempotencyKey: idempotencyKey, attemptId: attemptId
+            )
+        }
+        return Receipt(receipt)
+    }
+
+    /// `resolve_unknown_send(attempt_id, resolution)` under a
+    /// shell-made key: the answer crosses both ways (spec/05 step 6).
+    public func resolveUnknownSend(
+        idempotencyKey: String, attemptId: String, resolution: UnknownResolution
+    ) async throws -> ResolvedUnknown {
+        let token = SweetbriarCore.CancelToken()
+        let resolved = try await Self.withCancellation(token: token) {
+            try await self.core.resolveUnknownSend(
+                token: token, idempotencyKey: idempotencyKey,
+                attemptId: attemptId, resolution: resolution.generated
+            )
+        }
+        return ResolvedUnknown(resolved)
+    }
+
+    /// `confirm_send_route(attempt_id)` under a shell-made key.
+    public func confirmSendRoute(
+        idempotencyKey: String, attemptId: String
+    ) async throws -> Receipt {
+        let token = SweetbriarCore.CancelToken()
+        let receipt = try await Self.withCancellation(token: token) {
+            try await self.core.confirmSendRoute(
+                token: token, idempotencyKey: idempotencyKey, attemptId: attemptId
+            )
+        }
+        return Receipt(receipt)
+    }
+
+    /// `retry_rejected_recipients(attempt_id)` under a shell-made key.
+    public func retryRejectedRecipients(
+        idempotencyKey: String, attemptId: String
+    ) async throws -> Receipt {
+        let token = SweetbriarCore.CancelToken()
+        let receipt = try await Self.withCancellation(token: token) {
+            try await self.core.retryRejectedRecipients(
+                token: token, idempotencyKey: idempotencyKey, attemptId: attemptId
+            )
+        }
+        return Receipt(receipt)
+    }
+
+    /// `out_box()` (spec/07 "Other queries"): live attempts, then
+    /// history. A query: the token races every wait.
+    public func outBox() async throws -> OutBox {
+        let token = SweetbriarCore.CancelToken()
+        let value = try await Self.withCancellation(token: token) {
+            try await self.core.outBox(token: token)
+        }
+        return OutBox(value)
+    }
+}
+
 extension Receipt {
     /// Map the generated record field by field.
     init(_ generated: SweetbriarCore.Receipt) {
