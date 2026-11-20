@@ -19,6 +19,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var backups: SharedBackups?
     private var composeWindows: ComposeWindows?
     private var composeCues: SharedComposeCue?
+    /// The new-mail notification loop, started once the session's core
+    /// is open and stopped with the archive or at termination
+    /// (spec/10 "Notifications").
+    private var newMailNotifier: NewMailNotifier?
     private var terminating = false
 
     /// The menu builder is retained: `NSMenuItem.target` is weak, so
@@ -61,6 +65,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         self.session = session
         observeAppActive()
+
+        // The notifier starts once the archive session is open, never
+        // at launch: a permission request waits for the first arrival.
+        Task { @MainActor [weak self] in
+            guard let self, !self.terminating,
+                  let bridge = try? await session.bridge()
+            else { return }
+            let notifier = NewMailNotifier(
+                source: bridge, poster: UNUserNotificationCenterPoster())
+            self.newMailNotifier = notifier
+            notifier.start()
+        }
 
         let backups = SharedBackups(
             beforeRestore: { [weak self] in
@@ -397,6 +413,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func archiveClosed() async {
+        await newMailNotifier?.stop()
+        newMailNotifier = nil
         settingsWindow?.retireEditor()
         retireActivityWindow()
         await composeCues?.stopAndWait()
@@ -474,6 +492,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             await settingsWindow?.cancelAndWait()
             await composeCues?.stopAndWait()
             await prototypeController?.closeAndAwaitModel()
+            await newMailNotifier?.stop()
             await mainWindow?.retireContent()
             await appearance.reset()
             await session.shutdown()
