@@ -39,6 +39,12 @@ const EXTERNAL: &str = "stranger@example.test";
 const NOT_BASE64: &str = "not base64";
 /// Proton's `MessageFlagSent` bit (`go-proton-api/message_types.go`).
 const MESSAGE_FLAG_SENT: u32 = 1 << 1;
+/// The recipient-key lookup route the driver's send log records.
+const KEYS_PATH: &str = "/core/v4/keys";
+/// The draft-create route the driver's send log records.
+const MESSAGES_PATH: &str = "/mail/v4/messages";
+/// The attachment-upload route the driver's send log records.
+const ATTACHMENTS_PATH: &str = "/mail/v4/attachments";
 
 /// One record from the driver's send log.
 #[derive(Debug, Clone, Deserialize)]
@@ -209,7 +215,7 @@ pub(super) async fn run_send_suite(core: &Core, lane: &SendLaneParams) -> SendSu
     );
     let peer_key_count = peer_keys.keys.len();
     assert_eq!(peer_key_count, 1, "the recipient has one active key");
-    let lookup_status = log.next_record().await.status;
+    let lookup_status = log.next_record("GET", KEYS_PATH).await.status;
 
     // Step 2: the draft, its body encrypted to the sender's key.
     let draft_id = sender
@@ -221,7 +227,7 @@ pub(super) async fn run_send_suite(core: &Core, lane: &SendLaneParams) -> SendSu
         )
         .await
         .expect("the draft creates");
-    let create_status = log.next_record().await.status;
+    let create_status = log.next_record("POST", MESSAGES_PATH).await.status;
 
     // Step 3: an attachment, uploaded to the draft.
     let encrypted = encrypt_attachment(&provider, &sender_key, b"lane attachment bytes")
@@ -241,7 +247,7 @@ pub(super) async fn run_send_suite(core: &Core, lane: &SendLaneParams) -> SendSu
         )
         .await
         .expect("the attachment uploads");
-    let upload_status = log.next_record().await.status;
+    let upload_status = log.next_record("POST", ATTACHMENTS_PATH).await.status;
 
     // Step 4: one package for the internal recipient, then the send.
     let packages = build_packages(
@@ -266,7 +272,9 @@ pub(super) async fn run_send_suite(core: &Core, lane: &SendLaneParams) -> SendSu
         .await
         .expect("the internal send");
     assert_eq!(sent.id, draft_id, "the sent message's id is the draft id");
-    let send_record = log.next_record().await;
+    let send_record = log
+        .next_record("POST", &format!("{MESSAGES_PATH}/{draft_id}"))
+        .await;
     assert!(
         send_record.sent && send_record.inbox == 1,
         "the recipient's inbox grew by one: {send_record:?}"
@@ -296,7 +304,7 @@ pub(super) async fn run_send_suite(core: &Core, lane: &SendLaneParams) -> SendSu
         "{EXTERNAL} is not an external recipient without keys"
     );
     let external_key_count = external_keys.keys.len();
-    log.next_record().await;
+    log.next_record("GET", KEYS_PATH).await;
     let external_draft = sender
         .create_draft(
             &lane.send_email,
@@ -309,7 +317,7 @@ pub(super) async fn run_send_suite(core: &Core, lane: &SendLaneParams) -> SendSu
         )
         .await
         .expect("the external draft creates");
-    log.next_record().await;
+    log.next_record("POST", MESSAGES_PATH).await;
     let clear_packages = build_packages(
         &provider,
         &sender_key,
@@ -328,7 +336,9 @@ pub(super) async fn run_send_suite(core: &Core, lane: &SendLaneParams) -> SendSu
         .send_packages(&session, &external_draft, &clear_packages)
         .await
         .expect("the external send is accepted");
-    let clear_record = log.next_record().await;
+    let clear_record = log
+        .next_record("POST", &format!("{MESSAGES_PATH}/{external_draft}"))
+        .await;
     assert!(
         !clear_record.sent,
         "a clear send delivers nothing internally"
@@ -357,7 +367,7 @@ pub(super) async fn run_send_suite(core: &Core, lane: &SendLaneParams) -> SendSu
             b"lane unknown sender body",
         )
         .await;
-    let driver = log.next_record().await;
+    let driver = log.next_record("POST", MESSAGES_PATH).await;
     assert!(unknown_sender.is_err(), "an unknown sender is refused");
     refusals.push(record_case(
         "unknown_sender_address",
@@ -371,7 +381,7 @@ pub(super) async fn run_send_suite(core: &Core, lane: &SendLaneParams) -> SendSu
     // server panics on the nil message and its recovery answers 500;
     // production's refusal shape is unverified.
     let peer_keys = sender.recipient_keys(&lane.peer_email).await;
-    log.next_record().await;
+    log.next_record("GET", KEYS_PATH).await;
     let packages = build_packages(
         &provider,
         &sender_key,
@@ -389,7 +399,9 @@ pub(super) async fn run_send_suite(core: &Core, lane: &SendLaneParams) -> SendSu
     let unknown_draft = client
         .send_packages(&session, "missing-draft", &packages)
         .await;
-    let driver = log.next_record().await;
+    let driver = log
+        .next_record("POST", &format!("{MESSAGES_PATH}/missing-draft"))
+        .await;
     assert!(
         unknown_draft.is_err() && driver.status == 500,
         "the development server answers 500: {unknown_draft:?}"
@@ -414,10 +426,10 @@ pub(super) async fn run_send_suite(core: &Core, lane: &SendLaneParams) -> SendSu
         )
         .await
         .expect("the malformed-package draft creates");
-    log.next_record().await;
+    log.next_record("POST", MESSAGES_PATH).await;
     let before = draft_flags(&client, &session, &malformed_draft).await;
     let peer_keys = sender.recipient_keys(&lane.peer_email).await;
-    log.next_record().await;
+    log.next_record("GET", KEYS_PATH).await;
     let mut malformed = build_packages(
         &provider,
         &sender_key,
@@ -440,7 +452,9 @@ pub(super) async fn run_send_suite(core: &Core, lane: &SendLaneParams) -> SendSu
     let result = client
         .send_packages(&session, &malformed_draft, &malformed)
         .await;
-    let driver = log.next_record().await;
+    let driver = log
+        .next_record("POST", &format!("{MESSAGES_PATH}/{malformed_draft}"))
+        .await;
     let after = draft_flags(&client, &session, &malformed_draft).await;
     assert!(result.is_err(), "a malformed package is refused");
     assert!(!driver.sent, "a malformed package delivers nothing");
@@ -473,9 +487,9 @@ pub(super) async fn run_send_suite(core: &Core, lane: &SendLaneParams) -> SendSu
         )
         .await
         .expect("the missing-package draft creates");
-    log.next_record().await;
+    log.next_record("POST", MESSAGES_PATH).await;
     let external_keys = sender.recipient_keys(EXTERNAL).await;
-    log.next_record().await;
+    log.next_record("GET", KEYS_PATH).await;
     let missing = build_packages(
         &provider,
         &sender_key,
@@ -493,7 +507,9 @@ pub(super) async fn run_send_suite(core: &Core, lane: &SendLaneParams) -> SendSu
     let result = client
         .send_packages(&session, &missing_draft, &missing)
         .await;
-    let driver = log.next_record().await;
+    let driver = log
+        .next_record("POST", &format!("{MESSAGES_PATH}/{missing_draft}"))
+        .await;
     assert!(
         result.is_ok(),
         "a package set omitting a recipient is accepted"
@@ -521,9 +537,9 @@ pub(super) async fn run_send_suite(core: &Core, lane: &SendLaneParams) -> SendSu
         )
         .await
         .expect("the send-twice draft creates");
-    log.next_record().await;
+    log.next_record("POST", MESSAGES_PATH).await;
     let peer_keys = sender.recipient_keys(&lane.peer_email).await;
-    log.next_record().await;
+    log.next_record("GET", KEYS_PATH).await;
     let twice = build_packages(
         &provider,
         &sender_key,
@@ -542,12 +558,16 @@ pub(super) async fn run_send_suite(core: &Core, lane: &SendLaneParams) -> SendSu
         .send_packages(&session, &twice_draft, &twice)
         .await
         .expect("the first send");
-    let first_driver = log.next_record().await;
+    let first_driver = log
+        .next_record("POST", &format!("{MESSAGES_PATH}/{twice_draft}"))
+        .await;
     let second = client
         .send_packages(&session, &twice_draft, &twice)
         .await
         .expect("the second send is not refused");
-    let second_driver = log.next_record().await;
+    let second_driver = log
+        .next_record("POST", &format!("{MESSAGES_PATH}/{twice_draft}"))
+        .await;
     assert!(
         first_driver.sent && second_driver.sent,
         "both sends deliver"
@@ -665,10 +685,26 @@ fn record_case<T>(
 }
 
 /// The driver's append-only send log: one JSON record per send-suite
-/// call, written before the call's reply reaches the lane.
+/// call, written before the call's reply reaches the lane. The driver
+/// records `GET /core/v4/keys`, `POST /mail/v4/messages`,
+/// `POST /mail/v4/attachments` and `POST`/`PUT` on
+/// `/mail/v4/messages/...` (`isSendPath`); metadata reads are not
+/// recorded.
 struct SendLog {
     path: PathBuf,
     next: u64,
+}
+
+/// One pass over the driver's send log.
+enum ReadOutcome {
+    /// The expected record is present.
+    Record(DriverRecord),
+    /// The expected record is not there yet.
+    Pending,
+    /// A line that does not parse as a record. `retryable` is true for
+    /// the file's last line, which may be a partial write that a later
+    /// read completes.
+    Malformed { line: String, retryable: bool },
 }
 
 impl SendLog {
@@ -677,19 +713,41 @@ impl SendLog {
             !path.is_empty(),
             "the lane needs the driver's -send-log path to read back what was sent"
         );
+        // The driver truncates the file on open (os.Create), so stale records cannot leak in.
         Self {
             path: PathBuf::from(path),
             next: 1,
         }
     }
 
-    /// Waits for the record of the next call.
-    async fn next_record(&mut self) -> DriverRecord {
+    /// Waits for the record of the next call and asserts it is the
+    /// expected `method` on a path containing `path`, so a call and
+    /// its record cannot drift apart.
+    async fn next_record(&mut self, method: &str, path: &str) -> DriverRecord {
         let deadline = tokio::time::Instant::now() + RECORD_TIMEOUT;
         loop {
-            if let Some(record) = self.read() {
-                self.next += 1;
-                return record;
+            match self.read() {
+                ReadOutcome::Record(record) => {
+                    assert!(
+                        record.method == method && record.path.contains(path),
+                        "send-log record {} is {} {}, the suite expected {} {}: calls and records drifted",
+                        self.next,
+                        record.method,
+                        record.path,
+                        method,
+                        path
+                    );
+                    self.next += 1;
+                    return record;
+                }
+                ReadOutcome::Pending => {}
+                ReadOutcome::Malformed { line, retryable } => {
+                    assert!(
+                        retryable && tokio::time::Instant::now() < deadline,
+                        "the driver's send log {} line {line:?} does not parse as a record",
+                        self.path.display()
+                    );
+                }
             }
             assert!(
                 tokio::time::Instant::now() < deadline,
@@ -702,11 +760,28 @@ impl SendLog {
     }
 
     /// The record whose sequence is `self.next`, if it is already in
-    /// the file.
-    fn read(&self) -> Option<DriverRecord> {
-        let text = std::fs::read_to_string(&self.path).ok()?;
-        text.lines()
-            .filter_map(|line| serde_json::from_str::<DriverRecord>(line).ok())
-            .find(|record| record.sequence == self.next)
+    /// the file. A line that does not parse is reported rather than
+    /// skipped; only the file's last line may be a partial write that a
+    /// later read completes.
+    fn read(&self) -> ReadOutcome {
+        let Ok(text) = std::fs::read_to_string(&self.path) else {
+            return ReadOutcome::Pending;
+        };
+        let lines: Vec<&str> = text.lines().collect();
+        for (index, line) in lines.iter().enumerate() {
+            match serde_json::from_str::<DriverRecord>(line) {
+                Ok(record) if record.sequence == self.next => {
+                    return ReadOutcome::Record(record);
+                }
+                Ok(_) => {}
+                Err(_) => {
+                    return ReadOutcome::Malformed {
+                        line: (*line).to_owned(),
+                        retryable: index + 1 == lines.len(),
+                    };
+                }
+            }
+        }
+        ReadOutcome::Pending
     }
 }

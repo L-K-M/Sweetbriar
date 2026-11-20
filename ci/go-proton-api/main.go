@@ -377,6 +377,10 @@ func newSendLog(path string, peer *proton.Client) (*sendLog, error) {
 	}
 	log := &sendLog{file: file, peer: peer}
 	log.inbox = log.readInbox()
+	if log.inbox < 0 {
+		_ = file.Close()
+		return nil, fmt.Errorf("read the recipient's inbox before the send suite")
+	}
 	return log, nil
 }
 
