@@ -41,6 +41,30 @@ and [raw/plan-proton-bridge/codex.md](../research/raw/plan-proton-bridge/codex.m
   goes to the original's `Reply-To` if present, else its From; Reply All
   adds its To and Cc, minus the chosen identity's address. Offline, these
   come from `message_headers` (02).
+- **Reply and forward drafts** (M4.4d): `create_draft` for a reply,
+  reply-all or forward writes the draft's first revision in the same
+  transaction, so the window opens on it like any saved draft:
+  - **identity:** resolved as above; none leaves the revision unrouted;
+  - **recipients:** Reply puts its list in To. Reply All puts the reply
+    list and the original's To in To and the original's Cc in Cc, minus
+    the identity's address and repeats. Forward has none. Bcc is never
+    copied;
+  - **subject:** the original's, trimmed, after `Re: ` (replies) or
+    `Fwd: ` (forward), unless it already starts with that prefix,
+    compared without case; an empty one becomes `Re:` or `Fwd:`;
+  - **format:** `plain`, flowed, as a new message's;
+  - **body:** two empty lines, then, when the original's body is
+    acquired locally, its plain-text rendition:
+    - a reply quotes it under `On <Date>, <From> wrote:`, each line
+      prefixed `> ` (an empty line becomes `>`);
+    - a forward puts it, unquoted, under a
+      `---------- Forwarded message ----------` block with the original's
+      From, Date, Subject, To and Cc lines (empty ones left out).
+
+    `<Date>` and `<From>` are the header values as stored, the From
+    shown as `Name <address>` or the bare address. An original whose body
+    isn't acquired gets the attribution or block alone, and no
+    acquisition is requested. Forwarded attachments are a later step.
 - **Cross-account check:** a reply whose identity's account differs from
   the receiving occurrence's account shows a banner (08). Replies to
   local-archive messages are exempt: that account can't send. If it wasn't

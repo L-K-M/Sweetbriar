@@ -339,7 +339,12 @@ inspectable Out Box. Unknown outcomes are never retried automatically.
   acknowledgement reaches the shell there, since only replies need it)
   and the From-switch XCUITest over a UI-test account that can send.
   M4.4e: the composer extras deferred from M0.11. The owner check runs
-  after M4.4e.
+  after M4.4e. M4.4d itself lands in three PRs, since reply drafts had
+  no content and the acknowledgement no FFI: M4.4d1, the core's reply
+  and forward first revision (05 "Reply and forward drafts") and
+  `cross_account_notice`; M4.4d2, the shell's Reply, Reply All and
+  Forward commands, the banner and Send's confirmation; M4.4d3, the
+  From-switch XCUITest.
 
 ### M4.Q Qualification
 
