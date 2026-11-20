@@ -712,6 +712,25 @@ impl FakeProtonServer {
         let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         state.recorded_sends.clone()
     }
+
+    /// The account's draft ids (Drafts `8`, not Sent `7`), in the
+    /// server's order: what a submission created and left (05 "Drafts
+    /// on the server").
+    pub fn draft_ids(&self, username: &str) -> Vec<String> {
+        let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        state
+            .accounts
+            .get(username)
+            .map(|account| {
+                account
+                    .messages
+                    .iter()
+                    .filter(|message| is_draft(message))
+                    .map(|message| message.id.clone())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
 }
 
 #[cfg(test)]

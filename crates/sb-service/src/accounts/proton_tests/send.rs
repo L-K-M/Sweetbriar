@@ -1,23 +1,39 @@
-//! The Proton worker's wait and the Out Box's undo window (plan
-//! M4.3e2a): a held attempt is queued when its window ends rather than
-//! a whole poll interval later. M4.3e2b submits it.
+//! Proton submission on the account worker (plan M4.3e2): an attempt
+//! without attachments is claimed after its undo window, its
+//! recipients' keys are looked up, a draft is created or updated, the
+//! packages are sent, and the reply is interpreted. A failure before
+//! the send request requeues the attempt under the worker's in-memory
+//! backoff; a lost send reply is `outcome_unknown` and never retried.
 
 use super::*;
 
 use crate::{
-    AttemptState, ComposeFormat, DraftContent, DraftRecipient, DraftSource, IdentitySendable,
+    AttemptState, ComposeFormat, DraftAttachment, DraftContent, DraftRecipient, DraftSource,
+    DraftState, IdentitySendable, RecipientState,
 };
+use sb_test_support::{Fault, execute_sql};
 use std::time::Duration;
 
-/// The account's primary address.
+/// The account's primary address, which is also the internal recipient
+/// the fake serves a key for.
 const INTERNAL: &str = "owner@example.test";
+/// An external address with no keys: sent in clear.
+const EXTERNAL: &str = "stranger@example.test";
+/// An external address a test registers a key for.
+const EXTERNAL_WITH_KEYS: &str = "keys@example.test";
 /// A modern clock reading, so `out_box()`'s 30-day history cutoff is
 /// representable.
 const MODERN_MS: i64 = 1_700_000_000_000;
 /// The `sending.undo_seconds` default (spec/02).
 const UNDO_MS: i64 = 7_000;
+/// The first pre-request backoff (plan M4.3e2).
+const BACKOFF_MS: i64 = 2_000;
 const TICK: Duration = Duration::from_millis(20);
 const TIMEOUT: Duration = Duration::from_secs(30);
+/// The transport's own connect retries (1+2+4+8+16 s) and its 30 s
+/// request deadline are real time, so the two tests that wait them out
+/// need a longer bound.
+const SLOW_TIMEOUT: Duration = Duration::from_secs(45);
 
 /// Sign in, wait for the listing, and move the clock past the Out
 /// Box's history cutoff.
@@ -44,6 +60,30 @@ async fn identity(h: &Harness) -> String {
         .clone()
 }
 
+/// One recipient's state on an Out Box row.
+fn recipient<'a>(row: &'a crate::OutBoxRow, address: &str) -> &'a crate::OutBoxRecipient {
+    row.recipients
+        .iter()
+        .find(|recipient| recipient.address == address)
+        .unwrap_or_else(|| panic!("{address} is not on the row: {:?}", row.recipients))
+}
+
+/// How many times the address counts as sent to, 0 when absent.
+fn sent_to(h: &Harness, address: &str) -> i64 {
+    let db = h.scratch.path().join("store/state.sqlite");
+    let present = count_rows(
+        &db,
+        &format!("SELECT COUNT(*) FROM seen_addresses WHERE canonical = '{address}'"),
+    );
+    if present == 0 {
+        return 0;
+    }
+    count_rows(
+        &db,
+        &format!("SELECT times_sent_to FROM seen_addresses WHERE canonical = '{address}'"),
+    )
+}
+
 fn content(identity_id: &str, to: &[&str]) -> DraftContent {
     DraftContent {
         identity_id: Some(identity_id.to_owned()),
@@ -64,9 +104,10 @@ fn content(identity_id: &str, to: &[&str]) -> DraftContent {
     }
 }
 
-/// A queued attempt: its draft and the attempt.
+/// A queued attempt: its draft, the revision sent and the attempt.
 struct Queued {
     draft_id: String,
+    revision_id: String,
     attempt_id: String,
 }
 
@@ -100,6 +141,7 @@ async fn queue(h: &Harness, identity_id: &str, to: &[&str]) -> Queued {
         .expect("the attempt is queued");
     Queued {
         draft_id: created.draft_id,
+        revision_id: saved.revision_id,
         attempt_id: queued.attempt_id,
     }
 }
@@ -129,9 +171,40 @@ async fn row(h: &Harness, attempt_id: &str) -> Option<crate::OutBoxRow> {
         .find(|row| row.attempt_id == attempt_id)
 }
 
+/// Wait until `ready` holds, for evidence that a submission reached
+/// the fake (a `queued` row can also be the move out of `held`, before
+/// any request).
+async fn until_cond(h: &Harness, label: &str, ready: impl Fn(&Harness) -> bool) {
+    let deadline = std::time::Instant::now() + TIMEOUT;
+    while !ready(h) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the worker never {label}"
+        );
+        tokio::time::sleep(TICK).await;
+    }
+}
+
+/// Whether the account is in `needs_attention`.
+fn needs_attention(h: &Harness, id: &str) -> bool {
+    let db = h.scratch.path().join("store/state.sqlite");
+    count_rows(
+        &db,
+        &format!(
+            "SELECT COUNT(*) FROM accounts WHERE account_id = '{id}' AND state = 'needs_attention'"
+        ),
+    ) == 1
+}
+
 /// Wait until the attempt reaches `state`, returning its row.
 async fn until_state(h: &Harness, attempt_id: &str, state: AttemptState) -> crate::OutBoxRow {
     until_row(h, attempt_id, TIMEOUT, move |row| row.state == state).await
+}
+
+/// [`until_state`] with a longer bound, for the tests that wait out
+/// the transport's real-time retries.
+async fn until_state_slow(h: &Harness, attempt_id: &str, state: AttemptState) -> crate::OutBoxRow {
+    until_row(h, attempt_id, SLOW_TIMEOUT, move |row| row.state == state).await
 }
 
 /// Wait until the attempt's row satisfies `ready`, returning it.
@@ -158,22 +231,455 @@ async fn until_row(
     }
 }
 
+/// Assert every recipient's state.
+fn assert_recipients(row: &crate::OutBoxRow, state: RecipientState) {
+    assert!(
+        row.recipients
+            .iter()
+            .all(|recipient| recipient.state == state),
+        "the recipients are not all {state:?}: {:?}",
+        row.recipients
+    );
+}
+
+/// The requests the fake has logged matching `method` and `path`.
+fn requests(h: &Harness, method: &str, path: &str) -> usize {
+    h.server
+        .requests()
+        .into_iter()
+        .filter(|request| request.method == method && request.path == path)
+        .count()
+}
+
+/// The requests whose path starts with `prefix`.
+fn requests_with_prefix(h: &Harness, method: &str, prefix: &str) -> usize {
+    h.server
+        .requests()
+        .into_iter()
+        .filter(|request| request.method == method && request.path.starts_with(prefix))
+        .count()
+}
+
+/// Bump the account's `config_generation`, as a reconfiguration would.
+fn reconfigure(h: &Harness, id: &str) {
+    let db = h.scratch.path().join("store/state.sqlite");
+    execute_sql(
+        &db,
+        &format!(
+            "UPDATE accounts SET config_generation = config_generation + 1
+             WHERE account_id = '{id}'"
+        ),
+    );
+}
+
 #[tokio::test]
-async fn a_held_attempt_is_queued_when_its_window_ends() {
+async fn an_internal_recipient_is_sent_and_counted() {
     let h = setup(vec![TestAccount::new(USER, PASSWORD)]).await;
     let _id = sign_in(&h).await;
     let ident = identity(&h).await;
     let queued = queue(&h, &ident, &[INTERNAL]).await;
 
-    // One second short of the window: still held.
-    advance(&h, UNDO_MS - 1_000).await;
-    let held = row(&h, &queued.attempt_id).await.expect("the attempt");
-    assert_eq!(held.state, AttemptState::Held);
-    assert_eq!(held.draft_id, queued.draft_id);
+    advance(&h, UNDO_MS).await;
+    let row = until_state(&h, &queued.attempt_id, AttemptState::Accepted).await;
+    assert_eq!(row.recipients.len(), 1);
+    assert_recipients(&row, RecipientState::Sent);
+    assert_eq!(h.server.sends(), 1, "exactly one send");
 
-    // The window ends; the worker's wait ends with it rather than a
-    // whole interval later (it started inactive, a 2-min cadence).
+    // The fake decrypts the body with the recipient's key.
+    let recorded = h.server.recorded_sends();
+    assert_eq!(recorded.len(), 1);
+    let package = &recorded[0].packages[0];
+    assert_eq!(package.mime_type, "text/plain");
+    assert_eq!(package.scheme, sb_test_support::INTERNAL_SCHEME);
+    let entry = package
+        .recipients
+        .iter()
+        .find(|entry| entry.address == INTERNAL)
+        .expect("the recipient's entry");
+    let recipient = h.server.recipient_key(USER, INTERNAL).expect("the key");
+    let body = recipient
+        .decrypt_body(&entry.body_key_packet, &package.body)
+        .expect("the body decrypts");
+    let body = String::from_utf8_lossy(&body);
+    assert!(body.contains("hello from the synthetic draft"), "{body}");
+
+    let draft = h.core.draft(&queued.draft_id).await.expect("the draft");
+    assert_eq!(draft.state, DraftState::Sent);
+    assert_eq!(sent_to(&h, INTERNAL), 1, "the recipient counts as sent to");
+}
+
+#[tokio::test]
+async fn an_external_recipient_without_keys_is_sent_in_clear() {
+    let h = setup(vec![TestAccount::new(USER, PASSWORD)]).await;
+    let _id = sign_in(&h).await;
+    let ident = identity(&h).await;
+    let queued = queue(&h, &ident, &[EXTERNAL]).await;
+
+    advance(&h, UNDO_MS).await;
+    until_state(&h, &queued.attempt_id, AttemptState::Accepted).await;
+    assert_eq!(h.server.sends(), 1);
+    let recorded = h.server.recorded_sends();
+    let package = &recorded[0].packages[0];
+    assert_eq!(package.scheme, sb_test_support::CLEAR_SCHEME);
+    let body_key = package.body_key.as_ref().expect("the clear body key");
+    let recipient = h.server.recipient_key(USER, INTERNAL).expect("a key");
+    let body = recipient
+        .decrypt_clear_body(&body_key.algorithm, &body_key.key, &package.body)
+        .expect("the clear body decrypts");
+    let body = String::from_utf8_lossy(&body);
+    assert!(body.contains("hello from the synthetic draft"), "{body}");
+}
+
+#[tokio::test]
+async fn an_external_recipient_with_keys_fails_before_any_draft() {
+    let h = setup(vec![TestAccount::new(USER, PASSWORD)]).await;
+    let _id = sign_in(&h).await;
+    let ident = identity(&h).await;
+    let public = h
+        .server
+        .recipient_key(USER, INTERNAL)
+        .expect("a key")
+        .public_key()
+        .to_owned();
+    h.server.add_external_key(EXTERNAL_WITH_KEYS, &public);
+    let queued = queue(&h, &ident, &[INTERNAL, EXTERNAL_WITH_KEYS]).await;
+
+    advance(&h, UNDO_MS).await;
+    let row = until_state(&h, &queued.attempt_id, AttemptState::Failed).await;
+    assert_eq!(
+        recipient(&row, EXTERNAL_WITH_KEYS).state,
+        RecipientState::RejectedPermanent
+    );
+    assert_eq!(recipient(&row, INTERNAL).state, RecipientState::Unsent);
+    let reply = row.final_reply.as_deref().expect("the failure's reply");
+    assert!(reply.contains("external"), "{reply}");
+    assert!(
+        h.server.draft_ids(USER).is_empty(),
+        "the fake holds no draft"
+    );
+    assert_eq!(h.server.sends(), 0);
+    assert_eq!(requests(&h, "POST", "/mail/v4/messages"), 0);
+}
+
+#[tokio::test]
+async fn a_dropped_send_reply_is_outcome_unknown_and_never_retried() {
+    let h = setup(vec![TestAccount::new(USER, PASSWORD)]).await;
+    let _id = sign_in(&h).await;
+    let ident = identity(&h).await;
+    h.server
+        .set_fault(Some(Fault::OnceSend(Box::new(Fault::DropAfterApply))));
+    let queued = queue(&h, &ident, &[INTERNAL]).await;
+
+    advance(&h, UNDO_MS).await;
+    let row = until_state(&h, &queued.attempt_id, AttemptState::OutcomeUnknown).await;
+    assert_recipients(&row, RecipientState::Unknown);
+    assert_eq!(h.server.sends(), 1, "the fake applied the send once");
+    for _ in 0..3 {
+        advance(&h, 1_000).await;
+    }
+    assert_eq!(h.server.sends(), 1, "an unknown outcome is never retried");
+}
+
+#[tokio::test]
+async fn a_refusal_of_the_send_is_outcome_unknown_while_the_list_is_empty() {
+    let h = setup(vec![TestAccount::new(USER, PASSWORD)]).await;
+    let _id = sign_in(&h).await;
+    let ident = identity(&h).await;
+    h.server
+        .set_fault(Some(Fault::OnceSend(Box::new(Fault::Code {
+            status: 422,
+            code: 2001,
+        }))));
+    let queued = queue(&h, &ident, &[INTERNAL]).await;
+
+    advance(&h, UNDO_MS).await;
+    let row = until_state(&h, &queued.attempt_id, AttemptState::OutcomeUnknown).await;
+    assert_recipients(&row, RecipientState::Unknown);
+    assert_eq!(h.server.sends(), 0, "the refusal applied nothing");
+    assert!(row.final_reply.is_none());
+}
+
+#[tokio::test]
+async fn a_connection_refused_on_the_send_requeues_then_reuses_its_draft() {
+    let h = setup(vec![TestAccount::new(USER, PASSWORD)]).await;
+    let _id = sign_in(&h).await;
+    let ident = identity(&h).await;
+    // The draft creation is applied and its connection closed; every
+    // later connection, the send's included, is refused before it is
+    // established, so the transport's own connect retries all fail.
+    h.server.set_fault(Some(Fault::OnceAt {
+        path: "/mail/v4/messages".to_owned(),
+        fault: Box::new(Fault::ApplyThenRefuseConnection),
+    }));
+    let queued = queue(&h, &ident, &[INTERNAL]).await;
+
+    advance(&h, UNDO_MS).await;
+    until_cond(&h, "created the draft", |h| {
+        h.server.draft_ids(USER).len() == 1
+    })
+    .await;
+    let row = until_state_slow(&h, &queued.attempt_id, AttemptState::Queued).await;
+    assert_eq!(row.send_requested_at_ms, None);
+    assert_eq!(h.server.sends(), 0);
+    assert_eq!(h.server.draft_ids(USER).len(), 1, "one draft was created");
+
+    // The refusal lifts; the retry after the backoff updates that draft
+    // and sends once.
+    h.server.set_fault(None);
+    advance(&h, BACKOFF_MS).await;
+    let row = until_state(&h, &queued.attempt_id, AttemptState::Accepted).await;
+    assert_eq!(row.recipients[0].state, RecipientState::Sent);
+    assert_eq!(h.server.sends(), 1);
+    assert_eq!(requests(&h, "POST", "/mail/v4/messages"), 1, "one draft");
+    assert_eq!(
+        requests_with_prefix(&h, "PUT", "/mail/v4/messages/"),
+        1,
+        "the retry updated the recorded draft"
+    );
+}
+
+#[tokio::test]
+async fn a_timeout_after_the_send_began_is_outcome_unknown() {
+    let h = setup(vec![TestAccount::new(USER, PASSWORD)]).await;
+    let _id = sign_in(&h).await;
+    let ident = identity(&h).await;
+    h.server
+        .set_fault(Some(Fault::OnceSend(Box::new(Fault::Stall(
+            Duration::from_secs(60),
+        )))));
+    let queued = queue(&h, &ident, &[INTERNAL]).await;
+
+    advance(&h, UNDO_MS).await;
+    let row = until_state_slow(&h, &queued.attempt_id, AttemptState::OutcomeUnknown).await;
+    assert_recipients(&row, RecipientState::Unknown);
+    assert_eq!(h.server.sends(), 0, "the stalled send never completed");
+}
+
+#[tokio::test]
+async fn a_dropped_draft_create_is_not_reused() {
+    let h = setup(vec![TestAccount::new(USER, PASSWORD)]).await;
+    let _id = sign_in(&h).await;
+    let ident = identity(&h).await;
+    h.server.set_fault(Some(Fault::OnceAt {
+        path: "/mail/v4/messages".to_owned(),
+        fault: Box::new(Fault::DropAfterApply),
+    }));
+    let queued = queue(&h, &ident, &[INTERNAL]).await;
+
+    // The first creation's reply is dropped, so the attempt waits out
+    // its backoff and the retry creates a second draft.
+    advance(&h, UNDO_MS).await;
+    until_cond(&h, "applied the first draft", |h| {
+        h.server.draft_ids(USER).len() == 1
+    })
+    .await;
+    let _ = until_state(&h, &queued.attempt_id, AttemptState::Queued).await;
+    advance(&h, BACKOFF_MS).await;
+    let row = until_state(&h, &queued.attempt_id, AttemptState::Accepted).await;
+    assert_eq!(row.recipients[0].state, RecipientState::Sent);
+    assert_eq!(requests(&h, "POST", "/mail/v4/messages"), 2);
+    let sends = h.server.recorded_sends();
+    assert_eq!(sends.len(), 1);
+    let leftover = h.server.draft_ids(USER);
+    assert_eq!(leftover.len(), 1, "the first draft stays in Drafts");
+    assert_ne!(
+        sends[0].draft_id, leftover[0],
+        "the send used the second draft"
+    );
+}
+
+#[tokio::test]
+async fn a_reconfigured_account_waits_for_confirmation_and_cancel_still_works() {
+    let h = setup(vec![TestAccount::new(USER, PASSWORD)]).await;
+    let id = sign_in(&h).await;
+    let ident = identity(&h).await;
+
+    // The first attempt waits for a confirmation, and cancels.
+    let first = queue(&h, &ident, &[INTERNAL]).await;
+    reconfigure(&h, &id);
+    advance(&h, UNDO_MS).await;
+    let row = until_state(&h, &first.attempt_id, AttemptState::Queued).await;
+    assert!(row.waits_for_confirmation);
+    assert_eq!(h.server.sends(), 0);
+    let receipt = h
+        .core
+        .cancel_send(&h.core.engine().new_idempotency_key(), &first.attempt_id)
+        .await
+        .expect("a waiting attempt cancels");
+    assert_eq!(receipt.command, "cancel_send");
+    let draft = h.core.draft(&first.draft_id).await.expect("the draft");
+    assert_eq!(draft.state, DraftState::Editing);
+    assert_eq!(h.server.sends(), 0);
+
+    // The second adopts the new generation and sends.
+    let second = queue(&h, &ident, &[INTERNAL]).await;
+    reconfigure(&h, &id);
+    advance(&h, UNDO_MS).await;
+    let row = until_state(&h, &second.attempt_id, AttemptState::Queued).await;
+    assert!(row.waits_for_confirmation);
+    h.core
+        .confirm_send_route(&h.core.engine().new_idempotency_key(), &second.attempt_id)
+        .await
+        .expect("the route confirms");
+    let row = until_state(&h, &second.attempt_id, AttemptState::Accepted).await;
+    assert_eq!(row.recipients[0].state, RecipientState::Sent);
+    assert_eq!(h.server.sends(), 1);
+}
+
+#[tokio::test]
+async fn an_identity_refusal_on_the_draft_create_needs_attention() {
+    let h = setup(vec![TestAccount::new(USER, PASSWORD)]).await;
+    let id = sign_in(&h).await;
+    let ident = identity(&h).await;
+    h.server.set_fault(Some(Fault::OnceAt {
+        path: "/mail/v4/messages".to_owned(),
+        fault: Box::new(Fault::Code {
+            status: 400,
+            code: 2064,
+        }),
+    }));
+    let queued = queue(&h, &ident, &[INTERNAL]).await;
+
+    advance(&h, UNDO_MS).await;
+    until_cond(&h, "paused the account", |h| needs_attention(h, &id)).await;
+    let row = until_state(&h, &queued.attempt_id, AttemptState::Queued).await;
+    assert_eq!(row.send_requested_at_ms, None);
+    let account = account(&h.core, &id).await;
+    assert_eq!(account.state, AccountState::NeedsAttention);
+    assert_eq!(
+        account.state_reason.as_deref(),
+        Some("Proton refused this version of Sweetbriar")
+    );
+    assert!(h.server.draft_ids(USER).is_empty());
+    assert_eq!(h.server.sends(), 0);
+}
+
+#[tokio::test]
+async fn accepting_r1_with_r2_saved_leaves_the_draft_editing() {
+    let h = setup(vec![TestAccount::new(USER, PASSWORD)]).await;
+    let _id = sign_in(&h).await;
+    let ident = identity(&h).await;
+    let first = queue(&h, &ident, &[INTERNAL]).await;
+    let second = h
+        .core
+        .save_draft(
+            &h.core.engine().new_idempotency_key(),
+            &first.draft_id,
+            Some(&first.revision_id),
+            content(&ident, &[EXTERNAL]),
+        )
+        .await
+        .expect("R2 saves");
+
+    advance(&h, UNDO_MS).await;
+    let row = until_state(&h, &first.attempt_id, AttemptState::Accepted).await;
+    assert_eq!(row.recipients[0].state, RecipientState::Sent);
+    assert_eq!(h.server.sends(), 1);
+    let draft = h.core.draft(&first.draft_id).await.expect("the draft");
+    assert_eq!(draft.state, DraftState::Editing, "R2 keeps its state");
+    let revision = draft.revision.expect("the current revision");
+    assert_eq!(revision.revision_id, second.revision_id);
+    assert_eq!(revision.to[0].address, EXTERNAL);
+    assert_eq!(sent_to(&h, EXTERNAL), 0, "R2's recipient isn't marked sent");
+}
+
+#[tokio::test]
+async fn a_held_attempt_is_sent_by_a_poll_after_its_window_ends() {
+    let h = setup(vec![TestAccount::new(USER, PASSWORD)]).await;
+    let _id = sign_in(&h).await;
+    let ident = identity(&h).await;
+    let queued = queue(&h, &ident, &[INTERNAL]).await;
+
+    // One second short of the window: still held, nothing sent.
+    advance(&h, UNDO_MS - 1_000).await;
+    let row = row(&h, &queued.attempt_id).await.expect("the attempt");
+    assert_eq!(row.state, AttemptState::Held);
+    assert_eq!(h.server.sends(), 0);
+
+    // The window ends; the next poll sends without waiting a full
+    // interval (the worker started inactive, a 2-min cadence).
     advance(&h, 2_000).await;
-    until_state(&h, &queued.attempt_id, AttemptState::Queued).await;
-    assert_eq!(h.server.sends(), 0, "M4.3e2b submits it");
+    let row = until_state(&h, &queued.attempt_id, AttemptState::Accepted).await;
+    assert_eq!(row.recipients[0].state, RecipientState::Sent);
+    assert_eq!(h.server.sends(), 1);
+}
+
+#[tokio::test]
+async fn an_attempt_with_an_attachment_waits_for_the_upload_step() {
+    let h = setup(vec![TestAccount::new(USER, PASSWORD)]).await;
+    let _id = sign_in(&h).await;
+    let ident = identity(&h).await;
+    let object = h
+        .core
+        .publish_draft_attachment(std::io::Cursor::new(
+            b"Sweetbriar synthetic attachment bytes.".to_vec(),
+        ))
+        .await
+        .expect("the attachment publishes");
+    let created = h
+        .core
+        .create_draft(&h.core.engine().new_idempotency_key(), DraftSource::New)
+        .await
+        .expect("the draft is created");
+    let mut attached = content(&ident, &[INTERNAL]);
+    attached.attachments = vec![DraftAttachment::New {
+        object,
+        filename: "notes.txt".to_owned(),
+        media_type: "text/plain".to_owned(),
+    }];
+    let saved = h
+        .core
+        .save_draft(
+            &h.core.engine().new_idempotency_key(),
+            &created.draft_id,
+            None,
+            attached,
+        )
+        .await
+        .expect("the revision saves");
+    let queued = h
+        .core
+        .send_draft(
+            &h.core.engine().new_idempotency_key(),
+            &created.draft_id,
+            &saved.revision_id,
+            Vec::new(),
+        )
+        .await
+        .expect("the attempt queues");
+
+    advance(&h, UNDO_MS).await;
+    let row = until_row(&h, &queued.attempt_id, TIMEOUT, |row| {
+        row.state == AttemptState::Queued
+    })
+    .await;
+    assert_eq!(row.state, AttemptState::Queued, "M4.3e3 uploads it");
+    assert_eq!(row.send_requested_at_ms, None);
+    assert_eq!(h.server.sends(), 0);
+    assert_eq!(requests(&h, "POST", "/mail/v4/messages"), 0);
+}
+
+#[tokio::test]
+async fn no_sent_copy_is_uploaded_or_imported() {
+    let h = setup(vec![TestAccount::new(USER, PASSWORD)]).await;
+    let _id = sign_in(&h).await;
+    let ident = identity(&h).await;
+    let queued = queue(&h, &ident, &[INTERNAL]).await;
+    advance(&h, UNDO_MS).await;
+    until_state(&h, &queued.attempt_id, AttemptState::Accepted).await;
+
+    let requests = h.server.requests();
+    assert!(
+        !requests
+            .iter()
+            .any(|request| request.path.contains("import")),
+        "no import reached Proton: {requests:?}"
+    );
+    assert!(
+        !requests
+            .iter()
+            .any(|request| request.path == "/mail/v4/attachments"),
+        "no attachment upload reached Proton: {requests:?}"
+    );
+    assert_eq!(h.server.sends(), 1);
 }

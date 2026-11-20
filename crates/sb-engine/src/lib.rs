@@ -52,6 +52,7 @@ mod new_mail;
 #[cfg_attr(not(test), allow(dead_code))]
 mod policy;
 mod proton;
+mod proton_send;
 mod proton_sync;
 pub use proton::{BeginProtonSignIn, ProtonSignInState, ProtonSignInStep};
 pub use sb_resources::proton_sync::BreakerResolution;
