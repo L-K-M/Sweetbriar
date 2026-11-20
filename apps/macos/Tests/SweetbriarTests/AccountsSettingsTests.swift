@@ -22,6 +22,13 @@ struct AccountsSettingsTests {
         }
         #expect(await source.calls.isEmpty, "an invalid name makes no call")
 
+        // The bound is UTF-8 bytes, and only Cc characters are controls,
+        // as in the core: a U+200D-joined emoji is a valid name.
+        #expect(AccountsSettingsModel.validDisplayName(String(repeating: "é", count: 64)) != nil)
+        #expect(AccountsSettingsModel.validDisplayName(String(repeating: "é", count: 65)) == nil)
+        let family = "Family \u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}"
+        #expect(AccountsSettingsModel.validDisplayName(family) == family)
+
         await model.rename(accountId: account.accountId, displayName: "  Owner  ")
         #expect(
             await source.calls == [.update(accountId: account.accountId, displayName: "Owner")])

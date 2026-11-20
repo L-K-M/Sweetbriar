@@ -44,11 +44,14 @@ final class AccountsSettingsModel {
 
     /// The stored form of a display name (spec/07): trimmed, 1–128
     /// UTF-8 bytes, no control characters; nil refuses the name
-    /// without a call.
+    /// without a call. "Control" is the core's `char::is_control`,
+    /// general category Cc only: `CharacterSet.controlCharacters` also
+    /// holds the Cf format characters, so it would refuse a name the
+    /// core stores, such as an emoji joined by U+200D.
     static func validDisplayName(_ raw: String) -> String? {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, trimmed.utf8.count <= maxDisplayNameBytes else { return nil }
-        guard !trimmed.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) })
+        guard !trimmed.unicodeScalars.contains(where: { $0.properties.generalCategory == .control })
         else { return nil }
         return trimmed
     }
@@ -133,7 +136,7 @@ final class AccountsSettingsModel {
     /// call; the core's `InvalidInput` still surfaces if it refuses.
     func rename(accountId: String, displayName raw: String) async {
         guard let name = Self.validDisplayName(raw) else {
-            commandError = "Enter a name of 1 to 128 characters with no control characters."
+            commandError = "Enter a name of 1 to 128 bytes with no control characters."
             commandStatus = nil
             return
         }
