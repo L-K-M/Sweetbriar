@@ -18,6 +18,7 @@ use sb_test_support::{
     CutFs, FakeSecrets, ScratchDir, TestAccount, block_on, cert_der, fake_modulus_verifier, real_fs,
 };
 
+use super::SendTransition;
 use crate::{
     AccountKind, AttemptState, BeginProtonSignIn, ComposeFormat, DraftAttachment, DraftContent,
     DraftRecipient, DraftSource, Engine, IdentitySendable, ProtonSignInParams, ProtonSignInState,
@@ -88,11 +89,21 @@ async fn send_crash_child() {
     )
     .await
     .expect("the engine opens");
-    engine.send_evidence.set_hook(Some(Arc::new(move |_, _| {
-        hook_cuts
-            .metadata(&hook_root)
-            .expect("the cut's counted operation");
-    })));
+    // `Claim` fires at every poll, also when nothing is due, so its
+    // count would follow the poll timing and a seed could land past a
+    // shorter run's end. The store states it would cut are the ones
+    // `RecordDraft`'s before phase cuts (queued, or submitting with no
+    // send requested), so only the attempt's own transitions count.
+    engine
+        .send_evidence
+        .set_hook(Some(Arc::new(move |transition, _| {
+            if transition == SendTransition::Claim {
+                return;
+            }
+            hook_cuts
+                .metadata(&hook_root)
+                .expect("the cut's counted operation");
+        })));
 
     let params = ProtonSignInParams {
         display_name: "Owner".to_owned(),
@@ -334,7 +345,10 @@ fn send_crash_cuts_never_duplicate_a_send() {
     assert!(operations > 0, "the submission made no counted operations");
     let points = cut_points(1, operations, CUT_POINTS);
 
-    let mut total_sends = server.sends();
+    // The fake's send count when each child starts: a child that
+    // survives its seed is never checked, so a running total would
+    // charge its one send to the next cut.
+    let baseline = std::cell::Cell::new(server.sends());
     let mut cuts = 0;
     let report = sb_test_support::run_crash_cut_points(
         CUT_N_ENV,
@@ -342,6 +356,7 @@ fn send_crash_cuts_never_duplicate_a_send() {
         CHILD,
         &points,
         &mut |_| {
+            baseline.set(server.sends());
             let root = scratch.path().join(format!("cut-{}", cuts)).join("store");
             cuts += 1;
             let cache = root.parent().unwrap().join("cache");
@@ -359,9 +374,9 @@ fn send_crash_cuts_never_duplicate_a_send() {
             let (state, send_requested) = cut_state(root, &attempt_id);
             let after_child = server.sends();
             assert!(
-                after_child - total_sends <= 1,
+                after_child - baseline.get() <= 1,
                 "the child applied {} sends before the cut at {}",
-                after_child - total_sends,
+                after_child - baseline.get(),
                 root.display()
             );
 
@@ -393,9 +408,9 @@ fn send_crash_cuts_never_duplicate_a_send() {
 
             let after_parent = server.sends();
             assert!(
-                after_parent - total_sends <= 1,
+                after_parent - baseline.get() <= 1,
                 "the attempt was sent {} times across the cut at {}",
-                after_parent - total_sends,
+                after_parent - baseline.get(),
                 root.display()
             );
             let end_word = end.name();
@@ -403,7 +418,6 @@ fn send_crash_cuts_never_duplicate_a_send() {
                 allowed_end_states(&state, send_requested).contains(&end_word),
                 "the attempt cut in {state} (send_requested={send_requested}) ended {end_word}"
             );
-            total_sends = after_parent;
         },
     );
     assert!(
@@ -412,5 +426,4 @@ fn send_crash_cuts_never_duplicate_a_send() {
         report.killed,
         report.survived
     );
-    let _ = total_sends;
 }
