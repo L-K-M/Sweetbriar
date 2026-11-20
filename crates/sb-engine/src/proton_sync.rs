@@ -284,8 +284,10 @@ pub(crate) async fn start_all(
 }
 
 /// Move every `held` attempt whose undo window has passed to `queued`
-/// (spec/05 step 2), all accounts, in one write. Best effort at
-/// startup; the worker's tick retries any failure.
+/// (spec/05 step 2), all accounts, in one write, so a paused or
+/// disconnected account's attempts move too though its worker never
+/// starts. Best effort: every running worker's poll repeats the same
+/// all-account sweep, and with none running the next start does.
 async fn queue_due_held_at_startup(worker: &Worker) {
     let now = worker.resources().now();
     let _ = worker

@@ -1352,8 +1352,9 @@ fn claim_carries_the_attempt_its_recipients_and_its_parent() {
         "a submitting attempt is not claimable twice"
     );
 
-    // A forward source reads the same way; a cross-account one is none.
-    writing(&store, |tx| requeue_before_request(tx, "a1", now()));
+    // A forward source reads the same way.
+    let requeued = writing(&store, |tx| requeue_before_request(tx, "a1", now()));
+    assert!(requeued);
     writing(&store, |tx| {
         tx.execute(
             "UPDATE drafts SET reply_to_occurrence_id = NULL, forward_of_message_id = 9
@@ -1371,7 +1372,8 @@ fn claim_carries_the_attempt_its_recipients_and_its_parent() {
             kind: SendParentKind::Forward,
         })
     );
-    writing(&store, |tx| requeue_before_request(tx, "a1", now()));
+    let requeued = writing(&store, |tx| requeue_before_request(tx, "a1", now()));
+    assert!(requeued);
     // A source Proton never listed has no parent id to send.
     writing(&store, |tx| {
         tx.execute(
@@ -1633,6 +1635,50 @@ fn fail_records_the_reply_the_rejection_and_editing() {
         one(&store, "SELECT state FROM drafts WHERE draft_id = 'd1'"),
         "editing"
     );
+    store.close().unwrap();
+}
+
+#[test]
+fn fail_refuses_a_stranger_as_rejected_before_changing_anything() {
+    let (_scratch, _paths, store) = scratch();
+    seed(&store);
+    queue(&store);
+    force(&store, "a1", "queued", None);
+    claim(&store);
+    writing(&store, |tx| {
+        let failure = SendFailure {
+            code: None,
+            message: "external recipient has keys".to_owned(),
+            rejected: Some(SendFailureRejection {
+                canonical: "stranger@z.net".to_owned(),
+                reason: "keys known; clear text refused".to_owned(),
+            }),
+        };
+        assert!(matches!(
+            mark_send_failed(tx, "a1", &failure, now()),
+            Err(StoreError::InvalidInput { .. })
+        ));
+        // Inside the same transaction: nothing moved, so a caller that
+        // goes on to record the failure without the stranger can.
+        let state: String = tx
+            .query_row(
+                "SELECT state FROM send_attempts WHERE attempt_id = 'a1'",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|e| StoreError::internal(e.to_string()))?;
+        assert_eq!(state, "submitting");
+        let unsent: i64 = tx
+            .query_row(
+                "SELECT count(*) FROM send_recipients
+                 WHERE attempt_id = 'a1' AND state = 'unsent'",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|e| StoreError::internal(e.to_string()))?;
+        assert_eq!(unsent, 0);
+        Ok(())
+    });
     store.close().unwrap();
 }
 

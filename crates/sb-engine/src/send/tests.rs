@@ -828,7 +828,10 @@ fn held_attempts_past_their_window_queue_at_startup() {
          VALUES ('due', 'd1', 'r1', 'acct-1', 1, 'ident-1', 'sha', 'm', 'me@example.test',
                  'held', 0, 'server_saves', 0, 0),
                 ('waiting', 'd2', 'r2', 'acct-1', 1, 'ident-1', 'sha', 'm', 'me@example.test',
-                 'held', 9999999999999, 'server_saves', 0, 0);",
+                 'held', 9999999999999, 'server_saves', 0, 0);
+         -- Paused: no worker starts, so only the startup sweep can
+         -- move the due attempt.
+         UPDATE accounts SET state = 'paused' WHERE account_id = 'acct-1';",
     );
     block_on(engine.shutdown()).unwrap();
     let engine = block_on(Engine::open(scratch.path().join("store"))).unwrap();

@@ -857,6 +857,27 @@ pub fn mark_send_failed(
     let err = |e| classify(e, "fail a send");
     let now_ms = now.as_millis();
     let (draft_id, revision_id, _account) = attempt_row(tx, attempt_id)?;
+    // A rejected address that is not on the attempt is the caller's
+    // mistake; refuse it before any row changes.
+    if let Some(rejected) = &failure.rejected {
+        let known = tx
+            .query_row(
+                "SELECT 1 FROM send_recipients
+                 WHERE attempt_id = ?1 AND canonical = ?2 LIMIT 1",
+                params![attempt_id, rejected.canonical],
+                |_| Ok(()),
+            )
+            .optional()
+            .map_err(err)?;
+        if known.is_none() {
+            return Err(StoreError::InvalidInput {
+                message: format!(
+                    "recipient {} is not on send attempt {attempt_id}",
+                    rejected.canonical
+                ),
+            });
+        }
+    }
     let applied = tx
         .execute(
             "UPDATE send_attempts
@@ -878,22 +899,13 @@ pub fn mark_send_failed(
     )
     .map_err(err)?;
     if let Some(rejected) = &failure.rejected {
-        let refused = tx
-            .execute(
-                "UPDATE send_recipients
-                 SET state = 'rejected_permanent', rcpt_reply = ?3
-                 WHERE attempt_id = ?1 AND canonical = ?2",
-                params![attempt_id, rejected.canonical, rejected.reason],
-            )
-            .map_err(err)?;
-        if refused == 0 {
-            return Err(StoreError::InvalidInput {
-                message: format!(
-                    "recipient {} is not on send attempt {attempt_id}",
-                    rejected.canonical
-                ),
-            });
-        }
+        tx.execute(
+            "UPDATE send_recipients
+             SET state = 'rejected_permanent', rcpt_reply = ?3
+             WHERE attempt_id = ?1 AND canonical = ?2",
+            params![attempt_id, rejected.canonical, rejected.reason],
+        )
+        .map_err(err)?;
     }
     set_draft_state(tx, &draft_id, &revision_id, "editing", now_ms)?;
     Ok(true)
