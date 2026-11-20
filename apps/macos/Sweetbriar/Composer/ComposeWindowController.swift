@@ -25,6 +25,15 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
         labels: ["Plain", "Markdown"], trackingMode: .selectOne,
         target: nil, action: nil)
     private let saveButton = NSButton(title: "Save", target: nil, action: nil)
+    private let sendButton = NSButton(title: "Send", target: nil, action: nil)
+    private let undoSendButton = NSButton(title: "Undo Send", target: nil, action: nil)
+    private let sendStatusLabel = NSTextField(wrappingLabelWithString: "")
+    private lazy var sendBar: NSStackView = {
+        let bar = NSStackView(views: [sendStatusLabel, undoSendButton])
+        bar.spacing = 8
+        bar.isHidden = true
+        return bar
+    }()
     private let abandonButton = NSButton(title: "Close Without Saving…", target: nil, action: nil)
     let keepBothButton = NSButton(title: "Keep Both", target: nil, action: nil)
     /// Opens a Keep Both copy (the window owner's `openCopy`).
@@ -49,6 +58,26 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
     private let canWrite: @MainActor () -> Bool
     private let catalogSource: any ComposeCatalogSource
     private let preferredAccountId: String?
+    private let sendSource: (any SendSource)?
+    private let sendSettingsSource: (any SendSafetySettingsSource)?
+    /// Built once, from the sources this archive actually offers; nil
+    /// keeps Send disabled.
+    private(set) lazy var sendModel: ComposeSendModel? = {
+        guard let sendSource, let sendSettingsSource else { return nil }
+        return ComposeSendModel(
+            source: sendSource, settingsSource: sendSettingsSource, draftId: model.draftId,
+            settlePendingSave: { [weak self] in
+                guard let self else { return nil }
+                return try await self.settlePendingSaveForSend()
+            },
+            confirmCrossAccount: { [weak self] in
+                guard let self else { return false }
+                return await self.confirmCrossAccount()
+            },
+            closeAfterHold: { [weak self] in
+                Task { @MainActor [weak self] in _ = await self?.closeAndWait() }
+            })
+    }()
     private(set) lazy var identityControls: ComposeIdentityControls = {
         guard let window else { preconditionFailure("the compose window is installed before its controls") }
         return ComposeIdentityControls(
@@ -81,6 +110,8 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
         preferredAccountId: String? = nil, appearance: AppearanceModel? = nil, cue: ComposeCueModel? = nil,
         canWrite: @escaping @MainActor () -> Bool = { true },
         openCopy: OpenCopy? = nil,
+        sendSource: (any SendSource)? = nil,
+        settingsSource: (any SendSafetySettingsSource)? = nil,
         announceRoute: @escaping @MainActor (String) -> Void = { message in
             NSAccessibility.post(
                 element: NSApp!, notification: .announcementRequested,
@@ -92,6 +123,8 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
         self.announceRoute = announceRoute
         self.canWrite = canWrite
         self.openCopy = openCopy
+        self.sendSource = sendSource
+        self.sendSettingsSource = settingsSource
         catalogSource = source
         self.preferredAccountId = preferredAccountId
         let policy = ComposeSavePolicy(source: source, canWrite: canWrite)
@@ -123,6 +156,7 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
         buildContent(window)
         render()
         observeModel()
+        observeSend()
         observeAppearance()
         observeCue()
         loadTask = Task { [self] in
@@ -175,12 +209,17 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
         ])
         identity.spacing = 8
         identityControls.popup.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        let send = NSButton(title: "Send", target: nil, action: nil)
-        send.isEnabled = false
-        send.toolTip = "Sending is not available yet. You can save a local draft without a sending account."
-        send.setAccessibilityIdentifier("composeSend")
+        sendButton.target = self
+        sendButton.action = #selector(send)
+        sendButton.setAccessibilityIdentifier("composeSend")
+        undoSendButton.target = self
+        undoSendButton.action = #selector(undoSend)
+        undoSendButton.setAccessibilityIdentifier("composeUndoSend")
+        sendStatusLabel.setAccessibilityIdentifier("composeSendStatus")
+        sendStatusLabel.textColor = .secondaryLabelColor
         let controls = NSStackView(views: [
-            modeControl, attachmentControls.attachButton, saveButton, send, keepBothButton, abandonButton,
+            modeControl, attachmentControls.attachButton, saveButton, sendButton, keepBothButton,
+            abandonButton,
         ])
         controls.spacing = 8
         let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 640, height: 340))
@@ -203,7 +242,8 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
         textView.textContainer?.widthTracksTextView = true
         let stack = NSStackView(
             views: [identity as NSView] + recipientRows + [
-                subjectField, attachmentControls.list, controls, scroll, statusLabel, cueStatusLabel,
+                subjectField, attachmentControls.list, controls, sendBar, scroll, statusLabel,
+                cueStatusLabel,
             ])
         stack.orientation = .vertical
         stack.alignment = .leading
@@ -225,6 +265,7 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
             identity.widthAnchor.constraint(equalTo: stack.widthAnchor),
             subjectField.widthAnchor.constraint(equalTo: stack.widthAnchor),
             attachmentControls.list.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            sendBar.widthAnchor.constraint(equalTo: stack.widthAnchor),
             scroll.widthAnchor.constraint(equalTo: stack.widthAnchor),
             scroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 120),
             statusLabel.widthAnchor.constraint(equalTo: stack.widthAnchor),
@@ -358,6 +399,59 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
         let saved = await autosave.flush()
         render()
         return saved
+    }
+
+    /// Settle the pending save exactly as Save/Close do, so the send
+    /// queues the revision the user last saw saved (spec/05).
+    private func settlePendingSaveForSend() async throws -> String? {
+        guard !finished, !isClosing else {
+            throw CoreFailure.unavailable(reason: "This draft is closing.")
+        }
+        captureEdit()
+        // A file still publishing joins the revision being sent, as Close
+        // settles it before its final save.
+        await publications.settle()
+        guard await autosave.flush() else {
+            if let failure = model.failure { throw failure }
+            if model.conflict != nil {
+                throw CoreFailure.conflict(detail: "Another window saved this draft.")
+            }
+            throw CoreFailure.unavailable(reason: "Save this draft before sending it.")
+        }
+        render()
+        return model.baseRevisionId
+    }
+
+    @objc private func send() {
+        guard !isClosing, !finished, abandonAlert == nil, sendModel != nil else { return }
+        Task { [self] in _ = await sendModel?.send() }
+    }
+
+    @objc private func undoSend() {
+        guard case .held = sendModel?.state else { return }
+        Task { [self] in _ = await sendModel?.undo() }
+    }
+
+    /// Ask once per send whether to send from the selected account anyway
+    /// (spec/05). Cancel is the default; the acknowledgement lives only
+    /// in this answer and is never persisted.
+    private func confirmCrossAccount() async -> Bool {
+        guard let window, window.attachedSheet == nil,
+            let identity = identityControls.model.selectedIdentity
+        else { return false }
+        let name = identity.accountName.isEmpty ? identity.email : identity.accountName
+        return await withCheckedContinuation { continuation in
+            let alert = NSAlert()
+            alert.messageText = "Send from \(name) anyway?"
+            alert.informativeText =
+                "This reply sends from \(identity.email). Its account differs from the one that received the message."
+            alert.alertStyle = .warning
+            alert.addButton(withTitle: "Cancel")
+            alert.addButton(withTitle: "Send")
+            alert.beginSheetModal(for: window) { response in
+                continuation.resume(returning: response == .alertSecondButtonReturn)
+            }
+        }
     }
 
     func windowDidResignKey(_ notification: Notification) {
@@ -541,6 +635,18 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
         }
     }
 
+    private func observeSend() {
+        withObservationTracking {
+            _ = sendModel?.state
+        } onChange: { [weak self] in
+            Task { @MainActor [weak self] in
+                guard let self, !finished else { return }
+                render()
+                observeSend()
+            }
+        }
+    }
+
     private func observeAppearance() {
         withObservationTracking {
             _ = appearance?.appearance
@@ -633,15 +739,57 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
         if cueStatusLabel.isHidden != (message == nil) { cueStatusLabel.isHidden = message == nil }
     }
 
+    /// The window's existing admission checks: a selected identity that
+    /// can actually send, at least one stored recipient, an editing draft,
+    /// no conflict or deciding sheet, and archive writes (spec/05).
+    private var canSendNow: Bool {
+        guard let content = model.content, sendModel != nil, canWrite(), !finished, !isClosing,
+            abandonAlert == nil, !identityControls.isDeciding, !model.isSaving, model.conflict == nil,
+            model.draft?.state == .editing,
+            let identity = identityControls.model.selectedIdentity,
+            identity.sendable != .unavailable
+        else { return false }
+        return !content.to.isEmpty || !content.cc.isEmpty || !content.bcc.isEmpty
+    }
+
+    private func renderSendChrome(_ busy: Bool) {
+        sendButton.isEnabled = canSendNow && !busy
+        sendButton.toolTip =
+            sendModel == nil
+            ? "Sending needs an archive that can write and a sending identity."
+            : "Send this draft."
+        guard let sendModel else {
+            sendBar.isHidden = true
+            return
+        }
+        switch sendModel.state {
+        case .held(_, let remaining):
+            sendBar.isHidden = false
+            undoSendButton.isHidden = false
+            undoSendButton.isEnabled = true
+            sendStatusLabel.stringValue = "Sending in \(remaining) s"
+        case .failed(let message):
+            sendBar.isHidden = false
+            undoSendButton.isHidden = true
+            sendStatusLabel.stringValue = message
+        default:
+            sendBar.isHidden = true
+        }
+    }
+
     private func render(routeChanged: Bool = false) {
-        let editable =
-            model.content != nil && !isClosing && !finished && keepingBoth == nil && keepBothIntent == nil
+        // A send in flight or a held attempt owns the window: the draft
+        // can no longer be edited (spec/08).
+        let busy = sendModel?.isBusy ?? false
+        let editable = model.content != nil && !isClosing && !finished && keepingBoth == nil
+            && keepBothIntent == nil && !busy
         subjectField.isEditable = editable
         textView.isEditable = editable
         modeControl.isEnabled = editable
         for field in recipientFields { field.control.isEditable = editable }
         saveButton.isEnabled = editable && canWrite() && !model.isSaving && model.conflict == nil
         attachmentControls.render()
+        renderSendChrome(busy)
         abandonButton.isEnabled = !isClosing && !finished && keepingBoth == nil
         keepBothButton.isHidden = model.conflict == nil || openCopy == nil
         keepBothButton.isEnabled = !isClosing && !finished && keepingBoth == nil && canWrite()

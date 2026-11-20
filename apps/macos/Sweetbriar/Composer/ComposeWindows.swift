@@ -165,7 +165,9 @@ final class ComposeWindows {
             openCopy: { [weak self] in
                 guard let self else { throw CoreFailure.unavailable(reason: "Sweetbriar is closing.") }
                 try await openCopy(source: $0, content: $1, createKey: $2, saveKey: $3)
-            })
+            },
+            sendSource: source as? any SendSource,
+            settingsSource: source as? any SendSafetySettingsSource)
         windows[draftId] = controller
         controller.onClosed = { [weak self] in
             guard let self else { return }
