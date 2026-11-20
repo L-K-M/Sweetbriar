@@ -163,6 +163,53 @@ pub struct IntentPage {
     pub has_more: bool,
 }
 
+/// One account's parked and quarantined intent counts (spec/07
+/// diagnostics): what the package reports, not which intents they are.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IntentCounts {
+    pub account_id: String,
+    pub parked: u64,
+    pub quarantined: u64,
+}
+
+/// Per-account parked and quarantined counts, by account id. An
+/// account with neither state is absent; a caller treats that as zero.
+/// Read-only, like every other query here.
+pub fn intent_counts(tx: &Transaction) -> Result<Vec<IntentCounts>, StoreError> {
+    let mut statement = tx
+        .prepare_cached(
+            "SELECT account_id,
+                    SUM(CASE WHEN state = 'parked' THEN 1 ELSE 0 END),
+                    SUM(CASE WHEN state = 'quarantined' THEN 1 ELSE 0 END)
+             FROM intents
+             WHERE state IN ('parked','quarantined')
+             GROUP BY account_id
+             ORDER BY account_id",
+        )
+        .map_err(sql_error)?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, i64>(2)?,
+            ))
+        })
+        .map_err(sql_error)?;
+    let mut counts = Vec::new();
+    for row in rows {
+        let (account_id, parked, quarantined) = row.map_err(sql_error)?;
+        counts.push(IntentCounts {
+            account_id,
+            parked: u64::try_from(parked)
+                .map_err(|_| StoreError::corrupt("a parked intent count is negative"))?,
+            quarantined: u64::try_from(quarantined)
+                .map_err(|_| StoreError::corrupt("a quarantined intent count is negative"))?,
+        });
+    }
+    Ok(counts)
+}
+
 /// Read one page of the health surface's intents, oldest first, at most
 /// `limit` rows. A cursor's row that is no longer in the filtered set is
 /// [`PageRead::NotInWindow`]; a malformed stored payload is `Corrupt`.

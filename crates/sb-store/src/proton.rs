@@ -857,7 +857,9 @@ pub fn diagnostics_message(
 /// (spec/10): a refusal message may quote one. The local part is a
 /// nonempty run of address characters before `@`; the domain a run
 /// with at least one dot after it. `a@b` and `@b.com` are left alone.
-fn redact_addresses(message: &str) -> String {
+/// Re-exported for the engine, which masks again as the diagnostics
+/// package is assembled (spec/10).
+pub fn redact_addresses(message: &str) -> String {
     let bytes = message.as_bytes();
     let mut redacted = String::with_capacity(message.len());
     let mut copied = 0;

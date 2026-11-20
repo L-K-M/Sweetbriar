@@ -181,8 +181,8 @@ pub use sb_store::index::{
     note_observed_availability, publish_batch, search_generation, target_version,
 };
 pub use sb_store::intents::{
-    IntentAnchor, IntentEffect, IntentFilter, IntentKey, IntentKind, IntentPage, IntentState,
-    MAX_INTENT_PAGE_ROWS, QuarantineReason, StoredIntent, intents,
+    IntentAnchor, IntentCounts, IntentEffect, IntentFilter, IntentKey, IntentKind, IntentPage,
+    IntentState, MAX_INTENT_PAGE_ROWS, QuarantineReason, StoredIntent, intent_counts, intents,
 };
 pub use sb_store::lists::{
     ListAnchor, ListKey, ListPage, ListScope, MAX_PAGE_ROWS, MailboxRole, PageRead, StoredListRow,
@@ -227,7 +227,7 @@ pub use sb_store::{
     AppearanceObserver, ExportMetadata, ImportSourceSnapshot, ListObserver, PublishedObject,
     ReadStop, Receipt, Scoped, SearchObserver, StoreError, Timestamp, Transaction, Uuid,
     WriteFuture, WritePriority, await_write, encode_job_receipt, export_occurrence_metadata,
-    receipt_job_id, replay, run_once,
+    receipt_job_id, redact_addresses, replay, run_once, schema_version,
 };
 
 #[cfg(feature = "test-seams")]

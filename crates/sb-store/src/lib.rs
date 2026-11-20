@@ -100,14 +100,15 @@ pub use proton::{
     complete_listing, diagnostics_message, finish_listing, insert_proton_account,
     open_breaker_events, pause_for_reason, pending_proton_bodies, proton_account,
     proton_account_by_user_id, proton_coverage, reconcile_proton_labels, record_body_failure,
-    record_refusal, refresh_proton_identities, resolve_breaker_event, set_diagnostics,
-    set_event_cursor, update_listing_checkpoint, withhold_unlisted,
+    record_refusal, redact_addresses, refresh_proton_identities, resolve_breaker_event,
+    set_diagnostics, set_event_cursor, update_listing_checkpoint, withhold_unlisted,
 };
 pub use readers::{ReadStop, Scoped};
 pub use receipts::{
     Receipt, encode_job_receipt, receipt_generation_id, receipt_job_id, replay, run_once,
 };
 pub use restore_artifacts::{RestoreArtifact, RestoreArtifactKind};
+pub use schema::schema_version;
 pub use send::{
     OutBox, OutBoxRecipient, OutBoxRow, RecipientKind, RecipientState, SendAttempt, SentCopy,
     UnknownResolution, cancel_send, confirm_send_route, out_box, reply_headers,
