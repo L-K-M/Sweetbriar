@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use sb_proton::{
     ApiCode, Challenge, Client, Config, EventAction, InvalidField, LabelKind, ListingAnchor,
-    PasswordMode, ProtonError, SignInStep, Trust,
+    PasswordMode, ProtonError, SendError, SignInStep, Trust,
 };
 use sb_test_support::{
     ATTACHMENT_PLAINTEXT, FakeAttachment, FakeLabel, FakeMessage, FakeProtonServer, Fault,
@@ -749,6 +749,38 @@ async fn identities_map_enabled_and_sendable_addresses() {
         .expect("the alias identity");
     assert_eq!(alias.sendable, sb_proton::Sendable::Unavailable);
     assert!(alias.unlocked_key, "the legacy key unlocked");
+}
+
+#[tokio::test]
+async fn a_draft_body_is_encrypted_with_the_identity_s_unlocked_key() {
+    let server =
+        server_with(TestAccount::new(USER, PASSWORD).with_key_fault(KeyFault::OneAddressKey)).await;
+    let client = client(&server);
+    let session = sign_in(&client, USER, PASSWORD).await;
+    let keys = client
+        .unlock_keys(&session, PASSWORD.as_bytes())
+        .await
+        .expect("one address key still unlocks");
+
+    // The sending identity's key is found by its address in any case,
+    // and the account's own keys read the armored body back.
+    let armored = keys
+        .encrypt_draft_body("Owner@Example.Test", b"synthetic draft body")
+        .expect("the primary identity's key encrypts");
+    let body = keys.decrypt_body(&armored).expect("the body decrypts");
+    assert_eq!(body.as_slice(), b"synthetic draft body");
+
+    // An address whose key didn't unlock, or that isn't the account's,
+    // has no sender key: a wait for the keys, not a refusal.
+    for email in ["owner-alias@example.test", "stranger@example.test"] {
+        assert!(
+            matches!(
+                keys.encrypt_draft_body(email, b"x"),
+                Err(SendError::SenderKey)
+            ),
+            "{email} has no sender key"
+        );
+    }
 }
 
 #[tokio::test]

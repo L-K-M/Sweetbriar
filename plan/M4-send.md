@@ -261,13 +261,19 @@ inspectable Out Box. Unknown outcomes are never retried automatically.
   timeout after the request began, an external recipient with keys,
   a definite failure, R1 accepted with R2 saved or queued, and no Sent
   copy uploaded.
-- **Split (2026-11-19):** a survey measured about 3,740 changed lines,
-  so the step lands as three PRs that follow one another: M4.3e1 the
-  store transitions and the `held` to `queued` move (about 1,250);
-  M4.3e2 recipient keys, the draft, the in-memory backoff and
-  `needs_attention` on the worker (about 1,300); M4.3e3 the uploads,
-  the send, the reply interpretation, the sent-to counts and Sent
-  reconciliation (about 1,300).
+- **Split (2026-11-19, re-cut 2026-11-20):** a survey measured about
+  3,740 changed lines, so the step lands as PRs that follow one
+  another: M4.3e1 the store transitions and the `held` to `queued`
+  move (about 1,290); M4.3e2, which measured about 1,715 changed lines
+  once it submitted an attempt without attachments, as two: M4.3e2a
+  the sender's key, the frozen message's parts, the worker's wait
+  ending with an undo window and the wakes from the commands that
+  queue an attempt (about 700), then M4.3e2b the submission on the
+  worker: keys, draft, send, the reply interpretation, the in-memory
+  backoff and `needs_attention` (about 1,100); M4.3e3 the attachment
+  uploads and Sent reconciliation. Until M4.3e3 lands the worker
+  leaves an attempt with attachments `queued`; no FFI command reaches
+  send before M4.4.
 
 #### M4.3f Recovery, evidence and crash cuts — linux
 

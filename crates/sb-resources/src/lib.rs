@@ -47,6 +47,7 @@ mod activation;
 mod catchup;
 mod drafts;
 pub mod proton_bodies;
+mod proton_send;
 pub mod proton_sync;
 pub mod sync;
 pub use activation::{
@@ -56,6 +57,7 @@ pub use activation::{
 pub use catchup::{
     CatchupBatch, CatchupCommit, CatchupPreparation, CatchupReport, CatchupStatus, CatchupSweep,
 };
+pub use proton_send::{FrozenAttachment, FrozenBody, FrozenSend, frozen_send};
 mod export_files;
 mod import;
 mod import_jobs;
@@ -81,21 +83,23 @@ pub use proton::{
 // without depending on a leaf.
 pub use sb_proton::{
     ApiCode, AttachmentMetadata, BackoffKind, CertificateDer, Challenge, Client as ProtonClient,
-    DecryptError, EventAction, EventBatch, EventId, FinishedSignIn, FullMessage, Identity,
-    KeyStore, Label, LabelKind, ListingAnchor, MAX_PAGE_SIZE as PROTON_MAX_PAGE_SIZE,
-    ModulusSignatureVerifier, ProtonError, SecretBuffer, SecretString, Session, SignIn, SignInStep,
-    Trust,
+    DecryptError, DraftAction, DraftAddress, DraftCreate, DraftTemplate, EventAction, EventBatch,
+    EventId, FinishedSignIn, FullMessage, Identity, KeyStore, Label, LabelKind, ListingAnchor,
+    MAX_PAGE_SIZE as PROTON_MAX_PAGE_SIZE, ModulusSignatureVerifier, ProtonError,
+    RECIPIENT_TYPE_EXTERNAL, RECIPIENT_TYPE_INTERNAL, RecipientKeys, RefusalKind, SecretBuffer,
+    SecretString, SendAttachment, SendBody, SendError, SendPackages, SendRecipient, SendRefusal,
+    SendTransportError, Session, SignIn, SignInStep, Trust,
 };
 // The send lane's transport items (M4.3g): the lane drives the
 // submission calls and their crypto the way sb-proton's fake-server
-// tests do, so the resources layer re-exports what that needs, only
-// under the test-only `test-seams` feature.
+// tests do, so the resources layer re-exports what that needs beyond
+// the worker's surface above, only under the test-only `test-seams`
+// feature.
 #[cfg(feature = "test-seams")]
 pub use sb_proton::{
-    AttachmentUpload, DecryptedAddressKey, DraftAddress, DraftCreate, DraftTemplate, KeyFlag,
-    KeyGenerator, KeyGeneratorSync, KeyId, PGPProviderSync, ProtonPGP, RecipientKeys,
-    SendAttachment, SendBody, SendRecipient, SendTransportError, UnlockedAddressKey,
-    build_packages, encrypt_attachment, encrypt_draft_body,
+    AttachmentUpload, DecryptedAddressKey, KeyFlag, KeyGenerator, KeyGeneratorSync, KeyId,
+    PGPProviderSync, ProtonPGP, UnlockedAddressKey, build_packages, encrypt_attachment,
+    encrypt_draft_body,
 };
 mod renditions;
 mod repair;
@@ -219,9 +223,10 @@ pub use sb_store::send::{
     ClaimedRecipient, ClaimedSend, OutBox, OutBoxRecipient, OutBoxRow, ProtonUpload, RecipientKind,
     RecipientState, SendAttempt, SendFailure, SendFailureRejection, SendParent, SendParentKind,
     SentCopy, UnknownResolution, cancel_send, claim_send_attempt, commit_send_requested,
-    confirm_send_route, mark_outcome_unknown, mark_send_accepted, mark_send_failed, out_box,
-    queue_due_held, record_proton_draft, record_proton_upload, reply_headers, reply_source_account,
-    requeue_before_request, resolve_unknown_send, retry_rejected_recipients, send_draft,
+    confirm_send_route, earliest_hold_until, mark_outcome_unknown, mark_send_accepted,
+    mark_send_failed, out_box, queue_due_held, record_proton_draft, record_proton_upload,
+    reply_headers, reply_source_account, requeue_before_request, resolve_unknown_send,
+    retry_rejected_recipients, send_draft,
 };
 pub use sb_store::settings::{StoredSetting, read_all, upsert};
 pub use sb_store::sidebar::{
