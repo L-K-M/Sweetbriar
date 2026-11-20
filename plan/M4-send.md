@@ -329,11 +329,15 @@ inspectable Out Box. Unknown outcomes are never retried automatically.
   M4.4a: `send_draft`, `cancel_send`, `resolve_unknown_send`,
   `confirm_send_route`, `retry_rejected_recipients` and `out_box()`
   over FFI, with the bridge's `SendSource`. M4.4b: the send flow in the
-  compose window (the From swatches and disabled identities, the
-  cross-account banner and confirmation, Strong mode, Undo Send's hold)
-  and Settings → Sending safety, with the From-switch, full-screen,
-  Undo and Differentiate Without Color acceptance. M4.4c: the Out Box
-  view and its resolve actions. M4.4d: Reply, Reply All and Forward.
+  compose window (sendable Proton identities in From, Send, Undo
+  Send's hold) and Settings → Sending safety's undo delay, with the
+  Undo acceptance; the strip, swatches, disabled identities, Strong
+  mode, full screen and Differentiate Without Color shipped with M1.10
+  and its hosted tests. M4.4c: the Out Box view and its resolve
+  actions. M4.4d: Reply, Reply All and Forward, with the cross-account
+  banner and Send's confirmation (the core's revision-bound
+  acknowledgement reaches the shell there, since only replies need it)
+  and the From-switch XCUITest over a UI-test account that can send.
   M4.4e: the composer extras deferred from M0.11. The owner check runs
   after M4.4e.
 

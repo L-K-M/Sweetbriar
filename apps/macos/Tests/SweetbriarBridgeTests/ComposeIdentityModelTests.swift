@@ -173,12 +173,28 @@ struct ComposeIdentityModelTests {
             })
     }
 
-    @Test func aProtonIdentityIsNotOfferedUntilProtonCanSend() async throws {
+    @Test func anUnavailableDefaultIsNeitherOfferedNorApplied() async throws {
         let catalog = ComposeCatalog(
-            identities: [identity("a"), identity("proton", kind: .proton)], defaultIdentityId: "proton")
+            identities: [identity("a"), identity("gone", sendable: .unavailable, kind: .proton)],
+            defaultIdentityId: "gone")
         try await withIdentityFixture(catalog: catalog) { draft, model, _ in
             await model.reload()
-            #expect(model.choices.map(\.identityId) == ["a"] && draft.content?.identityId == nil)
+            #expect(model.choices.map(\.identityId) == ["a"])
+            #expect(draft.content?.identityId == nil)
+        }
+    }
+
+    @Test func aSendableProtonIdentityIsOfferedAndTakesTheDefault() async throws {
+        let catalog = ComposeCatalog(
+            identities: [
+                identity("a"), identity("proton", kind: .proton),
+                identity("gone", sendable: .unavailable, kind: .proton),
+            ],
+            defaultIdentityId: "proton")
+        try await withIdentityFixture(catalog: catalog) { draft, model, _ in
+            await model.reload()
+            #expect(model.choices.map(\.identityId) == ["a", "proton"])
+            #expect(draft.content?.identityId == "proton")
         }
     }
 

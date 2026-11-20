@@ -274,10 +274,11 @@ public final class ComposeIdentityModel {
         problem = message
         return .refused
     }
-    /// IMAP identities only: a Proton account can't send until M4 adds
-    /// Proton send (spec/05), and a local one never does.
+    /// IMAP and Proton identities that can send (spec/05, M4.4b); a
+    /// local account never does.
     private static func isSelectable(_ identity: ComposeIdentity) -> Bool {
-        identity.accountKind == .imap && identity.sendable != .unavailable
+        (identity.accountKind == .imap || identity.accountKind == .proton)
+            && identity.sendable != .unavailable
     }
     private static func appending(_ signature: String?, to body: String) -> String {
         guard let signature, !signature.isEmpty else { return body }
