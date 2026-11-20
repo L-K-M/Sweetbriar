@@ -271,9 +271,8 @@ inspectable Out Box. Unknown outcomes are never retried automatically.
   queue an attempt (about 700), then M4.3e2b the submission on the
   worker: keys, draft, send, the reply interpretation, the in-memory
   backoff and `needs_attention` (about 1,340); M4.3e3 the attachment
-  uploads and Sent reconciliation. Until M4.3e3 lands the worker
-  leaves an attempt with attachments `queued`; no FFI command reaches
-  send before M4.4.
+  uploads and Sent reconciliation (about 960 changed lines). No FFI
+  command reaches send before M4.4.
 
 #### M4.3f Recovery, evidence and crash cuts — linux
 
