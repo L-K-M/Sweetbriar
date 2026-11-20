@@ -1198,13 +1198,38 @@ fn out_box_reports_the_sent_copy_and_warns_24_hours_after_acceptance() {
     assert!(!row.sent_copy_appeared);
     assert!(row.sent_copy_warning);
 
-    // The sync inserts the Sent message by the attempt's Proton draft
-    // id; then it has appeared and the warning clears.
+    // The draft synced into Drafts under the same Proton id isn't the
+    // Sent copy: the message must be present in the Sent mailbox.
+    writing(&store, move |tx| {
+        tx.execute_batch(
+            "INSERT INTO mailboxes
+             (mailbox_id, account_id, remote_name, kind, role, selectable, sync_state)
+             VALUES (20, 'acct', 'Drafts', 'folder', 'drafts', 1, 'synced'),
+                    (21, 'acct', 'Sent', 'folder', 'sent', 1, 'synced');
+             INSERT INTO logical_messages (message_id, account_id, provider_key, created_at)
+             VALUES (30, 'acct', 'pd', 0);
+             INSERT INTO occurrences
+             (occurrence_id, account_id, mailbox_id, message_id, first_seen_at, last_seen_at, state)
+             VALUES (40, 'acct', 20, 30, 0, 0, 'present');",
+        )
+        .map_err(|e| StoreError::internal(e.to_string()))?;
+        Ok(())
+    });
+    let row = accepted_row(&store, accepted_at + 2 * day);
+    assert!(
+        !row.sent_copy_appeared,
+        "a Drafts occurrence is not the Sent copy"
+    );
+    assert!(row.sent_copy_warning);
+
+    // The send's events move the message into Sent; then it has
+    // appeared and the warning clears.
     writing(&store, move |tx| {
         tx.execute(
-            "INSERT INTO logical_messages (account_id, provider_key, created_at)
-             VALUES ('acct', 'pd', ?1)",
-            params![accepted_at],
+            "INSERT INTO occurrences
+             (occurrence_id, account_id, mailbox_id, message_id, first_seen_at, last_seen_at, state)
+             VALUES (41, 'acct', 21, 30, 0, 0, 'present')",
+            [],
         )
         .map_err(|e| StoreError::internal(e.to_string()))?;
         Ok(())

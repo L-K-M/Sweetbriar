@@ -1479,6 +1479,9 @@ pub fn out_box(tx: &Transaction, now: Timestamp) -> Result<OutBox, StoreError> {
                        s.send_requested_at, s.proton_draft_id, s.final_reply, s.resolution,
                        s.sent_copy, s.config_generation, a.config_generation AS account_generation,
                        (SELECT count(*) FROM logical_messages lm
+                        JOIN occurrences o ON o.message_id = lm.message_id
+                         AND o.account_id = lm.account_id AND o.state = 'present'
+                        JOIN mailboxes mb ON mb.mailbox_id = o.mailbox_id AND mb.role = 'sent'
                         WHERE lm.account_id = s.account_id
                           AND lm.provider_key = s.proton_draft_id) AS sent_copy_hits,
                        (SELECT count(*) FROM send_attempts n

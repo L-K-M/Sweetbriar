@@ -484,7 +484,7 @@ fn reconcile_draft_uploads(
         || format!("draft {draft_id} carries an attachment that doesn't match the frozen message");
     if recorded.len() > frozen.len() {
         return Err(format!(
-            "draft {draft_id} has fewer attachments than the attempt recorded"
+            "the attempt recorded more uploads to draft {draft_id} than the frozen message carries"
         ));
     }
     if draft.len() > frozen.len() {
