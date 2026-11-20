@@ -204,6 +204,8 @@ struct MessageMenuTests {
         #expect(reply.keyEquivalent == "r")
         #expect(replyAll.keyEquivalent == "R")
         #expect(forward.keyEquivalent == "F")
+        #expect(reply.keyEquivalentModifierMask == .command)
+        // An uppercase key equivalent implies Shift: ⇧⌘R and ⇧⌘F.
         #expect(replyAll.keyEquivalentModifierMask == .command)
         #expect(forward.keyEquivalentModifierMask == .command)
 

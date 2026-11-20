@@ -169,6 +169,8 @@ struct CrossAccountBannerTests {
 
         #expect(model.notice == nil)
         #expect(!model.isVisible)
+        // A failed revision is asked about again on the next chance.
+        #expect(model.nextRevision(toQuery: "rev-2") == "rev-2")
     }
 
     @Test func useIdentityPrefersTheSourceAccountsDefaultSendableIdentity() {

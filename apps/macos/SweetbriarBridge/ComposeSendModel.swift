@@ -63,7 +63,7 @@ public final class ComposeSendModel {
         draftId: String,
         settlePendingSave: @escaping SettlePendingSave,
         closeAfterHold: @escaping CloseAfterHold = {},
-        confirmCrossAccount: @escaping ConfirmCrossAccount = { _ in true },
+        confirmCrossAccount: @escaping ConfirmCrossAccount = { _ in false },
         isCrossAccountAcknowledged: @escaping CrossAccountAcknowledged = { _ in false },
         sleep: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) }
     ) {

@@ -700,7 +700,8 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
             + "\(accountDisplayName(notice.sourceAccountId)) received the original."
         crossAccountUseButton.title = "Use \(accountDisplayName(notice.sourceAccountId))"
         crossAccountKeepButton.title = "Keep \(accountDisplayName(notice.routeAccountId))"
-        // A send in flight owns the window, From included.
+        // A send in flight owns the window, From and Keep included.
+        crossAccountKeepButton.isEnabled = sendModel?.isBusy != true
         crossAccountUseButton.isEnabled =
             sendModel?.isBusy != true
             && CrossAccountBannerModel.useIdentity(
@@ -721,6 +722,7 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
     /// Keep the route account: remember this notice's acknowledgement in
     /// memory for this window only (spec/05, 08).
     @objc private func keepCrossAccountRoute() {
+        guard sendModel?.isBusy != true else { return }
         crossAccount.keepCurrentNotice()
         render()
     }
@@ -728,7 +730,10 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
     /// Send's cross-account confirmation (spec/08): the window asks once
     /// more before the acknowledgement is passed.
     private func confirmCrossAccountSend(_ notice: CrossAccountNotice) async -> Bool {
-        guard let window, !finished else { return false }
+        // One sheet at a time: a second ask while one is pending (the
+        // send model's busy gate keeps this unreachable) is a Cancel, so
+        // the pending continuation stays the one its sheet resumes.
+        guard let window, !finished, crossAccountConfirmation == nil else { return false }
         return await withCheckedContinuation { continuation in
             let alert = NSAlert()
             alert.messageText = "Send from \(accountDisplayName(notice.routeAccountId))?"

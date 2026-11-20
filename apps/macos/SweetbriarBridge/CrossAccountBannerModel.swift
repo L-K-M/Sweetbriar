@@ -72,11 +72,13 @@ public final class CrossAccountBannerModel {
             guard ticket == queryTicket, revisionId == queriedRevisionId else { return }
             notice = nil
             self.revisionId = nil
+            // Not asked after all: the next load or save change retries.
+            queriedRevisionId = nil
         }
     }
 
     /// The revision to query after a save or a load, or nil when the
-    /// current base is nil or was already asked about.
+    /// current base is nil or was already answered or is being asked.
     public func nextRevision(toQuery baseRevisionId: String?) -> String? {
         guard let baseRevisionId, baseRevisionId != queriedRevisionId else { return nil }
         return baseRevisionId

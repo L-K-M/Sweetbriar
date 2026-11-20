@@ -257,6 +257,7 @@ private func closes(_ close: CloseSpy, stayAt count: Int) async -> Bool {
         #expect(await source.sends.first?.acks == ["ack-1"])
         #expect(await source.noticeQueries.count == 1)
         #expect(await source.noticeQueries.first?.revisionId == "revision-1")
+        #expect(await source.noticeQueries.first?.draftId == "draft-1")
         #expect(probe.calls == 1)
         #expect(probe.notices.first?.ack == "ack-1")
 
