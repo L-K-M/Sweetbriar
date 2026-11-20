@@ -10,7 +10,7 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::time::Duration;
 
 use sb_resources::{Clock, Fs, Resources, Secret, SecretStore, StoreError, Timestamp};
@@ -18,7 +18,7 @@ use sb_test_support::{
     CutFs, FakeSecrets, ScratchDir, TestAccount, block_on, cert_der, fake_modulus_verifier, real_fs,
 };
 
-use super::SendTransition;
+use super::{SendPhase, SendTransition};
 use crate::{
     AccountKind, AttemptState, BeginProtonSignIn, ComposeFormat, DraftAttachment, DraftContent,
     DraftRecipient, DraftSource, Engine, IdentitySendable, ProtonSignInParams, ProtonSignInState,
@@ -94,15 +94,29 @@ async fn send_crash_child() {
     // shorter run's end. The store states it would cut are the ones
     // `RecordDraft`'s before phase cuts (queued, or submitting with no
     // send requested), so only the attempt's own transitions count.
+    // The terminal write's after phase fires once its commit is
+    // visible, so the child waits for it rather than for the Out Box
+    // state: shutting down in between would skip the last counted
+    // operation, and a seed on it would survive (CI run 44736291677).
+    let settled = Arc::new(AtomicBool::new(false));
+    let hook_settled = Arc::clone(&settled);
     engine
         .send_evidence
-        .set_hook(Some(Arc::new(move |transition, _| {
+        .set_hook(Some(Arc::new(move |transition, phase| {
             if transition == SendTransition::Claim {
                 return;
             }
             hook_cuts
                 .metadata(&hook_root)
                 .expect("the cut's counted operation");
+            if phase == SendPhase::After
+                && matches!(
+                    transition,
+                    SendTransition::Accepted | SendTransition::Failed | SendTransition::Unknown
+                )
+            {
+                hook_settled.store(true, Ordering::SeqCst);
+            }
         })));
 
     let params = ProtonSignInParams {
@@ -190,17 +204,23 @@ async fn send_crash_child() {
         .await
         .expect("the attempt");
     fs::write(root.join("attempt.txt"), queued.attempt_id()).expect("the attempt id writes");
-    run_until_terminal(&engine, &clock, queued.attempt_id()).await;
+    run_until_terminal(&engine, &clock, queued.attempt_id(), &settled).await;
     fs::write(root.join("operations.txt"), cuts.operations().to_string())
         .expect("the operation count writes");
     engine.shutdown().await.expect("the engine shuts down");
 }
 
 /// Advance the clock and wake the poll until the attempt reaches a
-/// terminal state. A killed child never returns.
-async fn run_until_terminal(engine: &Engine, clock: &MovableClock, attempt_id: &str) {
+/// terminal state and its write's after phase has fired. A killed child never returns.
+async fn run_until_terminal(
+    engine: &Engine,
+    clock: &MovableClock,
+    attempt_id: &str,
+    settled: &AtomicBool,
+) {
     for _ in 0..2_000 {
-        if let Some(state) = out_box_state(engine, attempt_id).await
+        if settled.load(Ordering::SeqCst)
+            && let Some(state) = out_box_state(engine, attempt_id).await
             && matches!(
                 state,
                 AttemptState::Accepted | AttemptState::Failed | AttemptState::OutcomeUnknown
