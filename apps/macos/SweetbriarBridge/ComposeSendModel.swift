@@ -29,6 +29,9 @@ public final class ComposeSendModel {
     public typealias CloseAfterHold = @MainActor () -> Void
 
     public private(set) var state: State = .idle
+    /// Why the last Undo failed while the attempt stayed held; cleared
+    /// when the hold starts again or ends.
+    public private(set) var undoError: String?
 
     private let source: any SendSource
     private let settingsSource: any SendSafetySettingsSource
@@ -106,11 +109,13 @@ public final class ComposeSendModel {
     }
 
     /// Cancel a held attempt exactly once. Success returns the draft to
-    /// editing; a failure (a hold that already ended, say) shows its
-    /// message and still leaves the draft editable.
+    /// editing. A `Conflict` (the hold already ended) shows its message
+    /// and leaves the draft editable; any other failure keeps the hold
+    /// and Undo, with `undoError` saying why, since the attempt is still
+    /// counting down in the core.
     @discardableResult
     public func undo() async -> Bool {
-        guard case .held(let attemptId, _) = state else { return false }
+        guard case .held(let attemptId, let remaining) = state else { return false }
         holdTask?.cancel()
         holdTask = nil
         if cancelAttemptId != attemptId {
@@ -129,14 +134,25 @@ public final class ComposeSendModel {
             state = .idle
             clearAction()
             return true
+        } catch CoreFailure.conflict(let detail) {
+            // The attempt left `held`: it is already being sent.
+            fail(with: CoreFailure.conflict(detail: detail))
+            return false
         } catch {
-            fail(with: error)
+            // Anything else leaves the attempt held and counting down in
+            // the core, so Undo stays offered and a retry replays the key.
+            hold(attemptId, for: remaining)
+            undoError = (error as? CoreFailure)?.errorDescription ?? error.localizedDescription
             return false
         }
     }
 
     private func beginHold(_ attemptId: String) async {
-        let seconds = await currentUndoSeconds()
+        hold(attemptId, for: await currentUndoSeconds())
+    }
+
+    private func hold(_ attemptId: String, for seconds: Int) {
+        undoError = nil
         let sleep = sleep
         let task = Task { [weak self] in
             var remaining = seconds
@@ -172,6 +188,7 @@ public final class ComposeSendModel {
     }
 
     private func clearAction() {
+        undoError = nil
         sendKey = nil
         sendRevision = nil
         cancelKey = nil

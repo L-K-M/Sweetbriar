@@ -257,6 +257,39 @@ private func eventually(_ predicate: @MainActor () async -> Bool) async -> Bool 
         await sleepBox.release()
     }
 
+    /// A cancel that fails for any reason but `Conflict` leaves the
+    /// attempt held in the core: the hold and Undo stay, and the retry
+    /// replays the same key.
+    @Test func aTransientCancelFailureKeepsTheHoldAndTheRetryReplaysItsKey() async throws {
+        let source = FakeSendSource()
+        await source.configure(cancellationError: CoreFailure.unavailable(reason: "store busy"))
+        let settings = FakeSendSettingsSource()
+        let sleepBox = GatedSleep()
+        let settle = SettleSpy()
+        let close = CloseSpy()
+        let model = makeModel(source, settings, sleepBox, settle, close)
+        #expect(await model.send())
+
+        #expect(!(await model.undo()))
+        guard case .held(let attemptId, _) = model.state else {
+            Issue.record("a transient cancel failure must keep the hold, got \(model.state)")
+            return
+        }
+        #expect(attemptId == "attempt-1")
+        #expect(model.undoError == "Unavailable: store busy")
+
+        await source.configure(cancellationError: nil)
+        #expect(await model.undo())
+        let cancels = await source.cancels
+        #expect(cancels.count == 2)
+        #expect(cancels.map(\.key) == [cancels[0].key, cancels[0].key], "the retry replays its key")
+        #expect(model.state == .idle)
+        #expect(model.undoError == nil)
+        #expect(close.calls == 0)
+
+        await sleepBox.release()
+    }
+
     @Test func anyOtherErrorShowsItsMessageAndKeepsTheDraftEditable() async throws {
         let source = FakeSendSource()
         await source.configure(error: CoreFailure.unavailable(reason: "offline"))

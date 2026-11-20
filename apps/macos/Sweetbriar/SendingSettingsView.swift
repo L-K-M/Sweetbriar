@@ -28,7 +28,7 @@ struct SendingSettingsView: View {
                     }
                     .disabled(model.isLoading || model.isSaving || model.undoSeconds == nil)
                     .accessibilityIdentifier("sendingUndoDelay")
-                    Text("The window Undo Send has before the message is queued: 5, 7, 10, 20 or 30 seconds.")
+                    Text("The window Undo Send has before the message is queued: \(Self.choicesText).")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                     if model.isLoading { ProgressView("Loading sending settings…") }
@@ -37,6 +37,10 @@ struct SendingSettingsView: View {
                         Text(error.localizedDescription)
                             .foregroundStyle(.red)
                             .accessibilityIdentifier("sendingSettingsError")
+                        if model.undoSeconds == nil, !model.isLoading {
+                            Button("Retry") { Task { await model.load() } }
+                                .accessibilityIdentifier("sendingSettingsRetry")
+                        }
                     }
                 }
                 Spacer(minLength: 0)
@@ -46,5 +50,13 @@ struct SendingSettingsView: View {
         }
         .task { await model.load() }
         .accessibilityIdentifier("sendingSettings")
+    }
+
+    /// The registered choices as the help text lists them: "5, 7, 10, 20 or 30 seconds".
+    private static var choicesText: String {
+        let choices = SendSafety.undoSecondsChoices.map(String.init)
+        guard let last = choices.last else { return "" }
+        let head = choices.dropLast().joined(separator: ", ")
+        return (head.isEmpty ? last : "\(head) or \(last)") + " seconds"
     }
 }

@@ -18,13 +18,27 @@ private actor FakeSendSafetySource: SendSafetySettingsSource {
         } ?? []
     }
 
+    private var readsGated = false
+    private var gated: [CheckedContinuation<Void, Never>] = []
+
     func failRead(_ error: (any Error)?) { readFailure = error }
     func failWrite(_ error: (any Error)?) { writeFailure = error }
+    /// Hold the next reads after they took their snapshot, as a slow
+    /// read would.
+    func gateReads() { readsGated = true }
+    func openReads() {
+        readsGated = false
+        gated.forEach { $0.resume() }
+        gated = []
+    }
+    var waitingReads: Int { gated.count }
 
     func settings() async throws -> [Setting] {
         reads += 1
         if let readFailure { throw readFailure }
-        return answer
+        let snapshot = answer
+        if readsGated { await withCheckedContinuation { gated.append($0) } }
+        return snapshot
     }
 
     func setSetting(key: String, value: String) async throws -> Receipt {
@@ -82,6 +96,21 @@ private actor FakeSendSafetySource: SendSafetySettingsSource {
         #expect(!(await model.setUndoSeconds(6)), "only registered choices are writable")
         #expect(await source.writes.isEmpty)
         #expect(model.undoSeconds == 10)
+    }
+
+    @Test func aSlowLoadCannotRevertAWriteThatLandedMeanwhile() async throws {
+        let source = FakeSendSafetySource(value: "7")
+        let model = SendSafetySettingsModel(source: source)
+        #expect(await model.load())
+
+        await source.gateReads()
+        let load = Task { await model.load() }
+        while await source.waitingReads == 0 { await Task.yield() }
+        #expect(await model.setUndoSeconds(20))
+        await source.openReads()
+        _ = await load.value
+
+        #expect(model.undoSeconds == 20, "the older read must not put back 7")
     }
 
     @Test func aMissingSettingIsAnErrorNotAGuess() async {

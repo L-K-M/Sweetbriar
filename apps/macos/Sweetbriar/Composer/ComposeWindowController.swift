@@ -419,7 +419,9 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
     }
 
     @objc private func send() {
-        guard !isClosing, !finished, abandonAlert == nil, sendModel != nil else { return }
+        // The menu and keyboard reach this too: admit exactly what the
+        // button's enabled state admits.
+        guard canSendNow else { return }
         Task { [self] in _ = await sendModel?.send() }
     }
 
@@ -744,7 +746,9 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
             sendBar.isHidden = false
             undoSendButton.isHidden = false
             undoSendButton.isEnabled = true
-            sendStatusLabel.stringValue = "Sending in \(remaining) s"
+            sendStatusLabel.stringValue = sendModel.undoError.map {
+                "Sending in \(remaining) s. Couldn't undo: \($0)"
+            } ?? "Sending in \(remaining) s"
         case .failed(let message):
             sendBar.isHidden = false
             undoSendButton.isHidden = true

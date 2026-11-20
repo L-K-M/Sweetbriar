@@ -48,6 +48,9 @@ public final class SendSafetySettingsModel {
     public private(set) var lastError: (any Error)?
 
     private let source: any SendSafetySettingsSource
+    /// Bumped by each successful write, so a load that began before it
+    /// can't put back the value it replaced.
+    private var writes = 0
 
     public init(source: any SendSafetySettingsSource) {
         self.source = source
@@ -58,8 +61,10 @@ public final class SendSafetySettingsModel {
         isLoading = true
         lastError = nil
         defer { isLoading = false }
+        let writesBefore = writes
         do {
             let settings = try await source.settings()
+            guard writes == writesBefore else { return true }
             guard let value = SendSafety.undoSeconds(in: settings) else {
                 lastError = CoreFailure.unavailable(
                     reason: "The \(SendSafety.undoSecondsKey) setting is missing or invalid.")
@@ -84,6 +89,7 @@ public final class SendSafetySettingsModel {
         do {
             _ = try await source.setSetting(
                 key: SendSafety.undoSecondsKey, value: String(value))
+            writes += 1
             undoSeconds = value
             return true
         } catch {
