@@ -1,8 +1,9 @@
 // The Drafts (local) list (spec/08 "Drafts (local)"): one row per local
 // draft over `DraftListModel`, in the core's order. Double-click or
 // Return opens the row's draft through `onOpen`; a failed reload keeps
-// the rows and shows the error with Retry. `ListPaneController` puts it
-// in the main window's list pane in place of the message list.
+// the rows and shows the error with Retry. `ListPaneController` puts it,
+// or the Out Box, in the main window's list pane in place of the
+// message list.
 
 import AppKit
 import SweetbriarBridge
@@ -204,17 +205,25 @@ private final class DraftRowView: NSTableCellView {
     }
 }
 
-/// The main window's list pane: the message list, or the drafts list
-/// in its place (spec/08 "Drafts (local)").
+/// The main window's list pane: the message list, or the drafts list,
+/// or the Out Box, in its place (spec/08).
 @MainActor
 final class ListPaneController: NSViewController {
+    enum Pane {
+        case messages
+        case drafts
+        case outBox
+    }
+
     let messages: NSViewController
     let drafts: DraftsListViewController
-    private(set) var showsDrafts = false
+    let outBox: OutBoxViewController
+    private(set) var pane: Pane = .messages
 
-    init(messages: NSViewController, drafts: DraftsListViewController) {
+    init(messages: NSViewController, drafts: DraftsListViewController, outBox: OutBoxViewController) {
         self.messages = messages
         self.drafts = drafts
+        self.outBox = outBox
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -222,7 +231,7 @@ final class ListPaneController: NSViewController {
 
     override func loadView() {
         let container = NSView()
-        for child in [messages, drafts] {
+        for child in [messages, drafts, outBox] {
             addChild(child)
             child.view.translatesAutoresizingMaskIntoConstraints = false
             container.addSubview(child.view)
@@ -234,13 +243,15 @@ final class ListPaneController: NSViewController {
             ])
         }
         view = container
-        show(drafts: showsDrafts)
+        show(pane)
     }
 
-    func show(drafts showDrafts: Bool) {
-        showsDrafts = showDrafts
+    func show(_ pane: Pane) {
+        self.pane = pane
         guard isViewLoaded else { return }
-        messages.view.isHidden = showDrafts
-        drafts.view.isHidden = !showDrafts
+        messages.view.isHidden = pane != .messages
+        drafts.view.isHidden = pane != .drafts
+        outBox.view.isHidden = pane != .outBox
+        outBox.setShown(pane == .outBox)
     }
 }

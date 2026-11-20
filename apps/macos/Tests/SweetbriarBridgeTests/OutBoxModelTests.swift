@@ -348,6 +348,30 @@ func anUnadmittedActionCallsNothing() async throws {
     #expect(await fake.reads == 1)
 }
 
+/// While archive writes are unavailable, an action is refused like a
+/// retired model: nothing runs and the list does not reload.
+@MainActor
+@Test(.timeLimit(.minutes(1)))
+func anActionIsRefusedWhileWritesAreUnavailable() async throws {
+    let fake = FakeOutBoxSource()
+    await fake.set(
+        OutBox(live: [outBoxRow("held", state: .held, holdUntilMs: 1)], history: []))
+    var canWrite = false
+    let model = OutBoxModel(source: fake, canWrite: { canWrite })
+    await model.reload()
+
+    await model.perform(.cancelSend, on: "held")
+    #expect(await fake.calls.isEmpty)
+    #expect(await fake.reads == 1)
+    #expect(model.actionError == nil)
+    #expect(!model.isActing)
+
+    canWrite = true
+    await model.perform(.cancelSend, on: "held")
+    #expect(await fake.calls.count == 1)
+    #expect(await fake.reads == 2)
+}
+
 /// A second action while one runs is refused: the running call owns
 /// the model until it and its reload are done.
 @MainActor

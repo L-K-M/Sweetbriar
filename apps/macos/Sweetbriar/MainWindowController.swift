@@ -10,8 +10,8 @@
 //        │ choose(spec) │   selection    │
 //        └──────────────┘ ───────────────┘
 //   a list's newer generation ──► the sidebar re-reads its counts
-//   Drafts (local) puts the drafts list in the list pane instead; the
-//   reader then shows nothing (spec/08 "Drafts (local)").
+//   Drafts (local) and Out Box put their panes in the list pane
+//   instead; the reader then shows nothing (spec/08).
 
 import AppKit
 import SwiftUI
@@ -46,6 +46,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     private(set) var sidebar: SidebarViewController?
     private(set) var messageList: MessageListViewController?
     private(set) var drafts: DraftsListViewController?
+    private(set) var outBox: OutBoxViewController?
     private var listPane: ListPaneController?
     private var imports: ImportCoordinator?
     private var signIn: ProtonSignInSheet?
@@ -112,7 +113,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         super.showWindow(sender)
         guard closed else { return }
         closed = false
-        if listPane?.showsDrafts != true { reader?.select(messageList?.list?.selectedIDs ?? []) }
+        if listPane?.pane != .drafts && listPane?.pane != .outBox {
+            reader?.select(messageList?.list?.selectedIDs ?? [])
+        }
     }
 
     func windowWillClose(_ notification: Notification) {
@@ -131,8 +134,11 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         retireActivity()
         sidebar?.onChoose = nil
         sidebar?.onChooseDrafts = nil
+        sidebar?.onChooseOutBox = nil
         let drafts = self.drafts
         drafts?.retire()
+        let outBox = self.outBox
+        outBox?.retire()
         messageList?.onGeneration = nil
         messageList?.onSelectionChange = nil
         retireWritersForRestore()
@@ -143,6 +149,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         sidebar = nil
         messageList = nil
         self.drafts = nil
+        self.outBox = nil
         listPane = nil
         self.reader = nil
         imports = nil
@@ -154,6 +161,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
             await writes.waitForRetirement()
             await list?.close()
             await drafts?.waitForRetirement()
+            await outBox?.waitForRetirement()
             await reader?.closeAndWait()
             await tasks.waitForRetirement()
         }
@@ -261,23 +269,31 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         )
         self.reader = reader
         let drafts = DraftsListViewController(model: DraftListModel(source: bridge))
-        let listPane = ListPaneController(messages: messageList, drafts: drafts)
+        let outBox = OutBoxViewController(
+            model: OutBoxModel(source: bridge, canWrite: { policy.canWrite }))
+        let listPane = ListPaneController(messages: messageList, drafts: drafts, outBox: outBox)
         drafts.onOpen = { [weak self] id in
             guard let self, contentSerial == serial else { return }
             openDraft(id)
         }
         sidebar.onChoose = { [weak self, weak messageList, weak listPane] spec in
             guard let self, contentSerial == serial else { return }
-            let wasDrafts = listPane?.showsDrafts == true
-            listPane?.show(drafts: false)
+            let wasNonMessage = listPane?.pane == .drafts || listPane?.pane == .outBox
+            listPane?.show(.messages)
             messageList?.show(spec)
-            if wasDrafts, !closed { self.reader?.select(messageList?.list?.selectedIDs ?? []) }
+            if wasNonMessage, !closed { self.reader?.select(messageList?.list?.selectedIDs ?? []) }
         }
         sidebar.onChooseDrafts = { [weak self, weak drafts, weak listPane] in
             guard let self, contentSerial == serial else { return }
-            listPane?.show(drafts: true)
+            listPane?.show(.drafts)
             self.reader?.select([])
             drafts?.reload()
+        }
+        sidebar.onChooseOutBox = { [weak self, weak outBox, weak listPane] in
+            guard let self, contentSerial == serial else { return }
+            listPane?.show(.outBox)
+            self.reader?.select([])
+            outBox?.reload()
         }
         messageList.onGeneration = { [weak self] generation in
             guard let self, contentSerial == serial else { return }
@@ -285,7 +301,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         }
         messageList.onSelectionChange = { [weak self] ids in
             guard let self, !closed, contentSerial == serial else { return }
-            guard self.listPane?.showsDrafts != true else { return }
+            guard self.listPane?.pane == .messages else { return }
             self.reader?.select(ids)
         }
         messageList.onViewSaved = { [weak self] view in
@@ -332,6 +348,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         self.sidebar = sidebar
         self.messageList = messageList
         self.drafts = drafts
+        self.outBox = outBox
         self.listPane = listPane
         contentTasks.run { [weak self] in
             await sidebarModel.reload()
@@ -383,10 +400,10 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     }
 
     /// A compose window opened or closed: the drafts list, if shown,
-    /// re-reads (spec/08 "Drafts (local)").
+    /// re-reads, and so does the Out Box, which a send changes (spec/08).
     func draftsChanged() {
-        guard listPane?.showsDrafts == true else { return }
-        drafts?.reload()
+        if listPane?.pane == .drafts { drafts?.reload() }
+        if listPane?.pane == .outBox { outBox?.reload() }
     }
 
     /// Select a freshly saved view in the sidebar (spec/08 Search).

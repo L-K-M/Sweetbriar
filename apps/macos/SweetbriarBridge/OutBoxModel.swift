@@ -4,8 +4,9 @@
 // It reads `out_box()`, one reload at a time; a reload asked for
 // meanwhile runs once after it. A failed reload keeps the rows it
 // showed. Each action runs alone under one fresh key and always
-// reloads. `retire()` ends the list for an old archive: a result that
-// arrives later is dropped and no row offers an action.
+// reloads; an action is refused while archive writes are unavailable,
+// like the composer's. `retire()` ends the list for an old archive: a
+// result that arrives later is dropped and no row offers an action.
 
 import Foundation
 import Observation
@@ -73,6 +74,7 @@ public final class OutBoxModel {
 
     private let source: any SendSource
     private let now: @Sendable () -> Date
+    private let canWrite: @MainActor () -> Bool
     @ObservationIgnored
     private var reloading = false
     @ObservationIgnored
@@ -80,10 +82,12 @@ public final class OutBoxModel {
 
     public init(
         source: any SendSource,
-        now: @escaping @Sendable () -> Date = Date.init
+        now: @escaping @Sendable () -> Date = Date.init,
+        canWrite: @escaping @MainActor () -> Bool = { true }
     ) {
         self.source = source
         self.now = now
+        self.canWrite = canWrite
     }
 
     /// The actions `id`'s row admits (spec/08 "Out Box"); none for a
@@ -126,10 +130,10 @@ public final class OutBoxModel {
     }
 
     /// Run one action on `id` under a fresh key, then reload. A refusal
-    /// (retired, acting, or a row that doesn't admit it) does nothing;
-    /// a thrown failure shows its message.
+    /// (retired, acting, writes unavailable, or a row that doesn't admit
+    /// it) does nothing; a thrown failure shows its message.
     public func perform(_ action: Action, on id: String) async {
-        guard !isRetired, !isActing, actions(for: id).contains(action) else { return }
+        guard !isRetired, !isActing, canWrite(), actions(for: id).contains(action) else { return }
         isActing = true
         actionError = nil
         let key = UUID().uuidString
