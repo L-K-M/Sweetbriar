@@ -4,11 +4,11 @@ import Observation
 // `SidebarModel`: what the main window's sidebar lists (spec/08
 // "Sidebar"), free of AppKit so the bridge's Linux tests exercise it.
 //
-//   Unified                      ← fixed: Inbox, Flagged, Drafts, then
-//     Inbox      unified(inbox)    entries whose steps haven't landed,
-//     Flagged    flagged           disabled, then the saved views in
-//     Drafts (local) drafts      ← saved_views() order, each opening
-//     Out Box        unavailable    View(id); Drafts is the local list
+//   Unified                      ← fixed: Inbox, Flagged, Drafts, Out
+//     Inbox      unified(inbox)    Box, then the saved views in
+//     Flagged    flagged           saved_views() order, each opening
+//     Drafts (local) drafts        View(id); Drafts is the local list
+//     Out Box        outBox
 //     <saved view>   view(id)
 //   <account>                    ← one section per account, in order
 //     <mailbox>  mailbox(id)     ← folders, labels, virtual; a mailbox
@@ -75,6 +75,8 @@ public final class SidebarModel {
         case window(WindowSpec)
         /// Show the local drafts list (spec/08 "Drafts (local)").
         case drafts
+        /// Show the Out Box (spec/08 "Out Box").
+        case outBox
         /// Nothing yet: shown disabled, with why.
         case unavailable(note: String)
     }
@@ -91,8 +93,6 @@ public final class SidebarModel {
     }
     /// The note on a mailbox that isn't selectable (spec/08).
     static let notSelectableNote = "This mailbox holds no messages of its own."
-    /// The note on entries whose steps haven't landed (spec/08).
-    static let notYetNote = "Not available yet."
 
     /// The unified section, then one per account.
     public private(set) var sections: [Section] = [SidebarModel.unifiedSection([])]
@@ -256,8 +256,8 @@ public final class SidebarModel {
     }
 
     /// The unified section: Inbox and Flagged open windows, Drafts
-    /// (local) the drafts list; Out Box waits for its step (spec/08);
-    /// each saved view opens `View(id)` (07).
+    /// (local) the drafts list, Out Box the Out Box (spec/08); each
+    /// saved view opens `View(id)` (07).
     private static func unifiedSection(_ views: [SavedView]) -> Section {
         let fixed: [Entry] = [
             Entry(
@@ -282,7 +282,7 @@ public final class SidebarModel {
                 id: "\(unifiedSectionID)/outbox",
                 title: "Out Box",
                 unread: nil,
-                target: .unavailable(note: notYetNote)
+                target: .outBox
             ),
         ]
         var entries = fixed

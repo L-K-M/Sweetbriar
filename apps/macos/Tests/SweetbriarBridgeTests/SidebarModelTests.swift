@@ -75,9 +75,10 @@ private func mailbox(_ id: Int64, _ name: String, unread: UInt64, selectable: Bo
     )
 }
 
-/// The unified section comes first with Inbox and Flagged open and
-/// Drafts (local) showing the drafts list, the rest disabled; each account follows with its mailboxes, unread
-/// counts, and an unselectable mailbox opening nothing.
+/// The unified section comes first with Inbox and Flagged open,
+/// Drafts (local) and Out Box opening their lists; each account
+/// follows with its mailboxes, unread counts, and an unselectable
+/// mailbox opening nothing.
 @MainActor
 @Test(.timeLimit(.minutes(1)))
 func theSidebarListsUnifiedThenEachAccount() async throws {
@@ -97,10 +98,8 @@ func theSidebarListsUnifiedThenEachAccount() async throws {
     #expect(unified[1].target == .window(.flagged))
     #expect(unified[2].target == .drafts)
     #expect(unified[2].id == SidebarModel.unifiedDraftsID)
-    #expect(unified[3...].allSatisfy {
-        if case .unavailable = $0.target { return true }
-        return false
-    })
+    #expect(unified[3].target == .outBox)
+    #expect(unified[3].id == "\(SidebarModel.unifiedSectionID)/outbox")
 
     let mailboxes = model.sections[1].entries
     #expect(mailboxes.map(\.title) == ["Inbox", "All"])
