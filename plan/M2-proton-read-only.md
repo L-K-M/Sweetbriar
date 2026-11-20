@@ -792,7 +792,9 @@ the provider policies (`proton_bridge`, `generic_imap`) live in
   another:
   - M2.7e1: Settings → Accounts (rename, pause and resume, disconnect
     with confirmation, sign in again) and the notification previews
-    toggle, with the rename-and-pause UI test (866 changed lines);
+    toggle, with the rename-and-pause UI test (about 900 changed
+    lines; with the diagnostics window and notifications the step
+    would pass the 1,450-line limit);
   - M2.7e2: the diagnostics preview and save panel, new-mail
     notifications through `UNUserNotificationCenter`, and the
     notification formatter unit test.
