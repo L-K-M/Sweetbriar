@@ -134,6 +134,9 @@ with `SB_SEARCH_TIMINGS_OUT=<file>` for the report and
   ActivityFlowTests`): over a store seeded with two breaker events,
   the Activity window's Accept and Keep leave them `accepted` and
   `kept`;
+- the account settings XCUITest (M2.7e1, `SweetbriarUITests/
+  AccountSettingsFlowTests`): a seeded Proton account renamed and
+  paused through Settings → Accounts keeps the new name and `paused`;
 - the M0.10 list benchmark: the Release app launches with
   `-runListBenchmark <report.json>` after the Release zip step; the
   step passes when all four runs happened without a generation abort
