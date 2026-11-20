@@ -182,7 +182,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// one over the main window's Activity model (spec/08).
     private func showActivity() {
         guard !terminating, let mainWindow,
-              let activity = mainWindow.activity, let bridge = mainWindow.bridge
+              let activity = mainWindow.activity, let bridge = mainWindow.bridge,
+              // A retired content leaves no model, and a model from an
+              // older bridge must not open over the current one.
+              mainWindow.activitySourceID == ObjectIdentifier(bridge)
         else { return }
         if activityWindow == nil {
             activityWindow = ActivityWindowController(model: activity, bridge: bridge) {
