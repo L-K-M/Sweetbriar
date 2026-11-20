@@ -76,8 +76,9 @@ struct DiagnosticsSheet: View {
         panel.message = "Save the diagnostics package."
         panel.begin { response in
             guard response == .OK, let url = panel.url else { return }
-            // The panel's completion is already on the main thread.
-            MainActor.assumeIsolated {
+            // Hop to the main actor rather than assume the panel's
+            // completion queue: a wrong assumption would trap.
+            Task { @MainActor in
                 do {
                     try Data(text.utf8).write(to: url, options: .atomic)
                 } catch {

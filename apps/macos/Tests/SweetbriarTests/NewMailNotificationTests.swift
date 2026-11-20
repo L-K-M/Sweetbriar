@@ -51,6 +51,35 @@ struct NewMailNotificationTests {
         }
     }
 
+    @Test func aCountBeyondTheNewestIdsSummarizesTheFullCount() {
+        let ids = (1...20).map { Int64($0) }
+        let text = NewMailNotificationText.make(
+            accountName: Self.accountName, mail: Self.mail(count: 25, messageIds: ids),
+            preview: MessagePreview(sender: Self.sender, subject: Self.subject))
+
+        #expect(text.body.contains("25 new messages"))
+        #expect(text.userInfo["count"] == "25")
+        for field in Self.allFields(text) {
+            #expect(!field.contains(Self.sender))
+            #expect(!field.contains(Self.subject))
+        }
+    }
+
+    @Test func aDeniedAuthorizationIsReadAgainOnTheNextArrival() async {
+        let source = FakeNewMailSource(
+            settings: Self.previews("off"), accounts: [Self.account()], message: nil)
+        let poster = FakePoster(grants: [false, true])
+        let notifier = NewMailNotifier(source: source, poster: poster)
+
+        await notifier.handle(Self.mail(count: 1))
+        #expect(await poster.notifications.isEmpty, "denied: nothing posts")
+
+        await notifier.handle(Self.mail(count: 1))
+        await notifier.handle(Self.mail(count: 1))
+        #expect(await poster.notifications.count == 2, "granted later in System Settings")
+        #expect(await poster.authorizationRequests == 2, "a grant is not re-read")
+    }
+
     @Test func previewsOnShowsTheHeadersAndAsksAuthorizationOnce() async throws {
         let source = FakeNewMailSource(
             settings: Self.previews("on"),
@@ -129,13 +158,13 @@ struct NewMailNotificationTests {
         #expect(Self.allFields(posted).contains { $0.contains(Self.accountName) })
     }
 
-    @Test func authorizationIsRequestedOnlyForTheFirstArrival() async {
+    @Test func aFailingSubscribeNeverAsksForAuthorization() async {
         let source = FakeNewMailSource(settings: [], accounts: [], message: nil)
         let poster = FakePoster()
         let notifier = NewMailNotifier(source: source, poster: poster)
 
         notifier.start()
-        // The fixture's subscription ends at once, so no arrival and no
+        // The fixture's subscribeNewMail() throws, so no arrival and no
         // permission request: the app never asks at launch.
         await notifier.stop()
         #expect(await poster.authorizationRequests == 0)
@@ -166,10 +195,10 @@ struct NewMailNotificationTests {
         [Setting(key: "notifications.previews", value: value, isDefault: false)]
     }
 
-    private static func mail(count: UInt32) -> NewMail {
+    private static func mail(count: UInt32, messageIds: [Int64]? = nil) -> NewMail {
         NewMail(
             accountId: "proton-1", count: count,
-            messageIds: count == 1 ? [7] : [9, 8, 7])
+            messageIds: messageIds ?? (count == 1 ? [7] : [9, 8, 7]))
     }
 
     private static func account() -> Account {
@@ -237,10 +266,16 @@ private actor FakeNewMailSource: NewMailSource {
 private actor FakePoster: NewMailPoster {
     private(set) var authorizationRequests = 0
     private(set) var notifications: [NewMailNotification] = []
+    /// The answers to successive requests; granted once they run out.
+    private var grants: [Bool]
+
+    init(grants: [Bool] = []) {
+        self.grants = grants
+    }
 
     func requestAuthorization() async -> Bool {
         authorizationRequests += 1
-        return true
+        return grants.isEmpty ? true : grants.removeFirst()
     }
 
     func post(_ notification: NewMailNotification) async {

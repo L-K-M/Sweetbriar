@@ -13,6 +13,9 @@ fn valid_json_without_a_refusal_key_contributes_no_refusal() {
     assert_eq!(parse_refusal("not json"), None);
     assert_eq!(parse_refusal("{}"), None);
     assert_eq!(parse_refusal(r#"{"v":1}"#), None);
+    // Valid JSON of another shape is not a refusal either.
+    assert_eq!(parse_refusal("[]"), None);
+    assert_eq!(parse_refusal("42"), None);
 
     let refusal = parse_refusal(
         r#"{"v":1,"code":2064,

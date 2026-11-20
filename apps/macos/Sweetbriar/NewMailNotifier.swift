@@ -46,7 +46,8 @@ enum NewMailNotificationText {
 
 /// Posts one new-mail notification (spec/10). Tests substitute a fake.
 protocol NewMailPoster: Sendable {
-    /// Ask once for notification authorization, on the first arrival.
+    /// Ask for notification authorization on the first arrival; later
+    /// calls while it is denied only re-read the user's decision.
     func requestAuthorization() async -> Bool
     /// Show one notification.
     func post(_ notification: NewMailNotification) async
@@ -94,7 +95,6 @@ final class NewMailNotifier {
     private let source: any NewMailSource
     private let poster: any NewMailPoster
     private var loop: Task<Void, Never>?
-    private var authorizationAsked = false
     private var authorized = false
 
     init(source: any NewMailSource, poster: any NewMailPoster) {
@@ -133,7 +133,10 @@ final class NewMailNotifier {
             // stop() cancelled the loop.
         } catch {
             // The subscription is done (the archive is closing or the
-            // core went away): stop rather than spin on a dead stream.
+            // core went away): stop rather than spin on a dead stream,
+            // but leave a trace, since notifications stay off for the
+            // rest of the session.
+            print("new-mail subscription ended: \(error.localizedDescription)")
         }
     }
 
@@ -148,8 +151,10 @@ final class NewMailNotifier {
         let accountName = await accountName(for: mail.accountId)
         let text = NewMailNotificationText.make(
             accountName: accountName, mail: mail, preview: preview)
-        if !authorizationAsked {
-            authorizationAsked = true
+        if !authorized {
+            // The first call may prompt; once the user decided, the
+            // call only reports the current decision, so a later
+            // grant in System Settings takes effect without a relaunch.
             authorized = await poster.requestAuthorization()
         }
         guard authorized else { return }

@@ -116,9 +116,9 @@ final class AccountSettingsFlowTests: XCTestCase {
         // The document always holds a schema_version key (spec/10).
         let preview = app.descendants(matching: .any)["diagnostics-preview"].firstMatch
         XCTAssertTrue(preview.waitForExistence(timeout: Self.timeout))
-        XCTAssertTrue(waitForValue(preview, containing: "schema"))
+        XCTAssertTrue(waitForValue(preview, containing: "schema_version"))
 
-        app.buttons["diagnostics-close"].click()
+        app.buttons["diagnostics-close"].firstMatch.click()
         XCTAssertTrue(diagnostics.waitForExistence(timeout: Self.timeout))
 
         app.terminate()
