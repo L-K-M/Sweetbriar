@@ -160,6 +160,52 @@ fn dangling_unavailable_or_absent_global_default_never_picks_the_first_sender() 
     block_on(core.shutdown());
 }
 
+/// Proton is M4's send path (spec/05): its account default and a
+/// global default naming a Proton identity resolve like IMAP's.
+#[test]
+fn a_proton_identity_is_a_default_like_an_imap_one() {
+    let (s, core) = seeded();
+    block_on(core.shutdown());
+    sql(
+        &s,
+        r#"
+        INSERT INTO accounts(account_id,kind,provider,display_name,state,sort_order,created_at)
+          VALUES('p','proton','proton_api','Proton','active',3,0);
+        INSERT INTO identities(identity_id,account_id,email,display_name,is_default,sendable)
+          VALUES('p-default','p','proton@example.test','Proton',1,'validated'),
+                ('p-hidden','p','gone@example.test','Gone',0,'unavailable');
+        UPDATE settings SET value_json='"p-default"' WHERE key='identity.default';
+    "#,
+    );
+    let core = open(&s);
+    assert_eq!(
+        block_on(core.compose_catalog(Some("p")))
+            .unwrap()
+            .default_identity_id
+            .as_deref(),
+        Some("p-default")
+    );
+    assert_eq!(
+        block_on(core.compose_catalog(None))
+            .unwrap()
+            .default_identity_id
+            .as_deref(),
+        Some("p-default")
+    );
+    // An unavailable Proton identity is never the default.
+    sql(
+        &s,
+        "UPDATE settings SET value_json='\"p-hidden\"' WHERE key='identity.default'",
+    );
+    assert_eq!(
+        block_on(core.compose_catalog(None))
+            .unwrap()
+            .default_identity_id,
+        None
+    );
+    block_on(core.shutdown());
+}
+
 #[test]
 fn bad_utf8_or_default_json_refuses_the_whole_catalog() {
     let (s, core) = seeded();

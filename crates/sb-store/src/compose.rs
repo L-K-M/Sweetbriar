@@ -77,8 +77,13 @@ impl ComposeIdentity {
     pub fn revision(&self) -> i64 {
         self.revision
     }
+    /// Whether a new draft may default to this identity: a sending
+    /// account kind (IMAP, and Proton, M4's send path, spec/05) whose
+    /// identity isn't unavailable. The composer's From popup offers the
+    /// same set.
     fn selectable(&self) -> bool {
-        self.account_kind == AccountKind::Imap && self.sendable != IdentitySendable::Unavailable
+        matches!(self.account_kind, AccountKind::Imap | AccountKind::Proton)
+            && self.sendable != IdentitySendable::Unavailable
     }
 }
 
