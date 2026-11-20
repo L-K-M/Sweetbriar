@@ -67,7 +67,8 @@ final class ComposeFromSwitchTests: XCTestCase {
 
         let strip = compose.descendants(matching: .any)["composeIdentityStrip"]
         XCTAssertTrue(strip.waitForExistence(timeout: Self.timeout))
-        XCTAssertEqual(strip.label, "Without a sending identity")
+        // The catalog loads asynchronously: wait out "Loading sending identity…".
+        XCTAssertTrue(waitForLabel(strip, "Without a sending identity"))
 
         let popup = compose.popUpButtons["composeFrom"]
         XCTAssertTrue(popup.waitForExistence(timeout: Self.timeout))
