@@ -323,6 +323,19 @@ inspectable Out Box. Unknown outcomes are never retried automatically.
   - Differentiate Without Color shows the stronger monogram;
   - **owner:** the strip reads clearly in light, dark, Increase Contrast
     and Reduce Transparency.
+- **Split (2026-11-20):** the send commands' FFI surface alone measured
+  1,189 changed lines (bindings excluded), so M4.4 lands as five PRs,
+  each keeping its deliverables and the acceptance bullets they carry.
+  M4.4a: `send_draft`, `cancel_send`, `resolve_unknown_send`,
+  `confirm_send_route`, `retry_rejected_recipients` and `out_box()`
+  over FFI, with the bridge's `SendSource`. M4.4b: the send flow in the
+  compose window (the From swatches and disabled identities, the
+  cross-account banner and confirmation, Strong mode, Undo Send's hold)
+  and Settings → Sending safety, with the From-switch, full-screen,
+  Undo and Differentiate Without Color acceptance. M4.4c: the Out Box
+  view and its resolve actions. M4.4d: Reply, Reply All and Forward.
+  M4.4e: the composer extras deferred from M0.11. The owner check runs
+  after M4.4e.
 
 ### M4.Q Qualification
 
