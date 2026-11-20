@@ -46,16 +46,9 @@ final class AccountSettingsFlowTests: XCTestCase {
         app.menuBars.menuBarItems["Sweetbriar"].click()
         app.menuBars.menuItems["Settings…"].click()
 
-        // The tab picker's items are tabs on macOS 27 and other button
-        // kinds on macOS 26, so the query takes any of them by label.
         let settings = app.windows["Settings"]
         XCTAssertTrue(settings.waitForExistence(timeout: Self.timeout))
-        let tabKinds: [XCUIElement.ElementType] = [.tab, .radioButton, .button]
-        let accountsTab = settings.descendants(matching: .any)
-            .matching(NSPredicate(
-                format: "label == %@ AND elementType IN %@", "Accounts",
-                tabKinds.map { $0.rawValue }))
-            .firstMatch
+        let accountsTab = Self.accountsTab(in: settings)
         XCTAssertTrue(accountsTab.waitForExistence(timeout: Self.timeout))
         accountsTab.click()
 
@@ -112,8 +105,7 @@ final class AccountSettingsFlowTests: XCTestCase {
 
         let settings = app.windows["Settings"]
         XCTAssertTrue(settings.waitForExistence(timeout: Self.timeout))
-        let accountsTab = settings.descendants(matching: .tab)
-            .matching(NSPredicate(format: "label == %@", "Accounts")).firstMatch
+        let accountsTab = Self.accountsTab(in: settings)
         XCTAssertTrue(accountsTab.waitForExistence(timeout: Self.timeout))
         accountsTab.click()
 
@@ -131,6 +123,19 @@ final class AccountSettingsFlowTests: XCTestCase {
 
         app.terminate()
         XCTAssertTrue(app.wait(for: .notRunning, timeout: Self.timeout))
+    }
+
+    /// The Settings tab picker's Accounts item. Its items are tabs on
+    /// macOS 27 and other button kinds on macOS 26, so the query takes
+    /// any of them by label.
+    @MainActor
+    private static func accountsTab(in settings: XCUIElement) -> XCUIElement {
+        let tabKinds: [XCUIElement.ElementType] = [.tab, .radioButton, .button]
+        return settings.descendants(matching: .any)
+            .matching(NSPredicate(
+                format: "label == %@ AND elementType IN %@", "Accounts",
+                tabKinds.map { $0.rawValue }))
+            .firstMatch
     }
 
     private static func launchArguments(dataRoot: URL, cacheRoot: URL) -> [String] {
