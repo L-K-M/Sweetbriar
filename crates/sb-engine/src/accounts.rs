@@ -121,6 +121,7 @@ impl Engine {
         let jobs = Arc::clone(self.account_jobs());
         let sessions = Arc::clone(&self.proton_sessions);
         let opened = Arc::clone(self.proton_opened());
+        let evidence = Arc::clone(&self.send_evidence);
         let threads = Arc::clone(self.imports().threads());
         let statuses = Arc::clone(self.worker_statuses());
         let (key, id) = (idempotency_key.to_owned(), account_id.to_owned());
@@ -174,7 +175,10 @@ impl Engine {
             if result.is_err() && stopping {
                 // The account stays as it was, so its worker runs again.
                 jobs.unpause(&id);
-                start_worker(&worker, &jobs, &sessions, &opened, &threads, kind, id).await;
+                start_worker(
+                    &worker, &jobs, &sessions, &opened, &evidence, &threads, kind, id,
+                )
+                .await;
             }
             let receipt = result.map_err(EngineError::from);
             if receipt.is_ok() {
@@ -203,6 +207,7 @@ impl Engine {
         let jobs = Arc::clone(self.account_jobs());
         let sessions = Arc::clone(&self.proton_sessions);
         let opened = Arc::clone(self.proton_opened());
+        let evidence = Arc::clone(&self.send_evidence);
         let threads = Arc::clone(self.imports().threads());
         let statuses = Arc::clone(self.worker_statuses());
         let (key, id) = (idempotency_key.to_owned(), account_id.to_owned());
@@ -253,7 +258,10 @@ impl Engine {
                 return Ok(receipt);
             }
             jobs.unpause(&id);
-            start_worker(&worker, &jobs, &sessions, &opened, &threads, kind, id).await;
+            start_worker(
+                &worker, &jobs, &sessions, &opened, &evidence, &threads, kind, id,
+            )
+            .await;
             statuses.rows_changed();
             Ok(receipt)
         })
@@ -277,11 +285,13 @@ async fn account_kind_and_state(
 
 /// Start a server account's worker. Launch skips a paused account's
 /// Proton session, so one without a session restores it first.
+#[allow(clippy::too_many_arguments)]
 async fn start_worker(
     worker: &Worker,
     jobs: &Arc<AccountJobs>,
     sessions: &Arc<Sessions>,
     opened: &Arc<ProtonOpened>,
+    evidence: &Arc<crate::proton_send::SendEvidence>,
     threads: &Arc<ThreadRebuilds>,
     kind: AccountKind,
     id: String,
@@ -291,7 +301,7 @@ async fn start_worker(
             if sessions.lock().await.get(&id).is_none() {
                 crate::proton::restore_proton_account(worker, sessions, &id).await;
             }
-            crate::proton_sync::start(worker, jobs, sessions, opened, id);
+            crate::proton_sync::start(worker, jobs, sessions, opened, evidence, id);
         }
         AccountKind::Imap => crate::account_sync::start_account(worker, jobs, threads, id),
         AccountKind::Local => {}

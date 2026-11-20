@@ -1589,6 +1589,132 @@ fn records_apply_only_while_submitting_and_survive_a_requeue() {
 }
 
 #[test]
+fn startup_recovery_marks_a_requested_send_unknown_and_requeues_the_unrequested() {
+    let (_scratch, _paths, store) = scratch();
+    seed(&store);
+    queue(&store);
+    force(&store, "a1", "submitting", None);
+    writing(&store, |tx| {
+        tx.execute(
+            "UPDATE send_attempts SET proton_draft_id = 'pd', send_requested_at = 500
+             WHERE attempt_id = 'a1'",
+            [],
+        )
+        .map_err(|e| StoreError::internal(e.to_string()))?;
+        Ok(())
+    });
+    let recovered = writing(&store, |tx| recover_proton_submitting(tx, now()));
+    assert_eq!(recovered, 1, "only the requested send became unknown");
+    assert_eq!(
+        one(
+            &store,
+            "SELECT state FROM send_attempts WHERE attempt_id = 'a1'"
+        ),
+        "outcome_unknown"
+    );
+    assert_eq!(
+        one_i64(
+            &store,
+            "SELECT count(*) FROM send_recipients
+             WHERE attempt_id = 'a1' AND state = 'unknown'"
+        ),
+        2,
+        "the recipients became unknown"
+    );
+    assert_eq!(
+        one(&store, "SELECT state FROM drafts WHERE draft_id = 'd1'"),
+        "queued",
+        "the draft reads queued under the current revision"
+    );
+
+    // A second attempt never issued its send request.
+    save_second_revision(&store);
+    queue_as(&store, "a2", "r2");
+    force(&store, "a2", "submitting", None);
+    writing(&store, |tx| {
+        tx.execute(
+            "UPDATE send_attempts SET proton_draft_id = 'pd2' WHERE attempt_id = 'a2'",
+            [],
+        )
+        .map_err(|e| StoreError::internal(e.to_string()))?;
+        Ok(())
+    });
+    let recovered = writing(&store, |tx| recover_proton_submitting(tx, now()));
+    assert_eq!(recovered, 0, "the unrequested attempt is only requeued");
+    assert_eq!(
+        one(
+            &store,
+            "SELECT state FROM send_attempts WHERE attempt_id = 'a2'"
+        ),
+        "queued",
+        "the unrequested attempt returns to queued"
+    );
+    assert_eq!(
+        one(
+            &store,
+            "SELECT proton_draft_id FROM send_attempts WHERE attempt_id = 'a2'"
+        ),
+        "pd2",
+        "the recorded draft is kept"
+    );
+    assert_eq!(
+        one_i64(
+            &store,
+            "SELECT count(send_requested_at) FROM send_attempts WHERE attempt_id = 'a2'"
+        ),
+        0
+    );
+    store.close().unwrap();
+}
+
+#[test]
+fn unknown_proton_attempts_lists_only_unresolved_ones_with_a_draft() {
+    let (_scratch, _paths, store) = scratch();
+    seed(&store);
+    for revision in ["r2", "r3", "r4"] {
+        insert_revision(&store, "d1", revision, "subject");
+    }
+    let seed_attempt = |attempt_id: &'static str,
+                        revision_id: &'static str,
+                        state: &'static str,
+                        resolution: Option<&'static str>,
+                        send_requested_at: Option<i64>| {
+        insert_attempt(
+            &store,
+            SeedAttempt {
+                attempt_id,
+                draft_id: "d1",
+                revision_id,
+                state,
+                config_generation: 1,
+                created_at: 1,
+                updated_at: 1,
+                resolution,
+                resolved_at: resolution.map(|_| 1),
+                final_reply: None,
+                hold_until: None,
+                send_requested_at,
+            },
+        );
+    };
+    seed_attempt("a1", "r1", "outcome_unknown", None, Some(1));
+    seed_attempt("a2", "r2", "outcome_unknown", Some("marked_sent"), Some(1));
+    seed_attempt("a3", "r3", "queued", None, Some(1));
+    seed_attempt("a4", "r4", "outcome_unknown", None, None);
+
+    let unknown = reading(&store, |tx| unknown_proton_attempts(tx, "acct"));
+    assert_eq!(
+        unknown,
+        vec![UnknownSend {
+            attempt_id: "a1".to_owned(),
+            proton_draft_id: "pd".to_owned(),
+        }],
+        "only the unresolved attempt with a recorded draft"
+    );
+    store.close().unwrap();
+}
+
+#[test]
 fn accept_moves_recipients_and_counts_each_once() {
     let (_scratch, _paths, store) = scratch();
     seed(&store);

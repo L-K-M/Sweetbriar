@@ -519,6 +519,102 @@ pub fn earliest_hold_until(
     Ok(hold_until.map(Timestamp::from_millis))
 }
 
+/// `recover_proton_submitting(now)` (spec/05 step 3): a Proton
+/// attempt a shutdown or crash left in `submitting`, recovered before
+/// any claim. One with `send_requested_at` committed became
+/// `outcome_unknown` (its recipients `unknown`, its draft `queued`
+/// under the current-revision rule) and is never retried; one without
+/// it never issued the send request, so it returns to `queued` and
+/// keeps its recorded draft and uploads. A generic attempt is left
+/// alone until SMTP records its own marker. Returns how many attempts
+/// became unknown.
+pub fn recover_proton_submitting(tx: &Transaction, now: Timestamp) -> Result<usize, StoreError> {
+    let err = |e| classify(e, "recover a Proton submission");
+    let now_ms = now.as_millis();
+    // The unknowned attempts' draft and revision, so the draft's state
+    // can follow the current-revision rule (spec/02, 05).
+    let mut statement = tx
+        .prepare(
+            "SELECT s.attempt_id, s.draft_id, s.revision_id
+             FROM send_attempts s
+             JOIN accounts a ON a.account_id = s.account_id
+             WHERE s.state = 'submitting' AND s.send_requested_at IS NOT NULL
+               AND a.provider = 'proton_api'",
+        )
+        .map_err(err)?;
+    let unknown: Vec<(String, String, String)> = statement
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+        .map_err(err)?
+        .collect::<Result<_, _>>()
+        .map_err(err)?;
+    drop(statement);
+    for (attempt_id, draft_id, revision_id) in &unknown {
+        let applied = tx
+            .execute(
+                "UPDATE send_attempts SET state = 'outcome_unknown', updated_at = ?2
+                 WHERE attempt_id = ?1 AND state = 'submitting'",
+                params![attempt_id, now_ms],
+            )
+            .map_err(err)?;
+        if applied == 0 {
+            continue;
+        }
+        tx.execute(
+            "UPDATE send_recipients SET state = 'unknown' WHERE attempt_id = ?1",
+            params![attempt_id],
+        )
+        .map_err(err)?;
+        set_draft_state(tx, draft_id, revision_id, "queued", now_ms)?;
+    }
+    tx.execute(
+        "UPDATE send_attempts SET state = 'queued', updated_at = ?2
+         WHERE state = 'submitting' AND send_requested_at IS NULL
+           AND account_id IN (SELECT account_id FROM accounts WHERE provider = 'proton_api')",
+        params![now_ms, now_ms],
+    )
+    .map_err(err)?;
+    Ok(unknown.len())
+}
+
+/// One unresolved Proton attempt's evidence target (spec/05 step 6):
+/// the attempt and the Proton draft the worker reads.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnknownSend {
+    pub attempt_id: String,
+    pub proton_draft_id: String,
+}
+
+/// `unknown_proton_attempts(account_id)` (spec/05 step 6): every
+/// unresolved `outcome_unknown` Proton attempt of the account with a
+/// recorded `proton_draft_id`, oldest first, so the worker can read
+/// each draft and observe what Proton holds.
+pub fn unknown_proton_attempts(
+    tx: &Transaction,
+    account_id: &str,
+) -> Result<Vec<UnknownSend>, StoreError> {
+    let err = |e| classify(e, "read the unresolved Proton attempts");
+    let mut statement = tx
+        .prepare(
+            "SELECT s.attempt_id, s.proton_draft_id
+             FROM send_attempts s
+             JOIN accounts a ON a.account_id = s.account_id
+             WHERE s.account_id = ?1 AND a.provider = 'proton_api'
+               AND s.state = 'outcome_unknown' AND s.resolution IS NULL
+               AND s.proton_draft_id IS NOT NULL
+             ORDER BY s.updated_at, s.attempt_id",
+        )
+        .map_err(err)?;
+    let rows = statement
+        .query_map(params![account_id], |row| {
+            Ok(UnknownSend {
+                attempt_id: row.get(0)?,
+                proton_draft_id: row.get(1)?,
+            })
+        })
+        .map_err(err)?;
+    rows.collect::<Result<_, _>>().map_err(err)
+}
+
 /// `claim_send_attempt(account_id, now)` (spec/05 step 3): the oldest
 /// `queued` attempt of the account whose `config_generation` is still
 /// the account's current one becomes `submitting`, committed before any
