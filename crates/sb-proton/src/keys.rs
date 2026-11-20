@@ -8,7 +8,7 @@ use std::fmt;
 use hyper::Method;
 use proton_crypto::ProtonPGP;
 use proton_crypto::crypto::{
-    DataEncoding, Decryptor, DecryptorSync, PGPProviderSync, VerifiedData,
+    DataEncoding, Decryptor, DecryptorSync, PGPProviderSync, SessionKey as _, VerifiedData,
 };
 use proton_crypto_account::keys::{
     AddressKeys, LockedKey, UnlockResult, UnlockedAddressKey, UnlockedUserKey, UnlockedUserKeys,
@@ -22,7 +22,10 @@ use zeroize::Zeroizing;
 use crate::auth::Session;
 use crate::client::{Client, Priority, expect_success, read_response};
 use crate::error::ProtonError;
-use crate::send::{SendAttachment, SendBody, SendError, SendPackages, SendRecipient};
+use crate::send::{
+    EncryptedAttachment, SendAttachment, SendBody, SendError, SendPackages, SendRecipient,
+    SessionKey,
+};
 
 /// `GET /core/v4/keys/salts` (research `auth-session.md` §7).
 pub const KEY_SALTS_PATH: &str = "/core/v4/keys/salts";
@@ -253,6 +256,26 @@ pub trait KeyStore: Send + Sync + fmt::Debug {
     /// [`SendError::SenderKey`] when no key unlocked for it.
     fn encrypt_draft_body(&self, email: &str, body: &[u8]) -> Result<Vec<u8>, SendError>;
 
+    /// Encrypts and signs an attachment with the unlocked address key
+    /// for `email`, ready to upload to the draft (spec/05 step 3).
+    /// [`SendError::SenderKey`] when no key unlocked for it.
+    fn encrypt_attachment(
+        &self,
+        email: &str,
+        data: &[u8],
+    ) -> Result<EncryptedAttachment, SendError>;
+
+    /// Recovers an uploaded attachment's session key from the draft's
+    /// key packets, which the sender's unlocked key decrypts, so a
+    /// retry's send packages carry it (spec/05 steps 3, 4).
+    /// [`SendError::SenderKey`] when no key unlocked for it.
+    fn send_attachment(
+        &self,
+        email: &str,
+        id: &str,
+        key_packets: &[u8],
+    ) -> Result<SendAttachment, SendError>;
+
     /// Builds the send packages with the unlocked address key for
     /// `email` (spec/05 step 4). [`SendError::SenderKey`] when no
     /// key unlocked for it.
@@ -289,6 +312,34 @@ impl<P: PGPProviderSync> KeyStore for KeySet<P> {
     fn encrypt_draft_body(&self, email: &str, body: &[u8]) -> Result<Vec<u8>, SendError> {
         let key = self.sender_key(email).ok_or(SendError::SenderKey)?;
         crate::send::encrypt_draft_body(&self.provider, key, body)
+    }
+
+    fn encrypt_attachment(
+        &self,
+        email: &str,
+        data: &[u8],
+    ) -> Result<EncryptedAttachment, SendError> {
+        let key = self.sender_key(email).ok_or(SendError::SenderKey)?;
+        crate::send::encrypt_attachment(&self.provider, key, data)
+    }
+
+    fn send_attachment(
+        &self,
+        email: &str,
+        id: &str,
+        key_packets: &[u8],
+    ) -> Result<SendAttachment, SendError> {
+        let key = self.sender_key(email).ok_or(SendError::SenderKey)?;
+        let session = self
+            .provider
+            .new_decryptor()
+            .with_decryption_key(&key.private_key)
+            .decrypt_session_key(key_packets)
+            .map_err(|_| SendError::Crypto)?;
+        Ok(SendAttachment {
+            id: id.to_owned(),
+            session_key: SessionKey::new(session.export().as_ref().to_vec(), session.algorithm()),
+        })
     }
 
     fn build_packages(

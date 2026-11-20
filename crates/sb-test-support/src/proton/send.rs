@@ -73,6 +73,21 @@ pub struct RecordedRecipient {
     pub attachment_key_packets: BTreeMap<String, Vec<u8>>,
 }
 
+/// One attachment the fake holds on a draft or sent message: its
+/// Proton id, the name, type and size it reports, and the upload's key
+/// packets and data packet, so a test can compare what a submission
+/// uploaded with the frozen bytes and recover its session key
+/// (spec/11 M4.3e3).
+#[derive(Debug, Clone)]
+pub struct StoredAttachment {
+    pub id: String,
+    pub name: String,
+    pub mime_type: String,
+    pub size: i64,
+    pub key_packets: Vec<u8>,
+    pub data_packet: Vec<u8>,
+}
+
 /// An internal recipient's unlocked address key, for tests that
 /// decrypt what a send package or an uploaded attachment carries
 /// (spec/11 M4.3c).
@@ -711,6 +726,39 @@ impl FakeProtonServer {
     pub fn recorded_sends(&self) -> Vec<RecordedSend> {
         let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         state.recorded_sends.clone()
+    }
+
+    /// The attachments the fake holds on one of the account's messages,
+    /// as the uploads left them, in the draft's order.
+    pub fn message_attachments(&self, username: &str, message_id: &str) -> Vec<StoredAttachment> {
+        let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        state
+            .accounts
+            .get(username)
+            .and_then(|account| {
+                account
+                    .messages
+                    .iter()
+                    .find(|message| message.id == message_id)
+            })
+            .map(|message| {
+                message
+                    .attachments
+                    .iter()
+                    .zip(&message.encrypted_attachments)
+                    .map(
+                        |(attachment, (id, key_packets, data_packet))| StoredAttachment {
+                            id: id.clone(),
+                            name: attachment.name.clone(),
+                            mime_type: attachment.mime_type.clone(),
+                            size: attachment.plaintext.len() as i64,
+                            key_packets: key_packets.clone(),
+                            data_packet: data_packet.clone(),
+                        },
+                    )
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     /// The account's draft ids (Drafts `8`, not Sent `7`), in the

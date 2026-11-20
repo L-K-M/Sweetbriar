@@ -52,7 +52,7 @@ mod send;
 
 pub use send::{
     CLEAR_SCHEME, INTERNAL_SCHEME, RecipientKey, RecordedPackage, RecordedRecipient, RecordedSend,
-    RecordedSessionKey,
+    RecordedSessionKey, StoredAttachment,
 };
 
 /// Encrypts a message body to the account's primary address key.

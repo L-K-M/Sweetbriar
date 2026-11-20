@@ -36,7 +36,8 @@ pub use send::{
 };
 pub use send_transport::{
     AttachmentUpload, Draft, DraftAction, DraftAddress, DraftCreate, DraftTemplate, KEYS_PATH,
-    RefusalKind, SendRefusal, SendTransportError, SentMessage, UploadedAttachment,
+    ProtonDraftAttachment, RefusalKind, SendRefusal, SendTransportError, SentMessage,
+    UploadedAttachment,
 };
 // The send lane's sender-key generation (M4.3g): like the fake-server
 // tests, the lane builds its own sender key rather than using the
