@@ -128,6 +128,11 @@ struct Emitter {
     last_close: Option<(&'static str, usize)>,
     /// How many lines have been flushed so far.
     flushed: usize,
+    /// How many tables enclose the cells this emitter renders. Each
+    /// level renders its cells through a new emitter, so past
+    /// [`MAX_NESTING`] a table is walked as a plain container instead,
+    /// on `convert`'s explicit stack.
+    table_depth: usize,
 }
 
 impl Emitter {
@@ -152,6 +157,7 @@ impl Emitter {
             item_marker: None,
             last_close: None,
             flushed: 0,
+            table_depth: 0,
         }
     }
 
@@ -249,9 +255,13 @@ impl Emitter {
                 self.emit_pre(&text);
                 true
             }
-            "table" => {
+            "table" if self.table_depth < MAX_NESTING => {
                 self.emit_table(tree, id);
                 true
+            }
+            "table" => {
+                self.losses.add(PasteLoss::Tables);
+                false
             }
             "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => {
                 self.heading(tag.as_bytes()[1] - b'0');

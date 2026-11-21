@@ -585,3 +585,20 @@ fn a_caption_becomes_a_paragraph_before_its_table() {
         "Cap\n\na"
     );
 }
+
+#[test]
+fn deeply_nested_tables_convert_on_a_small_stack() {
+    // Each table's cells render through their own emitter, so nesting
+    // past the cap must stay on the explicit stack: 2,000 levels fit in
+    // a 2 MiB stack (a Tokio worker's) and keep their text.
+    let html = format!("{}x", "<table><tr><td>".repeat(2_000));
+    let converted = std::thread::Builder::new()
+        .stack_size(2 << 20)
+        .spawn(move || markdown_from_html(&html))
+        .unwrap()
+        .join()
+        .expect("no stack overflow")
+        .unwrap();
+    assert_eq!(converted.markdown, "x");
+    assert!(converted.losses.contains(&PasteLoss::Tables));
+}

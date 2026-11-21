@@ -131,6 +131,7 @@ impl Emitter {
     fn render_cell(&mut self, tree: &Tree, cell: usize, escape_pipes: bool) -> String {
         let mut emitter = Emitter::new(escape_pipes);
         emitter.flat = true;
+        emitter.table_depth = self.table_depth + 1;
         emitter.convert(tree, cell);
         let text = emitter.take_text();
         self.losses.merge(emitter.losses);
