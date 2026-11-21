@@ -34,6 +34,8 @@ pub use diagnostics::{
 mod drafts;
 mod engine;
 mod error;
+mod flags;
+pub use flags::UndoToken;
 mod health;
 #[cfg(test)]
 mod idempotency_tests;
@@ -87,12 +89,12 @@ pub use sb_resources::{
     ProtonSignInParams, Secret, SecretError, SecretStore,
 };
 pub use sb_resources::{
-    AccountColor, AccountKind, AccountState, AppearanceAssignment, ExportSelection,
+    AccountColor, AccountKind, AccountState, AppearanceAssignment, ExportSelection, FlagChange,
     ImportJobCheckpoint, ImportJobState, ImportProblem, ImportProblemKind, ImportTotals,
-    IntentEffect, IntentFilter, IntentKind, IntentState, MailboxKind, MailboxList, MailboxRole,
-    MboxQuoting, MboxVariant, QuarantineReason, Receipt, RecoveryState, SourceInventory,
-    SourceKind, SourcePosition, StoredAccount, StoredIntent, StoredMailbox, StoredRecovery,
-    Timestamp, default_cache_root, default_data_root,
+    IntentEffect, IntentFilter, IntentFlag, IntentKind, IntentState, MailboxKind, MailboxList,
+    MailboxRole, MboxQuoting, MboxVariant, QuarantineReason, Receipt, RecoveryState,
+    SourceInventory, SourceKind, SourcePosition, StoredAccount, StoredIntent, StoredMailbox,
+    StoredRecovery, Timestamp, default_cache_root, default_data_root,
 };
 
 pub use drafts::{DraftContent, DraftCreated, DraftSaved};

@@ -1,7 +1,8 @@
 //! Intent lifecycle writes (spec/04-sync-proton "Running an intent",
 //! spec/02 "Intents", spec/07's health actions): planning a flag change
 //! with its local effect in the caller's transaction, the claim and its
-//! per-message ordering, and the state transitions.
+//! per-message ordering, the state transitions, and `release_intents` /
+//! `cancel_intents`.
 //!
 //! Every function takes the caller's [`Transaction`], so the local
 //! effect and the intent row commit together or not at all (spec/02).
@@ -153,6 +154,19 @@ pub enum FailureOutcome {
     Retry { next_attempt_at: i64 },
     /// The fifth failure: the intent parks.
     Parked,
+}
+
+/// The undoable part of a stored intent (spec/07 "Undo").
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UndoableIntent {
+    /// The account the intent belongs to.
+    pub account_id: String,
+    /// The logical message the intent targeted.
+    pub message_id: i64,
+    /// The change the intent made; its inverse is what undo plans.
+    pub change: FlagChange,
+    /// The stored state word; a cancelled intent has nothing to undo.
+    pub state: String,
 }
 
 /// Plan one `set_flags` intent per message, with the local effect, in
@@ -531,26 +545,175 @@ pub fn clear_account_intents_waiting(
     Ok(())
 }
 
+/// `release_intents` (spec/07, spec/04-sync-proton "Health actions"):
+/// every named `parked` or `quarantined` intent becomes `pending` with
+/// `attempts` 0, its reasons cleared and its `config_generation` the
+/// account's current one. All or nothing: a missing id is `NotFound`,
+/// one that doesn't qualify is `Conflict`, and nothing changes.
+pub fn release_intents(
+    tx: &Transaction,
+    intent_ids: &[String],
+    now: i64,
+) -> Result<(), StoreError> {
+    let mut targets = Vec::with_capacity(intent_ids.len());
+    for intent_id in intent_ids {
+        let row = intent_row(tx, intent_id)?;
+        if !matches!(row.state.as_str(), "parked" | "quarantined") {
+            return Err(conflict(format!(
+                "intent {intent_id} in state {} cannot be released",
+                row.state
+            )));
+        }
+        targets.push(row);
+    }
+    for row in targets {
+        tx.execute(
+            "UPDATE intents SET state = 'pending', attempts = 0, next_attempt_at = NULL,
+             wait_reason = NULL, quarantine_reason = NULL, config_generation =
+             (SELECT config_generation FROM accounts WHERE account_id = ?2),
+             updated_at = ?3 WHERE intent_id = ?1",
+            params![row.intent_id, row.account_id, now],
+        )
+        .map_err(|e| classify(e, "release an intent"))?;
+    }
+    Ok(())
+}
+
+/// `cancel_intents` (spec/07, spec/04-sync-proton "Health actions"):
+/// every named `pending`, `parked` or `quarantined` intent becomes
+/// `cancelled`, and a `set_flags` intent's local effect is reverted on
+/// the message's current occurrences unless a later live intent changes
+/// the same flag. All or nothing: a missing id is `NotFound`, an
+/// `in_flight` or terminal intent is `Conflict`, and nothing changes.
+pub fn cancel_intents(tx: &Transaction, intent_ids: &[String], now: i64) -> Result<(), StoreError> {
+    let mut targets = Vec::with_capacity(intent_ids.len());
+    for intent_id in intent_ids {
+        let row = intent_row(tx, intent_id)?;
+        if !matches!(row.state.as_str(), "pending" | "parked" | "quarantined") {
+            return Err(conflict(format!(
+                "intent {intent_id} in state {} cannot be cancelled",
+                row.state
+            )));
+        }
+        targets.push(row);
+    }
+
+    // Latest first: each revert then undoes the plan write just after
+    // the one before it, and a sibling this call cancels has already
+    // stopped being a later live intent, so the ids' order can't
+    // change the result.
+    targets.sort_by_key(|row| std::cmp::Reverse(row.rowid));
+
+    let mut touched = BTreeSet::new();
+    for row in targets {
+        if row.op == "set_flags" {
+            let change = parse_flag_change(&row.args_json)?;
+            let message = resolve_message(tx, &row.account_id, &row.target_json)?;
+            let revert = match message {
+                Some(message_id)
+                    if !later_live_same_flag(
+                        tx,
+                        &row.account_id,
+                        message_id,
+                        row.rowid,
+                        change.flag,
+                    )? =>
+                {
+                    Some(message_id)
+                }
+                _ => None,
+            };
+            if let Some(message_id) = revert {
+                let occurrences = current_occurrence_ids(tx, &row.account_id, message_id)?;
+                let placeholders = vec!["?"; occurrences.len()].join(",");
+                let mut update = vec![i64::from(!change.set)];
+                update.extend(occurrences.iter().copied());
+                tx.execute(
+                    &format!(
+                        "UPDATE occurrences SET {} = ? WHERE occurrence_id IN ({placeholders})",
+                        change.flag.column()
+                    ),
+                    params_from_iter(update),
+                )
+                .map_err(|e| classify(e, "revert a cancelled intent"))?;
+                touched.extend(occurrences);
+            }
+        }
+        tx.execute(
+            "UPDATE intents SET state = 'cancelled', wait_reason = NULL,
+             next_attempt_at = NULL, quarantine_reason = NULL, updated_at = ?2
+             WHERE intent_id = ?1",
+            params![row.intent_id, now],
+        )
+        .map_err(|e| classify(e, "cancel an intent"))?;
+    }
+    refresh(tx, &touched)?;
+    Ok(())
+}
+
+/// The undoable part of a stored intent (spec/07 "Undo"): its account,
+/// its message, its change and its state. `None` when the id is
+/// unknown, or the intent isn't a `set_flags` change or its target no
+/// longer resolves to a message. A malformed payload is `Corrupt`.
+pub fn intent_for_undo(
+    tx: &Transaction,
+    intent_id: &str,
+) -> Result<Option<UndoableIntent>, StoreError> {
+    let row = match intent_row_optional(tx, intent_id)? {
+        Some(row) => row,
+        None => return Ok(None),
+    };
+    if row.op != "set_flags" {
+        return Ok(None);
+    }
+    let Some(message_id) = resolve_message(tx, &row.account_id, &row.target_json)? else {
+        return Ok(None);
+    };
+    Ok(Some(UndoableIntent {
+        account_id: row.account_id,
+        message_id,
+        change: parse_flag_change(&row.args_json)?,
+        state: row.state,
+    }))
+}
+
 /// One raw intent row, before its payloads are parsed.
 struct IntentRow {
+    intent_id: String,
+    account_id: String,
     state: String,
     attempts: i64,
+    rowid: i64,
+    op: String,
+    target_json: String,
+    args_json: String,
 }
 
 fn intent_row(tx: &Transaction, intent_id: &str) -> Result<IntentRow, StoreError> {
+    intent_row_optional(tx, intent_id)?
+        .ok_or_else(|| StoreError::not_found(format!("intent {intent_id}")))
+}
+
+fn intent_row_optional(tx: &Transaction, intent_id: &str) -> Result<Option<IntentRow>, StoreError> {
     tx.query_row(
-        "SELECT state, attempts FROM intents WHERE intent_id = ?1",
+        "SELECT intent_id, account_id, state, attempts, rowid, op, target_json, args_json
+         FROM intents WHERE intent_id = ?1",
         [intent_id],
         |row| {
             Ok(IntentRow {
-                state: row.get(0)?,
-                attempts: row.get(1)?,
+                intent_id: row.get(0)?,
+                account_id: row.get(1)?,
+                state: row.get(2)?,
+                attempts: row.get(3)?,
+                rowid: row.get(4)?,
+                op: row.get(5)?,
+                target_json: row.get(6)?,
+                args_json: row.get(7)?,
             })
         },
     )
     .optional()
-    .map_err(|e| classify(e, "read an intent"))?
-    .ok_or_else(|| StoreError::not_found(format!("intent {intent_id}")))
+    .map_err(|e| classify(e, "read an intent"))
 }
 
 /// The account's current configuration generation, or `NotFound`.
@@ -602,6 +765,17 @@ fn current_occurrences(
         .map_err(|e| classify(e, "read a message's occurrences"))
 }
 
+fn current_occurrence_ids(
+    tx: &Transaction,
+    account_id: &str,
+    message_id: i64,
+) -> Result<Vec<i64>, StoreError> {
+    Ok(current_occurrences(tx, account_id, message_id)?
+        .into_iter()
+        .map(|(id, _, _)| id)
+        .collect())
+}
+
 /// Whether an earlier intent of the same message is still live
 /// (spec/04-sync-proton "Order").
 fn earlier_live_intent(
@@ -622,6 +796,91 @@ fn earlier_live_intent(
     .optional()
     .map(|found| found.is_some())
     .map_err(|e| classify(e, "read an earlier intent"))
+}
+
+/// Whether a later live intent changes the same flag of the same
+/// message, which keeps a cancelled intent's local effect in place
+/// (spec/04-sync-proton "Health actions").
+fn later_live_same_flag(
+    tx: &Transaction,
+    account_id: &str,
+    message_id: i64,
+    rowid: i64,
+    flag: IntentFlag,
+) -> Result<bool, StoreError> {
+    let mut statement = tx
+        .prepare(
+            "SELECT target_json, args_json FROM intents
+         WHERE account_id = ?1 AND rowid > ?2 AND op = 'set_flags'
+           AND state IN ('pending','in_flight','parked','quarantined')
+         ORDER BY rowid",
+        )
+        .map_err(|e| classify(e, "read a later intent"))?;
+    let rows = statement
+        .query_map(params![account_id, rowid], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .map_err(|e| classify(e, "read a later intent"))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| classify(e, "read a later intent"))?;
+    for (target_json, args_json) in rows {
+        if resolve_message(tx, account_id, &target_json)? == Some(message_id)
+            && parse_flag_change(&args_json)?.flag == flag
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// Resolve a target's logical message: its first occurrence id, else
+/// its provider key (spec/02's Proton `target_json`). `None` when
+/// neither resolves.
+fn resolve_message(
+    tx: &Transaction,
+    account_id: &str,
+    target_json: &str,
+) -> Result<Option<i64>, StoreError> {
+    let occurrence = parse_target(target_json)?.first().copied();
+    let message = match occurrence {
+        Some(occurrence) => occurrence_message(tx, account_id, occurrence)?,
+        None => None,
+    };
+    if let Some(message) = message {
+        return Ok(Some(message));
+    }
+    match parse_provider_key(target_json)?.filter(|key| !key.is_empty()) {
+        Some(provider_key) => message_by_provider_key(tx, account_id, &provider_key),
+        None => Ok(None),
+    }
+}
+
+fn occurrence_message(
+    tx: &Transaction,
+    account_id: &str,
+    occurrence: i64,
+) -> Result<Option<i64>, StoreError> {
+    tx.query_row(
+        "SELECT message_id FROM occurrences WHERE occurrence_id = ?1 AND account_id = ?2",
+        params![occurrence, account_id],
+        |row| row.get(0),
+    )
+    .optional()
+    .map_err(|e| classify(e, "read an occurrence's message"))
+}
+
+fn message_by_provider_key(
+    tx: &Transaction,
+    account_id: &str,
+    provider_key: &str,
+) -> Result<Option<i64>, StoreError> {
+    tx.query_row(
+        "SELECT message_id FROM logical_messages WHERE account_id = ?1 AND provider_key = ?2",
+        params![account_id, provider_key],
+        |row| row.get(0),
+    )
+    .optional()
+    .map_err(|e| classify(e, "read a message by provider key"))
 }
 
 /// A `set_flags` intent's flag delta from its `args_json`. A Proton
