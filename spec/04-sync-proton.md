@@ -323,8 +323,10 @@ Execution follows 04-sync-imap's intent rules, with Proton's evidence:
   intent is `done` is overtaken by it, at the latest on the next poll.
 - **Undo** is the inverse intent, as for IMAP. Proton's undo tokens
   aren't used. A move's inverse moves the message back to the folder
-  its intent recorded (02); when the message's folder is no longer the
-  move's destination, undo is refused with "Moved elsewhere since"
+  its intent recorded (02); a source recorded as no folder (`null`)
+  has nowhere to go back to, so undo leaves that message in the
+  destination (07). When the message's folder is no longer the move's
+  destination, undo is refused with "Moved elsewhere since"
   (04-sync-imap).
 
 | User action | Call | Notes |
