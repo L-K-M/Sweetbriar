@@ -372,7 +372,10 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
             sidebar.reloadSections()
             await beforeDefaultChoice?()
             guard !Task.isCancelled, contentSerial == serial else { return }
-            sidebar.choose(entryID: SidebarModel.unifiedInboxID)
+            // A list chosen while the sidebar loaded stays chosen.
+            if messageList.shownSpec == nil {
+                sidebar.choose(entryID: SidebarModel.unifiedInboxID)
+            }
             await imports?.reattach()
         }
     }
