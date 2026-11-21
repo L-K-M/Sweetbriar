@@ -87,8 +87,9 @@ verified before it completes.
     fake without execution;
   - M5.1b (~1,300): execution on the Proton account worker: body
     pre-acquisition, `label` then `unlabel` of the previous folder, the
-    confirming read, reconcile after a drop, the third-folder
-    quarantine, the crash cuts and the fake's refusal of permanent
+    confirming read, reconcile after a drop re-issuing a missing label,
+    the quarantine of a third folder or of neither, the crash cuts and
+    the fake's refusal of permanent
     deletes and emptying, asserted as never attempted;
   - M5.1c (~800): the commands through the service and FFI with the
     regenerated bindings, and the mutation-matrix suite on the
