@@ -66,8 +66,9 @@ impl MessageMutation {
 
 /// A mutation failure, typed so the M3.1 executor maps it without
 /// string matching (spec/04 "Intents and the mutation matrix"). Like
-/// [`crate::SendTransportError`], `Debug` and `Display` carry no body
-/// text, key material or credentials (spec/10).
+/// [`crate::SendTransportError`], `Debug` and `Display` carry no request
+/// body, key material or credentials (spec/10); a refusal keeps only
+/// Proton's short `Error` text.
 #[derive(Debug)]
 pub enum MutationError {
     /// Proton answered and refused: HTTP 4xx other than 429, or a
@@ -215,7 +216,7 @@ impl Client {
 
 /// Classifies a mutation reply: success (an empty 2xx, top-level 1000,
 /// or the multi-response 1001 with the message's own 1000), a refusal carrying
-/// Proton's status and code, or an unknown outcome. Pure over the
+/// Proton's status and code, or an unknown outcome when a 2xx names no code. Pure over the
 /// status and body so the response rules are unit-testable.
 fn classify_reply(
     path: &str,
@@ -261,21 +262,30 @@ fn classify_reply(
                 .iter()
                 .find(|response| response.id == id)
                 .and_then(|response| response.response.as_ref());
-            match own.and_then(|response| response.code) {
-                Some(1000) => Ok(()),
-                code => Err(MutationError::Refused {
+            // Only a code refuses; a reply without one for this message
+            // may follow an applied change, so the confirming read decides.
+            match own.and_then(|response| response.code.map(|code| (code, response))) {
+                Some((1000, _)) => Ok(()),
+                Some((code, response)) => Err(MutationError::Refused {
                     status: status.as_u16(),
-                    code,
-                    message: own
-                        .and_then(|response| response.error.clone())
-                        .unwrap_or_else(|| format!("the reply named no success for message {id}")),
+                    code: Some(code),
+                    message: response
+                        .error
+                        .clone()
+                        .unwrap_or_else(|| format!("Proton refused message {id}")),
+                }),
+                None => Err(MutationError::OutcomeUnknown {
+                    message: format!("the reply named no code for message {id}"),
                 }),
             }
         }
-        code => Err(MutationError::Refused {
+        Some(code) => Err(MutationError::Refused {
             status: status.as_u16(),
-            code,
+            code: Some(code),
             message: error_message(body),
+        }),
+        None => Err(MutationError::OutcomeUnknown {
+            message: "the reply named no code".to_owned(),
         }),
     }
 }
@@ -311,6 +321,32 @@ mod tests {
     use super::*;
 
     const ID: &str = "msg-0";
+
+    #[test]
+    fn each_mutation_sends_its_route_and_body() {
+        let cases = [
+            (MessageMutation::Read, READ_PATH, json!({"IDs": [ID]})),
+            (MessageMutation::Unread, UNREAD_PATH, json!({"IDs": [ID]})),
+            (
+                MessageMutation::Label(STARRED_LABEL_ID.to_owned()),
+                LABEL_PATH,
+                json!({"LabelID": "10", "IDs": [ID]}),
+            ),
+            (
+                MessageMutation::Unlabel(STARRED_LABEL_ID.to_owned()),
+                UNLABEL_PATH,
+                json!({"LabelID": "10", "IDs": [ID]}),
+            ),
+        ];
+        for (mutation, path, body) in cases {
+            let (sent_path, sent) = mutation.request(ID);
+            assert_eq!(sent_path, path);
+            assert_eq!(
+                serde_json::from_slice::<serde_json::Value>(&sent).unwrap(),
+                body
+            );
+        }
+    }
 
     #[test]
     fn an_empty_success_is_success() {
@@ -396,6 +432,24 @@ mod tests {
             "{error:?}"
         );
         assert!(!error.to_string().contains("not json"));
+    }
+
+    #[test]
+    fn a_reply_without_a_code_for_the_message_is_an_unknown_outcome() {
+        // A missing code is no refusal: the change may have been
+        // applied, so the confirming read decides (spec/04 "Running an
+        // intent").
+        let other = r#"{"Code":1001,"Responses":[{"ID":"msg-9","Response":{"Code":1000}}]}"#;
+        let bare = format!(r#"{{"Code":1001,"Responses":[{{"ID":"{ID}"}}]}}"#);
+        let codeless = format!(r#"{{"Code":1001,"Responses":[{{"ID":"{ID}","Response":{{}}}}]}}"#);
+        for body in [other, bare.as_str(), codeless.as_str(), r#"{"Error":"?"}"#] {
+            let error = classify_reply(READ_PATH, StatusCode::OK, ID, body.as_bytes())
+                .expect_err("no success for the message");
+            assert!(
+                matches!(error, MutationError::OutcomeUnknown { .. }),
+                "{body}: {error:?}"
+            );
+        }
     }
 
     #[test]
