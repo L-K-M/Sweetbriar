@@ -322,15 +322,18 @@ Execution follows 04-sync-imap's intent rules, with Proton's evidence:
   arrives as a later event, so an older event delivered after the
   intent is `done` is overtaken by it, at the latest on the next poll.
 - **Undo** is the inverse intent, as for IMAP. Proton's undo tokens
-  aren't used.
+  aren't used. A move's inverse moves the message back to the folder
+  its intent recorded (02); when the message's folder is no longer the
+  move's destination, undo is refused with "Moved elsewhere since"
+  (04-sync-imap).
 
 | User action | Call | Notes |
 |---|---|---|
 | Mark read or unread (M3) | `PUT /mail/v4/messages/read` or `/unread` | Applies to the message, so to every occurrence |
 | Star or unstar (M3) | `PUT /mail/v4/messages/label` or `/unlabel` with `10` | Same |
-| Archive, move to a folder or to Trash (M5) | label with the destination folder or system label | Proton keeps one location; user labels stay. Confirm the new location before `done`. The body must be acquired first, as for IMAP |
+| Archive, move to a folder or to Trash (M5) | label with the destination folder or system label; then, when the confirming read still shows the previous folder, unlabel it | Proton keeps one location, but the server may not drop the previous folder (research/proton-api/mail-sync.md). The unlabel always follows the label, so a crash between them leaves the message in two folders for a while, never in none; the reconcile before retry issues only what is still missing. `done` needs a read showing the destination as the message's only folder; a read showing a third folder, or no destination, quarantines the intent (`ambiguous_match`, "Moved elsewhere since") without acting. A message without a folder needs the label alone. User labels stay. The body must be acquired first, as for IMAP |
 | Add a label (M5) | label with the user label | The location stays |
-| Remove a label (M5) | unlabel | Allowed: a label removal deletes nothing on Proton |
+| Remove a label (M5) | unlabel with the user label | Allowed: a label removal deletes nothing on Proton. The location stays |
 | Delete permanently, empty Trash | — | Not in the pilot |
 | Any action in Scheduled | — | Not in the pilot |
 

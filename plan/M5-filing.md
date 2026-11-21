@@ -74,6 +74,25 @@ verified before it completes.
   - crash cuts across move steps never lose or duplicate a message
     (fake server state check);
   - the `go-proton-api` lane passes the matrix.
+- **Split (2026-11-21):** M5.1 follows its spec commit (02's
+  `remove_label` op and a Proton move's recorded source folder,
+  04-sync-proton's move row and undo, 07's `remove_label`) and lands as
+  three PRs, estimated from M3.1 and M3.2 at about 3,400 lines in all:
+  - M5.1a (~1,300): the migration adding `remove_label`;
+    `move_messages`, `delete_to_trash`, `add_label` and `remove_label`
+    in the store and engine, with the policy checks, the local effect
+    and intent in one transaction for Proton and the local commands for
+    the local archive; undo tokens for moves, none for labels, and
+    undo's "Moved elsewhere since" refusal; tested on the store and the
+    fake without execution;
+  - M5.1b (~1,300): execution on the Proton account worker: body
+    pre-acquisition, `label` then `unlabel` of the previous folder, the
+    confirming read, reconcile after a drop, the third-folder
+    quarantine, the crash cuts and the fake's refusal of permanent
+    deletes and emptying, asserted as never attempted;
+  - M5.1c (~800): the commands through the service and FFI with the
+    regenerated bindings, and the mutation-matrix suite on the
+    `go-proton-api` lane.
 
 ### M5.2 Filing in the app — M, macos-ci + owner
 
