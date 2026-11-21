@@ -1,7 +1,7 @@
 // Parked and quarantined intents (spec/07 `intents`; spec/02
-// "Intents"): what the Activity window lists, read only until M3.1.
-// The bridge's own value types, mirroring the core's field by field,
-// so nothing generated crosses into the app.
+// "Intents"): what the Activity window lists, with the health actions
+// the model runs. The bridge's own value types, mirroring the core's
+// field by field, so nothing generated crosses into the app.
 
 import Foundation
 import SweetbriarCore

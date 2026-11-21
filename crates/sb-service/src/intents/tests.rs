@@ -1,5 +1,6 @@
-//! `Core::intents` (spec/07): the query's page, order, filters and
-//! typed DTOs across the service boundary.
+//! `Core::intents` and the intent health actions (spec/07): the
+//! query's page, order, filters and typed DTOs across the service
+//! boundary, and `release_intents` / `cancel_intents` under a key.
 
 use super::*;
 use crate::{CoreConfig, open_core};
@@ -120,3 +121,104 @@ fn intents_cross_field_by_field_and_page() {
 }
 
 const ACCOUNT: &str = "00000000-0000-4000-8000-0000000000a0";
+
+/// `release_intents` resets a parked intent, `cancel_intents` ends a
+/// pending star and reverts its flag, a repeated key answers the stored
+/// receipt, and a bad id changes nothing.
+#[test]
+fn intent_health_actions_cross_the_service() {
+    let scratch = sb_test_support::ScratchDir::new("service-intents-health");
+    let store = scratch.path().join("store");
+    let core = sb_test_support::block_on(open_core(config(&scratch))).unwrap();
+    sb_test_support::block_on(core.shutdown());
+
+    sb_test_support::execute_sql(
+        &store.join("state.sqlite"),
+        r#"
+        INSERT INTO accounts (account_id, kind, provider, display_name, state,
+         config_generation, sort_order, created_at)
+         VALUES ('acct-1', 'proton', 'proton_api', 'Owner', 'active', 1, 1, 0);
+        INSERT INTO mailboxes (mailbox_id, account_id, remote_name, role, kind, selectable,
+         sync_state) VALUES (1, 'acct-1', 'Inbox', 'inbox', 'folder', 1, 'synced');
+        INSERT INTO logical_messages (message_id, account_id, provider_key, created_at)
+         VALUES (1, 'acct-1', 'msg-1', 0);
+        INSERT INTO occurrences (occurrence_id, account_id, mailbox_id, message_id, state,
+         first_seen_at, last_seen_at, f_flagged)
+         VALUES (11, 'acct-1', 1, 1, 'present', 0, 0, 1);
+        INSERT INTO intents (intent_id, account_id, config_generation, op, target_json,
+         args_json, preconditions_json, state, quarantine_reason, last_error,
+         idempotency_key, origin, created_at, updated_at)
+         VALUES
+           ('i1', 'acct-1', 1, 'set_flags',
+            '{"v":1,"occurrence_ids":[11],"provider_key":"msg-1"}',
+            '{"v":1,"add":["\\Flagged"],"remove":[]}', '{}', 'parked',
+            'config_change', 'no', 'i1', 'user', 1, 1),
+           ('i2', 'acct-1', 1, 'set_flags',
+            '{"v":1,"occurrence_ids":[11],"provider_key":"msg-1"}',
+            '{"v":1,"add":["\\Flagged"],"remove":[]}', '{}', 'pending',
+            NULL, NULL, 'i2', 'user', 2, 2),
+           ('i3', 'acct-1', 1, 'set_flags',
+            '{"v":1,"occurrence_ids":[11],"provider_key":"msg-1"}',
+            '{"v":1,"add":["\\Flagged"],"remove":[]}', '{}', 'done',
+            NULL, NULL, 'i3', 'user', 3, 3);
+        "#,
+    );
+    let core = sb_test_support::block_on(open_core(config(&scratch))).unwrap();
+    let db = store.join("state.sqlite");
+
+    let receipt =
+        sb_test_support::block_on(core.release_intents("release-1", vec!["i1".to_owned()]))
+            .unwrap();
+    assert_eq!(receipt.command, "release_intents");
+    assert_eq!(
+        sb_test_support::count_rows(
+            &db,
+            "SELECT COUNT(*) FROM intents WHERE intent_id = 'i1' AND state = 'pending'
+             AND attempts = 0 AND quarantine_reason IS NULL",
+        ),
+        1
+    );
+    let replayed =
+        sb_test_support::block_on(core.release_intents("release-1", vec!["i1".to_owned()]))
+            .unwrap();
+    assert_eq!(replayed, receipt);
+
+    let receipt =
+        sb_test_support::block_on(core.cancel_intents("cancel-1", vec!["i2".to_owned()])).unwrap();
+    assert_eq!(receipt.command, "cancel_intents");
+    assert_eq!(
+        sb_test_support::count_rows(
+            &db,
+            "SELECT COUNT(*) FROM intents WHERE intent_id = 'i2' AND state = 'cancelled'",
+        ),
+        1
+    );
+    assert_eq!(
+        sb_test_support::count_rows(
+            &db,
+            "SELECT COUNT(*) FROM occurrences WHERE occurrence_id = 11 AND f_flagged = 0",
+        ),
+        1,
+        "cancelling reverts the pending star's local effect"
+    );
+
+    // A terminal id is a Conflict and changes nothing; an empty list is
+    // InvalidInput.
+    let error = sb_test_support::block_on(core.cancel_intents("cancel-2", vec!["i3".to_owned()]))
+        .unwrap_err();
+    assert!(matches!(error, CoreError::Conflict { .. }), "{error:?}");
+    assert_eq!(
+        sb_test_support::count_rows(
+            &db,
+            "SELECT COUNT(*) FROM intents WHERE intent_id = 'i3' AND state = 'done'",
+        ),
+        1
+    );
+    let error = sb_test_support::block_on(core.cancel_intents("cancel-3", Vec::new())).unwrap_err();
+    assert!(
+        matches!(error, CoreError::InvalidInput { ref field, .. } if field == "intent_ids"),
+        "{error:?}"
+    );
+
+    sb_test_support::block_on(core.shutdown());
+}

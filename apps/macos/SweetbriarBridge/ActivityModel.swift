@@ -21,6 +21,12 @@ public protocol ActivitySource: Sendable {
     func resolveBreakerEvent(
         idempotencyKey: String, eventId: String, resolution: BreakerResolution
     ) async throws -> Receipt
+    func releaseIntents(
+        idempotencyKey: String, intentIds: [String]
+    ) async throws -> Receipt
+    func cancelIntents(
+        idempotencyKey: String, intentIds: [String]
+    ) async throws -> Receipt
 }
 
 /// One in-flight next per stream; every answer requires a new read.
@@ -47,14 +53,18 @@ public final class ActivityModel {
     /// The last full read's first failure, or nil. A section whose
     /// fetch failed keeps what it showed; the others still update.
     public private(set) var loadError: (any Error)?
-    /// The last breaker resolution's failure, cleared by the next
-    /// success; nil while none failed.
+    /// The last health action's failure, cleared by the next success;
+    /// nil while none failed. Covers a breaker resolution and an intent
+    /// release or cancel.
     public private(set) var actionError: (any Error)?
     /// Event ids with a resolution in flight.
     public private(set) var resolving: Set<String> = []
+    /// Intent ids with a release or cancel in flight.
+    public private(set) var acting: Set<String> = []
 
     private let source: any ActivitySource
     private var healthTicket: UInt64 = 0
+    private var intentsTicket: UInt64 = 0
     private var readTicket: UInt64 = 0
     private var readPending = false
     private var followTicket: UInt64 = 0
@@ -126,6 +136,78 @@ public final class ActivityModel {
                 self.resolving.remove(eventId)
                 self.actionError = error
             }
+        }
+    }
+
+    /// Release parked or quarantined intents so the account worker
+    /// runs them again.
+    public func release(intentIds: [String]) {
+        runIntentAction(intentIds) { source, key in
+            try await source.releaseIntents(idempotencyKey: key, intentIds: intentIds)
+        }
+    }
+
+    /// Cancel pending, parked or quarantined intents so they never run,
+    /// reverting a flag intent's local effect.
+    public func cancel(intentIds: [String]) {
+        runIntentAction(intentIds) { source, key in
+            try await source.cancelIntents(idempotencyKey: key, intentIds: intentIds)
+        }
+    }
+
+    /// One intent health action, like `resolve(eventId:resolution:)`:
+    /// each user action takes a fresh key, a call naming an id already
+    /// in flight (or none) is ignored, and a success clears any
+    /// previous action error and re-reads the intents list before the
+    /// ids leave `acting`.
+    private func runIntentAction(
+        _ intentIds: [String],
+        _ action: @escaping @Sendable (any ActivitySource, String) async throws -> Receipt
+    ) {
+        let ids = Set(intentIds)
+        guard !ids.isEmpty, ids.isDisjoint(with: acting) else { return }
+        acting.formUnion(ids)
+        Task { [weak self] in
+            let key = UUID().uuidString
+            do {
+                guard let source = self?.source else { return }
+                _ = try await action(source, key)
+                guard let self else { return }
+                self.actionError = nil
+                // Keep the row disabled until the re-read replaces its
+                // old state, or a second click would act on it again.
+                await self.refreshIntents()
+                self.acting.subtract(ids)
+            } catch is CancellationError {
+                self?.acting.subtract(ids)
+            } catch {
+                guard let self else { return }
+                self.acting.subtract(ids)
+                self.actionError = error
+            }
+        }
+    }
+
+    /// Re-read the intents list after a health action; a newer read
+    /// wins. Like [`refreshAccounts`], a success leaves `loadError`
+    /// alone so a failed subscription stays visible and retryable.
+    private func refreshIntents() async {
+        intentsTicket &+= 1
+        let ticket = intentsTicket
+        do {
+            // The query returns parked and quarantined only, so the
+            // filter names neither (spec/07).
+            let page = try await source.intents(
+                filter: IntentFilter(accountId: nil, state: nil),
+                after: nil, limit: Self.pageLimit
+            )
+            guard ticket == intentsTicket else { return }
+            intents = page.rows
+            intentsTruncated = page.hasMore
+        } catch is CancellationError {
+        } catch {
+            guard ticket == intentsTicket else { return }
+            loadError = error
         }
     }
 
