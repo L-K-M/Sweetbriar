@@ -271,3 +271,33 @@ fn requested_backups_use_the_setting_and_replay_after_the_volume_disappears() {
     assert_eq!(block_on(engine.list_backups()).unwrap().len(), 1);
     block_on(engine.shutdown()).unwrap();
 }
+
+/// `reader.mark_read` (spec/02, M3.2): `immediately` by default, one of
+/// the registry's choices, anything else `InvalidInput`.
+#[test]
+fn reader_mark_read_defaults_to_immediately_and_takes_its_choices() {
+    let scratch = ScratchDir::new("engine-reader-mark-read");
+    let engine = block_on(Engine::open(scratch.path().join("store"))).unwrap();
+    let mark_read = |engine: &Engine| {
+        block_on(engine.settings())
+            .unwrap()
+            .into_iter()
+            .find(|setting| setting.key() == "reader.mark_read")
+            .unwrap()
+    };
+    assert_eq!(mark_read(&engine).value(), "immediately");
+    assert!(mark_read(&engine).is_default());
+
+    for value in ["2", "5", "10", "manual", "immediately"] {
+        block_on(engine.set_setting(&engine.new_idempotency_key(), "reader.mark_read", value))
+            .unwrap();
+        assert_eq!(mark_read(&engine).value(), value);
+    }
+    for value in ["0", "3", "never", ""] {
+        assert!(matches!(
+            block_on(engine.set_setting(&engine.new_idempotency_key(), "reader.mark_read", value)),
+            Err(EngineError::InvalidInput { field, .. }) if field == "value"
+        ));
+    }
+    block_on(engine.shutdown()).unwrap();
+}

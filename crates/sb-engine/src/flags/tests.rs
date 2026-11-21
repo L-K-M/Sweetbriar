@@ -9,7 +9,7 @@ use sb_resources::{StoreError, WritePriority, cancel_intents, refresh_list_rows}
 use sb_test_support::block_on;
 
 use crate::views::tests::scratch_engine;
-use crate::{Engine, EngineError, FlagChange, IntentFlag, UndoToken};
+use crate::{Engine, EngineError, FlagChange, IntentFlag, MessageSelection, UndoToken};
 
 const ACCOUNT: &str = "acct-1";
 const MESSAGE: i64 = 1;
@@ -340,6 +340,184 @@ fn a_local_archive_account_is_refused() {
         matches!(error, EngineError::InvalidInput { ref field, .. } if field.as_str() == "account_id"),
         "{error:?}"
     );
+
+    block_on(engine.shutdown()).unwrap();
+}
+
+fn set_flags(
+    engine: &Engine,
+    key: &str,
+    occurrences: Vec<i64>,
+    add: &[&str],
+    remove: &[&str],
+) -> Result<Option<UndoToken>, EngineError> {
+    let names = |names: &[&str]| names.iter().map(|name| (*name).to_owned()).collect();
+    block_on(engine.set_flags(
+        key,
+        MessageSelection::OccurrenceIds(occurrences),
+        names(add),
+        names(remove),
+    ))
+}
+
+fn seen(engine: &Engine, occurrence: i64) -> i64 {
+    count(
+        engine,
+        &format!("SELECT f_seen FROM occurrences WHERE occurrence_id = {occurrence}"),
+    )
+}
+
+/// An occurrence of the local archive account, in a fresh mailbox.
+fn local_occurrence(engine: &Engine) -> i64 {
+    block_on(engine.resources().write(WritePriority::User, |tx| {
+        tx.execute(
+            "INSERT INTO mailboxes (mailbox_id, account_id, remote_name, kind, selectable,
+             sync_state)
+             SELECT 9, account_id, 'Imported', 'folder', 1, 'synced' FROM accounts
+             WHERE provider = 'local_archive'",
+            [],
+        )
+        .map_err(internal)?;
+        tx.execute(
+            "INSERT INTO logical_messages (message_id, account_id, created_at)
+             SELECT 9, account_id, 0 FROM accounts WHERE provider = 'local_archive'",
+            [],
+        )
+        .map_err(internal)?;
+        tx.execute(
+            "INSERT INTO occurrences (occurrence_id, account_id, mailbox_id, message_id,
+             state, first_seen_at, last_seen_at)
+             SELECT 91, account_id, 9, 9, 'present', 0, 0 FROM accounts
+             WHERE provider = 'local_archive'",
+            [],
+        )
+        .map_err(internal)?;
+        Ok(91)
+    }))
+    .unwrap()
+}
+
+/// `set_flags` plans each change once per logical message, however
+/// many of its occurrences the selection names, under one token that
+/// undo reverses; a replayed key is inert and a held flag plans nothing
+/// (spec/07 "Flags").
+#[test]
+fn set_flags_plans_each_change_per_message_under_one_token() {
+    let (_scratch, engine) = scratch_engine("flags-set-flags");
+    seed(&engine);
+
+    let key = engine.new_idempotency_key();
+    let token = set_flags(
+        &engine,
+        &key,
+        vec![FIRST, SECOND],
+        &["\\Seen", "\\Flagged"],
+        &[],
+    )
+    .unwrap()
+    .expect("a token");
+    let planned = intents(&engine);
+    assert_eq!(planned.len(), 2, "one intent per change: {planned:?}");
+    assert!(
+        planned
+            .iter()
+            .all(|(_, state, origin, _)| state == "pending" && origin == "user")
+    );
+    for occurrence in [FIRST, SECOND] {
+        assert_eq!(
+            (seen(&engine, occurrence), flagged(&engine, occurrence)),
+            (1, 1)
+        );
+    }
+    let replayed = set_flags(&engine, &key, vec![FIRST], &["\\Seen"], &[]).unwrap();
+    assert_eq!(replayed.as_ref(), Some(&token));
+    assert_eq!(intents(&engine).len(), 2);
+    assert_eq!(
+        set_flags(
+            &engine,
+            &engine.new_idempotency_key(),
+            vec![FIRST],
+            &["\\Seen"],
+            &[]
+        )
+        .unwrap(),
+        None,
+        "a held flag plans nothing"
+    );
+
+    block_on(engine.undo(&engine.new_idempotency_key(), &token)).unwrap();
+    let all = intents(&engine);
+    assert_eq!(all.len(), 4);
+    assert!(all[2..].iter().all(|(_, _, origin, _)| origin == "undo"));
+    assert_eq!((seen(&engine, FIRST), flagged(&engine, SECOND)), (0, 0));
+
+    block_on(engine.shutdown()).unwrap();
+}
+
+/// Unknown or repeated flags, no flag at all, an empty selection, and
+/// a selection of the local archive or of several accounts are
+/// `InvalidInput` on their field and write nothing; an unknown
+/// occurrence is `NotFound`.
+#[test]
+fn set_flags_refuses_bad_flags_and_selections() {
+    let (_scratch, engine) = scratch_engine("flags-set-flags-refused");
+    seed(&engine);
+    let local = local_occurrence(&engine);
+    let field_of = |result: Result<Option<UndoToken>, EngineError>| match result {
+        Err(EngineError::InvalidInput { field, .. }) => field,
+        other => panic!("expected InvalidInput, got {other:?}"),
+    };
+    let key = || engine.new_idempotency_key();
+
+    assert_eq!(
+        field_of(set_flags(
+            &engine,
+            &key(),
+            vec![FIRST],
+            &["\\Answered"],
+            &[]
+        )),
+        "add"
+    );
+    assert_eq!(
+        field_of(set_flags(
+            &engine,
+            &key(),
+            vec![FIRST],
+            &["\\Seen"],
+            &["\\Seen"]
+        )),
+        "remove"
+    );
+    assert_eq!(
+        field_of(set_flags(&engine, &key(), vec![FIRST], &[], &[])),
+        "add"
+    );
+    assert_eq!(
+        field_of(set_flags(&engine, &key(), vec![], &["\\Seen"], &[])),
+        "selection"
+    );
+    assert_eq!(
+        field_of(set_flags(&engine, &key(), vec![local], &["\\Seen"], &[])),
+        "selection"
+    );
+    assert_eq!(
+        field_of(set_flags(
+            &engine,
+            &key(),
+            vec![FIRST, local],
+            &["\\Seen"],
+            &[]
+        )),
+        "selection"
+    );
+    assert!(matches!(
+        set_flags(&engine, &key(), vec![404], &["\\Seen"], &[]),
+        Err(EngineError::NotFound { .. })
+    ));
+    assert!(intents(&engine).is_empty());
+    assert_eq!(seen(&engine, FIRST), 0);
+    assert_eq!(count(&engine, "SELECT COUNT(*) FROM command_receipts"), 0);
 
     block_on(engine.shutdown()).unwrap();
 }

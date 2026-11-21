@@ -1,20 +1,22 @@
 //! Flag changes and undo (spec/04-sync-proton "Running an intent",
 //! spec/07 "Undo"): `plan_flag_change` writes the local effect and one
 //! intent per message in one transaction and answers an opaque token;
-//! `undo` plans the inverse change for the token's intents. M3 plans
-//! Proton accounts only; the other providers arrive with M3.2.
+//! `set_flags` plans them for a selection's messages; `undo` plans the
+//! inverse change for the token's intents. M3 plans Proton accounts
+//! only; the local archive's flags are later (spec/07 "Flags").
 
 use std::collections::VecDeque;
 
 use sb_resources::{
-    FlagChange, IntentOrigin, StoreError, WritePriority, intent_for_undo, plan_flag_intents,
-    proton_account, run_once,
+    FlagChange, IntentFlag, IntentOrigin, StoreError, WritePriority, flag_selection_account,
+    intent_for_undo, plan_flag_intents, proton_account, run_once,
 };
 
 use crate::engine::validate_idempotency_key;
-use crate::{Engine, EngineError};
+use crate::{Engine, EngineError, MessageSelection};
 
 const PLAN_FLAG_CHANGE: &str = "plan_flag_change";
+const SET_FLAGS: &str = "set_flags";
 const UNDO: &str = "undo";
 
 /// An opaque undo token (spec/07 "Undo"): for remote effects it names
@@ -78,9 +80,8 @@ impl Engine {
     /// one intent per message, in one user-priority write. Answers the
     /// token naming the planned intents, or `None` when every message
     /// already held the requested value. A repeated key replays the
-    /// same token and writes nothing. Only a Proton account is accepted
-    /// for now; any other account is `InvalidInput` (M3.2 adds the
-    /// rest).
+    /// same token and writes nothing. Only a Proton account is accepted;
+    /// any other account is `InvalidInput` (spec/07 "Flags").
     pub async fn plan_flag_change(
         &self,
         idempotency_key: &str,
@@ -122,6 +123,85 @@ impl Engine {
             .await?;
         // The account workers run new intents after their next poll;
         // ask for it now rather than after the poll interval.
+        self.account_jobs().wake();
+        token_from_receipt(receipt.result_json())
+    }
+
+    /// `set_flags(selection, add, remove)` (spec/07 "Flags"): add or
+    /// remove `\Seen` and `\Flagged` on the selection's logical
+    /// messages, each change planned as [`Engine::plan_flag_change`]
+    /// plans it, all in one user-priority write. The selection's
+    /// messages must belong to one Proton account. Answers one token
+    /// naming every planned intent, or `None` when every flag already
+    /// held. A repeated key replays the same token and writes nothing.
+    pub async fn set_flags(
+        &self,
+        idempotency_key: &str,
+        selection: MessageSelection,
+        add: Vec<String>,
+        remove: Vec<String>,
+    ) -> Result<Option<UndoToken>, EngineError> {
+        validate_idempotency_key(idempotency_key)?;
+        let changes = flag_changes(&add, &remove)?;
+        let messages = self.selection_messages(&selection).await?;
+        if messages.is_empty() {
+            return Err(EngineError::invalid_input(
+                "selection",
+                "a flag change needs at least one message",
+            ));
+        }
+        let mut ids: VecDeque<String> = (0..messages.len() * changes.len())
+            .map(|_| self.resources().new_uuid_string())
+            .collect();
+        let now = self.resources().now();
+        let key = idempotency_key.to_owned();
+        let receipt = self
+            .command(move |worker| async move {
+                worker
+                    .resources()
+                    .write(WritePriority::User, move |tx| {
+                        run_once(tx, &key, SET_FLAGS, now, |tx| {
+                            // The selection was resolved before this write
+                            // ran; refuse rather than assume it still is.
+                            let Some(account) = flag_selection_account(tx, &messages)? else {
+                                return Err(StoreError::InvalidInput {
+                                    message: "a flag change needs at least one message".to_owned(),
+                                });
+                            };
+                            if proton_account(tx, &account)?.is_none() {
+                                return Err(StoreError::InvalidInput {
+                                    message: "flag changes need a Proton account".to_owned(),
+                                });
+                            }
+                            let mut planned = Vec::new();
+                            for &change in &changes {
+                                planned.extend(plan_flag_intents(
+                                    tx,
+                                    &account,
+                                    &messages,
+                                    change,
+                                    IntentOrigin::User,
+                                    now.as_millis(),
+                                    &mut || {
+                                        ids.pop_front()
+                                            .expect("one intent id was minted per change")
+                                    },
+                                )?);
+                            }
+                            Ok(encode_receipt(&account, &planned))
+                        })
+                    })
+                    .await
+                    .map_err(|error| match error {
+                        // Every refusal inside is about what the
+                        // selection names.
+                        StoreError::InvalidInput { message } => {
+                            EngineError::invalid_input("selection", message)
+                        }
+                        other => EngineError::from(other),
+                    })
+            })
+            .await?;
         self.account_jobs().wake();
         token_from_receipt(receipt.result_json())
     }
@@ -208,6 +288,37 @@ impl Engine {
             ))
         }
     }
+}
+
+/// `set_flags`' changes, adds first: each name is `\Seen` or
+/// `\Flagged` and appears once across both lists, and at least one is
+/// given (spec/07 "Flags").
+fn flag_changes(add: &[String], remove: &[String]) -> Result<Vec<FlagChange>, EngineError> {
+    let mut changes: Vec<FlagChange> = Vec::new();
+    for (field, names, set) in [("add", add, true), ("remove", remove, false)] {
+        for name in names {
+            let flag = [IntentFlag::Seen, IntentFlag::Flagged]
+                .into_iter()
+                .find(|flag| flag.as_str() == name)
+                .ok_or_else(|| {
+                    EngineError::invalid_input(field, format!("set_flags doesn't change {name}"))
+                })?;
+            if changes.iter().any(|change| change.flag == flag) {
+                return Err(EngineError::invalid_input(
+                    field,
+                    format!("{name} is named twice"),
+                ));
+            }
+            changes.push(FlagChange { flag, set });
+        }
+    }
+    if changes.is_empty() {
+        return Err(EngineError::invalid_input(
+            "add",
+            "set_flags needs a flag to add or remove",
+        ));
+    }
+    Ok(changes)
 }
 
 /// The receipt body: the same shape as the token, so a replay answers
