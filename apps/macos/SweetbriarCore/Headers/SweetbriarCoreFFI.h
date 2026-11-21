@@ -448,6 +448,26 @@ uint64_t uniffi_sb_ffi_fn_method_core_republish_draft_attachment(uint64_t ptr, u
 uint64_t uniffi_sb_ffi_fn_method_core_save_draft(uint64_t ptr, uint64_t token, RustBuffer idempotency_key, RustBuffer draft_id, RustBuffer base_revision_id, RustBuffer content
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_ADD_LABEL
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_ADD_LABEL
+uint64_t uniffi_sb_ffi_fn_method_core_add_label(uint64_t ptr, uint64_t token, RustBuffer idempotency_key, RustBuffer selection, int64_t label_mailbox_id
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_DELETE_TO_TRASH
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_DELETE_TO_TRASH
+uint64_t uniffi_sb_ffi_fn_method_core_delete_to_trash(uint64_t ptr, uint64_t token, RustBuffer idempotency_key, RustBuffer selection
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_MOVE_MESSAGES
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_MOVE_MESSAGES
+uint64_t uniffi_sb_ffi_fn_method_core_move_messages(uint64_t ptr, uint64_t token, RustBuffer idempotency_key, RustBuffer selection, int64_t to_mailbox_id
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_REMOVE_LABEL
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_REMOVE_LABEL
+uint64_t uniffi_sb_ffi_fn_method_core_remove_label(uint64_t ptr, uint64_t token, RustBuffer idempotency_key, RustBuffer selection, int64_t label_mailbox_id
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_SET_FLAGS
 #define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_SET_FLAGS
 uint64_t uniffi_sb_ffi_fn_method_core_set_flags(uint64_t ptr, uint64_t token, RustBuffer idempotency_key, RustBuffer selection, RustBuffer add, RustBuffer remove
@@ -1334,6 +1354,30 @@ uint16_t uniffi_sb_ffi_checksum_method_core_republish_draft_attachment(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_SAVE_DRAFT
 #define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_SAVE_DRAFT
 uint16_t uniffi_sb_ffi_checksum_method_core_save_draft(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_ADD_LABEL
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_ADD_LABEL
+uint16_t uniffi_sb_ffi_checksum_method_core_add_label(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_DELETE_TO_TRASH
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_DELETE_TO_TRASH
+uint16_t uniffi_sb_ffi_checksum_method_core_delete_to_trash(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_MOVE_MESSAGES
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_MOVE_MESSAGES
+uint16_t uniffi_sb_ffi_checksum_method_core_move_messages(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_REMOVE_LABEL
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_REMOVE_LABEL
+uint16_t uniffi_sb_ffi_checksum_method_core_remove_label(void
     
 );
 #endif

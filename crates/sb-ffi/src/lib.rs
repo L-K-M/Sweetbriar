@@ -33,6 +33,7 @@ pub use compose::{ComposeCatalog, ComposeIdentity, MarkdownPaste, PasteLoss};
 mod diagnostics;
 mod drafts;
 mod error;
+mod filing;
 mod flags;
 mod health;
 mod imports;

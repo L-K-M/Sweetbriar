@@ -1,4 +1,4 @@
-//! M2.17: the read-only sync suite against Proton's own development
+//! The sync and mutation suites against Proton's own development
 //! server (spec/11 "The `go-proton-api` lane").
 //!
 //! Gated on `SB_GPA_LANE=<path to the driver's JSON line>`. Without it
@@ -14,6 +14,8 @@ use proton_srp::RPGPVerifier;
 use rustls::pki_types::CertificateDer;
 use rustls::pki_types::pem::PemObject;
 use serde::Deserialize;
+
+mod filing;
 
 const LANE_ENV: &str = "SB_GPA_LANE";
 const SUMMARY_ENV: &str = "SB_GPA_LANE_SUMMARY";
@@ -66,7 +68,7 @@ struct LaneMessage {
 }
 
 #[tokio::test]
-async fn the_development_server_lists_the_seeded_account_read_only() {
+async fn the_development_server_syncs_and_mutates_synthetic_mail() {
     let Some(path) = std::env::var_os(LANE_ENV) else {
         println!(
             "skipped: {LANE_ENV} is not set; run ci/go-proton-api and point it at its JSON line"
@@ -84,41 +86,8 @@ async fn the_development_server_lists_the_seeded_account_read_only() {
 
     let scratch = ScratchDir::new("service-go-proton-api-lane");
     let root = scratch.path().join("store");
-    let secrets = Arc::new(FakeSecrets::new());
-    let clock = Arc::new(MovableClock::new(1_000_000));
-    let cert = CertificateDer::from_pem_slice(lane.cert_pem.as_bytes())
-        .expect("the driver's certificate parses");
-    let engine = Engine::open_with_proton(
-        &root,
-        secrets,
-        lane.base_url.clone(),
-        vec![cert],
-        Arc::new(RPGPVerifier::default()),
-        clock,
-    )
-    .await
-    .expect("the engine opens against the development server");
-    let core = Core::around(engine);
-
-    let state = match core
-        .begin_proton_sign_in(
-            "lane",
-            ProtonSignInParams {
-                display_name: "Lane".to_owned(),
-                username: lane.username.clone(),
-                password: lane.password.clone().into_bytes(),
-                account_id: None,
-            },
-        )
-        .await
-        .expect("the sign-in begins")
-    {
-        BeginProtonSignIn::Open { state, .. } => state,
-        BeginProtonSignIn::Complete { receipt } => {
-            panic!("an unused key replayed a receipt: {receipt:?}")
-        }
-    };
-    let id = account_id(&state);
+    let core = open_lane_core(&root, &lane).await;
+    let id = sign_in_lane(&core, &lane).await;
 
     let coverage = listed(&core, &id).await;
     assert_eq!(
@@ -239,6 +208,7 @@ async fn the_development_server_lists_the_seeded_account_read_only() {
         },
     )
     .await;
+    let filing = filing::run(&core, &db, &id, &coverage, &lane).await;
 
     write_summary(
         SUMMARY_ENV,
@@ -256,10 +226,51 @@ async fn the_development_server_lists_the_seeded_account_read_only() {
             "mutations": mutations,
             "send": send,
             "flags": flags,
+            "filing": filing,
         }),
     );
 
     core.shutdown().await;
+}
+
+async fn open_lane_core(root: &std::path::Path, lane: &LaneLine) -> Core {
+    let secrets = Arc::new(FakeSecrets::new());
+    let clock = Arc::new(MovableClock::new(1_000_000));
+    let cert = CertificateDer::from_pem_slice(lane.cert_pem.as_bytes())
+        .expect("the driver's certificate parses");
+    let engine = Engine::open_with_proton(
+        root,
+        secrets,
+        lane.base_url.clone(),
+        vec![cert],
+        Arc::new(RPGPVerifier::default()),
+        clock,
+    )
+    .await
+    .expect("the engine opens against the development server");
+    Core::around(engine)
+}
+
+async fn sign_in_lane(core: &Core, lane: &LaneLine) -> String {
+    let state = match core
+        .begin_proton_sign_in(
+            "lane",
+            ProtonSignInParams {
+                display_name: "Lane".to_owned(),
+                username: lane.username.clone(),
+                password: lane.password.clone().into_bytes(),
+                account_id: None,
+            },
+        )
+        .await
+        .expect("the sign-in begins")
+    {
+        BeginProtonSignIn::Open { state, .. } => state,
+        BeginProtonSignIn::Complete { receipt } => {
+            panic!("an unused key replayed a receipt: {receipt:?}")
+        }
+    };
+    account_id(&state)
 }
 
 /// The UTC date, for the artifact's run date.

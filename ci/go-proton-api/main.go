@@ -482,8 +482,18 @@ func isSendPath(method, path string) bool {
 	if method == http.MethodPost && (path == "/mail/v4/messages" || path == "/mail/v4/attachments") {
 		return true
 	}
-	return strings.HasPrefix(path, "/mail/v4/messages/") &&
-		(method == http.MethodPost || method == http.MethodPut)
+	id, messagePath := strings.CutPrefix(path, "/mail/v4/messages/")
+	if !messagePath || (method != http.MethodPost && method != http.MethodPut) {
+		return false
+	}
+	switch id {
+	case "label", "unlabel", "read", "unread":
+		// Filing and flags don't send mail. A send-log readback here
+		// would add the driver's own POST-based Inbox query to their audit.
+		return false
+	default:
+		return true
+	}
 }
 
 // responseCodeError reads Proton's `Code` and `Error` from a reply. A
@@ -742,6 +752,9 @@ func rewriteLaneResponse(path string, body []byte) ([]byte, bool) {
 	if path == "/mail/v4/messages" && replaceNullLists(response) {
 		changed = true
 	}
+	if strings.HasPrefix(path, "/mail/v4/messages/") && replaceNullFullMessageLists(response) {
+		changed = true
+	}
 	if isEventsPath(path) && replaceNullEventLists(response) {
 		changed = true
 	}
@@ -789,7 +802,7 @@ func replaceNullEventLists(response map[string]any) bool {
 			continue
 		}
 		if message, ok := event["Message"].(map[string]any); ok {
-			if replaceNullLists(map[string]any{"Messages": []any{message}}) {
+			if replaceNullAddressLists(message) {
 				changed = true
 			}
 		}
@@ -804,21 +817,39 @@ func replaceNullEventLists(response map[string]any) bool {
 // object, and the in-process fake sends `[]`).
 func replaceNullLists(response map[string]any) bool {
 	changed := false
-	fix := func(message map[string]any) {
-		for _, field := range []string{"ToList", "CCList", "BCCList", "ReplyTos"} {
-			if message[field] == nil {
-				message[field] = []any{}
-				changed = true
-			}
-		}
-	}
 	messages, ok := response["Messages"].([]any)
 	if !ok {
 		return false
 	}
 	for _, item := range messages {
-		if message, ok := item.(map[string]any); ok {
-			fix(message)
+		if message, ok := item.(map[string]any); ok && replaceNullAddressLists(message) {
+			changed = true
+		}
+	}
+	return changed
+}
+
+// Full-message reads precede filing. Like listing, they can carry null
+// address lists, and the pinned server can also send null Attachments.
+func replaceNullFullMessageLists(response map[string]any) bool {
+	message, ok := response["Message"].(map[string]any)
+	if !ok {
+		return false
+	}
+	changed := replaceNullAddressLists(message)
+	if value, present := message["Attachments"]; present && value == nil {
+		message["Attachments"] = []any{}
+		changed = true
+	}
+	return changed
+}
+
+func replaceNullAddressLists(message map[string]any) bool {
+	changed := false
+	for _, field := range []string{"ToList", "CCList", "BCCList", "ReplyTos"} {
+		if message[field] == nil {
+			message[field] = []any{}
+			changed = true
 		}
 	}
 	return changed

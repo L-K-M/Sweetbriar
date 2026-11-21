@@ -675,8 +675,8 @@ struct State {
     /// M5.1b), so a suite can assert none was attempted.
     destructive_calls: usize,
     /// Whether labelling a message with a folder drops its other
-    /// folder, as Proton's own server may; off by default, as the
-    /// pinned development server keeps both (plan M5.1b).
+    /// folder, as the pinned development server does. The fake keeps
+    /// both by default to exercise explicit unlabel (plan M5.1b).
     exclusive_folders: bool,
     /// The fake's own page-size cap; the transport clamps to the same
     /// 150 (research `mail-sync.md` §3).

@@ -103,7 +103,7 @@ verified before it completes.
     deletes and emptying, asserted as never attempted;
   - M5.1c (~800): the commands through the service and FFI with the
     regenerated bindings, and the mutation-matrix suite on the
-    `go-proton-api` lane.
+    `go-proton-api` lane, using the events support from M3.2d.
 
 ### M5.2 Filing in the app — M, macos-ci + owner
 
