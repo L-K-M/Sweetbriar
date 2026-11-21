@@ -186,7 +186,10 @@ final class ComposeWindows {
             },
             sendSource: source as? any SendSource,
             settingsSource: source as? any SendSafetySettingsSource,
-            pasteSource: source as? any PasteConversionSource)
+            pasteSource: source as? any PasteConversionSource,
+            externalEditor: (source as? any ExternalEditRootSource).map {
+                ExternalEditor(root: $0.externalEditRoot, opener: WorkspaceEditorOpener())
+            })
         windows[draftId] = controller
         controller.onClosed = { [weak self] in
             guard let self else { return }

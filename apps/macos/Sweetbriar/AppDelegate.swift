@@ -59,6 +59,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // opened. `-dataRoot <path> -cacheRoot <path>` opens other
         // roots: UI tests import into fresh ones (spec/11).
         let roots = LaunchRoots.fromArguments()
+        // External edits a crash left behind go unread (spec/10).
+        if let cacheRoot = (roots ?? (try? CoreBridge.platformDefaultConfig()))?.cacheRoot {
+            ExternalEditFiles.purge(
+                ExternalEditFiles.root(inCache: URL(fileURLWithPath: cacheRoot, isDirectory: true)))
+        }
         let session = CoreSession {
             if let roots {
                 return try await CoreBridge.open(config: roots, snapshots: batcher)

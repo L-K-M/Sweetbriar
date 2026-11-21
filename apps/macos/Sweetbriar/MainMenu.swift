@@ -274,6 +274,11 @@ final class MainMenuBuilder: NSObject {
             action: #selector(ComposeWindowController.insertImage(_:)),
             key: ""
         ))
+        menu.addItem(Self.item(
+            "Edit in External Editor",
+            action: #selector(ComposeWindowController.editInExternalEditor(_:)),
+            key: "E"
+        ))
         menu.addItem(.separator())
         menu.addItem(Self.item(
             "Select All",

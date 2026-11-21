@@ -15,10 +15,13 @@ import SweetbriarCore
 public final class CoreBridge: Sendable {
     private let core: SweetbriarCore.Core
     private let snapshots: FrameBatcher<[Setting]>
+    /// The roots the core opened under.
+    public let config: CoreConfig
 
-    private init(core: SweetbriarCore.Core, snapshots: FrameBatcher<[Setting]>) {
+    private init(core: SweetbriarCore.Core, snapshots: FrameBatcher<[Setting]>, config: CoreConfig) {
         self.core = core
         self.snapshots = snapshots
+        self.config = config
     }
 
     /// Open the core under explicit roots.
@@ -36,26 +39,24 @@ public final class CoreBridge: Sendable {
                 )
             )
         }
-        return CoreBridge(core: core, snapshots: snapshots)
+        return CoreBridge(core: core, snapshots: snapshots, config: config)
+    }
+
+    /// The platform's default roots.
+    public static func platformDefaultConfig() throws -> CoreConfig {
+        do {
+            let config = try SweetbriarCore.platformDefaultConfig()
+            return CoreConfig(dataRoot: config.dataRoot, cacheRoot: config.cacheRoot)
+        } catch let error as SweetbriarCore.CoreError {
+            throw CoreFailure(error)
+        }
     }
 
     /// Open the core under the platform's default roots.
     public static func open(
         snapshots: FrameBatcher<[Setting]>
     ) async throws -> CoreBridge {
-        let config: SweetbriarCore.CoreConfig
-        do {
-            config = try SweetbriarCore.platformDefaultConfig()
-        } catch let error as SweetbriarCore.CoreError {
-            throw CoreFailure(error)
-        }
-        return try await open(
-            config: CoreConfig(
-                dataRoot: config.dataRoot,
-                cacheRoot: config.cacheRoot
-            ),
-            snapshots: snapshots
-        )
+        try await open(config: platformDefaultConfig(), snapshots: snapshots)
     }
 
     /// Whole retained identity metadata and the core's resolved new-draft default.
