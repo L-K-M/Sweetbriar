@@ -20,6 +20,10 @@ use crate::schema::classify;
 use crate::sync::SyncedFlags;
 use crate::{StoreError, list_rows};
 
+mod filing;
+
+pub use filing::{Filed, Filing, LocalMove, filing_account, filing_target, plan_filing};
+
 /// The attempts after which an intent parks (spec/04-sync-proton
 /// "Failures"): the fifth failure is terminal.
 const MAX_INTENT_ATTEMPTS: i64 = 5;
