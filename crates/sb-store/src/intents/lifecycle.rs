@@ -22,7 +22,10 @@ use crate::{StoreError, list_rows};
 
 mod filing;
 
-pub use filing::{Filed, Filing, LocalMove, filing_account, filing_target, plan_filing};
+pub use filing::{
+    Filed, Filing, LocalMove, UndoableMove, filing_account, filing_target, move_for_undo,
+    plan_filing, plan_move_undo, undo_local_move,
+};
 
 /// The attempts after which an intent parks (spec/04-sync-proton
 /// "Failures"): the fifth failure is terminal.
@@ -629,7 +632,9 @@ pub fn release_intents(
 /// every named `pending`, `parked` or `quarantined` intent becomes
 /// `cancelled`, and a `set_flags` intent's local effect is reverted on
 /// the message's current occurrences unless a later live intent changes
-/// the same flag. All or nothing: a missing id is `NotFound`, an
+/// the same flag. A filing intent's local effect is reverted where the
+/// message still shows it (spec/04-sync-proton "Intents and the
+/// mutation matrix"). All or nothing: a missing id is `NotFound`, an
 /// `in_flight` or terminal intent is `Conflict`, and nothing changes.
 pub fn cancel_intents(tx: &Transaction, intent_ids: &[String], now: i64) -> Result<(), StoreError> {
     let mut targets = Vec::with_capacity(intent_ids.len());
@@ -684,6 +689,15 @@ pub fn cancel_intents(tx: &Transaction, intent_ids: &[String], now: i64) -> Resu
                 .map_err(|e| classify(e, "revert a cancelled intent"))?;
                 touched.extend(occurrences);
             }
+        } else {
+            touched.extend(filing::revert_filing(
+                tx,
+                &row.account_id,
+                &row.op,
+                &row.target_json,
+                &row.args_json,
+                now,
+            )?);
         }
         tx.execute(
             "UPDATE intents SET state = 'cancelled', wait_reason = NULL,

@@ -36,6 +36,7 @@ pub use diagnostics::{
 mod drafts;
 mod engine;
 mod error;
+mod filing;
 mod flags;
 pub use flags::UndoToken;
 mod health;

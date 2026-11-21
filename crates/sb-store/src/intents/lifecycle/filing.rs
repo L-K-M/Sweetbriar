@@ -10,7 +10,7 @@ use rusqlite::{OptionalExtension, Transaction, params};
 
 use super::{
     IntentOrigin, account_generation, current_occurrence_ids, logical_message, not_found_message,
-    refresh, target_json,
+    refresh, resolve_message, target_json,
 };
 use crate::StoreError;
 use crate::schema::classify;
@@ -48,6 +48,20 @@ pub enum Filed {
     Intents(Vec<String>),
     /// The local archive's moves, already made; labels never get here.
     Local(Vec<LocalMove>),
+}
+
+/// The undoable part of a stored Proton move (spec/04-sync-proton
+/// "Intents and the mutation matrix", Undo).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UndoableMove {
+    pub account_id: String,
+    pub message_id: i64,
+    /// Where the move put the message; Trash for `delete_to_trash`.
+    pub to_mailbox_id: i64,
+    /// The folder it moved from; `None` for a message without one.
+    pub from_mailbox_id: Option<i64>,
+    /// The stored state word; a cancelled move has nothing to undo.
+    pub state: String,
 }
 
 /// The one account `message_ids` belong to: several accounts are
@@ -91,7 +105,16 @@ pub fn plan_filing(
     now: i64,
     new_id: &mut dyn FnMut() -> String,
 ) -> Result<Filed, StoreError> {
-    plan(tx, account_id, message_ids, filing, origin, now, new_id)
+    plan(
+        tx,
+        account_id,
+        message_ids,
+        filing,
+        Policy::Command,
+        origin,
+        now,
+        new_id,
+    )
 }
 
 /// The mailbox `filing` files `account_id`'s messages into or out of,
@@ -103,20 +126,101 @@ pub fn filing_target(
     account_id: &str,
     filing: Filing,
 ) -> Result<i64, StoreError> {
-    target_mailbox(tx, account_id, account_kind(tx, account_id)?, filing)
+    target_mailbox(
+        tx,
+        account_id,
+        account_kind(tx, account_id)?,
+        filing,
+        Policy::Command,
+    )
 }
 
+/// Plan the inverse of a stored Proton move (spec/04-sync-proton
+/// "Intents and the mutation matrix", Undo): a move back to the folder
+/// it left, with `origin='undo'`. A message no longer in the move's
+/// destination is `Conflict` "Moved elsewhere since"; a cancelled move,
+/// or one from no folder, plans nothing.
+pub fn plan_move_undo(
+    tx: &Transaction,
+    moved: &UndoableMove,
+    now: i64,
+    new_id: &mut dyn FnMut() -> String,
+) -> Result<Vec<String>, StoreError> {
+    if moved.state == "cancelled" {
+        return Ok(Vec::new());
+    }
+    if occurrence_in(tx, moved.message_id, moved.to_mailbox_id)?.is_none() {
+        return Err(StoreError::conflict(MOVED_ELSEWHERE));
+    }
+    let Some(from) = moved.from_mailbox_id else {
+        return Ok(Vec::new());
+    };
+    let back = Filing::Move {
+        to_mailbox_id: from,
+    };
+    match plan(
+        tx,
+        &moved.account_id,
+        &[moved.message_id],
+        back,
+        Policy::Undo,
+        IntentOrigin::Undo,
+        now,
+        new_id,
+    )? {
+        Filed::Intents(planned) => Ok(planned),
+        Filed::Local(_) => Err(invalid("a Proton move's undo acted locally")),
+    }
+}
+
+/// Move a local-archive message back as [`LocalMove`] recorded it
+/// (spec/07 "Undo"): refused with `Conflict` "Moved elsewhere since"
+/// when it is no longer in the move's destination, and `InvalidInput`
+/// for an account that isn't the local archive.
+pub fn undo_local_move(
+    tx: &Transaction,
+    account_id: &str,
+    moved: &LocalMove,
+    now: i64,
+) -> Result<(), StoreError> {
+    // Undo tokens come from the caller: one naming local moves on a
+    // Proton account must not reach the intent planner below.
+    if account_kind(tx, account_id)? != AccountKind::Local {
+        return Err(invalid("local moves undo only on the local archive"));
+    }
+    if occurrence_in(tx, moved.message_id, moved.to_mailbox_id)?.is_none() {
+        return Err(StoreError::conflict(MOVED_ELSEWHERE));
+    }
+    let back = Filing::Move {
+        to_mailbox_id: moved.from_mailbox_id,
+    };
+    let mut no_intent = || unreachable!("the local archive plans no intent");
+    plan(
+        tx,
+        account_id,
+        &[moved.message_id],
+        back,
+        Policy::Undo,
+        IntentOrigin::Undo,
+        now,
+        &mut no_intent,
+    )?;
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
 fn plan(
     tx: &Transaction,
     account_id: &str,
     message_ids: &[i64],
     filing: Filing,
+    policy: Policy,
     origin: IntentOrigin,
     now: i64,
     new_id: &mut dyn FnMut() -> String,
 ) -> Result<Filed, StoreError> {
     let kind = account_kind(tx, account_id)?;
-    let target = target_mailbox(tx, account_id, kind, filing)?;
+    let target = target_mailbox(tx, account_id, kind, filing, policy)?;
     let mut messages = Vec::with_capacity(message_ids.len());
     for &message_id in message_ids {
         let (owner, provider_key) =
@@ -155,7 +259,13 @@ fn plan(
                     .filter(|&(_, mailbox)| mailbox != target)
                     .collect();
                 let arrived = folders.iter().any(|&(_, mailbox)| mailbox == target);
-                if left.is_empty() && arrived {
+                let previous_destination = match provider_key.as_deref() {
+                    Some(key) if kind == AccountKind::Proton => {
+                        live_move_destination(tx, account_id, key)?
+                    }
+                    _ => None,
+                };
+                if previous_destination.map_or(left.is_empty() && arrived, |id| id == target) {
                     continue;
                 }
                 for &(occurrence_id, _) in &left {
@@ -166,7 +276,8 @@ fn plan(
                 }
                 moved_any = true;
                 Change::Moved {
-                    from: left.first().map(|&(_, mailbox)| mailbox),
+                    from: previous_destination
+                        .or_else(|| left.first().map(|&(_, mailbox)| mailbox)),
                 }
             }
             Filing::AddLabel { .. } => {
@@ -223,6 +334,166 @@ fn plan(
     })
 }
 
+/// The move a stored `move` or `delete_to_trash` intent made; `None` for
+/// another operation, an unknown intent, or a target that no longer
+/// resolves to a message.
+pub fn move_for_undo(
+    tx: &Transaction,
+    intent_id: &str,
+) -> Result<Option<UndoableMove>, StoreError> {
+    let Some((account_id, op, target_json, args_json, state)) = tx
+        .query_row::<(String, String, String, String, String), _, _>(
+            "SELECT account_id, op, target_json, args_json, state FROM intents
+             WHERE intent_id = ?1 AND op IN ('move', 'delete_to_trash')",
+            [intent_id],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(|e| classify(e, "read a move for undo"))?
+    else {
+        return Ok(None);
+    };
+    let Some(message_id) = resolve_message(tx, &account_id, &target_json)? else {
+        return Ok(None);
+    };
+    let (to_mailbox_id, from_mailbox_id) = stored_move(tx, &account_id, &op, &args_json)?;
+    Ok(Some(UndoableMove {
+        account_id,
+        message_id,
+        to_mailbox_id,
+        from_mailbox_id,
+        state,
+    }))
+}
+
+/// Revert a cancelled filing intent's local effect (spec/04-sync-proton
+/// "Health actions"), when the message is still as the intent left it:
+/// a move's message goes back from the destination to the folder it
+/// left, an added label goes and a removed one returns. Answers the
+/// occurrences it changed; another operation changes nothing.
+pub(super) fn revert_filing(
+    tx: &Transaction,
+    account_id: &str,
+    op: &str,
+    target_json: &str,
+    args_json: &str,
+    now: i64,
+) -> Result<BTreeSet<i64>, StoreError> {
+    let mut touched = BTreeSet::new();
+    if !matches!(op, "move" | "delete_to_trash" | "copy" | "remove_label") {
+        return Ok(touched);
+    }
+    let Some(message_id) = resolve_message(tx, account_id, target_json)? else {
+        return Ok(touched);
+    };
+    let corrupt = || StoreError::corrupt(format!("a {op} intent has malformed args"));
+    let args: serde_json::Value = serde_json::from_str(args_json).map_err(|_| corrupt())?;
+    let mailbox = |field: &str| {
+        args.get(field)
+            .and_then(serde_json::Value::as_i64)
+            .ok_or_else(corrupt)
+    };
+    match op {
+        "copy" => {
+            if let Some(occurrence_id) = occurrence_in(tx, message_id, mailbox("to_mailbox_id")?)? {
+                touched.insert(vanish(tx, occurrence_id)?);
+            }
+        }
+        "remove_label" => {
+            let label = mailbox("from_mailbox_id")?;
+            let template = current_occurrence_ids(tx, account_id, message_id)?
+                .first()
+                .copied();
+            if let (None, Some(template)) = (occurrence_in(tx, message_id, label)?, template) {
+                touched.insert(place(tx, label, template, now)?);
+            }
+        }
+        _ => {
+            let (to, from) = stored_move(tx, account_id, op, args_json)?;
+            let Some(arrived) = occurrence_in(tx, message_id, to)? else {
+                return Ok(touched);
+            };
+            if let Some(from) = from
+                && occurrence_in(tx, message_id, from)?.is_none()
+            {
+                touched.insert(place(tx, from, arrived, now)?);
+            }
+            touched.insert(vanish(tx, arrived)?);
+        }
+    }
+    Ok(touched)
+}
+
+/// The last live move must finish before a newly planned move can run.
+/// Its destination is the next move's source even if events still list
+/// the earlier folder or temporarily show both.
+fn live_move_destination(
+    tx: &Transaction,
+    account_id: &str,
+    provider_key: &str,
+) -> Result<Option<i64>, StoreError> {
+    let previous = tx
+        .query_row(
+            "SELECT op, args_json FROM intents
+             WHERE account_id = ?1 AND op IN ('move', 'delete_to_trash')
+               AND state IN ('pending', 'in_flight', 'parked', 'quarantined')
+               AND json_extract(target_json, '$.provider_key') = ?2
+             ORDER BY rowid DESC LIMIT 1",
+            params![account_id, provider_key],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        )
+        .optional()
+        .map_err(|error| classify(error, "read a live move's destination"))?;
+    previous
+        .map(|(op, args)| stored_move(tx, account_id, &op, &args).map(|(to, _)| to))
+        .transpose()
+}
+
+/// A stored move's destination and source; `delete_to_trash` resolves
+/// the account's Trash.
+fn stored_move(
+    tx: &Transaction,
+    account_id: &str,
+    op: &str,
+    args_json: &str,
+) -> Result<(i64, Option<i64>), StoreError> {
+    let corrupt = || StoreError::corrupt(format!("a {op} intent has a malformed move"));
+    let args: serde_json::Value = serde_json::from_str(args_json).map_err(|_| corrupt())?;
+    let from = match args.get("from_mailbox_id") {
+        Some(serde_json::Value::Null) => None,
+        Some(value) => Some(value.as_i64().ok_or_else(corrupt)?),
+        None => return Err(corrupt()),
+    };
+    let to = if op == "move" {
+        args.get("to_mailbox_id")
+            .and_then(serde_json::Value::as_i64)
+            .ok_or_else(corrupt)?
+    } else {
+        trash(tx, account_id)?
+    };
+    Ok((to, from))
+}
+
+/// Undo's refusal when the message has moved on (spec/04-sync-proton
+/// "Intents and the mutation matrix").
+const MOVED_ELSEWHERE: &str = "Moved elsewhere since";
+
+/// Who files: a command keeps to the matrix's destinations, and undo
+/// may also move a message back into Sent or Drafts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Policy {
+    Command,
+    Undo,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AccountKind {
     Proton,
@@ -262,6 +533,7 @@ fn target_mailbox(
     account_id: &str,
     kind: AccountKind,
     filing: Filing,
+    policy: Policy,
 ) -> Result<i64, StoreError> {
     let (mailbox_id, wants_label) = match filing {
         Filing::Move { to_mailbox_id } => (to_mailbox_id, false),
@@ -305,7 +577,7 @@ fn target_mailbox(
             "messages can't be moved to mailbox {mailbox_id}"
         )));
     }
-    if matches!(role.as_deref(), Some("sent" | "drafts")) {
+    if policy == Policy::Command && matches!(role.as_deref(), Some("sent" | "drafts")) {
         return Err(invalid("messages can't be moved to Sent or Drafts"));
     }
     Ok(mailbox_id)
