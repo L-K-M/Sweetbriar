@@ -49,6 +49,11 @@ struct LaneLine {
     peer_email: String,
     #[serde(default)]
     send_log: String,
+    /// The flag suite's account and its one message (M3.2d).
+    #[serde(default)]
+    flags_username: String,
+    #[serde(default)]
+    flags_message: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -223,6 +228,18 @@ async fn the_development_server_lists_the_seeded_account_read_only() {
     )
     .await;
 
+    let flags = lane_flags::run_flag_suite(
+        &core,
+        &db,
+        &lane_flags::FlagLaneParams {
+            flags_username: lane.flags_username.clone(),
+            password: lane.password.clone(),
+            flags_message: lane.flags_message.clone(),
+            request_log: lane.request_log.clone(),
+        },
+    )
+    .await;
+
     write_summary(
         SUMMARY_ENV,
         serde_json::json!({
@@ -238,6 +255,7 @@ async fn the_development_server_lists_the_seeded_account_read_only() {
             "occurrences": multi.labels.len() + 1,
             "mutations": mutations,
             "send": send,
+            "flags": flags,
         }),
     );
 
@@ -316,6 +334,6 @@ fn audit_requests(path: &str) -> Vec<String> {
 }
 
 /// `value` as an SQL string literal: label names are free text.
-fn quoted(value: &str) -> String {
+pub(super) fn quoted(value: &str) -> String {
     format!("'{}'", value.replace('\'', "''"))
 }

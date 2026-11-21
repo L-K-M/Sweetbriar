@@ -1147,6 +1147,7 @@ mod flags;
 mod health;
 mod identities;
 mod lane;
+mod lane_flags;
 mod lane_send;
 mod new_mail;
 mod send;
