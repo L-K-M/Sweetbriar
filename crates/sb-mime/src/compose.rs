@@ -366,9 +366,9 @@ fn wrap_paragraph(text: &str) -> Vec<String> {
 
 // Markdown
 
-struct Rendered {
-    plain: String,
-    html: String,
+pub(crate) struct Rendered {
+    pub(crate) plain: String,
+    pub(crate) html: String,
 }
 
 fn markdown_options() -> Options {
@@ -495,7 +495,7 @@ fn trim_url(url: &str) -> &str {
     }
 }
 
-fn render_markdown(source: &str) -> Result<Rendered, ComposeError> {
+pub(crate) fn render_markdown(source: &str) -> Result<Rendered, ComposeError> {
     let options = markdown_options();
     let plain = {
         let mut renderer = PlainRenderer::default();

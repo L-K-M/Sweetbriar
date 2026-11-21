@@ -1425,6 +1425,12 @@ public protocol CoreProtocol: AnyObject, Sendable {
     func composeCatalog(token: CancelToken, preferredAccountId: String?) async throws  -> ComposeCatalog
     
     /**
+     * Paste as Markdown's pure conversion on the native compute pool;
+     * a refusal is `InvalidInput` on `html`, never a partial answer.
+     */
+    func markdownFromHtml(token: CancelToken, html: String) async throws  -> MarkdownPaste
+    
+    /**
      * Strict whole-input recipient parsing on the native compute pool.
      */
     func parseDraftRecipients(token: CancelToken, text: String) async throws  -> [DraftRecipient]
@@ -2424,6 +2430,26 @@ open func composeCatalog(token: CancelToken, preferredAccountId: String?)async t
             completeFunc: ffi_sb_ffi_rust_future_complete_rust_buffer,
             freeFunc: ffi_sb_ffi_rust_future_free_rust_buffer,
             liftFunc: FfiConverterTypeComposeCatalog_lift,
+            errorHandler: FfiConverterTypeCoreError_lift
+        )
+}
+    
+    /**
+     * Paste as Markdown's pure conversion on the native compute pool;
+     * a refusal is `InvalidInput` on `html`, never a partial answer.
+     */
+open func markdownFromHtml(token: CancelToken, html: String)async throws  -> MarkdownPaste  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_sb_ffi_fn_method_core_markdown_from_html(
+                        self.uniffiCloneHandle(),FfiConverterTypeCancelToken_lower(token),FfiConverterString.lower(html)
+                )
+            },
+            pollFunc: ffi_sb_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_sb_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_sb_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeMarkdownPaste_lift,
             errorHandler: FfiConverterTypeCoreError_lift
         )
 }
@@ -7794,6 +7820,63 @@ public func FfiConverterTypeMailboxes_lift(_ buf: RustBuffer) throws -> Mailboxe
 #endif
 public func FfiConverterTypeMailboxes_lower(_ value: Mailboxes) -> RustBuffer {
     return FfiConverterTypeMailboxes.lower(value)
+}
+
+
+/**
+ * Paste as Markdown's source and its losses, empty when lossless.
+ */
+public struct MarkdownPaste: Equatable, Hashable {
+    public var markdown: String
+    public var losses: [PasteLoss]
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(markdown: String, losses: [PasteLoss]) {
+        self.markdown = markdown
+        self.losses = losses
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension MarkdownPaste: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeMarkdownPaste: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> MarkdownPaste {
+        return
+            try MarkdownPaste(
+                markdown: FfiConverterString.read(from: &buf), 
+                losses: FfiConverterSequenceTypePasteLoss.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: MarkdownPaste, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.markdown, into: &buf)
+        FfiConverterSequenceTypePasteLoss.write(value.losses, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeMarkdownPaste_lift(_ buf: RustBuffer) throws -> MarkdownPaste {
+    return try FfiConverterTypeMarkdownPaste.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeMarkdownPaste_lower(_ value: MarkdownPaste) -> RustBuffer {
+    return FfiConverterTypeMarkdownPaste.lower(value)
 }
 
 
@@ -13830,6 +13913,96 @@ public func FfiConverterTypeMessageSelection_lower(_ value: MessageSelection) ->
 
 
 /**
+ * What a paste conversion couldn't keep (spec/07), in the spec's order.
+ */
+
+public enum PasteLoss: Equatable, Hashable {
+    
+    case images
+    case styling
+    case links
+    case tables
+    case other
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension PasteLoss: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypePasteLoss: FfiConverterRustBuffer {
+    typealias SwiftType = PasteLoss
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> PasteLoss {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .images
+        
+        case 2: return .styling
+        
+        case 3: return .links
+        
+        case 4: return .tables
+        
+        case 5: return .other
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: PasteLoss, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .images:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .styling:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .links:
+            writeInt(&buf, Int32(3))
+        
+        
+        case .tables:
+            writeInt(&buf, Int32(4))
+        
+        
+        case .other:
+            writeInt(&buf, Int32(5))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypePasteLoss_lift(_ buf: RustBuffer) throws -> PasteLoss {
+    return try FfiConverterTypePasteLoss.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypePasteLoss_lower(_ value: PasteLoss) -> RustBuffer {
+    return FfiConverterTypePasteLoss.lower(value)
+}
+
+
+
+/**
  * The next state of a Proton sign-in (spec/07).
  */
 
@@ -17448,6 +17621,31 @@ fileprivate struct FfiConverterSequenceTypeDraftAttachment: FfiConverterRustBuff
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterSequenceTypePasteLoss: FfiConverterRustBuffer {
+    typealias SwiftType = [PasteLoss]
+
+    public static func write(_ value: [PasteLoss], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypePasteLoss.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [PasteLoss] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [PasteLoss]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypePasteLoss.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterSequenceTypeReadingBlock: FfiConverterRustBuffer {
     typealias SwiftType = [ReadingBlock]
 
@@ -17729,6 +17927,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sb_ffi_checksum_method_core_compose_catalog() != 37204) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sb_ffi_checksum_method_core_markdown_from_html() != 46920) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sb_ffi_checksum_method_core_parse_draft_recipients() != 30089) {

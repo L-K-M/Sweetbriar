@@ -29,7 +29,7 @@ mod backup_copy;
 mod backups;
 mod cancel;
 mod compose;
-pub use compose::{ComposeCatalog, ComposeIdentity};
+pub use compose::{ComposeCatalog, ComposeIdentity, MarkdownPaste, PasteLoss};
 mod diagnostics;
 mod drafts;
 mod error;

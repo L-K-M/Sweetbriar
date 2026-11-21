@@ -388,6 +388,11 @@ uint64_t uniffi_sb_ffi_fn_method_core_list_restore_artifacts(uint64_t ptr, uint6
 uint64_t uniffi_sb_ffi_fn_method_core_compose_catalog(uint64_t ptr, uint64_t token, RustBuffer preferred_account_id
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_MARKDOWN_FROM_HTML
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_MARKDOWN_FROM_HTML
+uint64_t uniffi_sb_ffi_fn_method_core_markdown_from_html(uint64_t ptr, uint64_t token, RustBuffer html
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_PARSE_DRAFT_RECIPIENTS
 #define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_PARSE_DRAFT_RECIPIENTS
 uint64_t uniffi_sb_ffi_fn_method_core_parse_draft_recipients(uint64_t ptr, uint64_t token, RustBuffer text
@@ -1237,6 +1242,12 @@ uint16_t uniffi_sb_ffi_checksum_method_core_list_restore_artifacts(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_COMPOSE_CATALOG
 #define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_COMPOSE_CATALOG
 uint16_t uniffi_sb_ffi_checksum_method_core_compose_catalog(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_MARKDOWN_FROM_HTML
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_MARKDOWN_FROM_HTML
+uint16_t uniffi_sb_ffi_checksum_method_core_markdown_from_html(void
     
 );
 #endif

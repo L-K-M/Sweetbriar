@@ -263,6 +263,12 @@ final class MainMenuBuilder: NSObject {
         menu.addItem(Self.item("Cut", action: #selector(NSText.cut(_:)), key: "x"))
         menu.addItem(Self.item("Copy", action: #selector(NSText.copy(_:)), key: "c"))
         menu.addItem(Self.item("Paste", action: #selector(NSText.paste(_:)), key: "v"))
+        menu.addItem(Self.item(
+            "Paste as Markdown…",
+            action: #selector(ComposeWindowController.pasteAsMarkdown(_:)),
+            key: "v",
+            modifiers: [.option, .command]
+        ))
         menu.addItem(.separator())
         menu.addItem(Self.item(
             "Select All",

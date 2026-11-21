@@ -27,7 +27,7 @@ pub use bodies::{
 mod api;
 mod backups;
 mod compose;
-pub use compose::{ComposeCatalog, ComposeIdentity};
+pub use compose::{ComposeCatalog, ComposeIdentity, MarkdownPaste, PasteLoss};
 mod diagnostics;
 pub use diagnostics::{
     DiagnosticsAccount, DiagnosticsCoverage, DiagnosticsIntegrity, DiagnosticsPackage,
