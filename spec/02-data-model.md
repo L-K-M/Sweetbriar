@@ -1174,7 +1174,7 @@ CREATE TABLE draft_revisions (                    -- immutable once written
   cc_json         TEXT NOT NULL,
   bcc_json        TEXT NOT NULL,
   body_source     TEXT NOT NULL,
-  attachments_json TEXT NOT NULL,                  -- list of {object_sha256, filename, media_type, size}
+  attachments_json TEXT NOT NULL,                  -- list of {object_sha256, filename, media_type, size, content_id?} (content_id: bare, an image meant inline; a plain draft sends it as an ordinary attachment, 05; M4.4e2)
   created_at      INTEGER NOT NULL,
   UNIQUE (draft_id, seq),
   UNIQUE (revision_id, draft_id),

@@ -562,13 +562,69 @@ M4.4c. Choosing Out Box shows the Out Box in the list pane, as Drafts
     publications before its final save, so a finished file is saved,
     then fences and drains them; Close Without Saving fences first and
     drops unwanted results unreferenced.
-- **Paste:** pasting HTML offers "Paste as Markdown" with a preview and a
-  lossy-conversion warning; plain paste is the default.
+- **Paste (M4.4e1):** ⌘V always pastes plain text; the editor never
+  takes rich text. When the pasteboard holds HTML (`public.html`) and
+  the focused body editor is an editable Markdown draft, Edit → Paste as
+  Markdown (⌥⌘V) is enabled; otherwise it is disabled.
+  - It captures the HTML once and asks the core for its Markdown
+    (07 `markdown_from_html`), then shows a sheet with a read-only
+    preview of the Markdown source, styled as the composer styles it.
+    When the conversion was lossy, the sheet says what was lost ("Some
+    formatting can't be kept: images, text styles and colors."), one
+    phrase per loss in the core's order. Paste inserts the source at
+    the selection as one undoable edit ("Undo Paste as Markdown");
+    Cancel changes nothing. A later pasteboard change does
+    not alter an open sheet.
+  - HTML the core refuses (too large, 07) shows the reason in the sheet
+    with only Cancel; ⌘V still pastes its plain text.
+- **Inline images (M4.4e2–e3):** in a Markdown draft, Edit → Insert
+  Image… picks PNG, JPEG or GIF files, and pasting image data (PNG or
+  JPEG as is, TIFF converted to PNG) inserts it. Each image is published
+  like a picked file (above) and joins the content as an attachment with
+  a new Content-ID (a lowercase UUID followed by `@sweetbriar.invalid`,
+  bare, 05), and an image reference to it, `![name](cid:…)` (05), is
+  inserted at the selection; the text and the attachment are one
+  undoable edit ("Undo Insert Image"). The name is the file name without
+  its extension, or "Image" for pasted data, escaped like Markdown text
+  so nothing in it can break the reference. The source stays visible:
+  the editor shows the reference, not the picture. The image's
+  attachment row says "Inline". Removing that row keeps the reference
+  text, which then sends as its alt text in the text part and is dropped
+  from the HTML (05). Dropped files still attach as ordinary
+  attachments. In a plain draft Insert Image… is disabled and pasted
+  image data is ignored.
+- **External editor (M4.4e4):** Edit → Edit in External Editor (⇧⌘E)
+  hands the body to the default app for its type, `.md` for a Markdown
+  draft and `.txt` for a plain one.
+  - The shell writes the body source as UTF-8 to a new private file
+    (10) and opens it in that app. While it is out, the body editor is
+    read-only under a banner, "Editing in <app>. Changes you save there
+    appear here.", with Done; recipients, subject and attachments stay
+    editable. A file no app can open leaves the body editable, shows the
+    reason, and is deleted with its directory.
+  - The shell watches the file's directory, since editors save by
+    replacing the file, and reads it once changes have been quiet for
+    250 ms, which usually keeps an in-place save from being read
+    half-written; the final read on Done or close (below) replaces
+    whatever a mid-write read caught. Each change it
+    reads replaces the whole body as one undoable edit ("Undo External
+    Edit") and goes through autosave as any edit. A file that isn't
+    valid UTF-8 or is over 16 MiB changes nothing and the banner shows
+    the reason until a later save fixes it.
+  - Done, closing the window or quitting waits for the same 250 ms of
+    quiet (at most 2 s), reads the file once more, applies a change,
+    deletes the file and its directory, and then follows the usual close
+    and flush rules. When that read is invalid, nothing is deleted: Done
+    keeps the edit open with the reason in the banner, and closing or
+    quitting first asks whether to discard the external edits
+    ("Discard External Edits" or Cancel). Close Without Saving drops
+    the external edits with the other unsaved changes. Files left by a
+    crash are deleted at the next launch, unread.
 - **Sending** shows the Out Box entry. During the undo window (default
   7 s, set in settings) **Undo Send** cancels it.
 - **Composer probes (M0):** CJK marked text, right-to-left text, and undo
   across formatting. Pasted HTML, inline images and the external editor
-  come in M4.
+  came in M4.4e.
 
 ### Identity strip and account colors
 

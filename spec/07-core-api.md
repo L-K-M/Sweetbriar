@@ -434,6 +434,52 @@ async fn Core::shutdown(self);   // flush writer, release the lease
   own reservation, which a following `save_draft` spends once. It takes
   no idempotency key, returns no receipt, and writes no revision or
   draft row.
+- **Inline attachments (M4.4e2):** each attachment entry of
+  `save_draft`'s content, a published handle or a stored reference,
+  carries an optional `content_id` (05), which the revision stores in
+  `attachments_json` and `draft(draft_id)` returns. Republication
+  matches the four fields above and ignores it; the content that spends
+  the new handle carries the Content-ID again.
+- **Paste conversion (M4.4e1):** `markdown_from_html(html)` →
+  `MarkdownFromHtml { markdown, losses }` is a pure function: no store,
+  network or clock, and the same input always gives the same output.
+  Input HTML over 2 MiB of UTF-8 is `InvalidInput` ("too large"), and so
+  is HTML that builds more than 200,000 nodes or exceeds the parser's
+  fixed work budget ("too complex"). `losses` lists, once each and in
+  this order, what didn't survive: `images`, `styling`, `links`,
+  `tables`, `other`. An empty list means lossless.
+  - The HTML is parsed with `html5ever` as a fragment. Comments and
+    `head`, `script`, `style`, `template` and `noscript` are dropped
+    without a loss; nothing is fetched or run.
+  - Blocks: `p`, `div` and the other block containers become
+    paragraphs, `h1`–`h6` ATX headings, `blockquote` `>` quotes,
+    `ul`/`ol`/`li` lists (nested, with `ol`'s `start`), `pre` a fenced
+    code block whose fence is longer than any backtick run inside, `hr`
+    `---`, and `br` a hard break (`\` at the line's end).
+  - Inline: `strong`/`b` → `**`, `em`/`i` → `*`, `del`/`s`/`strike` →
+    `~~`, `code` → a backtick run longer than any inside. An `a` whose
+    `href` is `http`, `https` or `mailto` becomes `[text](url)`; with
+    any other `href` it becomes its text and adds `links`; without one,
+    its text.
+  - A `table` without `colspan`, `rowspan`, block content or a `br` in
+    its cells becomes a GFM table, its first row the header, with `|`
+    in cell text escaped; any other
+    becomes one paragraph per row, cells joined by " | ", and adds
+    `tables`.
+  - `img`, `picture`, `svg`, `video`, `audio`, `iframe`, `object` and
+    `embed` are dropped, keeping an `img`'s `alt` as text, and add
+    `images`. Form controls, `canvas` and `math` are dropped and add
+    `other`. A `style`, `color`, `bgcolor`, `face`, `size` or `align`
+    attribute, or a `font`, `u`, `mark`, `sub`, `sup`, `small` or `big`
+    element, keeps its content and adds `styling`. Other elements keep
+    their content without a loss.
+  - Text collapses whitespace as HTML renders it, except in `pre`.
+    Characters Markdown would read as syntax are backslash-escaped, so
+    the text renders as itself. That includes `<`: 05 shows raw HTML as
+    literal text, but as its source, so escapes inside a tag or an HTML
+    block would show their backslashes. Blocks are separated by one
+    blank line (inside a quote, a `>` line), lines end in `\n` and
+    nothing trails.
 
 ## Queries
 

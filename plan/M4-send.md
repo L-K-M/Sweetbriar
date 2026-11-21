@@ -345,6 +345,18 @@ inspectable Out Box. Unknown outcomes are never retried automatically.
   `cross_account_notice`; M4.4d2, the shell's Reply, Reply All and
   Forward commands, the banner and Send's confirmation; M4.4d3, the
   From-switch XCUITest.
+- **Split (2026-11-21):** M4.4e follows a spec revision (05, 07, 08,
+  10) and lands as four PRs, each with hosted tests on the real
+  `NSTextView` for its shell part. M4.4e1: `markdown_from_html` in
+  `sb-mime` over FFI, with a corpus test per rule and loss and a
+  property test that lossless output renders (05's text part) to the
+  HTML's text, and Paste as Markdown's sheet. M4.4e2: inline images in
+  the core: `content_id` in draft content, `save_draft`'s checks, the
+  engine's MIME input and the Proton upload's disposition, with the fake
+  checking `Disposition` and `ContentID`. M4.4e3: Insert Image… and
+  pasted image data in the composer. M4.4e4: Edit in External Editor,
+  tested with an injected opener and a fake editor that replaces the
+  file.
 
 ### M4.Q Qualification
 
