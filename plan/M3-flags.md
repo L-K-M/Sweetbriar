@@ -116,9 +116,10 @@ the intent framework every later mutation uses.
 - **Split (2026-11-21, M3.2):** the deliverables are estimated at
   about 3,800 lines, so M3.2 lands as four PRs:
   - M3.2a (~900): the flag-conflict rule on Proton events and listings,
-    and the engine acceptance on the fake (one call and its confirming
-    read, the label and Starred views, another client's later change
-    preserved, correct after the next poll);
+    and the engine acceptance on the fake through `plan_flag_change`
+    (one call and its confirming read, the label and Starred views,
+    another client's later change preserved, correct after the next
+    poll);
   - M3.2b (~1,100): `set_flags` through the engine, service and FFI, and
     the `reader.mark_read` setting (spec revision 2026-11-21: 02, 07);
   - M3.2c (~1,200): macOS: the Message menu and toolbar commands, `⇧⌘U`

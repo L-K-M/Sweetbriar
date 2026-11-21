@@ -336,9 +336,10 @@ M4.4c. Choosing Out Box shows the Out Box in the list pane, as Drafts
     it marks every row read (starred), otherwise unread (unstarred).
     The Message menu and the toolbar carry both commands. They act
     through `set_flags` (07), one call per account of the selection,
-    and are disabled when the selection holds a local-archive row. The
-    rows change at once from the local effect; a failed call shows its
-    error and changes nothing;
+    and are disabled when the selection holds a local-archive row. A
+    call's local effect commits with it, so its rows change at once; a
+    refused call shows its error and changes nothing, while the other
+    accounts' calls keep their effect;
   - type-to-file (below);
   - every command is also in a menu.
 - **Performance budget:** switching mailbox shows the first rows within
@@ -454,9 +455,9 @@ M4.4c. Choosing Out Box shows the Out Box in the list pane, as Drafts
   a Proton account, it marks that occurrence read through `set_flags`
   as `reader.mark_read` (02) says: at once, after that many seconds
   while the same message stays shown, or never (`manual`). Another
-  selection, a multi-row selection or a closed pane cancels a pending
-  mark. A message marked unread while it is shown stays unread until
-  it is shown again. Settings → Reading chooses the setting:
+  selection, a multi-row selection, a closed pane or marking the shown
+  message unread cancels a pending mark. A message marked unread while
+  it is shown stays unread until it is shown again. Settings → Reading chooses the setting:
   Immediately, After 2, 5 or 10 seconds, or Manually.
 - **Header area:**
   - from, to and date;
