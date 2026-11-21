@@ -1,10 +1,12 @@
-//! Crash cuts through a star's run (spec/11, plan M3.1c acceptance): a
-//! child signs in, plans a star on a fresh message and is killed at
-//! each counted point in turn: after the claim commits, before and
-//! after the call, and before and after the write that ends the run.
-//! The parent checks what the cut left, reopens the same store and
-//! fake, and asserts the fake applied the star at most once, the
-//! intent ends `done`, and it is never `done` without the star.
+//! Crash cuts through a star's run (spec/11, plan M3.1c acceptance)
+//! and a move's (plan M5.1b): a child signs in, plans the action on a
+//! fresh message and is killed at each counted point in turn: after the
+//! claim commits, before and after each call, and before and after the
+//! write that ends the run. The parent checks what the cut left,
+//! reopens the same store and fake, and asserts the fake applied each
+//! call at most once, the intent ends `done`, and it is never `done`
+//! without the change. A move's message is in its source, its
+//! destination or both after every cut, never in neither.
 
 use std::env;
 use std::fs;
@@ -22,7 +24,36 @@ use sb_test_support::{
 use super::tests::STAR;
 use super::{IntentCut, set_cut_hook};
 use crate::proton_send::crash_tests::MovableClock;
-use crate::{BeginProtonSignIn, Engine, ProtonSignInParams, ProtonSignInState};
+use crate::{BeginProtonSignIn, Engine, MessageSelection, ProtonSignInParams, ProtonSignInState};
+
+/// What a child plans.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Action {
+    /// Star the message: one `label` call.
+    Star,
+    /// Move it from the Inbox to Archive: `label`, then `unlabel`.
+    Move,
+}
+
+impl Action {
+    fn word(self) -> &'static str {
+        match self {
+            Self::Star => "star",
+            Self::Move => "move",
+        }
+    }
+
+    /// The calls the action takes once it is done.
+    fn calls(self) -> usize {
+        match self {
+            Self::Star => 1,
+            Self::Move => 2,
+        }
+    }
+}
+
+const INBOX: &str = "0";
+const ARCHIVE: &str = "6";
 
 const USER: &str = "owner@example.test";
 const PASSWORD: &str = "synthetic-proton-password";
@@ -42,6 +73,7 @@ async fn intent_crash_child() {
     let parent = root.parent().expect("a parent").to_path_buf();
     let base_url = fs::read_to_string(parent.join("url.txt")).expect("the fake's url");
     let key = fs::read_to_string(parent.join("message.txt")).expect("the message key");
+    let action = fs::read_to_string(parent.join("action.txt")).expect("the action");
     let verifier = fake_modulus_verifier(
         &fs::read_to_string(parent.join("verifier.txt")).expect("the fake's verifier key"),
     );
@@ -94,16 +126,41 @@ async fn intent_crash_child() {
     fs::write(root.join("session_ref.txt"), &reference).expect("the session ref writes");
 
     let message = listed_message(&engine, &key).await;
-    engine
-        .plan_flag_change(
-            &engine.new_idempotency_key(),
-            &account_id,
-            vec![message],
-            STAR,
-        )
-        .await
-        .expect("the star plans")
-        .expect("the fresh message wasn't starred");
+    if action == Action::Move.word() {
+        let (occurrence, archive) = engine
+            .resources()
+            .read(move |tx| {
+                tx.query_row(
+                    "SELECT o.occurrence_id,
+                            (SELECT mailbox_id FROM mailboxes WHERE provider_key = '6')
+                     FROM occurrences o JOIN mailboxes mb ON mb.mailbox_id = o.mailbox_id
+                     WHERE o.message_id = ?1 AND mb.provider_key = '0' AND o.state = 'present'",
+                    [message],
+                    |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+                )
+                .map_err(|error| StoreError::internal(error.to_string()))
+            })
+            .expect("the move's mailboxes read");
+        engine
+            .move_messages(
+                &engine.new_idempotency_key(),
+                MessageSelection::OccurrenceIds(vec![occurrence]),
+                archive,
+            )
+            .await
+            .expect("the move plans");
+    } else {
+        engine
+            .plan_flag_change(
+                &engine.new_idempotency_key(),
+                &account_id,
+                vec![message],
+                STAR,
+            )
+            .await
+            .expect("the star plans")
+            .expect("the fresh message wasn't starred");
+    }
     for _ in 0..2_000 {
         if settled.load(Ordering::SeqCst) {
             break;
@@ -112,7 +169,10 @@ async fn intent_crash_child() {
         engine.wake_proton_poll();
         tokio::time::sleep(Duration::from_millis(2)).await;
     }
-    assert!(settled.load(Ordering::SeqCst), "the star never finished");
+    assert!(
+        settled.load(Ordering::SeqCst),
+        "the {action} never finished"
+    );
     engine.shutdown().await.expect("the engine shuts down");
 }
 
@@ -145,7 +205,7 @@ fn cut_intent(root: &Path) -> Option<(String, String)> {
     let resources = Resources::open(root).expect("the cut store opens");
     let read = resources
         .read(|tx| {
-            // One intent at most: the child plans a single star.
+            // One intent at most: the child plans a single action.
             tx.query_row(
                 "SELECT MAX(intent_id), MAX(state) FROM intents",
                 [],
@@ -175,7 +235,16 @@ fn intent_state(engine: &Engine, intent_id: &str) -> String {
 
 #[test]
 fn intent_crash_cuts_never_apply_twice_or_finish_unapplied() {
-    let scratch = sb_test_support::ScratchDir::new("engine-intent-crash-cuts");
+    crash_cuts(Action::Star);
+}
+
+#[test]
+fn move_crash_cuts_never_lose_or_duplicate_the_message() {
+    crash_cuts(Action::Move);
+}
+
+fn crash_cuts(action: Action) {
+    let scratch = sb_test_support::ScratchDir::new(&format!("engine-{}-crash-cuts", action.word()));
     // The fake runs on its own runtime thread; the parent drives the
     // reopened engine with the test executor, outside any runtime.
     let (sent, ready) = std::sync::mpsc::channel();
@@ -209,26 +278,38 @@ fn intent_crash_cuts_never_apply_twice_or_finish_unapplied() {
             fs::write(dir.join("url.txt"), &base_url).unwrap();
             fs::write(dir.join("verifier.txt"), server.verifier_public_key()).unwrap();
             fs::write(dir.join("message.txt"), &fresh).unwrap();
+            fs::write(dir.join("action.txt"), action.word()).unwrap();
             *key.borrow_mut() = fresh;
             dir.join("store")
         },
         &mut |root| {
             let key = key.borrow().clone();
-            let starred = || {
+            let labels = || {
                 server
                     .message(USER, &key)
-                    .expect("the fresh message")
+                    .expect("the fresh message is never lost")
                     .label_ids
-                    .iter()
-                    .any(|label| label == "10")
             };
+            let has = |label: &str| labels().iter().any(|held| held == label);
+            // The star is on, or the message is in Archive alone.
+            let applied = || match action {
+                Action::Star => has("10"),
+                Action::Move => has(ARCHIVE) && !has(INBOX),
+            };
+            let located = || action == Action::Star || has(INBOX) || has(ARCHIVE);
             let (intent_id, state) =
                 cut_intent(root).expect("a cut point lies after the plan committed");
             let calls = || server.mutation_calls() - baseline.get();
-            assert!(calls() <= 1, "the child called {} times", calls());
             assert!(
-                state != "done" || starred(),
-                "the intent was done without the star at {}",
+                calls() <= action.calls(),
+                "the child called {} times",
+                calls()
+            );
+            assert!(located(), "the cut left the message in no folder");
+            assert!(
+                state != "done" || applied(),
+                "the intent was done without the {} at {}",
+                action.word(),
                 root.display()
             );
 
@@ -265,10 +346,21 @@ fn intent_crash_cuts_never_apply_twice_or_finish_unapplied() {
             }
             block_on(engine.shutdown()).expect("the reopened engine shuts down");
             assert_eq!(end, "done", "the intent cut in {state} never finished");
-            assert!(starred(), "done without the star after the cut in {state}");
-            assert_eq!(calls(), 1, "the star was sent {} times", calls());
+            assert!(
+                applied(),
+                "done without the change after the cut in {state}"
+            );
+            assert!(located(), "the message ended in no folder");
+            assert_eq!(
+                calls(),
+                action.calls(),
+                "the {} sent {} calls",
+                action.word(),
+                calls()
+            );
         },
     );
-    // Claimed, around the call, and around the finishing write.
-    assert!(killed >= 5, "only {killed} cut points landed");
+    // Claimed, around each call, and around the finishing write.
+    let points = 3 + 2 * action.calls() as u64;
+    assert!(killed >= points, "only {killed} cut points landed");
 }

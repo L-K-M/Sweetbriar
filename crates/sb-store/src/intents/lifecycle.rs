@@ -23,9 +23,12 @@ use crate::{StoreError, list_rows};
 mod filing;
 
 pub use filing::{
-    Filed, Filing, LocalMove, UndoableMove, filing_account, filing_target, move_for_undo,
-    plan_filing, plan_move_undo, undo_local_move,
+    Filed, Filing, LocalMove, MOVED_ELSEWHERE, UndoableMove, filing_account, filing_target,
+    move_for_undo, plan_filing, plan_move_undo, undo_local_move,
 };
+
+/// A claimed filing intent's mailbox that no longer has a Proton label.
+const MAILBOX_GONE: &str = "the intent's mailbox is gone";
 
 /// The attempts after which an intent parks (spec/04-sync-proton
 /// "Failures"): the fifth failure is terminal.
@@ -149,10 +152,31 @@ pub struct ClaimedIntent {
     pub provider_key: String,
     /// The target occurrence ids, ascending.
     pub occurrence_ids: Vec<i64>,
-    /// The flag delta the worker applies.
-    pub change: FlagChange,
+    /// What the worker asks Proton for.
+    pub action: IntentAction,
     /// The count before this attempt, not after it.
     pub attempts: i64,
+}
+
+/// What a claimed intent asks Proton for (spec/04-sync-proton's
+/// mutation matrix), its mailboxes resolved to Proton label ids.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum IntentAction {
+    /// `set_flags`: one flag delta (M3.1).
+    Flags(FlagChange),
+    /// `move` or `delete_to_trash`: label `to`, then unlabel `from`
+    /// when a read still shows it. `from` is `None` for a message
+    /// planned without a folder. `folders` are the account's folder
+    /// label ids, which tell the message's location among its labels.
+    Move {
+        to: String,
+        from: Option<String>,
+        folders: BTreeSet<String>,
+    },
+    /// `copy`: add the user label.
+    Label(String),
+    /// `remove_label`: remove the user label.
+    Unlabel(String),
 }
 
 /// What a failure leaves behind (spec/04-sync-proton "Failures").
@@ -288,12 +312,14 @@ pub fn plan_flag_intents(
     Ok(planned)
 }
 
-/// Claim the account's oldest runnable `set_flags` intent, marking it
-/// `in_flight` (spec/04-sync-proton "Order" and "Claim"). A candidate
-/// whose message has an earlier live intent is passed over and marked
-/// `dependency`; one that is not due, waits for anything but
-/// `dependency`, or is another operation is left alone. `None` when
-/// nothing is claimable.
+/// Claim the account's oldest runnable Proton intent (`set_flags` or a
+/// filing operation), marking it `in_flight` (spec/04-sync-proton
+/// "Order" and "Claim"). A candidate whose message has an earlier live
+/// intent is passed over and marked `dependency`; one that is not due,
+/// waits for anything but `dependency`, or is a reserved operation is
+/// left alone. A filing intent naming a mailbox that no longer has a
+/// Proton label id is quarantined (`ambiguous_match`) instead, since
+/// nothing can be sent for it. `None` when nothing is claimable.
 pub fn claim_next_intent(
     tx: &Transaction,
     account_id: &str,
@@ -302,9 +328,10 @@ pub fn claim_next_intent(
     let err = |e| classify(e, "claim an intent");
     let mut statement = tx
         .prepare(
-            "SELECT rowid, intent_id, config_generation, target_json, args_json, attempts
+            "SELECT rowid, intent_id, config_generation, target_json, op, args_json, attempts
          FROM intents
-         WHERE account_id = ?1 AND state = 'pending' AND op = 'set_flags'
+         WHERE account_id = ?1 AND state = 'pending'
+           AND op IN ('set_flags','move','delete_to_trash','copy','remove_label')
            AND (wait_reason IS NULL OR wait_reason = 'dependency')
            AND (next_attempt_at IS NULL OR next_attempt_at <= ?2)
          ORDER BY rowid",
@@ -318,7 +345,8 @@ pub fn claim_next_intent(
                 row.get::<_, i64>(2)?,
                 row.get::<_, String>(3)?,
                 row.get::<_, String>(4)?,
-                row.get::<_, i64>(5)?,
+                row.get::<_, String>(5)?,
+                row.get::<_, i64>(6)?,
             ))
         })
         .map_err(err)?
@@ -327,12 +355,12 @@ pub fn claim_next_intent(
     drop(statement);
 
     let mut claimed = None;
-    for (rowid, intent_id, config_generation, target_json, args_json, attempts) in candidates {
+    for (rowid, intent_id, config_generation, target_json, op, args_json, attempts) in candidates {
         let provider_key = parse_provider_key(&target_json)?
             .filter(|key| !key.is_empty())
             .ok_or_else(|| {
                 StoreError::corrupt(format!(
-                    "a set_flags intent's target_json names no provider key: {target_json}"
+                    "a {op} intent's target_json names no provider key: {target_json}"
                 ))
             })?;
         if earlier_live_intent(tx, account_id, &provider_key, rowid)? {
@@ -349,6 +377,25 @@ pub fn claim_next_intent(
         if claimed.is_some() {
             continue;
         }
+        let action = if op == "set_flags" {
+            IntentAction::Flags(parse_flag_change(&args_json)?)
+        } else {
+            match filing::claimed_action(tx, account_id, &op, &args_json)? {
+                Some(action) => action,
+                // A mailbox the intent names has no Proton label any
+                // more: nothing can be sent for it.
+                None => {
+                    quarantine_intent_because(
+                        tx,
+                        &intent_id,
+                        QuarantineReason::AmbiguousMatch,
+                        Some(MAILBOX_GONE),
+                        now,
+                    )?;
+                    continue;
+                }
+            }
+        };
         let updated = tx
             .execute(
                 "UPDATE intents SET state = 'in_flight', wait_reason = NULL, updated_at = ?2
@@ -365,7 +412,7 @@ pub fn claim_next_intent(
                 config_generation,
                 provider_key,
                 occurrence_ids: parse_target(&target_json)?,
-                change: parse_flag_change(&args_json)?,
+                action,
                 attempts,
             });
         }
@@ -495,6 +542,19 @@ pub fn quarantine_intent(
     reason: QuarantineReason,
     now: i64,
 ) -> Result<(), StoreError> {
+    quarantine_intent_because(tx, intent_id, reason, None, now)
+}
+
+/// [`quarantine_intent`] with what the user is told in `last_error`,
+/// as a move's "Moved elsewhere since" (spec/04-sync-proton); `None`
+/// keeps the stored one.
+pub fn quarantine_intent_because(
+    tx: &Transaction,
+    intent_id: &str,
+    reason: QuarantineReason,
+    error: Option<&str>,
+    now: i64,
+) -> Result<(), StoreError> {
     let row = intent_row(tx, intent_id)?;
     if !matches!(row.state.as_str(), "in_flight" | "pending") {
         return Err(conflict(format!(
@@ -504,8 +564,9 @@ pub fn quarantine_intent(
     }
     tx.execute(
         "UPDATE intents SET state = 'quarantined', quarantine_reason = ?2,
+         last_error = COALESCE(?4, last_error),
          wait_reason = NULL, next_attempt_at = NULL, updated_at = ?3 WHERE intent_id = ?1",
-        params![intent_id, reason.as_str(), now],
+        params![intent_id, reason.as_str(), now, error],
     )
     .map_err(|e| classify(e, "quarantine an intent"))?;
     Ok(())

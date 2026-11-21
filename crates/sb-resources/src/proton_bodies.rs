@@ -21,9 +21,9 @@ use crate::sync::header_columns;
 use crate::{Resources, acquire};
 
 pub use sb_store::proton::{
-    MAX_PENDING_BODIES, PendingBody, ProtonBody, ProtonBodyCommit, ProtonBodyFailureReason,
-    ProtonOpenState, bump_key_generation, commit_proton_body, pending_proton_bodies,
-    proton_open_state, record_body_failure,
+    BodyBeforeMove, MAX_PENDING_BODIES, PendingBody, ProtonBody, ProtonBodyCommit,
+    ProtonBodyFailureReason, ProtonOpenState, body_before_move, bump_key_generation,
+    commit_proton_body, pending_proton_bodies, proton_open_state, record_body_failure,
 };
 
 /// Why a fetched body did not become a commit. The content reasons map

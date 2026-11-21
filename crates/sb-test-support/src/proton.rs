@@ -671,6 +671,13 @@ struct State {
     /// Mutation-route calls the server has handled (plan M3.1a), so a
     /// test can assert a mutation went out exactly once.
     mutation_calls: usize,
+    /// Permanent-delete and empty-folder calls, all refused (plan
+    /// M5.1b), so a suite can assert none was attempted.
+    destructive_calls: usize,
+    /// Whether labelling a message with a folder drops its other
+    /// folder, as Proton's own server may; off by default, as the
+    /// pinned development server keeps both (plan M5.1b).
+    exclusive_folders: bool,
     /// The fake's own page-size cap; the transport clamps to the same
     /// 150 (research `mail-sync.md` §3).
     max_page_size: u32,
@@ -715,6 +722,8 @@ impl FakeProtonServer {
             external_keys: HashMap::new(),
             recorded_sends: Vec::new(),
             mutation_calls: 0,
+            destructive_calls: 0,
+            exclusive_folders: false,
             max_page_size: 150,
             max_events_per_response: 0,
             stale: false,
@@ -1064,6 +1073,23 @@ impl FakeProtonServer {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .mutation_calls
+    }
+
+    /// How many permanent-delete or empty-folder calls reached the
+    /// fake, which refuses every one (plan M5.1b).
+    pub fn destructive_calls(&self) -> usize {
+        self.state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .destructive_calls
+    }
+
+    /// Make labelling a message with a folder drop its other folder.
+    pub fn set_exclusive_folders(&self, on: bool) {
+        self.state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .exclusive_folders = on;
     }
 
     pub fn set_fault(&self, fault: Option<Fault>) {
@@ -1526,6 +1552,16 @@ async fn dispatch(
         }
         ("PUT", "/mail/v4/messages/unlabel") => {
             handle_mutation(state, headers, &body, MutationKind::Unlabel)
+        }
+        // No test may delete permanently or empty a folder (plan
+        // M5.1b): the fake refuses both, and counts the attempt.
+        ("PUT", "/mail/v4/messages/delete") | ("DELETE", "/mail/v4/messages/empty") => {
+            let mut state = state.lock().unwrap_or_else(|e| e.into_inner());
+            state.destructive_calls += 1;
+            Ok(json_response(
+                403,
+                json!({"Code": 2011, "Error": "the fake refuses permanent deletes"}),
+            ))
         }
         _ => {
             if let Some(id) = path.strip_prefix("/mail/v4/messages/") {
@@ -2149,6 +2185,12 @@ enum MutationKind {
 /// but the fake answers `Code` 1001 with one response per id, so tests
 /// reach the per-message path, and gives an unknown id Proton's
 /// invalid-value code 2001.
+/// Proton's system folders (Inbox, Trash, Spam, Archive, Sent, Drafts):
+/// a message is in one of them or in a user folder.
+const SYSTEM_FOLDERS: [&str; 6] = ["0", "3", "4", "6", "7", "8"];
+/// Proton's label `Type` for a user folder.
+const FOLDER_TYPE: u8 = 3;
+
 fn handle_mutation(
     state: &Arc<Mutex<State>>,
     headers: &hyper::HeaderMap,
@@ -2177,10 +2219,22 @@ fn handle_mutation(
             json!({"Code": 2001, "Error": "invalid mutation body"}),
         ));
     }
+    let exclusive = state.exclusive_folders;
     let account = state
         .accounts
         .get_mut(&username)
         .expect("the session's account exists");
+    let folders: HashSet<String> = SYSTEM_FOLDERS
+        .iter()
+        .map(|id| (*id).to_owned())
+        .chain(
+            account
+                .labels
+                .iter()
+                .filter(|label| label.kind == FOLDER_TYPE)
+                .map(|label| label.id.clone()),
+        )
+        .collect();
     let mut responses = Vec::with_capacity(ids.len());
     let mut updated = Vec::new();
     for id in ids {
@@ -2194,6 +2248,11 @@ fn handle_mutation(
             MutationKind::Unread => message.unread = true,
             MutationKind::Label => {
                 let label = label_id.expect("a label mutation carries its label id");
+                if exclusive && folders.contains(label) {
+                    message
+                        .label_ids
+                        .retain(|existing| existing == label || !folders.contains(existing));
+                }
                 if !message.label_ids.iter().any(|existing| existing == label) {
                     message.label_ids.push(label.to_owned());
                 }

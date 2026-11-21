@@ -872,3 +872,139 @@ fn cancelling_a_move_since_overtaken_leaves_the_message() {
         vec![seed.trash, seed.work]
     );
 }
+
+/// Give the seed's mailboxes Proton label ids.
+fn label_ids(conn: &Connection, seed: &Proton) {
+    for (mailbox_id, key) in [
+        (seed.inbox, "0"),
+        (seed.archive, "6"),
+        (seed.trash, "3"),
+        (seed.sent, "7"),
+        (seed.work, "w1"),
+    ] {
+        conn.execute(
+            "UPDATE mailboxes SET provider_key = ?2 WHERE mailbox_id = ?1",
+            params![mailbox_id, key],
+        )
+        .unwrap();
+    }
+}
+
+fn claim(conn: &Connection) -> Option<crate::intents::ClaimedIntent> {
+    let tx = conn.unchecked_transaction().unwrap();
+    let claimed = crate::intents::claim_next_intent(&tx, PROTON, NOW).unwrap();
+    tx.commit().unwrap();
+    claimed
+}
+
+fn finish(conn: &Connection, intent_id: &str) {
+    let tx = conn.unchecked_transaction().unwrap();
+    crate::intents::finish_intent_done(&tx, intent_id, NOW).unwrap();
+    tx.commit().unwrap();
+}
+
+#[test]
+fn a_claimed_filing_intent_names_its_label_ids() {
+    let conn = migrated(MIGRATIONS);
+    let seed = proton(&conn);
+    label_ids(&conn, &seed);
+    let folders: BTreeSet<String> = ["0", "3", "6", "7"].map(str::to_owned).into();
+    let claimed_next = |filing| {
+        file(&conn, PROTON, &[seed.message], filing).unwrap();
+        let claimed = claim(&conn).expect("the intent claims");
+        assert_eq!(claimed.provider_key, "msg-1");
+        finish(&conn, &claimed.intent_id);
+        claimed.action
+    };
+
+    let moved = claimed_next(Filing::Move {
+        to_mailbox_id: seed.archive,
+    });
+    assert_eq!(
+        moved,
+        IntentAction::Move {
+            to: "6".to_owned(),
+            from: Some("0".to_owned()),
+            folders: folders.clone(),
+        }
+    );
+    assert_eq!(
+        claimed_next(Filing::DeleteToTrash),
+        IntentAction::Move {
+            to: "3".to_owned(),
+            from: Some("6".to_owned()),
+            folders,
+        },
+        "Trash resolves to its label id"
+    );
+    assert_eq!(
+        claimed_next(Filing::RemoveLabel {
+            label_mailbox_id: seed.work,
+        }),
+        IntentAction::Unlabel("w1".to_owned())
+    );
+    assert_eq!(
+        claimed_next(Filing::AddLabel {
+            label_mailbox_id: seed.work,
+        }),
+        IntentAction::Label("w1".to_owned())
+    );
+}
+
+#[test]
+fn a_move_from_no_folder_claims_without_a_source() {
+    let conn = migrated(MIGRATIONS);
+    let seed = proton(&conn);
+    label_ids(&conn, &seed);
+    // Only the label: Proton's message without a folder.
+    conn.execute(
+        "DELETE FROM occurrences WHERE occurrence_id = ?1",
+        [seed.in_inbox],
+    )
+    .unwrap();
+    file(
+        &conn,
+        PROTON,
+        &[seed.message],
+        Filing::Move {
+            to_mailbox_id: seed.archive,
+        },
+    )
+    .unwrap();
+    let IntentAction::Move { to, from, .. } = claim(&conn).unwrap().action else {
+        panic!("a move claims as a move");
+    };
+    assert_eq!((to.as_str(), from), ("6", None));
+}
+
+#[test]
+fn a_filing_intent_whose_mailbox_lost_its_label_is_quarantined_at_the_claim() {
+    let conn = migrated(MIGRATIONS);
+    let seed = proton(&conn);
+    label_ids(&conn, &seed);
+    file(
+        &conn,
+        PROTON,
+        &[seed.message],
+        Filing::Move {
+            to_mailbox_id: seed.archive,
+        },
+    )
+    .unwrap();
+    conn.execute(
+        "UPDATE mailboxes SET provider_key = NULL WHERE mailbox_id = ?1",
+        [seed.archive],
+    )
+    .unwrap();
+    assert_eq!(claim(&conn), None, "nothing can be sent for it");
+    let (state, reason, error): (String, Option<String>, Option<String>) = conn
+        .query_row(
+            "SELECT state, quarantine_reason, last_error FROM intents",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(state, "quarantined");
+    assert_eq!(reason.as_deref(), Some("ambiguous_match"));
+    assert_eq!(error.as_deref(), Some("the intent's mailbox is gone"));
+}

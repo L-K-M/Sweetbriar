@@ -12,7 +12,7 @@ use sb_resources::{
     plan_flag_intents, release_intents,
 };
 use sb_test_support::{
-    FakeMessage, FakeProtonServer, FakeSecrets, Fault, ScratchDir, TestAccount, cert_der,
+    FakeLabel, FakeMessage, FakeProtonServer, FakeSecrets, Fault, ScratchDir, TestAccount, cert_der,
 };
 
 use super::is_terminal_refusal;
@@ -40,10 +40,18 @@ pub(super) struct Harness {
 
 /// A signed-in engine whose listing holds `m1`, unread and unstarred.
 pub(super) async fn signed_in() -> Harness {
+    signed_in_with(&[], &["0", "5"]).await
+}
+
+/// [`signed_in`] with `labels` on the fake and `m1` under `m1_labels`.
+pub(super) async fn signed_in_with(labels: &[FakeLabel], m1_labels: &[&str]) -> Harness {
     let server = FakeProtonServer::serve(vec![TestAccount::new(USER, PASSWORD)])
         .await
         .expect("the fake serves");
-    server.add_message(USER, FakeMessage::new(KEY).with_labels(&["0", "5"]));
+    for label in labels {
+        server.add_label(USER, label.clone());
+    }
+    server.add_message(USER, FakeMessage::new(KEY).with_labels(m1_labels));
     let scratch = ScratchDir::new("engine-proton-intents");
     let clock = Arc::new(MovableClock::new(MODERN_MS));
     let engine = Engine::open_with_proton_and_cache(
