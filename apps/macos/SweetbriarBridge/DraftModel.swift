@@ -16,6 +16,8 @@ public protocol DraftStore: Sendable {
     func discardDraft(idempotencyKey: String, draftId: String) async throws -> Receipt
     /// Stream a user-selected file into a fresh publication (spec/07).
     func publishDraftAttachment(file: URL) async throws -> DraftAttachmentObject
+    /// Publish bytes the shell holds, such as pasted image data (spec/07).
+    func publishDraftAttachment(bytes: Data) async throws -> DraftAttachmentObject
     /// A fresh publication of a reference stored on an exact revision (spec/07).
     func republishDraftAttachment(
         draftId: String, revisionId: String, reference: DraftAttachmentRef
@@ -252,10 +254,10 @@ public final class DraftModel {
     public func restoreAttachment(_ restoration: AttachmentRestoration) -> Int? {
         guard var current = editableContent else { return nil }
         var attachment = restoration.attachment
-        if case .new(let object, let filename, let mediaType) = attachment,
+        if case .new(let object, let filename, let mediaType, let contentId) = attachment,
             spent.contains(where: { $0.object === object })
         {
-            attachment = .retained(Self.reference(object, filename, mediaType))
+            attachment = .retained(Self.reference(object, filename, mediaType, contentId))
         }
         guard !Self.holdsHandle(of: attachment, in: current) else { return nil }
         let index = min(max(restoration.index, 0), current.attachments.count)
@@ -266,9 +268,9 @@ public final class DraftModel {
 
     /// One handle carries one reservation, so it can appear only once.
     private static func holdsHandle(of attachment: DraftAttachment, in content: DraftContent) -> Bool {
-        guard case .new(let object, _, _) = attachment else { return false }
+        guard case .new(let object, _, _, _) = attachment else { return false }
         return content.attachments.contains {
-            guard case .new(let present, _, _) = $0 else { return false }
+            guard case .new(let present, _, _, _) = $0 else { return false }
             return present === object
         }
     }
@@ -440,7 +442,7 @@ public final class DraftModel {
         unresolved = nil
         baseAttachments = sent.attachments.map(Self.reference)
         recordSources(baseAttachments, in: saved.revisionId)
-        for case .new(let object, _, _) in sent.attachments
+        for case .new(let object, _, _, _) in sent.attachments
         where !spent.contains(where: { $0.object === object }) {
             spent.append((object, saved.revisionId))
         }
@@ -456,9 +458,9 @@ public final class DraftModel {
         for (index, attachment) in content.attachments.enumerated() {
             let reference: DraftAttachmentRef
             switch attachment {
-            case .new(let object, let filename, let mediaType):
+            case .new(let object, let filename, let mediaType, let contentId):
                 guard spent.contains(where: { $0.object === object }) else { continue }
-                reference = Self.reference(object, filename, mediaType)
+                reference = Self.reference(object, filename, mediaType, contentId)
             case .retained(let stored):
                 reference = stored
             }
@@ -472,7 +474,8 @@ public final class DraftModel {
             let object = try await source.republishDraftAttachment(
                 draftId: draftId, revisionId: authority.revisionId, reference: reference)
             resolved.attachments[index] = .new(
-                object: object, filename: reference.filename, mediaType: reference.mediaType)
+                object: object, filename: reference.filename, mediaType: reference.mediaType,
+                contentId: reference.contentId)
         }
         return resolved
     }
@@ -501,9 +504,9 @@ public final class DraftModel {
         for (index, attachment) in content.attachments.enumerated() {
             let reference: DraftAttachmentRef
             switch attachment {
-            case .new(let object, let filename, let mediaType):
+            case .new(let object, let filename, let mediaType, let contentId):
                 guard spent.contains(where: { $0.object === object }) else { continue }
-                reference = Self.reference(object, filename, mediaType)
+                reference = Self.reference(object, filename, mediaType, contentId)
             case .retained(let stored):
                 reference = stored
             }
@@ -515,7 +518,8 @@ public final class DraftModel {
             let object = try await source.republishDraftAttachment(
                 draftId: draftId, revisionId: authority.revisionId, reference: reference)
             resolved.attachments[index] = .new(
-                object: object, filename: reference.filename, mediaType: reference.mediaType)
+                object: object, filename: reference.filename, mediaType: reference.mediaType,
+                contentId: reference.contentId)
         }
         return (copySource, resolved)
     }
@@ -529,19 +533,20 @@ public final class DraftModel {
 
     private static func reference(_ attachment: DraftAttachment) -> DraftAttachmentRef {
         switch attachment {
-        case .new(let object, let filename, let mediaType):
-            return reference(object, filename, mediaType)
+        case .new(let object, let filename, let mediaType, let contentId):
+            return reference(object, filename, mediaType, contentId)
         case .retained(let reference):
             return reference
         }
     }
 
     private static func reference(
-        _ object: DraftAttachmentObject, _ filename: String, _ mediaType: String
+        _ object: DraftAttachmentObject, _ filename: String, _ mediaType: String,
+        _ contentId: String?
     ) -> DraftAttachmentRef {
         DraftAttachmentRef(
             objectSha256: object.objectSha256, filename: filename,
-            mediaType: mediaType, size: object.byteLength, contentId: nil)
+            mediaType: mediaType, size: object.byteLength, contentId: contentId)
     }
 
     /// The core compares stored references byte for byte, not by Swift's
@@ -552,6 +557,14 @@ public final class DraftModel {
             && a.mediaType.utf8.elementsEqual(b.mediaType.utf8)
     }
 
+    private static func sameBytes(_ a: String?, _ b: String?) -> Bool {
+        switch (a, b) {
+        case (nil, nil): true
+        case (let a?, let b?): a.utf8.elementsEqual(b.utf8)
+        default: false
+        }
+    }
+
     /// Only an acknowledged publication becomes a retained reference.
     /// Same bytes in an independent publication are still a new handle.
     /// Changing attachment metadata after acknowledgement requires a fresh
@@ -560,21 +573,22 @@ public final class DraftModel {
         guard var current = content else { return }
         var acknowledgedAny = false
         current.attachments = current.attachments.map { attachment in
-            guard case .new(let object, let filename, let mediaType) = attachment else {
+            guard case .new(let object, let filename, let mediaType, let contentId) = attachment
+            else {
                 return attachment
             }
             let acknowledged = savedContent.attachments.contains { saved in
-                guard case .new(let original, let originalName, let originalType) = saved else {
+                guard case .new(let original, let originalName, let originalType, let originalId) = saved
+                else {
                     return false
                 }
                 return original === object && originalName.utf8.elementsEqual(filename.utf8)
                     && originalType.utf8.elementsEqual(mediaType.utf8)
+                    && Self.sameBytes(originalId, contentId)
             }
             guard acknowledged else { return attachment }
             acknowledgedAny = true
-            return .retained(DraftAttachmentRef(objectSha256: object.objectSha256,
-                filename: filename, mediaType: mediaType, size: object.byteLength,
-                contentId: nil))
+            return .retained(Self.reference(object, filename, mediaType, contentId))
         }
         guard acknowledgedAny else { return }
         content = current

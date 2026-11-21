@@ -122,6 +122,9 @@ private actor NativeIdentitySource: DraftStore, ComposeCatalogSource, RecipientS
     func publishDraftAttachment(file: URL) async throws -> DraftAttachmentObject {
         throw CoreFailure.internalError(detail: "attachment publication is not used by this fixture")
     }
+    func publishDraftAttachment(bytes: Data) async throws -> DraftAttachmentObject {
+        throw CoreFailure.internalError(detail: "attachment publication is not used by this fixture")
+    }
     func republishDraftAttachment(
         draftId: String, revisionId: String, reference: DraftAttachmentRef
     ) async throws -> DraftAttachmentObject {

@@ -92,10 +92,10 @@ private actor FakeDraftStore: DraftStore {
             attachments: content.attachments.map { attachment in
                 switch attachment {
                 case .retained(let ref): return ref
-                case .new(let object, let filename, let mediaType):
+                case .new(let object, let filename, let mediaType, let contentId):
                     return DraftAttachmentRef(
                         objectSha256: object.objectSha256, filename: filename,
-                        mediaType: mediaType, size: object.byteLength, contentId: nil
+                        mediaType: mediaType, size: object.byteLength, contentId: contentId
                     )
                 }
             },
@@ -124,6 +124,9 @@ private actor FakeDraftStore: DraftStore {
         )
     }
     func publishDraftAttachment(file: URL) async throws -> DraftAttachmentObject {
+        throw CoreFailure.internalError(detail: "attachment publication is not used by this fixture")
+    }
+    func publishDraftAttachment(bytes: Data) async throws -> DraftAttachmentObject {
         throw CoreFailure.internalError(detail: "attachment publication is not used by this fixture")
     }
     func republishDraftAttachment(
@@ -456,6 +459,9 @@ private actor ReceiptHeldDraftStore: DraftStore {
     func publishDraftAttachment(file: URL) async throws -> DraftAttachmentObject {
         try await bridge.publishDraftAttachment(file: file)
     }
+    func publishDraftAttachment(bytes: Data) async throws -> DraftAttachmentObject {
+        try await bridge.publishDraftAttachment(bytes: bytes)
+    }
     func republishDraftAttachment(
         draftId: String, revisionId: String, reference: DraftAttachmentRef
     ) async throws -> DraftAttachmentObject {
@@ -535,7 +541,7 @@ private func acknowledgedAttachmentsRemainSaveable(scenario: AttachmentAcknowled
         #expect(model.failure == nil && !model.isDirty)
     }
     if scenario == .independentReplacement {
-        guard case .new(let object, _, _) = try #require(model.content?.attachments.first) else {
+        guard case .new(let object, _, _, _) = try #require(model.content?.attachments.first) else {
             Issue.record("an independent unspent replacement must stay new"); await bridge.shutdown(); return
         }
         #expect(object === replacement)

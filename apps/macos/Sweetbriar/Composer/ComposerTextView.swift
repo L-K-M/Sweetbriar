@@ -143,7 +143,18 @@ final class ComposerTextView: NSTextView {
     /// coalesced with the typing around it.
     @discardableResult
     func insertMarkdownPaste(_ source: String) -> Bool {
-        guard isEditable, mode == .markdown, !hasMarkedText(), let textStorage else { return false }
+        insertMarkdownSource(source, actionName: "Paste as Markdown")
+    }
+
+    /// Whether Markdown source can go in at the selection now.
+    var canInsertMarkdown: Bool { canFormat }
+
+    /// Replace the selection with Markdown source, never coalesced with
+    /// the typing around it. A nil `actionName` leaves the name to the
+    /// caller's undo group, as an inline image's reference does.
+    @discardableResult
+    func insertMarkdownSource(_ source: String, actionName: String?) -> Bool {
+        guard canInsertMarkdown, let textStorage else { return false }
         let range = selectedRange()
         breakUndoCoalescing()
         guard shouldChangeText(in: range, replacementString: source) else { return false }
@@ -151,7 +162,7 @@ final class ComposerTextView: NSTextView {
             textStorage.replaceCharacters(in: range, with: source)
         }
         didChangeText()
-        undoManager?.setActionName("Paste as Markdown")
+        if let actionName { undoManager?.setActionName(actionName) }
         breakUndoCoalescing()
         setSelectedRange(NSRange(location: range.location + (source as NSString).length, length: 0))
         scrollRangeToVisible(selectedRange())
@@ -221,11 +232,33 @@ final class ComposerTextView: NSTextView {
         }
     }
 
+    // MARK: pasted images
+
+    /// Takes pasted image data (spec/08 "Inline images"). ⌘V hands the
+    /// pasteboard here when it holds an image and no text and the body
+    /// takes Markdown; otherwise AppKit pastes plain text, so a plain
+    /// body ignores image data.
+    weak var imagePasteTarget: (any ComposerImagePasting)?
+
+    private var pastesImage: Bool {
+        canInsertMarkdown && imagePasteTarget?.canPasteImage() == true
+    }
+
+    override func paste(_ sender: Any?) {
+        guard pastesImage, let imagePasteTarget else {
+            super.paste(sender)
+            return
+        }
+        if !imagePasteTarget.pasteImage() { NSSound.beep() }
+    }
+
     /// Bold and Italic are Markdown-only, and wait for a composition
-    /// to end. Anything else NSTextView validates itself.
+    /// to end. Paste is enabled for image data the body takes. Anything
+    /// else NSTextView validates itself.
     override func validateUserInterfaceItem(
         _ item: any NSValidatedUserInterfaceItem
     ) -> Bool {
+        if item.action == #selector(paste(_:)), pastesImage { return true }
         guard let action = item.action,
               action == #selector(toggleBoldMarkdown(_:))
                   || action == #selector(toggleItalicMarkdown(_:)) else {
@@ -237,6 +270,7 @@ final class ComposerTextView: NSTextView {
     /// Menu-item validation reaches the view through the same rule —
     /// covered separately in case AppKit prefers this entry point.
     override func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        if menuItem.action == #selector(paste(_:)), pastesImage { return true }
         guard let action = menuItem.action,
               action == #selector(toggleBoldMarkdown(_:))
                   || action == #selector(toggleItalicMarkdown(_:)) else {
@@ -452,4 +486,14 @@ extension ComposerTextView: @preconcurrency NSTextContentStorageDelegate {
         )
         return NSTextParagraph(attributedString: paragraph)
     }
+}
+
+/// The composer's owner of pasted image data: the window, which reads
+/// its own pasteboard and publishes the image.
+@MainActor
+protocol ComposerImagePasting: AnyObject {
+    /// Whether the pasteboard holds image data and no text.
+    func canPasteImage() -> Bool
+    /// Start inserting the pasted image; false when it can't start.
+    func pasteImage() -> Bool
 }

@@ -116,6 +116,12 @@ private actor ComposeTestSource: ComposeSource {
         await publishGate?.wait()
         return object
     }
+    func publishDraftAttachment(bytes: Data) async throws -> DraftAttachmentObject {
+        publishes += 1
+        let object = try await bridge.publishDraftAttachment(bytes: bytes)
+        await publishGate?.wait()
+        return object
+    }
     func republishDraftAttachment(
         draftId: String, revisionId: String, reference: DraftAttachmentRef
     ) async throws -> DraftAttachmentObject {
