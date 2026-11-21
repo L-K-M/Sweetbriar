@@ -64,10 +64,14 @@ public enum ExternalEditFiles {
         return file
     }
 
-    /// The file's text: valid UTF-8 of at most `maxBytes`.
+    /// The file's text: valid UTF-8 of at most `maxBytes`. Anything but
+    /// a regular file is unreadable, so a pipe put in its place can't
+    /// block the open.
     public static func read(_ file: URL) -> Result<String, ReadFailure> {
         let data: Data
         do {
+            let type = try FileManager.default.attributesOfItem(atPath: file.path)[.type] as? FileAttributeType
+            guard type == .typeRegular else { return .failure(.unreadable("It isn't a regular file.")) }
             let handle = try FileHandle(forReadingFrom: file)
             defer { try? handle.close() }
             data = try handle.read(upToCount: maxBytes + 1) ?? Data()

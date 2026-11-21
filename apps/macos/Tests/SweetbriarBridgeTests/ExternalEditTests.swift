@@ -32,7 +32,7 @@ private func watchEventually(_ predicate: @MainActor () -> Bool) async -> Bool {
     return true
 }
 
-@Suite struct ExternalEditFileTests {
+@Suite(.timeLimit(.minutes(1))) struct ExternalEditFileTests {
     /// A new `0700` directory named by a lowercase UUID, holding a `0600`
     /// file named for the draft's type, with the body as UTF-8.
     @Test func theBodyGoesToAPrivateFileNamedForTheFormat() throws {
@@ -67,6 +67,20 @@ private func watchEventually(_ predicate: @MainActor () -> Bool) async -> Bool {
         ExternalEditFiles.remove(file)
         guard case .failure(.unreadable) = ExternalEditFiles.read(file) else {
             Issue.record("a missing file is unreadable")
+            return
+        }
+    }
+
+    /// A pipe in the file's place is unreadable rather than blocking the
+    /// read until something writes to it.
+    @Test func aPipeInTheFilesPlaceIsUnreadable() throws {
+        let root = scratchRoot()
+        defer { ExternalEditFiles.purge(root.deletingLastPathComponent()) }
+        let file = try ExternalEditFiles.create(body: "", format: .plain, in: root)
+        try FileManager.default.removeItem(at: file)
+        try #require(mkfifo(file.path, 0o600) == 0)
+        guard case .failure(.unreadable) = ExternalEditFiles.read(file) else {
+            Issue.record("a pipe is unreadable")
             return
         }
     }

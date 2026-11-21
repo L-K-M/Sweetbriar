@@ -1348,7 +1348,9 @@ extension ComposeWindowController {
     }
 
     private func confirmDiscardExternalEdits() async -> Bool {
+        // Done's read still in flight, or another sheet up: nothing to ask yet.
         guard let window, window.attachedSheet == nil, let failure = externalEdit?.watch.failure else {
+            statusLabel.stringValue = "Finish the external edit before closing this draft."
             return false
         }
         let alert = NSAlert()
