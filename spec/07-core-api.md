@@ -421,7 +421,9 @@ async fn Core::shutdown(self);   // flush writer, release the lease
   command, never a rollback of history. An `UndoToken` is an opaque
   string to the shell; for remote effects it names the account and the
   intents the command planned, and `undo` plans their inverses
-  (04-sync-proton "Running an intent"). A token that doesn't parse,
+  (04-sync-proton "Running an intent"). A message a move took from no
+  folder has nowhere to go back to, so `undo` leaves it in the
+  destination and moves the rest back. A token that doesn't parse,
   names no intent, or names an intent of another account than the
   one the token names is `InvalidInput`.
 - **Selected-file attachment publication:** `publish_draft_attachment_file(path)`
