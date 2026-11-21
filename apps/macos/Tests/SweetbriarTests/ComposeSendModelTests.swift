@@ -17,22 +17,32 @@ private actor FakeSendSource: SendSource {
         var key: String
         var attemptId: String
     }
+    struct NoticeQuery: Equatable {
+        var draftId: String
+        var revisionId: String
+    }
 
     private(set) var sends: [Send] = []
     private(set) var cancels: [Cancel] = []
+    private(set) var noticeQueries: [NoticeQuery] = []
     private var attemptId = "attempt-1"
     private var conflictOnFirstSend = false
     private var error: (any Error)?
     private var cancellationError: (any Error)?
+    private var notice: CrossAccountNotice?
+    private var noticeError: (any Error)?
 
     func configure(
         attemptId: String = "attempt-1", conflictOnFirstSend: Bool = false,
-        error: (any Error)? = nil, cancellationError: (any Error)? = nil
+        error: (any Error)? = nil, cancellationError: (any Error)? = nil,
+        notice: CrossAccountNotice? = nil, noticeError: (any Error)? = nil
     ) {
         self.attemptId = attemptId
         self.conflictOnFirstSend = conflictOnFirstSend
         self.error = error
         self.cancellationError = cancellationError
+        self.notice = notice
+        self.noticeError = noticeError
     }
 
     func sendDraft(
@@ -73,6 +83,14 @@ private actor FakeSendSource: SendSource {
 
     func outBox() async throws -> OutBox {
         fatalError("not part of the compose send flow")
+    }
+
+    func crossAccountNotice(
+        draftId: String, revisionId: String
+    ) async throws -> CrossAccountNotice? {
+        noticeQueries.append(NoticeQuery(draftId: draftId, revisionId: revisionId))
+        if let noticeError { throw noticeError }
+        return notice
     }
 }
 
@@ -135,14 +153,43 @@ private final class CloseSpy {
 }
 
 @MainActor
+private final class ConfirmationProbe {
+    private(set) var calls = 0
+    private(set) var notices: [CrossAccountNotice] = []
+    var answer = true
+    func confirm(_ notice: CrossAccountNotice) async -> Bool {
+        calls += 1
+        notices.append(notice)
+        return answer
+    }
+}
+
+/// A Keep-remembered ack set the confirmation closure reads; a class,
+/// so the closure captures a reference rather than a mutable local.
+@MainActor
+private final class AcknowledgementBox {
+    var acks: Set<String> = []
+    func contains(_ ack: String) -> Bool { acks.contains(ack) }
+}
+
+private func makeNotice(ack: String = "cross_account:[1]") -> CrossAccountNotice {
+    CrossAccountNotice(
+        sourceAccountId: "account-source", routeAccountId: "account-route", ack: ack)
+}
+
+@MainActor
 private func makeModel(
     _ source: FakeSendSource, _ settings: FakeSendSettingsSource, _ sleepBox: GatedSleep,
-    _ settle: SettleSpy, _ close: CloseSpy
+    _ settle: SettleSpy, _ close: CloseSpy,
+    confirm: @escaping @MainActor (CrossAccountNotice) async -> Bool = { _ in true },
+    acknowledged: @escaping @MainActor (String) -> Bool = { _ in false }
 ) -> ComposeSendModel {
     ComposeSendModel(
         source: source, settingsSource: settings, draftId: "draft-1",
         settlePendingSave: { try await settle.settle() },
         closeAfterHold: { close.close() },
+        confirmCrossAccount: confirm,
+        isCrossAccountAcknowledged: acknowledged,
         sleep: { duration in await sleepBox.sleep(duration) })
 }
 
@@ -192,9 +239,131 @@ private func closes(_ close: CloseSpy, stayAt count: Int) async -> Bool {
         #expect(model.state == .idle, "the hold ended without Undo")
     }
 
+    @Test func anUnacknowledgedNoticeAsksAndSendPassesItsAck() async throws {
+        let source = FakeSendSource()
+        await source.configure(notice: makeNotice(ack: "ack-1"))
+        let settings = FakeSendSettingsSource()
+        let sleepBox = GatedSleep()
+        let settle = SettleSpy()
+        let close = CloseSpy()
+        let probe = ConfirmationProbe()
+        let model = makeModel(
+            source, settings, sleepBox, settle, close,
+            confirm: { notice in await probe.confirm(notice) })
+
+        #expect(await model.send())
+
+        #expect(await source.sends.count == 1)
+        #expect(await source.sends.first?.acks == ["ack-1"])
+        #expect(await source.noticeQueries.count == 1)
+        #expect(await source.noticeQueries.first?.revisionId == "revision-1")
+        #expect(await source.noticeQueries.first?.draftId == "draft-1")
+        #expect(probe.calls == 1)
+        #expect(probe.notices.first?.ack == "ack-1")
+
+        await sleepBox.release()
+        #expect(await eventually({ close.calls == 1 }))
+    }
+
+    @Test func aCancelledConfirmationSendsNothing() async throws {
+        let source = FakeSendSource()
+        await source.configure(notice: makeNotice(ack: "ack-1"))
+        let settings = FakeSendSettingsSource()
+        let sleepBox = GatedSleep()
+        let settle = SettleSpy()
+        let close = CloseSpy()
+        let probe = ConfirmationProbe()
+        probe.answer = false
+        let model = makeModel(
+            source, settings, sleepBox, settle, close,
+            confirm: { notice in await probe.confirm(notice) })
+
+        #expect(!(await model.send()))
+
+        #expect(await source.sends.isEmpty)
+        #expect(probe.calls == 1)
+        #expect(model.state == .idle)
+        #expect(!model.isBusy)
+        #expect(close.calls == 0)
+    }
+
+    @Test func aKeepRememberedAckSendsWithoutAsking() async throws {
+        let source = FakeSendSource()
+        await source.configure(notice: makeNotice(ack: "ack-1"))
+        let settings = FakeSendSettingsSource()
+        let sleepBox = GatedSleep()
+        let settle = SettleSpy()
+        let close = CloseSpy()
+        let probe = ConfirmationProbe()
+        let model = makeModel(
+            source, settings, sleepBox, settle, close,
+            confirm: { notice in await probe.confirm(notice) },
+            acknowledged: { $0 == "ack-1" })
+
+        #expect(await model.send())
+
+        #expect(await source.sends.first?.acks == ["ack-1"])
+        #expect(probe.calls == 0, "a Keep-remembered ack does not ask again")
+
+        await sleepBox.release()
+        #expect(await eventually({ close.calls == 1 }))
+    }
+
+    @Test func aChangedAckAsksAgain() async throws {
+        let source = FakeSendSource()
+        await source.configure(notice: makeNotice(ack: "ack-1"))
+        let settings = FakeSendSettingsSource()
+        let sleepBox = GatedSleep()
+        let settle = SettleSpy()
+        let close = CloseSpy()
+        let probe = ConfirmationProbe()
+        let acknowledged = AcknowledgementBox()
+        let model = makeModel(
+            source, settings, sleepBox, settle, close,
+            confirm: { notice in await probe.confirm(notice) },
+            acknowledged: { acknowledged.contains($0) })
+
+        #expect(await model.send())
+        #expect(probe.calls == 1)
+        #expect(await model.undo())
+
+        // Keep remembers the first ack; resending the same revision
+        // passes it without asking (spec/08).
+        acknowledged.acks.insert("ack-1")
+        #expect(await model.send())
+        #expect(probe.calls == 1)
+        #expect(await source.sends.last?.acks == ["ack-1"])
+        #expect(await model.undo())
+
+        // A changed revision ack asks again (spec/05, 08).
+        await source.configure(notice: makeNotice(ack: "ack-2"))
+        #expect(await model.send())
+        #expect(probe.calls == 2)
+        #expect(await source.sends.last?.acks == ["ack-2"])
+
+        await sleepBox.release()
+        #expect(await eventually({ close.calls == 1 }))
+    }
+
+    @Test func aFailingNoticeQueryDoesNotSend() async throws {
+        let source = FakeSendSource()
+        await source.configure(noticeError: CoreFailure.unavailable(reason: "offline"))
+        let settings = FakeSendSettingsSource()
+        let sleepBox = GatedSleep()
+        let settle = SettleSpy()
+        let close = CloseSpy()
+        let model = makeModel(source, settings, sleepBox, settle, close)
+
+        #expect(!(await model.send()))
+
+        #expect(await source.sends.isEmpty)
+        #expect(await source.noticeQueries.count == 1)
+        #expect(model.state == .failed(message: "Unavailable: offline"))
+        #expect(!model.isBusy)
+    }
+
     @Test func aCrossAccountConflictShowsItsMessageAndSendsNothingMore() async throws {
-        // The confirmation and its acknowledgement come with the banner
-        // (M4.4d); until then the core's refusal is shown as is.
+        // Without a notice the core's refusal is shown as is (spec/08).
         let source = FakeSendSource()
         await source.configure(conflictOnFirstSend: true)
         let settings = FakeSendSettingsSource()

@@ -70,6 +70,12 @@ private actor FakeOutBoxSource: SendSource {
     func retryRejectedRecipients(idempotencyKey: String, attemptId: String) async throws -> Receipt {
         throw CoreFailure.unavailable(reason: "not part of this test")
     }
+
+    func crossAccountNotice(
+        draftId: String, revisionId: String
+    ) async throws -> CrossAccountNotice? {
+        throw CoreFailure.unavailable(reason: "the Out Box never queries a notice")
+    }
 }
 
 private func heldRow(_ attemptId: String) -> OutBoxRow {

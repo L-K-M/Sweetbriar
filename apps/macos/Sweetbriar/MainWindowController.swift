@@ -33,6 +33,18 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     private let openDraft: @MainActor (String) -> Void
     private let writes = ArchiveWriteTasks()
     private(set) var bridge: CoreBridge?
+    /// The message list's single selected occurrence, when the list
+    /// shows messages and exactly one occurrence is selected; Reply,
+    /// Reply All and Forward act on it (spec/08 "Cross-account
+    /// check").
+    var selectedOccurrenceId: Int64? {
+        guard listPane?.pane == .messages,
+            let ids = messageList?.list?.selectedIDs,
+            ids.count == 1
+        else { return nil }
+        return ids.first
+    }
+
     /// The app's one Activity model, started with the core and
     /// restarted after a restore; the sidebar and the Activity window
     /// share it.

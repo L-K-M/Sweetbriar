@@ -1189,6 +1189,21 @@ extension CoreBridge: SendSource {
         }
         return OutBox(value)
     }
+
+    /// `cross_account_notice(draft_id, revision_id)` (spec/07 "Other
+    /// queries"): the cross-account warning for that revision of a
+    /// reply or reply-all, or none. A query: the token races every
+    /// wait.
+    public func crossAccountNotice(
+        draftId: String, revisionId: String
+    ) async throws -> CrossAccountNotice? {
+        let token = SweetbriarCore.CancelToken()
+        let value = try await Self.withCancellation(token: token) {
+            try await self.core.crossAccountNotice(
+                token: token, draftId: draftId, revisionId: revisionId)
+        }
+        return value.map { CrossAccountNotice($0) }
+    }
 }
 
 extension Receipt {

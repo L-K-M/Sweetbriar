@@ -76,6 +76,12 @@ actor FakeOutBoxSource: SendSource {
         return Self.receipt("retry_rejected_recipients")
     }
 
+    func crossAccountNotice(
+        draftId: String, revisionId: String
+    ) async throws -> CrossAccountNotice? {
+        fatalError("the Out Box never queries a cross-account notice")
+    }
+
     private func record(
         _ method: String, key: String, attemptId: String,
         resolution: UnknownResolution? = nil
