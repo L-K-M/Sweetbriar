@@ -301,6 +301,32 @@ private func closes(_ close: CloseSpy, stayAt count: Int) async -> Bool {
         #expect(await closes(close, stayAt: 0), "the undone hold must never close the window")
     }
 
+    /// A retried Undo that meets a `Conflict` ends the hold: the
+    /// earlier transient failure's Undo error goes with it, so the
+    /// failed state never shows a stale reason beside its own.
+    @Test func aConflictAfterATransientCancelFailureClearsTheUndoError() async throws {
+        let source = FakeSendSource()
+        await source.configure(cancellationError: CoreFailure.unavailable(reason: "store busy"))
+        let settings = FakeSendSettingsSource()
+        let sleepBox = GatedSleep()
+        let settle = SettleSpy()
+        let close = CloseSpy()
+        let model = makeModel(source, settings, sleepBox, settle, close)
+        #expect(await model.send())
+
+        #expect(!(await model.undo()))
+        #expect(model.undoError == "Unavailable: store busy")
+
+        await source.configure(
+            cancellationError: CoreFailure.conflict(detail: "the hold already ended"))
+        #expect(!(await model.undo()))
+        #expect(model.state == .failed(message: "Conflict: the hold already ended"))
+        #expect(model.undoError == nil)
+
+        await sleepBox.release()
+        #expect(await closes(close, stayAt: 0), "the ended hold must never close the window")
+    }
+
     @Test func anyOtherErrorShowsItsMessageAndKeepsTheDraftEditable() async throws {
         let source = FakeSendSource()
         await source.configure(error: CoreFailure.unavailable(reason: "offline"))
