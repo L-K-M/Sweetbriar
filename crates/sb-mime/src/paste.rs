@@ -94,6 +94,9 @@ struct Frame {
     saved: String,
     had_content: bool,
     kind: FrameKind,
+    /// [`Emitter::flushed`] when the frame opened: a link whose content
+    /// was flushed as lines of its own wrapped block content.
+    flushed: usize,
 }
 
 /// Renders the parsed tree into blocks of finished lines. An explicit
@@ -121,6 +124,8 @@ struct Emitter {
     /// Where the last emphasis closed, so an adjacent run of the same
     /// kind continues it instead of reading as one longer delimiter run.
     last_close: Option<(&'static str, usize)>,
+    /// How many lines have been flushed so far.
+    flushed: usize,
 }
 
 impl Emitter {
@@ -144,6 +149,7 @@ impl Emitter {
             pending_breaks: 0,
             item_marker: None,
             last_close: None,
+            flushed: 0,
         }
     }
 
@@ -396,6 +402,7 @@ impl Emitter {
             saved: std::mem::take(&mut self.buf),
             had_content: self.line_has_content,
             kind,
+            flushed: self.flushed,
         });
         self.line_has_content = false;
     }
@@ -406,14 +413,20 @@ impl Emitter {
     }
 
     fn close_emphasis(&mut self, id: usize, marker: &'static str) {
-        let Some(frame) = self.pop_frame(id) else {
+        let Some((frame, inner, inner_content)) = self.close_frame(id) else {
             return;
         };
-        let inner = std::mem::take(&mut self.buf);
-        self.buf = frame.saved;
-        self.line_has_content = frame.had_content;
+        // Emphasis around blocks keeps only its last line's markers.
+        if self.flushed != frame.flushed {
+            self.losses.add(PasteLoss::Styling);
+        }
         let (lead, core, trail) = split_edges(&inner);
         if core.is_empty() {
+            return;
+        }
+        // Inside a code span the markers would be literal text.
+        if self.code > 0 {
+            self.keep_inner(&inner, inner_content, PasteLoss::Styling);
             return;
         }
         if lead.is_empty() && self.last_close == Some((marker, self.buf.len())) {
@@ -431,12 +444,9 @@ impl Emitter {
     }
 
     fn close_code(&mut self, id: usize) {
-        let Some(frame) = self.pop_frame(id) else {
+        let Some((_, inner, _)) = self.close_frame(id) else {
             return;
         };
-        let inner = std::mem::take(&mut self.buf);
-        self.buf = frame.saved;
-        self.line_has_content = frame.had_content;
         if inner.is_empty() {
             return;
         }
@@ -469,15 +479,18 @@ impl Emitter {
     }
 
     fn close_link(&mut self, id: usize) {
-        let Some(frame) = self.pop_frame(id) else {
+        let Some((frame, inner, inner_content)) = self.close_frame(id) else {
             return;
         };
         let FrameKind::Link(url) = frame.kind else {
             return;
         };
-        let inner = std::mem::take(&mut self.buf);
-        self.buf = frame.saved;
-        self.line_has_content = frame.had_content;
+        // Link syntax is literal text inside a code span, and inline
+        // syntax cannot span the blocks a link may wrap.
+        if self.code > 0 || self.flushed != frame.flushed {
+            self.keep_inner(&inner, inner_content, PasteLoss::Links);
+            return;
+        }
         let text = if inner.trim_matches(is_html_ws).is_empty() {
             let mut escaped = String::new();
             escape_plain(&mut escaped, &url, self.escape_pipes);
@@ -492,6 +505,36 @@ impl Emitter {
         self.buf.push(')');
         self.line_has_content = true;
         self.inline_started = true;
+    }
+
+    /// Pop a frame and restore the line it interrupted, returning the
+    /// frame, its content and whether that content has text.
+    fn close_frame(&mut self, id: usize) -> Option<(Frame, String, bool)> {
+        let frame = self.pop_frame(id)?;
+        let inner_content = self.line_has_content;
+        let mut inner = std::mem::take(&mut self.buf);
+        self.buf = frame.saved.clone();
+        self.line_has_content = frame.had_content;
+        // A frame that saw a line flushed lost its saved text to that
+        // line; its content now starts the current line, prefix first.
+        if self.flushed != frame.flushed
+            && self.buf.is_empty()
+            && let Some(rest) = inner.strip_prefix(self.prefix.as_str())
+        {
+            self.buf = self.prefix.clone();
+            inner = rest.to_string();
+        }
+        Some((frame, inner, inner_content))
+    }
+
+    /// Keep a closed frame's content without its decoration.
+    fn keep_inner(&mut self, inner: &str, inner_content: bool, loss: PasteLoss) {
+        self.losses.add(loss);
+        self.buf.push_str(inner);
+        if inner_content {
+            self.line_has_content = true;
+            self.inline_started = true;
+        }
     }
 
     fn heading(&mut self, level: u8) {
@@ -651,7 +694,8 @@ impl Emitter {
         for line in body.split('\n') {
             let line = line.trim_end_matches(is_html_ws);
             if line.is_empty() {
-                self.lines.push(String::new());
+                // A blank line without the quote's marker would end it.
+                self.lines.push(self.prefix.trim_end().to_string());
             } else {
                 self.lines.push(format!("{}{}", self.prefix, line));
             }
@@ -677,8 +721,15 @@ impl Emitter {
     }
 
     fn flush_line(&mut self) {
-        let had_content = self.line_has_content;
-        let line = std::mem::take(&mut self.buf);
+        // A line ending inside open frames takes the text they saved, in
+        // order; their decoration cannot span lines.
+        let mut had_content = self.line_has_content;
+        let mut line = String::new();
+        for frame in &mut self.inline {
+            line.push_str(&std::mem::take(&mut frame.saved));
+            had_content |= std::mem::take(&mut frame.had_content);
+        }
+        line.push_str(&std::mem::take(&mut self.buf));
         self.buf = self.prefix.clone();
         self.line_has_content = false;
         self.inline_started = false;
@@ -695,6 +746,7 @@ impl Emitter {
         };
         if !cleaned.is_empty() {
             self.lines.push(cleaned);
+            self.flushed += 1;
         }
     }
 
@@ -814,12 +866,20 @@ fn entity_like(chars: &[char], index: usize) -> bool {
 }
 
 /// The URL a browser would follow: without edge whitespace, tabs or
-/// line breaks (WHATWG URL parsing drops them).
+/// line breaks (WHATWG URL parsing drops them), and other control
+/// characters percent-encoded as its serializer does; a Markdown
+/// destination may not contain them.
 fn clean_href(href: &str) -> String {
-    href.trim_matches(|c: char| c.is_ascii_whitespace() || c.is_ascii_control())
-        .chars()
-        .filter(|c| !matches!(c, '\t' | '\n' | '\r'))
-        .collect()
+    let mut out = String::new();
+    let trimmed = href.trim_matches(|c: char| c.is_ascii_whitespace() || c.is_ascii_control());
+    for c in trimmed.chars().filter(|c| !matches!(c, '\t' | '\n' | '\r')) {
+        if c.is_ascii_control() {
+            out.push_str(&format!("%{:02X}", c as u32));
+        } else {
+            out.push(c);
+        }
+    }
+    out
 }
 
 fn is_safe_href(href: &str) -> bool {
@@ -834,8 +894,11 @@ fn link_dest(url: &str) -> String {
     let wrap = url
         .chars()
         .any(|c| matches!(c, ' ' | '(' | ')' | '<' | '>'));
+    // CommonMark reads backslash escapes inside a destination, so a
+    // literal backslash is doubled in both forms.
+    let url = url.replace('\\', "\\\\");
     if !wrap {
-        return url.to_string();
+        return url;
     }
     let cleaned = url.replace('<', "%3C").replace('>', "%3E");
     format!("<{cleaned}>")
@@ -859,7 +922,8 @@ fn escape_plain(out: &mut String, text: &str, escape_pipes: bool) {
 
 /// Concatenate the rendered text of a subtree, verbatim apart from `br`
 /// becoming a newline. Used for `pre`, where nothing is escaped or
-/// collapsed.
+/// collapsed; `emit_pre` then trims each line's end, as no output line
+/// ends in whitespace.
 fn gather_text(tree: &Tree, root: usize) -> String {
     let mut out = String::new();
     let mut stack = vec![root];

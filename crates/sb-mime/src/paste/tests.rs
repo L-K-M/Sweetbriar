@@ -362,3 +362,82 @@ fn adjacent_runs_of_one_emphasis_merge() {
     assert_eq!(md("<p><b>a</b><b>b</b></p>"), "**ab**");
     assert_eq!(md("<p><i>a</i><em>b</em> <i>c</i></p>"), "*ab* *c*");
 }
+
+#[test]
+fn a_fence_inside_a_quote_keeps_its_marker_on_blank_lines() {
+    assert_eq!(
+        md("<blockquote><pre>a\n\nb</pre></blockquote>"),
+        "> ```\n> a\n>\n> b\n> ```"
+    );
+    assert_eq!(md("<pre>a\n\nb</pre>"), "```\na\n\nb\n```");
+    assert_eq!(
+        md("<ul><li><pre>a\n\nb</pre></li></ul>"),
+        "-\n\n  ```\n  a\n\n  b\n  ```"
+    );
+}
+
+#[test]
+fn a_link_around_blocks_keeps_its_text_and_reports_the_link() {
+    let converted = convert("<a href=\"https://x\"><p>Read more</p></a>");
+    assert_eq!(converted.markdown, "Read more");
+    assert_eq!(converted.losses, vec![PasteLoss::Links]);
+    assert_eq!(
+        md("<p><a href=\"https://x\">text</a></p>"),
+        "[text](https://x)"
+    );
+    assert_eq!(
+        md("<p><a href=\"https://x\"></a></p>"),
+        "[https://x](https://x)"
+    );
+}
+
+#[test]
+fn backslashes_and_controls_in_destinations_survive_reparsing() {
+    assert_eq!(
+        md("<p><a href=\"mailto:a@b\\*c\">x</a></p>"),
+        "[x](mailto:a@b\\\\*c)"
+    );
+    assert_eq!(
+        md("<p><a href=\"https://e.com/a b\\c\">x</a></p>"),
+        "[x](<https://e.com/a b\\\\c>)"
+    );
+    assert_eq!(
+        md("<p><a href=\"https://e.com/a&#11;b\">x</a></p>"),
+        "[x](https://e.com/a%0Bb)"
+    );
+}
+
+#[test]
+fn code_spans_keep_nested_text_without_decoration() {
+    let converted = convert("<p><code>a<b>b</b>c</code></p>");
+    assert_eq!(converted.markdown, "`abc`");
+    assert_eq!(converted.losses, vec![PasteLoss::Styling]);
+    let converted = convert("<p><code><a href=\"https://x\">y</a></code></p>");
+    assert_eq!(converted.markdown, "`y`");
+    assert_eq!(converted.losses, vec![PasteLoss::Links]);
+    assert_eq!(md("<p><b>a<code>c</code></b></p>"), "**a`c`**");
+}
+
+#[test]
+fn inline_frames_around_blocks_keep_their_text_in_order() {
+    assert_eq!(md("x<a href=\"https://x\"><p>a</p></a>"), "x\n\na");
+    assert_eq!(
+        md("<blockquote><a href=\"https://x\"><p>a</p><p>b</p></a></blockquote>"),
+        "> a\n>\n> b"
+    );
+    assert_eq!(
+        md("<blockquote>x<a href=\"https://x\"><p>a</p>b</a></blockquote>"),
+        "> x\n>\n> a\n>\n> b"
+    );
+    let converted = convert("<blockquote><b>x<p>a</p>b</b></blockquote>");
+    assert_eq!(converted.markdown, "> x\n>\n> a\n>\n> **b**");
+    assert_eq!(converted.losses, vec![PasteLoss::Styling]);
+    assert_eq!(
+        md("<blockquote><i>q<b>x<p>a</p>b</b>z</i></blockquote>"),
+        "> qx\n>\n> a\n>\n> ***b**z*"
+    );
+    assert_eq!(
+        md("<ul><li><a href=\"https://x\">a<ul><li>b</li></ul></a></li></ul>"),
+        "- a\n  - b"
+    );
+}
