@@ -211,6 +211,24 @@ fn the_local_archive_moves_at_once_and_undoes_locally() {
     assert!(moved_elsewhere(again), "the message is no longer in Kept");
 }
 
+/// A token naming local moves on a Proton account is refused, not
+/// planned: local moves never mint intents.
+#[test]
+fn a_local_moves_token_for_a_proton_account_is_refused() {
+    let (_scratch, engine) = scratch_engine("filing-forged-moves");
+    seed(&engine);
+
+    let forged = crate::flags::UndoToken::from_string(&format!(
+        r#"{{"v":1,"account_id":"acct-1","moves":[{{"message_id":{PROTON_MESSAGE},"from":{ARCHIVE},"to":{INBOX}}}]}}"#
+    ))
+    .unwrap();
+    let error = block_on(engine.undo(&engine.new_idempotency_key(), &forged)).unwrap_err();
+
+    assert_eq!(field(error), "token");
+    assert_eq!(mailboxes_of(&engine, PROTON_MESSAGE), vec![INBOX]);
+    assert!(intents(&engine).is_empty(), "nothing was planned");
+}
+
 #[test]
 fn trash_and_labels_plan_their_intents_and_labels_answer_no_token() {
     let (_scratch, engine) = scratch_engine("filing-trash-labels");

@@ -175,13 +175,19 @@ pub fn plan_move_undo(
 
 /// Move a local-archive message back as [`LocalMove`] recorded it
 /// (spec/07 "Undo"): refused with `Conflict` "Moved elsewhere since"
-/// when it is no longer in the move's destination.
+/// when it is no longer in the move's destination, and `InvalidInput`
+/// for an account that isn't the local archive.
 pub fn undo_local_move(
     tx: &Transaction,
     account_id: &str,
     moved: &LocalMove,
     now: i64,
 ) -> Result<(), StoreError> {
+    // Undo tokens come from the caller: one naming local moves on a
+    // Proton account must not reach the intent planner below.
+    if account_kind(tx, account_id)? != AccountKind::Local {
+        return Err(invalid("local moves undo only on the local archive"));
+    }
     if occurrence_in(tx, moved.message_id, moved.to_mailbox_id)?.is_none() {
         return Err(StoreError::conflict(MOVED_ELSEWHERE));
     }
