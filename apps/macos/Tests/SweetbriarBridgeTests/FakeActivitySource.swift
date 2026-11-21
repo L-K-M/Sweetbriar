@@ -104,6 +104,7 @@ actor FakeActivitySource: ActivitySource {
     private var subscribeGate: Gate?
     private var resolveGate: Gate?
     private var intentActionGate: Gate?
+    private var intentsGate: Gate?
     private var intentsFailure: (any Error)?
     private var subscribeFailure: (any Error)?
     private var resolveFailure: (any Error)?
@@ -117,6 +118,7 @@ actor FakeActivitySource: ActivitySource {
     func holdHealth(_ gate: Gate?) { healthGate = gate }
     func holdResolve(_ gate: Gate?) { resolveGate = gate }
     func holdIntentAction(_ gate: Gate?) { intentActionGate = gate }
+    func holdIntents(_ gate: Gate?) { intentsGate = gate }
     func holdSubscribe(_ gate: Gate?) { subscribeGate = gate }
     func failIntents(_ error: (any Error)?) { intentsFailure = error }
     func failSubscribe(_ error: (any Error)?) { subscribeFailure = error }
@@ -178,7 +180,9 @@ actor FakeActivitySource: ActivitySource {
     func intents(filter: IntentFilter, after: String?, limit: UInt32) async throws -> IntentPage {
         calls.append(.intents(filter, after, limit))
         if let intentsFailure { throw intentsFailure }
-        return intentsPage
+        let page = intentsPage
+        if let intentsGate { await intentsGate.wait() }
+        return page
     }
 
     func recovery(accountId: String?, after: String?, limit: UInt32) async throws -> RecoveryPage {
@@ -201,7 +205,7 @@ actor FakeActivitySource: ActivitySource {
     ) async throws -> Receipt {
         calls.append(.release(idempotencyKey, intentIds))
         if let intentActionFailure { throw intentActionFailure }
-        let value = receipt
+        let value = Receipt(command: "release_intents", resultJson: "{}", createdAtMs: 1_001)
         if let intentActionGate { await intentActionGate.wait() }
         return value
     }
@@ -211,7 +215,7 @@ actor FakeActivitySource: ActivitySource {
     ) async throws -> Receipt {
         calls.append(.cancel(idempotencyKey, intentIds))
         if let intentActionFailure { throw intentActionFailure }
-        let value = receipt
+        let value = Receipt(command: "cancel_intents", resultJson: "{}", createdAtMs: 1_001)
         if let intentActionGate { await intentActionGate.wait() }
         return value
     }

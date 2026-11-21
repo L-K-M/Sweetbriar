@@ -158,7 +158,8 @@ public final class ActivityModel {
     /// One intent health action, like `resolve(eventId:resolution:)`:
     /// each user action takes a fresh key, a call naming an id already
     /// in flight (or none) is ignored, and a success clears any
-    /// previous action error and re-reads the intents list.
+    /// previous action error and re-reads the intents list before the
+    /// ids leave `acting`.
     private func runIntentAction(
         _ intentIds: [String],
         _ action: @escaping @Sendable (any ActivitySource, String) async throws -> Receipt
@@ -172,9 +173,11 @@ public final class ActivityModel {
                 guard let source = self?.source else { return }
                 _ = try await action(source, key)
                 guard let self else { return }
-                self.acting.subtract(ids)
                 self.actionError = nil
+                // Keep the row disabled until the re-read replaces its
+                // old state, or a second click would act on it again.
                 await self.refreshIntents()
+                self.acting.subtract(ids)
             } catch is CancellationError {
                 self?.acting.subtract(ids)
             } catch {

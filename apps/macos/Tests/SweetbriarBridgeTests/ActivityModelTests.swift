@@ -196,6 +196,26 @@ struct ActivityModelTests {
     }
 
     @Test
+    func anIntentStaysActingUntilTheReReadLands() async throws {
+        let source = FakeActivitySource()
+        let gate = Gate()
+        await source.holdIntents(gate)
+        let refreshed = IntentPage(rows: [activityIntentRow("intent-2")], after: nil, hasMore: true)
+        await source.setIntents(refreshed)
+        let model = ActivityModel(source: source)
+        model.release(intentIds: ["intent-1"])
+        try #require(await eventually { await source.intentReads == 1 })
+        // The command succeeded, but the row still shows its old state
+        // until the re-read lands, so its buttons stay disabled.
+        #expect(model.acting == ["intent-1"])
+        await gate.open()
+        try #require(await eventually { await model.acting.isEmpty })
+        #expect(model.intents.map(\.intentId) == ["intent-2"])
+        #expect(model.intentsTruncated)
+        model.stop()
+    }
+
+    @Test
     func aFailedIntentActionSetsAnErrorAndTheNextSuccessClearsIt() async throws {
         let source = FakeActivitySource()
         let model = ActivityModel(source: source)
