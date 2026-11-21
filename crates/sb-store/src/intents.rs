@@ -409,10 +409,11 @@ pub(crate) fn parse_target(text: &str) -> Result<Vec<i64>, StoreError> {
 /// but the writers and the lifecycle need (spec/02's Proton shape).
 pub(crate) fn parse_provider_key(text: &str) -> Result<Option<String>, StoreError> {
     let json = parse_target_json(text)?;
-    Ok(json
-        .get("provider_key")
-        .and_then(Json::as_str)
-        .map(str::to_owned))
+    match json.get("provider_key") {
+        None => Ok(None),
+        Some(Json::String(key)) => Ok(Some(key.clone())),
+        Some(_) => Err(malformed_target(text)),
+    }
 }
 
 /// `target_json` as an object with `"v": 1`, or `Corrupt`.

@@ -324,6 +324,20 @@ fn claim_orders_a_message_and_marks_the_next_dependency() {
             .is_none()
     );
 
+    // Only a claimed intent finishes: a pending one, even with its
+    // successor waiting on it, is `Conflict`.
+    assert!(matches!(
+        with_tx(&conn, |tx| finish_intent_done(tx, &first[0], NOW)),
+        Err(StoreError::Conflict { .. })
+    ));
+    with_tx(&conn, |tx| {
+        clear_account_intents_waiting(tx, ACCOUNT, WaitReason::Offline, NOW)
+    })
+    .unwrap();
+    let again = with_tx(&conn, |tx| claim_next_intent(tx, ACCOUNT, NOW + 5))
+        .unwrap()
+        .expect("claimable once online");
+    assert_eq!(again.intent_id, first[0]);
     with_tx(&conn, |tx| finish_intent_done(tx, &first[0], NOW)).unwrap();
     let follows = with_tx(&conn, |tx| claim_next_intent(tx, ACCOUNT, NOW))
         .unwrap()
@@ -489,6 +503,10 @@ fn quarantine_and_park_keep_the_reason_invariant() {
     );
     assert!(matches!(
         with_tx(&conn, |tx| park_intent(tx, &first, "no", NOW)),
+        Err(StoreError::Conflict { .. })
+    ));
+    assert!(matches!(
+        with_tx(&conn, |tx| finish_intent_done(tx, &first, NOW)),
         Err(StoreError::Conflict { .. })
     ));
 

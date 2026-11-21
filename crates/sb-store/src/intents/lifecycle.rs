@@ -160,8 +160,9 @@ pub enum FailureOutcome {
 /// of another account, or one without a `provider_key`, is
 /// `InvalidInput`; an unknown message is `NotFound`. A message every
 /// current occurrence of which already holds the requested value gets no
-/// intent. `new_id` mints each intent's id. Returns the new ids in
-/// `message_ids` order.
+/// intent. `new_id` mints each intent's id. Returns the ids of the
+/// intents planned, in `message_ids` order; skipped messages have none,
+/// so the list can be shorter than `message_ids`.
 pub fn plan_flag_intents(
     tx: &Transaction,
     account_id: &str,
@@ -326,12 +327,13 @@ pub fn claim_next_intent(
     Ok(claimed)
 }
 
-/// Mark an intent `done` (spec/04-sync-proton "Confirm"). `pending` is
-/// allowed too, for the "already holds" reconcile that makes no call.
-/// Any other state is `Conflict`.
+/// Mark a claimed intent `done` (spec/04-sync-proton "Confirm", and the
+/// live check's "already holds", which runs after the claim too).
+/// `in_flight` only, so a pending intent can't finish ahead of the one
+/// it waits on; any other state is `Conflict`.
 pub fn finish_intent_done(tx: &Transaction, intent_id: &str, now: i64) -> Result<(), StoreError> {
     let row = intent_row(tx, intent_id)?;
-    if !matches!(row.state.as_str(), "in_flight" | "pending") {
+    if row.state != "in_flight" {
         return Err(conflict(format!(
             "an intent in state {} cannot finish",
             row.state
