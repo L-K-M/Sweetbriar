@@ -198,10 +198,11 @@ pub use sb_store::index::{
 pub use sb_store::intents::{
     ClaimedIntent, FailureOutcome, FlagChange, IntentAnchor, IntentCounts, IntentEffect,
     IntentFilter, IntentFlag, IntentKey, IntentKind, IntentOrigin, IntentPage, IntentState,
-    MAX_INTENT_PAGE_ROWS, QuarantineReason, StoredIntent, WaitReason, claim_next_intent,
-    clear_account_intents_waiting, finish_intent_done, intent_counts, intents, park_intent,
-    plan_flag_intents, quarantine_intent, record_intent_failure, recover_in_flight_intents,
-    return_intent_to_pending, set_account_intents_waiting,
+    MAX_INTENT_PAGE_ROWS, QuarantineReason, StoredIntent, UndoableIntent, WaitReason,
+    cancel_intents, claim_next_intent, clear_account_intents_waiting, finish_intent_done,
+    intent_counts, intent_for_undo, intents, park_intent, plan_flag_intents, quarantine_intent,
+    record_intent_failure, recover_in_flight_intents, release_intents, return_intent_to_pending,
+    set_account_intents_waiting,
 };
 pub use sb_store::lists::{
     ListAnchor, ListKey, ListPage, ListScope, MAX_PAGE_ROWS, MailboxRole, PageRead, StoredListRow,

@@ -1,6 +1,6 @@
 //! Intent lifecycle tests (spec/04-sync-proton "Running an intent",
 //! spec/02 "Intents"): planning, the claim's ordering, the transitions
-//! and their backoff, and the reader.
+//! and their backoff, the health actions, and the reader.
 
 use rusqlite::{Connection, Transaction, params};
 
@@ -568,4 +568,187 @@ fn the_reader_reads_written_intents() {
     );
     let counts = with_tx(&conn, intent_counts).unwrap();
     assert!(counts.len() == 1 && counts[0].parked == 1 && counts[0].quarantined == 0);
+}
+
+/// `release_intents` resets attempts, reasons and the generation, and
+/// is all or nothing; quarantine sets the reason exactly when it
+/// quarantines.
+#[test]
+fn release_resets_and_is_all_or_nothing() {
+    let conn = store();
+    let seed = seed(&conn);
+    let mut next = 0;
+    let first = plan(&conn, &mut next, &[seed.message], star()).remove(0);
+    with_tx(&conn, |tx| claim_next_intent(tx, ACCOUNT, NOW))
+        .unwrap()
+        .expect("claimable");
+    with_tx(&conn, |tx| {
+        record_intent_failure(tx, &first, "refused", NOW)
+    })
+    .unwrap();
+    with_tx(&conn, |tx| {
+        quarantine_intent(tx, &first, QuarantineReason::ConfigChange, NOW)
+    })
+    .unwrap();
+    let row = stored(&conn, &first);
+    assert!(
+        row.state == "quarantined" && row.quarantine_reason.as_deref() == Some("config_change")
+    );
+    conn.execute(
+        "UPDATE accounts SET config_generation = 2 WHERE account_id = ?1",
+        params![ACCOUNT],
+    )
+    .unwrap();
+
+    with_tx(&conn, |tx| {
+        release_intents(tx, std::slice::from_ref(&first), NOW)
+    })
+    .unwrap();
+    let row = stored(&conn, &first);
+    assert!(row.state == "pending" && row.attempts == 0 && row.generation == 2);
+    assert!(
+        row.next_attempt_at.is_none()
+            && row.wait_reason.is_none()
+            && row.quarantine_reason.is_none()
+    );
+    assert!(
+        with_tx(&conn, |tx| release_intents(
+            tx,
+            std::slice::from_ref(&first),
+            NOW
+        ))
+        .is_err()
+    );
+
+    // One parked and one pending: nothing changes; a missing id is NotFound.
+    let second = plan(&conn, &mut next, &[seed.message], unstar()).remove(0);
+    with_tx(&conn, |tx| park_intent(tx, &second, "no", NOW)).unwrap();
+    assert!(
+        with_tx(&conn, |tx| release_intents(
+            tx,
+            &[second.clone(), first.clone()],
+            NOW
+        ))
+        .is_err()
+    );
+    assert!(stored(&conn, &second).state == "parked" && stored(&conn, &first).state == "pending");
+    let missing = with_tx(&conn, |tx| {
+        release_intents(tx, &[second.clone(), "missing".to_owned()], NOW)
+    });
+    assert!(matches!(missing, Err(StoreError::NotFound { .. })));
+    assert_eq!(stored(&conn, &second).state, "parked");
+}
+
+/// `cancel_intents` reverts the flag, keeps a later live intent's
+/// effect, is all or nothing and refuses an in-flight intent.
+#[test]
+fn cancel_reverts_and_keeps_a_later_live_effect() {
+    let conn = store();
+    let seed = seed(&conn);
+    let mut next = 0;
+    let planned = plan(&conn, &mut next, &[seed.message], star()).remove(0);
+    assert_eq!(flag(&conn, seed.first, IntentFlag::Flagged), 1);
+    with_tx(&conn, |tx| {
+        cancel_intents(tx, std::slice::from_ref(&planned), NOW)
+    })
+    .unwrap();
+    assert_eq!(stored(&conn, &planned).state, "cancelled");
+    assert!(
+        flag(&conn, seed.first, IntentFlag::Flagged) == 0
+            && flag(&conn, seed.second, IntentFlag::Flagged) == 0
+    );
+    assert!(
+        with_tx(&conn, |tx| cancel_intents(
+            tx,
+            std::slice::from_ref(&planned),
+            NOW
+        ))
+        .is_err()
+    );
+
+    // A later live intent on the same flag keeps the effect; on another
+    // flag it does not.
+    let star_intent = plan(&conn, &mut next, &[seed.message], star()).remove(0);
+    let unstar_intent = plan(&conn, &mut next, &[seed.message], unstar()).remove(0);
+    with_tx(&conn, |tx| {
+        cancel_intents(tx, std::slice::from_ref(&star_intent), NOW)
+    })
+    .unwrap();
+    assert_eq!(flag(&conn, seed.first, IntentFlag::Flagged), 0);
+    with_tx(&conn, |tx| {
+        cancel_intents(tx, std::slice::from_ref(&unstar_intent), NOW)
+    })
+    .unwrap();
+    assert!(
+        flag(&conn, seed.first, IntentFlag::Flagged) == 1
+            && flag(&conn, seed.second, IntentFlag::Flagged) == 1
+    );
+    let unstar_again = plan(&conn, &mut next, &[seed.message], unstar()).remove(0);
+    let seen_intent = plan(&conn, &mut next, &[seed.message], seen()).remove(0);
+    with_tx(&conn, |tx| {
+        cancel_intents(tx, std::slice::from_ref(&unstar_again), NOW)
+    })
+    .unwrap();
+    assert!(
+        flag(&conn, seed.first, IntentFlag::Flagged) == 1
+            && flag(&conn, seed.first, IntentFlag::Seen) == 1
+    );
+    assert_eq!(stored(&conn, &seen_intent).state, "pending");
+    with_tx(&conn, |tx| finish_intent_done(tx, &seen_intent, NOW)).unwrap();
+
+    // An in-flight intent is refused; a missing id leaves the other
+    // cancelled nothing.
+    let in_flight = plan(&conn, &mut next, &[seed.message], unstar()).remove(0);
+    with_tx(&conn, |tx| claim_next_intent(tx, ACCOUNT, NOW))
+        .unwrap()
+        .expect("claimable");
+    assert!(
+        with_tx(&conn, |tx| cancel_intents(
+            tx,
+            std::slice::from_ref(&in_flight),
+            NOW
+        ))
+        .is_err()
+    );
+    assert_eq!(stored(&conn, &in_flight).state, "in_flight");
+    let pending = plan(&conn, &mut next, &[seed.message], star()).remove(0);
+    let missing = with_tx(&conn, |tx| {
+        cancel_intents(tx, &[pending.clone(), "missing".to_owned()], NOW)
+    });
+    assert!(matches!(missing, Err(StoreError::NotFound { .. })));
+    assert_eq!(stored(&conn, &pending).state, "pending");
+}
+
+/// `intent_for_undo` resolves the message and keeps its state.
+#[test]
+fn intent_for_undo_resolves_the_message() {
+    let conn = store();
+    let seed = seed(&conn);
+    let mut next = 0;
+    let planned = plan(&conn, &mut next, &[seed.message], star()).remove(0);
+    let undo = with_tx(&conn, |tx| intent_for_undo(tx, &planned))
+        .unwrap()
+        .expect("undoable");
+    assert!(
+        undo.account_id == ACCOUNT
+            && undo.message_id == seed.message
+            && undo.change == star()
+            && undo.state == "pending"
+    );
+    with_tx(&conn, |tx| {
+        cancel_intents(tx, std::slice::from_ref(&planned), NOW)
+    })
+    .unwrap();
+    assert_eq!(
+        with_tx(&conn, |tx| intent_for_undo(tx, &planned))
+            .unwrap()
+            .unwrap()
+            .state,
+        "cancelled"
+    );
+    assert!(
+        with_tx(&conn, |tx| intent_for_undo(tx, "missing"))
+            .unwrap()
+            .is_none()
+    );
 }
