@@ -1260,9 +1260,11 @@ CREATE INDEX intents_runnable ON intents(account_id, state, next_attempt_at);
   - `args_json`:
     - `set_flags`: `{"v":1,"add":[…],"remove":[…]}`;
     - `move` and `copy`: `{"v":1,"to_mailbox_id":N}`; `copy` adds a
-      label (04);
+      label (04). A Proton `move` (M5) adds `"from_mailbox_id":N` or
+      `null`, as below;
     - `delete_to_trash`: `{"v":1}`, with the destination resolved when
-      the intent runs;
+      the intent runs; a Proton one (M5) adds `"from_mailbox_id"`
+      the same way;
     - `remove_label` (Proton, M5): `{"v":1,"from_mailbox_id":N}`, the
       user label's mailbox. Migration 35 (plan M5.1a) adds it to the
       `op` CHECK above, rebuilding the table as migration 28 did.
