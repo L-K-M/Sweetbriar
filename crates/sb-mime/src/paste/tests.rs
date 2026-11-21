@@ -561,6 +561,21 @@ fn a_ragged_table_pads_every_row_to_the_widest() {
 }
 
 #[test]
+fn an_empty_row_is_skipped_and_a_whole_group_rowspan_spans() {
+    let converted = convert("<table><tr></tr><tr><td>a</td></tr></table>");
+    assert_eq!(converted.markdown, "| a |\n| --- |");
+    assert!(converted.losses.is_empty());
+
+    // `rowspan=0` spans the rest of the row group (WHATWG); a zero
+    // `colspan` is read as one.
+    let converted = convert("<table><tr><td rowspan=0>a</td></tr></table>");
+    assert_eq!(converted.markdown, "a");
+    assert_eq!(converted.losses, vec![PasteLoss::Tables]);
+    let converted = convert("<table><tr><td colspan=0>a</td></tr></table>");
+    assert_eq!(converted.markdown, "| a |\n| --- |");
+}
+
+#[test]
 fn a_caption_becomes_a_paragraph_before_its_table() {
     let converted = convert("<table><caption>Totals</caption><tr><td>a</td></tr></table>");
     assert_eq!(converted.markdown, "Totals\n\n| a |\n| --- |");

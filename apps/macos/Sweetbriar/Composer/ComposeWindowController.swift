@@ -1140,12 +1140,15 @@ extension ComposeWindowController: NSMenuItemValidation {
             // say so rather than closing on a silent no-op.
             if let markdown, !textView.insertMarkdownPaste(markdown) { NSSound.beep() }
         }
+        // A sheet dismissed mid-conversion cancels this task; a late
+        // answer must not reach it, whatever the call threw.
         pasteConversion = Task { [weak sheet] in
             do {
                 let converted = try await pasteSource.markdownFromHtml(html: html)
+                guard !Task.isCancelled else { return }
                 sheet?.show(.ready(converted))
-            } catch is CancellationError {
             } catch {
+                guard !Task.isCancelled, !(error is CancellationError) else { return }
                 let reason = (error as? CoreFailure)?.errorDescription ?? error.localizedDescription
                 sheet?.show(.refused(reason))
             }

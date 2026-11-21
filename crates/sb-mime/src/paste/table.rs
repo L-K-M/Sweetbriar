@@ -34,9 +34,6 @@ impl Emitter {
                     .iter()
                     .map(|&cell| self.render_cell(tree, cell, false))
                     .collect();
-                if parts.is_empty() {
-                    continue;
-                }
                 if self.line_has_content && !self.buf.ends_with(' ') {
                     self.buf.push(' ');
                 }
@@ -159,7 +156,7 @@ fn collect_rows(tree: &Tree, table: usize) -> (Vec<Vec<usize>>, Vec<usize>) {
             continue;
         }
         if tag == "tr" && !nested {
-            let cells = node
+            let cells: Vec<usize> = node
                 .children
                 .borrow()
                 .iter()
@@ -169,7 +166,11 @@ fn collect_rows(tree: &Tree, table: usize) -> (Vec<Vec<usize>>, Vec<usize>) {
                     cell.name.ns == ns!(html) && matches!(cell.name.local.as_ref(), "td" | "th")
                 })
                 .collect();
-            rows.push(cells);
+            // A row without cells has nothing to show; as a GFM header it
+            // would be an empty first line.
+            if !cells.is_empty() {
+                rows.push(cells);
+            }
             continue;
         }
         let children = node.children.borrow().clone();
@@ -195,7 +196,7 @@ fn cell_is_simple(tree: &Tree, cell: usize) -> bool {
         let tag: &str = node.name.local.as_ref();
         let simple = {
             let attrs = node.attrs.borrow();
-            attrs.colspan <= 1 && attrs.rowspan <= 1
+            attrs.colspan <= 1 && attrs.rowspan == 1
         };
         if !simple {
             return false;

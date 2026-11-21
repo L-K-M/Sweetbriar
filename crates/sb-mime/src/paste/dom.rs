@@ -65,7 +65,9 @@ impl Attrs {
                 "alt" => out.alt = Some(attr.value.to_string()),
                 "start" => out.start = attr.value.parse().ok(),
                 "colspan" => out.colspan = attr.value.parse().unwrap_or(1).max(1),
-                "rowspan" => out.rowspan = attr.value.parse().unwrap_or(1).max(1),
+                // Zero spans the rest of the row group (WHATWG), unlike
+                // a zero colspan, which reads as one.
+                "rowspan" => out.rowspan = attr.value.parse().unwrap_or(1),
                 "style" | "color" | "bgcolor" | "face" | "size" | "align" => {
                     out.styling = true;
                 }
