@@ -120,6 +120,9 @@ impl Engine {
                     .map_err(EngineError::from)
             })
             .await?;
+        // The account workers run new intents after their next poll;
+        // ask for it now rather than after the poll interval.
+        self.account_jobs().wake();
         token_from_receipt(receipt.result_json())
     }
 
@@ -182,8 +185,9 @@ impl Engine {
                     other => EngineError::from(other),
                 })
         })
-        .await
-        .map(|_| ())
+        .await?;
+        self.account_jobs().wake();
+        Ok(())
     }
 
     /// Whether `account_id` is a Proton account (spec/02

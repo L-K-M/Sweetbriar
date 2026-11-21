@@ -1082,7 +1082,7 @@ async fn fail(
 }
 
 #[cfg(test)]
-mod crash_tests;
+pub(crate) mod crash_tests;
 
 #[cfg(test)]
 mod tests {

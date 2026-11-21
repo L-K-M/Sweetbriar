@@ -86,10 +86,11 @@ pub use sb_proton::{
     Client as ProtonClient, DecryptError, Disposition, DraftAction, DraftAddress, DraftCreate,
     DraftTemplate, EventAction, EventBatch, EventId, FinishedSignIn, FullMessage, Identity,
     KeyStore, Label, LabelKind, ListingAnchor, MAX_PAGE_SIZE as PROTON_MAX_PAGE_SIZE,
-    ModulusSignatureVerifier, ProtonDraftAttachment, ProtonError, RECIPIENT_TYPE_EXTERNAL,
-    RECIPIENT_TYPE_INTERNAL, RecipientKeys, RefusalKind, SecretBuffer, SecretString,
-    SendAttachment, SendBody, SendError, SendPackages, SendRecipient, SendRefusal,
-    SendTransportError, Session, SignIn, SignInStep, Trust,
+    MessageMetadata, MessageMutation, ModulusSignatureVerifier, MutationError,
+    ProtonDraftAttachment, ProtonError, RECIPIENT_TYPE_EXTERNAL, RECIPIENT_TYPE_INTERNAL,
+    RecipientKeys, RefusalKind, STARRED_LABEL_ID, SecretBuffer, SecretString, SendAttachment,
+    SendBody, SendError, SendPackages, SendRecipient, SendRefusal, SendTransportError, Session,
+    SignIn, SignInStep, Trust,
 };
 // The send lane's transport items (M4.3g): the lane drives the
 // submission calls and their crypto the way sb-proton's fake-server
@@ -204,8 +205,9 @@ pub use sb_store::intents::{
     IntentFilter, IntentFlag, IntentKey, IntentKind, IntentOrigin, IntentPage, IntentState,
     MAX_INTENT_PAGE_ROWS, QuarantineReason, StoredIntent, UndoableIntent, WaitReason,
     cancel_intents, claim_next_intent, clear_account_intents_waiting, finish_intent_done,
-    intent_counts, intent_for_undo, intents, park_intent, plan_flag_intents, quarantine_intent,
-    record_intent_failure, recover_in_flight_intents, release_intents, return_intent_to_pending,
+    intent_counts, intent_for_undo, intents, park_intent, plan_flag_intents,
+    quarantine_if_reconfigured, quarantine_intent, record_intent_failure,
+    recover_in_flight_intents, release_intents, return_intent_to_pending,
     set_account_intents_waiting,
 };
 pub use sb_store::lists::{

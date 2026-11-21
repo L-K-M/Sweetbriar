@@ -1126,6 +1126,18 @@ impl FakeProtonServer {
         id
     }
 
+    /// A copy of the message as the server holds it now, flags
+    /// included (plan M3.1c's checks of what a mutation changed).
+    pub fn message(&self, username: &str, id: &str) -> Option<FakeMessage> {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let account = account_mut(&mut state, username);
+        account
+            .messages
+            .iter()
+            .find(|message| message.id == id)
+            .cloned()
+    }
+
     /// Replaces a message's metadata and body and appends an update
     /// event.
     pub fn update_message(&self, username: &str, mut message: FakeMessage) {

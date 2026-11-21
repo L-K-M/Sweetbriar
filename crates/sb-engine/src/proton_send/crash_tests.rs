@@ -40,14 +40,14 @@ const CUT_ROOT_ENV: &str = "SB_SEND_CUT_ROOT";
 const CHILD: &str = "proton_send::crash_tests::send_crash_child";
 
 /// A clock the test advances by hand.
-struct MovableClock(AtomicI64);
+pub(crate) struct MovableClock(AtomicI64);
 
 impl MovableClock {
-    fn new(at: i64) -> Self {
+    pub(crate) fn new(at: i64) -> Self {
         Self(AtomicI64::new(at))
     }
 
-    fn advance(&self, millis: i64) {
+    pub(crate) fn advance(&self, millis: i64) {
         self.0.fetch_add(millis, Ordering::SeqCst);
     }
 }
