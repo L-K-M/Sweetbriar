@@ -308,8 +308,11 @@ struct SavedViewUITests {
         #expect(window.makeFirstResponder(sink))
         #expect(await waitUntil { source.noteCommands.count >= 2 })
         #expect(source.noteCommands.last == "")
-        #expect(controller.model.currentMessage?.note == nil)
-        #expect(controller.noteEditor.text.isEmpty)
+        // The first save's refresh may still render "a note" after the
+        // second command; the second's refresh then clears it.
+        #expect(await waitUntil {
+            controller.model.currentMessage?.note == nil && controller.noteEditor.text.isEmpty
+        })
 
         // Clicking another message ends the editing, then selects it in
         // the same turn: the note still saves to the edited message.
