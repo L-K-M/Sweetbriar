@@ -694,6 +694,10 @@ fn cancel_reverts_and_keeps_a_later_live_effect() {
             && flag(&conn, seed.first, IntentFlag::Seen) == 1
     );
     assert_eq!(stored(&conn, &seen_intent).state, "pending");
+    let claimed = with_tx(&conn, |tx| claim_next_intent(tx, ACCOUNT, NOW))
+        .unwrap()
+        .expect("claimable");
+    assert_eq!(claimed.intent_id, seen_intent);
     with_tx(&conn, |tx| finish_intent_done(tx, &seen_intent, NOW)).unwrap();
 
     // An in-flight intent is refused; a missing id leaves the other
