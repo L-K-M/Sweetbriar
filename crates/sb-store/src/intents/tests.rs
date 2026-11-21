@@ -310,6 +310,119 @@ fn the_stored_effect_and_target_cross_as_typed_data() {
     );
 }
 
+/// A Proton `move`, `copy` or `delete_to_trash` may carry an optional
+/// `from_mailbox_id` (an integer or null), which the reader accepts
+/// without changing the effect; `remove_label` reads its mailbox from
+/// that key (spec/02).
+#[test]
+fn from_mailbox_id_is_optional_and_remove_label_reads_its_mailbox() {
+    let (conn, archive) = store();
+    intent(
+        &conn,
+        "move-from",
+        &archive,
+        "move",
+        TARGET,
+        r#"{"v":1,"to_mailbox_id":5,"from_mailbox_id":3}"#,
+        "parked",
+        None,
+        None,
+        1,
+    );
+    intent(
+        &conn,
+        "copy-null",
+        &archive,
+        "copy",
+        TARGET,
+        r#"{"v":1,"to_mailbox_id":5,"from_mailbox_id":null}"#,
+        "parked",
+        None,
+        None,
+        2,
+    );
+    intent(
+        &conn,
+        "trash-from",
+        &archive,
+        "delete_to_trash",
+        TARGET,
+        r#"{"v":1,"from_mailbox_id":3}"#,
+        "parked",
+        None,
+        None,
+        3,
+    );
+    intent(
+        &conn,
+        "remove",
+        &archive,
+        "remove_label",
+        TARGET,
+        r#"{"v":1,"from_mailbox_id":7}"#,
+        "parked",
+        None,
+        None,
+        4,
+    );
+
+    let page = ready(read_page(
+        &conn,
+        &IntentFilter::default(),
+        IntentAnchor::Top,
+        10,
+    ));
+    let row = |id: &str| page.rows.iter().find(|row| row.intent_id == id).unwrap();
+    assert_eq!(
+        row("move-from").effect,
+        IntentEffect::ToMailbox { mailbox_id: 5 }
+    );
+    assert_eq!(
+        row("copy-null").effect,
+        IntentEffect::ToMailbox { mailbox_id: 5 }
+    );
+    assert_eq!(row("trash-from").effect, IntentEffect::DeleteToTrash);
+    assert_eq!(row("remove").kind, IntentKind::RemoveLabel);
+    assert_eq!(
+        row("remove").effect,
+        IntentEffect::RemoveLabel { mailbox_id: 7 }
+    );
+}
+
+/// A `remove_label` without `from_mailbox_id`, or a `move` whose
+/// `from_mailbox_id` is neither an integer nor null, is `Corrupt`.
+#[test]
+fn malformed_from_mailbox_id_is_corrupt() {
+    let (conn, archive) = store();
+    intent(
+        &conn,
+        "remove",
+        &archive,
+        "remove_label",
+        TARGET,
+        r#"{"v":1}"#,
+        "parked",
+        None,
+        None,
+        1,
+    );
+    intent(
+        &conn,
+        "move",
+        &archive,
+        "move",
+        TARGET,
+        r#"{"v":1,"to_mailbox_id":5,"from_mailbox_id":"no"}"#,
+        "parked",
+        None,
+        None,
+        2,
+    );
+    let tx = conn.unchecked_transaction().unwrap();
+    let error = intents(&tx, &IntentFilter::default(), IntentAnchor::Top, 10).unwrap_err();
+    assert!(matches!(error, StoreError::Corrupt { .. }), "{error:?}");
+}
+
 /// A payload that isn't the stored shape is `Corrupt`, never a
 /// defaulted effect.
 #[test]
@@ -371,6 +484,10 @@ fn stored_words_round_trip_and_a_non_string_provider_key_is_corrupt() {
     for state in [IntentState::Parked, IntentState::Quarantined] {
         assert_eq!(IntentState::parse(state.as_str()), Some(state));
     }
+    assert_eq!(
+        IntentKind::parse("remove_label"),
+        Some(IntentKind::RemoveLabel)
+    );
     for reason in [
         QuarantineReason::EpochChange,
         QuarantineReason::Restore,

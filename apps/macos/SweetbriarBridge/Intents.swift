@@ -58,6 +58,7 @@ public enum IntentKind: Sendable, Equatable {
     case move
     case copy
     case deleteToTrash
+    case removeLabel
     /// Reserved, not produced in the pilot (spec/02).
     case expungeScoped
     /// Reserved, not produced in the pilot (spec/02).
@@ -71,6 +72,7 @@ public enum IntentKind: Sendable, Equatable {
         case .move: self = .move
         case .copy: self = .copy
         case .deleteToTrash: self = .deleteToTrash
+        case .removeLabel: self = .removeLabel
         case .expungeScoped: self = .expungeScoped
         case .append: self = .append
         case .submit: self = .submit
@@ -96,6 +98,7 @@ public enum IntentEffect: Sendable, Equatable {
     case setFlags(add: [String], remove: [String])
     case toMailbox(mailboxId: Int64)
     case deleteToTrash
+    case removeLabel(mailboxId: Int64)
     /// A reserved operation, not produced in the pilot (spec/02).
     case reserved(argsJson: String)
 
@@ -107,6 +110,8 @@ public enum IntentEffect: Sendable, Equatable {
             self = .toMailbox(mailboxId: mailboxId)
         case .deleteToTrash:
             self = .deleteToTrash
+        case .removeLabel(let mailboxId):
+            self = .removeLabel(mailboxId: mailboxId)
         case .reserved(let argsJson):
             self = .reserved(argsJson: argsJson)
         }

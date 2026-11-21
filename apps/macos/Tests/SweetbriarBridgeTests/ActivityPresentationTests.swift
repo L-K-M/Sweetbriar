@@ -106,6 +106,9 @@ struct ActivityPresentationTests {
         #expect(
             p.intent(activityIntentRow(kind: .setFlags, state: .parked))
                 == ActivityLine(title: "Set flags", detail: "Parked"))
+        #expect(
+            p.intent(activityIntentRow(kind: .removeLabel, state: .parked))
+                == ActivityLine(title: "Remove label", detail: "Parked"))
     }
 
     @Test
