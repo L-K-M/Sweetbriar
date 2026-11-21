@@ -298,8 +298,7 @@ or `superseded` occurrences and no intent needs `retarget_intent`.
 - **`cleared`:** a held message that reappears, in a later response or
   listing, is present again and no longer held; an event left holding
   none becomes `cleared`.
-- **Explained** deletes need Proton intents (M3); until then none are
-  explained.
+- **Explained** deletes are matched as "Running an intent" says (M3.1).
 
 ## Intents and the mutation matrix
 
@@ -338,6 +337,66 @@ Execution follows 04-sync-imap's intent rules, with Proton's evidence:
 M3 and M5 qualify each call on the fake server and the
 `go-proton-api` lane (11) before enabling it, and on the owner's account
 (plan M3.Q, M5.Q).
+
+### Running an intent (M3.1)
+
+- **Planning:** one intent per message and flag change, written with
+  its local effect on every occurrence of the message on the account
+  (02). A message whose flag already has the requested value gets
+  none, so an intent's inverse is always the state before it.
+- **Order:** a message's intents run in the order they were planned.
+  A later one waits (`dependency`) while an earlier one is `pending`,
+  `in_flight`, `parked` or `quarantined`.
+- **Claim:** the worker marks an intent `in_flight` in its own
+  transaction before the call, after the pass's listing or poll. On
+  startup, `in_flight` intents return to `pending`; the live target
+  check that runs next does the reconciling.
+- **Waiting** doesn't count as an attempt: a pending Refresh listing
+  (`resync`, until the listing completes; no intent is quarantined),
+  a session that needs signing in (`auth`), 429 or 503 (`throttled`,
+  until `Retry-After`) and a connection that was never established
+  (`offline`).
+- **Before the call:** an intent whose `config_generation` is below the
+  account's is quarantined (`config_change`). The live target check
+  then reads the message by id; a missing message quarantines it
+  (`ambiguous_match`) and nothing is sent. When the requested state
+  already holds, the intent is `done` without a call: this read is
+  the reconcile before retry, so no flag is stored for it.
+- **The call** carries one message ID and isn't retried by the
+  transport. A 2xx answer that refuses nothing (code 1000, 1000 for
+  the message where Proton reports per message, or an empty body, as
+  `go-proton-api`'s server gives) is followed by the confirming read.
+  Any other code, top-level or for the message, and any 4xx answer
+  but 429 are refusals. 429 and 503 are the `throttled` wait above. A
+  5xx answer other than 503, or a 2xx body that doesn't parse, is a
+  lost reply: the change may have been applied, so it counts as a
+  failure like a lost connection, and the next attempt's live check
+  reconciles before anything is sent again.
+- **Failures** count: a refused call, a connection lost after the
+  request was sent, or a confirming read without the requested state.
+  The intent returns to `pending` with `last_error`, its `attempts`
+  incremented and `next_attempt_at` 30 s × 4^(attempts − 1) later
+  (30 s, 2 min, 8 min, 32 min); the fifth failure parks it. A 4xx
+  refusal other than 429 parks it at once.
+- **Undo** plans, for each message the token names, the inverse change
+  with `origin='undo'`, unless the message's flag already has the
+  inverse value. A cancelled intent has nothing to undo. Undoing the
+  same token again therefore plans nothing while the inverse holds,
+  and a repeated idempotency key replays the first undo.
+- **Health actions** (07) act on all their ids or none, refusing the
+  call with `Conflict` when one doesn't qualify:
+  - `release_intents`: a `parked` or `quarantined` intent becomes
+    `pending` with `attempts` 0, its reasons cleared and its
+    `config_generation` the account's current one;
+  - `cancel_intents`: a `pending`, `parked` or `quarantined` intent
+    becomes `cancelled`, and its local effect is reverted on the
+    message's occurrences unless a later live intent changes the same
+    flag;
+  - `retarget_intent` is for IMAP epochs; a Proton intent is
+    `InvalidInput`.
+- **Explained** (the breaker): a disappearance is explained when a
+  `done` `move` or `delete_to_trash` intent's `target_json` names the
+  occurrence.
 
 ## Account states and health
 

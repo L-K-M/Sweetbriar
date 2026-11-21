@@ -1262,6 +1262,15 @@ CREATE INDEX intents_runnable ON intents(account_id, state, next_attempt_at);
     - `move` and `copy`: `{"v":1,"to_mailbox_id":N}`;
     - `delete_to_trash`: `{"v":1}`, with the destination resolved when
       the intent runs.
+  - **Proton (M3.1):** `target_json` is `{"v":1,"occurrence_ids":[…],
+    "provider_key":"…"}`, the occurrence ids being the message's
+    occurrences on the account when the intent was planned.
+    `set_flags` names `\Seen` and `\Flagged`, and a Proton intent
+    changes exactly one of them: its `add` or its `remove` holds one
+    flag and the other list is empty. `preconditions_json` is
+    `{"v":1}`: flags are deltas and the generation is a column.
+    `evidence_json` stays NULL, since the live target check's read is
+    also the reconcile before retry (04-sync-proton).
   - The reserved operations' args are shown as stored. Any other
     shape is `Corrupt`.
   - M3.1's spec revision may extend these shapes, and the reader
