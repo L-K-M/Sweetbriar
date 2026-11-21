@@ -443,7 +443,9 @@ async fn Core::shutdown(self);   // flush writer, release the lease
 - **Paste conversion (M4.4e1):** `markdown_from_html(html)` →
   `MarkdownFromHtml { markdown, losses }` is a pure function: no store,
   network or clock, and the same input always gives the same output.
-  More than 2 MiB of UTF-8 is `InvalidInput` ("too large"). `losses`
+  Input HTML over 2 MiB of UTF-8 is `InvalidInput` ("too large"), and so
+  is HTML past the parser's node or work budget ("too complex").
+  `losses`
   lists, once each and in this order, what didn't survive: `images`,
   `styling`, `links`, `tables`, `other`. An empty list means lossless.
   - The HTML is parsed with `html5ever` as a fragment. Comments and
@@ -459,8 +461,9 @@ async fn Core::shutdown(self);   // flush writer, release the lease
     `href` is `http`, `https` or `mailto` becomes `[text](url)`; with
     any other `href` it becomes its text and adds `links`; without one,
     its text.
-  - A `table` without `colspan`, `rowspan` or block content in its
-    cells becomes a GFM table, its first row the header; any other
+  - A `table` without `colspan`, `rowspan`, block content or a `br` in
+    its cells becomes a GFM table, its first row the header, with `|`
+    in cell text escaped; any other
     becomes one paragraph per row, cells joined by " | ", and adds
     `tables`.
   - `img`, `picture`, `svg`, `video`, `audio`, `iframe`, `object` and
@@ -472,9 +475,9 @@ async fn Core::shutdown(self);   // flush writer, release the lease
     their content without a loss.
   - Text collapses whitespace as HTML renders it, except in `pre`.
     Characters Markdown would read as syntax are backslash-escaped, so
-    the text renders as itself; `<` stays as is, since raw HTML renders
-    literally (05). Blocks are separated by one blank line, lines end
-    in `\n` and nothing trails.
+    the text renders as itself; `<` stays as is, since 05 disables raw
+    HTML and it renders as literal text. Blocks are separated by one
+    blank line, lines end in `\n` and nothing trails.
 
 ## Queries
 

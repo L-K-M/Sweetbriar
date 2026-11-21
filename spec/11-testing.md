@@ -359,8 +359,9 @@ test, except where the spec says "manual qualification".
   the events stream with `More` and `Refresh`, counts, the mutation
   calls 04-sync-proton uses, and the key lookup, draft, attachment
   upload and send calls 05 uses (recording what each recipient's
-  package carries); its draft read reports each attachment's name, type
-  and size as uploaded, the measure 05's retry matching uses.
+  package carries); its draft read reports each attachment's name, type,
+  size as uploaded, disposition and `ContentID`, what 05's retry
+  matching compares.
 - **Fault knobs:** refuse a connection before it is established, or
   stall it before the TLS handshake completes (a connect timeout); drop
   or stall a request; drop the reply after the

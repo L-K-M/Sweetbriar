@@ -99,9 +99,14 @@ and [raw/plan-proton-bridge/codex.md](../research/raw/plan-proton-bridge/codex.m
     ASCII, at most 250 bytes, unique within the revision, and its media
     type is `image/png`, `image/jpeg` or `image/gif`; `save_draft`
     refuses anything else with `InvalidInput` naming the attachment.
-    The shell mints `<lowercase UUID>@sweetbriar.invalid`. In a Markdown
+    The stored `content_id` is the bare value; the shell mints a
+    lowercase UUID followed by `@sweetbriar.invalid`. Only the
+    `Content-ID` header wraps it in angle brackets; a `cid:` reference
+    (RFC 2392) and Proton's `ContentID` use it bare. In a Markdown
     draft, inline images join the HTML part in `multipart/related`,
-    referenced as `![alt](cid:<Content-ID>)`. The text part shows a
+    referenced by an image whose URL is `cid:` and the bare value, as in
+    `![Chart](cid:0f8fad5b-d9cb-469f-a165-70867728950e@sweetbriar.invalid)`.
+    The text part shows a
     `cid:` image as its alt text, and the HTML drops a `cid:` source
     that names none of the revision's inline images. A plain draft has
     no HTML, so its inline images go as ordinary attachments. Inline
@@ -226,7 +231,8 @@ Otherwise the draft keeps its state.
       draft: an attachment it carries that the attempt didn't record
       (its reply was lost) is recorded when its name, type, size (as
       the draft reports it, the measure the fake and the lane pin, 11)
-      and disposition match the next pending one; an unrecorded draft attachment
+      and disposition match the next pending one, and for an inline
+      one its `ContentID` too; an unrecorded draft attachment
       with no pending counterpart, and any other mismatch, makes the
       attempt `failed` before the send request, naming the draft.
       Attachments the attempt recorded are expected and pass.

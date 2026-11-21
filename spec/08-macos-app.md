@@ -581,15 +581,17 @@ M4.4c. Choosing Out Box shows the Out Box in the list pane, as Drafts
   Image… picks PNG, JPEG or GIF files, and pasting image data (PNG, or
   TIFF converted to PNG) inserts it. Each image is published like a
   picked file (above) and joins the content as an attachment with a new
-  Content-ID (`<lowercase UUID>@sweetbriar.invalid`, 05), and
-  `![<name>](cid:<Content-ID>)` is inserted at the selection; the text
-  and the attachment are one undoable edit ("Undo Insert Image"). The
-  name is the file name without its extension, or "Image" for pasted
-  data. The source stays visible: the editor shows the reference, not
-  the picture. The image's attachment row says "Inline". Removing that
-  row keeps the reference text, which then sends as its alt text (05).
-  Dropped files still attach as ordinary attachments. In a plain draft
-  Insert Image… is disabled and pasted image data is ignored.
+  Content-ID (a lowercase UUID followed by `@sweetbriar.invalid`, bare,
+  05), and an image reference to it, `![name](cid:…)` (05), is inserted
+  at the selection; the text and the attachment are one undoable edit
+  ("Undo Insert Image"). The name is the file name without its
+  extension, or "Image" for pasted data, escaped like Markdown text so
+  nothing in it can break the reference. The source stays visible: the
+  editor shows the reference, not the picture. The image's attachment
+  row says "Inline". Removing that row keeps the reference text, which
+  then sends as its alt text (05). Dropped files still attach as
+  ordinary attachments. In a plain draft Insert Image… is disabled and
+  pasted image data is ignored.
 - **External editor (M4.4e4):** Edit → Edit in External Editor (⇧⌘E)
   hands the body to the default app for its type, `.md` for a Markdown
   draft and `.txt` for a plain one.
@@ -597,14 +599,15 @@ M4.4c. Choosing Out Box shows the Out Box in the list pane, as Drafts
     (10) and opens it in that app. While it is out, the body editor is
     read-only under a banner, "Editing in <app>. Changes you save there
     appear here.", with Done; recipients, subject and attachments stay
-    editable. Files that can't be opened leave the body editable and
-    show the reason.
+    editable. A file no app can open leaves the body editable, shows the
+    reason, and is deleted with its directory.
   - The shell watches the file's directory, since editors save by
-    replacing the file. Each change it reads replaces the whole body as
-    one undoable edit ("Undo External Edit") and goes through autosave
-    as any edit. A file that isn't valid UTF-8 or is over 16 MiB
-    changes nothing and the banner shows the reason until a later save
-    fixes it.
+    replacing the file, and reads it once changes have been quiet for
+    250 ms, so an in-place save isn't read half-written. Each change it
+    reads replaces the whole body as one undoable edit ("Undo External
+    Edit") and goes through autosave as any edit. A file that isn't
+    valid UTF-8 or is over 16 MiB changes nothing and the banner shows
+    the reason until a later save fixes it.
   - Done, closing the window or quitting reads the file once more,
     applies a change, deletes the file and its directory, and then
     follows the usual close and flush rules. Close Without Saving drops
