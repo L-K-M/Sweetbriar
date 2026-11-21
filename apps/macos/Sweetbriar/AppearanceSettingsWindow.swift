@@ -3,7 +3,7 @@ import Observation
 import SwiftUI
 import SweetbriarBridge
 
-enum SettingsTab: Hashable { case appearance, accounts, sending, backups }
+enum SettingsTab: Hashable { case appearance, accounts, reading, sending, backups }
 
 @MainActor
 @Observable
@@ -60,6 +60,7 @@ private struct AppearanceSettingsLoader: View {
     @State private var accountsModel: AccountsSettingsModel?
     @State private var diagnosticsModel: DiagnosticsModel?
     @State private var sendingModel: SendSafetySettingsModel?
+    @State private var readingModel: ReadingSettingsModel?
     @State private var failure: String?
 
     var body: some View {
@@ -109,6 +110,20 @@ private struct AppearanceSettingsLoader: View {
                                                    description: Text("Quit and reopen Sweetbriar to settle the restore."))
                         } else if backups.isRestoring {
                             ProgressView("Waiting for the restore outcome…")
+                        } else if let readingModel {
+                            ReadingSettingsView(model: readingModel).id(editor.revision)
+                        } else {
+                            ProgressView("Opening reading settings…")
+                        }
+                    }
+                    .disabled(!backups.canWrite)
+                    .tabItem { Label("Reading", systemImage: "envelope.open") }.tag(SettingsTab.reading)
+                    Group {
+                        if model.isClosed {
+                            ContentUnavailableView("Archive closed", systemImage: "exclamationmark.triangle",
+                                                   description: Text("Quit and reopen Sweetbriar to settle the restore."))
+                        } else if backups.isRestoring {
+                            ProgressView("Waiting for the restore outcome…")
                         } else if let sendingModel {
                             SendingSettingsView(model: sendingModel).id(editor.revision)
                         } else {
@@ -141,6 +156,7 @@ private struct AppearanceSettingsLoader: View {
                 accountsModel = AccountsSettingsModel(source: bridge)
                 diagnosticsModel = DiagnosticsModel(source: bridge)
                 sendingModel = SendSafetySettingsModel(source: bridge)
+                readingModel = ReadingSettingsModel(source: bridge)
                 if model == nil { failure = "Settings are unavailable while quitting." }
             } catch { failure = error.localizedDescription }
         }

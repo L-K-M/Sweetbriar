@@ -97,6 +97,14 @@ final class MainMenuBuilder: NSObject {
         static let forward = NSUserInterfaceItemIdentifier(
             "ch.lkmc.Sweetbriar.cmd.forward"
         )
+        /// Message → Mark as Read or Unread (spec/08 "Message list").
+        static let toggleRead = NSUserInterfaceItemIdentifier(
+            "ch.lkmc.Sweetbriar.cmd.toggleRead"
+        )
+        /// Message → Star or Unstar.
+        static let toggleStar = NSUserInterfaceItemIdentifier(
+            "ch.lkmc.Sweetbriar.cmd.toggleStar"
+        )
         /// "Run List Benchmark" — disabled while a run is in flight.
         static let benchmark = NSUserInterfaceItemIdentifier(
             "debug.runListBenchmark"
@@ -295,6 +303,18 @@ final class MainMenuBuilder: NSObject {
             "Forward", action: #selector(forward(_:)), key: "F", target: self)
         forward.identifier = ItemID.forward
         menu.addItem(forward)
+        menu.addItem(.separator())
+        // ⇧⌘U and ⇧⌘L (an uppercase key implies Shift), nil-target: the
+        // main window acts on its list's selection and retitles both for
+        // what they would do (spec/08 "Message list").
+        let read = Self.item(
+            "Mark as Read", action: #selector(MessageFlagCommands.toggleRead(_:)), key: "U")
+        read.identifier = ItemID.toggleRead
+        menu.addItem(read)
+        let star = Self.item(
+            "Star", action: #selector(MessageFlagCommands.toggleStar(_:)), key: "L")
+        star.identifier = ItemID.toggleStar
+        menu.addItem(star)
         item.submenu = menu
         return item
     }
@@ -529,4 +549,12 @@ extension MainMenuBuilder: NSMenuItemValidation {
         }
         return true
     }
+}
+
+/// The main window's read and star commands, named here so the menu's
+/// nil-target items can reach them down the responder chain.
+@MainActor
+@objc protocol MessageFlagCommands {
+    func toggleRead(_ sender: Any?)
+    func toggleStar(_ sender: Any?)
 }
