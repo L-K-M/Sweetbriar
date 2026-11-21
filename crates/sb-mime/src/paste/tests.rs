@@ -552,6 +552,8 @@ fn deep_inline_nesting_converts_quickly_or_is_refused() {
     assert!(markdown_from_html(&format!("{}x", "<em>".repeat(1_000))).is_ok());
     assert!(started.elapsed() < std::time::Duration::from_secs(2));
 }
+
+#[test]
 fn a_ragged_table_pads_every_row_to_the_widest() {
     let converted = convert("<table><tr><td>a</td></tr><tr><td>b</td><td>c</td></tr></table>");
     assert_eq!(converted.markdown, "| a |  |\n| --- | --- |\n| b | c |");
