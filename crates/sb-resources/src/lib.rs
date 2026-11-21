@@ -205,8 +205,8 @@ pub use sb_store::intents::{
     IntentFilter, IntentFlag, IntentKey, IntentKind, IntentOrigin, IntentPage, IntentState,
     MAX_INTENT_PAGE_ROWS, QuarantineReason, StoredIntent, UndoableIntent, WaitReason,
     cancel_intents, claim_next_intent, clear_account_intents_waiting, finish_intent_done,
-    intent_counts, intent_for_undo, intents, park_intent, plan_flag_intents,
-    quarantine_if_reconfigured, quarantine_intent, record_intent_failure,
+    flag_selection_account, intent_counts, intent_for_undo, intents, park_intent,
+    plan_flag_intents, quarantine_if_reconfigured, quarantine_intent, record_intent_failure,
     recover_in_flight_intents, release_intents, return_intent_to_pending,
     set_account_intents_waiting,
 };

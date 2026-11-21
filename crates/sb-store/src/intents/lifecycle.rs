@@ -170,6 +170,30 @@ pub struct UndoableIntent {
     pub state: String,
 }
 
+/// The one account `message_ids` belong to (spec/07 `set_flags`): the
+/// messages of several accounts are `InvalidInput`, an unknown one is
+/// `NotFound`, and an empty list has none.
+pub fn flag_selection_account(
+    tx: &Transaction,
+    message_ids: &[i64],
+) -> Result<Option<String>, StoreError> {
+    let mut account: Option<String> = None;
+    for &message_id in message_ids {
+        let (owner, _) =
+            logical_message(tx, message_id)?.ok_or_else(|| not_found_message(message_id))?;
+        match &account {
+            Some(first) if *first != owner => {
+                return Err(StoreError::InvalidInput {
+                    message: "a flag change acts on one account's messages".to_owned(),
+                });
+            }
+            Some(_) => {}
+            None => account = Some(owner),
+        }
+    }
+    Ok(account)
+}
+
 /// Plan one `set_flags` intent per message, with the local effect, in
 /// the caller's transaction (spec/04-sync-proton "Planning"). A message
 /// of another account, or one without a `provider_key`, is

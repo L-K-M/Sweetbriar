@@ -448,6 +448,16 @@ uint64_t uniffi_sb_ffi_fn_method_core_republish_draft_attachment(uint64_t ptr, u
 uint64_t uniffi_sb_ffi_fn_method_core_save_draft(uint64_t ptr, uint64_t token, RustBuffer idempotency_key, RustBuffer draft_id, RustBuffer base_revision_id, RustBuffer content
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_SET_FLAGS
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_SET_FLAGS
+uint64_t uniffi_sb_ffi_fn_method_core_set_flags(uint64_t ptr, uint64_t token, RustBuffer idempotency_key, RustBuffer selection, RustBuffer add, RustBuffer remove
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_UNDO
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_UNDO
+uint64_t uniffi_sb_ffi_fn_method_core_undo(uint64_t ptr, uint64_t token, RustBuffer idempotency_key, RustBuffer undo_token
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_HEALTH
 #define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_HEALTH
 uint64_t uniffi_sb_ffi_fn_method_core_health(uint64_t ptr, uint64_t token
@@ -1324,6 +1334,18 @@ uint16_t uniffi_sb_ffi_checksum_method_core_republish_draft_attachment(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_SAVE_DRAFT
 #define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_SAVE_DRAFT
 uint16_t uniffi_sb_ffi_checksum_method_core_save_draft(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_SET_FLAGS
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_SET_FLAGS
+uint16_t uniffi_sb_ffi_checksum_method_core_set_flags(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_UNDO
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_UNDO
+uint16_t uniffi_sb_ffi_checksum_method_core_undo(void
     
 );
 #endif
