@@ -1,10 +1,11 @@
-//! Filing's planning, policy and local effect
+//! Filing's planning, policy, local effect, undo reads and cancel
 //! (spec/04-sync-proton "Intents and the mutation matrix", spec/07
 //! "Local archive").
 
 use rusqlite::{Connection, params};
 
 use super::*;
+use crate::intents::lifecycle::cancel_intents;
 use crate::schema::MIGRATIONS;
 use crate::testing::fixtures::{mailbox, migrated};
 
@@ -561,6 +562,203 @@ fn a_selection_must_belong_to_one_account() {
 }
 
 #[test]
+fn a_stored_move_reads_back_for_undo() {
+    let conn = migrated(MIGRATIONS);
+    let seed = proton(&conn);
+    file(
+        &conn,
+        PROTON,
+        &[seed.message],
+        Filing::Move {
+            to_mailbox_id: seed.archive,
+        },
+    )
+    .unwrap();
+    let trashed = message(&conn, PROTON, Some("msg-2"));
+    occurrence(&conn, PROTON, seed.archive, trashed);
+    file(&conn, PROTON, &[trashed], Filing::DeleteToTrash).unwrap();
+
+    let tx = conn.unchecked_transaction().unwrap();
+    let moved = move_for_undo(&tx, "intent-1").unwrap().unwrap();
+    assert_eq!(
+        moved,
+        UndoableMove {
+            account_id: PROTON.to_owned(),
+            message_id: seed.message,
+            to_mailbox_id: seed.archive,
+            from_mailbox_id: Some(seed.inbox),
+            state: "pending".to_owned(),
+        }
+    );
+    let deleted = move_for_undo(&tx, "intent-2").unwrap().unwrap();
+    assert_eq!(
+        (deleted.message_id, deleted.to_mailbox_id),
+        (trashed, seed.trash)
+    );
+    assert_eq!(deleted.from_mailbox_id, Some(seed.archive));
+    assert!(move_for_undo(&tx, "unknown").unwrap().is_none());
+}
+
+fn undo(conn: &Connection, intent_id: &str) -> Result<Vec<String>, StoreError> {
+    let tx = conn.unchecked_transaction().unwrap();
+    let moved = move_for_undo(&tx, intent_id).unwrap().unwrap();
+    let mut next: i64 = tx
+        .query_row("SELECT COUNT(*) FROM intents", [], |row| row.get(0))
+        .unwrap();
+    let planned = plan_move_undo(&tx, &moved, NOW, &mut || {
+        next += 1;
+        format!("intent-{next}")
+    })?;
+    tx.commit().unwrap();
+    Ok(planned)
+}
+
+#[test]
+fn undo_moves_back_to_the_folder_the_move_left() {
+    let conn = migrated(MIGRATIONS);
+    let seed = proton(&conn);
+    file(
+        &conn,
+        PROTON,
+        &[seed.message],
+        Filing::Move {
+            to_mailbox_id: seed.archive,
+        },
+    )
+    .unwrap();
+
+    assert_eq!(
+        undo(&conn, "intent-1").unwrap(),
+        vec!["intent-2".to_owned()]
+    );
+
+    let (op, args, _, origin) = stored(&conn, "intent-2");
+    assert_eq!((op.as_str(), origin.as_str()), ("move", "undo"));
+    assert_eq!(
+        args,
+        serde_json::json!({"v": 1, "to_mailbox_id": seed.inbox, "from_mailbox_id": seed.archive})
+    );
+    assert_eq!(
+        mailboxes_of(&conn, seed.message),
+        vec![seed.inbox, seed.work]
+    );
+}
+
+#[test]
+fn undo_refuses_a_message_moved_elsewhere_since() {
+    let conn = migrated(MIGRATIONS);
+    let seed = proton(&conn);
+    file(
+        &conn,
+        PROTON,
+        &[seed.message],
+        Filing::Move {
+            to_mailbox_id: seed.archive,
+        },
+    )
+    .unwrap();
+    file(&conn, PROTON, &[seed.message], Filing::DeleteToTrash).unwrap();
+
+    match undo(&conn, "intent-1") {
+        Err(StoreError::Conflict { detail }) => assert_eq!(detail, "Moved elsewhere since"),
+        other => panic!("expected Conflict, got {other:?}"),
+    }
+    assert_eq!(
+        mailboxes_of(&conn, seed.message),
+        vec![seed.trash, seed.work]
+    );
+}
+
+#[test]
+fn undo_plans_nothing_for_a_cancelled_move_or_one_from_no_folder() {
+    let conn = migrated(MIGRATIONS);
+    let seed = proton(&conn);
+    let loose = message(&conn, PROTON, Some("msg-2"));
+    occurrence(&conn, PROTON, seed.work, loose);
+    file(
+        &conn,
+        PROTON,
+        &[seed.message],
+        Filing::Move {
+            to_mailbox_id: seed.archive,
+        },
+    )
+    .unwrap();
+    file(
+        &conn,
+        PROTON,
+        &[loose],
+        Filing::Move {
+            to_mailbox_id: seed.archive,
+        },
+    )
+    .unwrap();
+    let tx = conn.unchecked_transaction().unwrap();
+    cancel_intents(&tx, &["intent-1".to_owned()], NOW).unwrap();
+    tx.commit().unwrap();
+
+    assert_eq!(undo(&conn, "intent-1").unwrap(), Vec::<String>::new());
+    assert_eq!(undo(&conn, "intent-2").unwrap(), Vec::<String>::new());
+}
+
+#[test]
+fn undo_may_move_a_message_back_into_sent() {
+    let conn = migrated(MIGRATIONS);
+    let seed = proton(&conn);
+    let sent = message(&conn, PROTON, Some("msg-2"));
+    occurrence(&conn, PROTON, seed.sent, sent);
+    file(
+        &conn,
+        PROTON,
+        &[sent],
+        Filing::Move {
+            to_mailbox_id: seed.archive,
+        },
+    )
+    .unwrap();
+
+    undo(&conn, "intent-1").unwrap();
+
+    assert_eq!(mailboxes_of(&conn, sent), vec![seed.sent]);
+}
+
+#[test]
+fn a_local_move_undoes_until_the_message_moves_on() {
+    let conn = migrated(MIGRATIONS);
+    let local = local_archive(&conn);
+    let imported = mailbox(&conn, &local, "Imported", "folder", None);
+    let kept = mailbox(&conn, &local, "Kept", "folder", None);
+    let message = message(&conn, &local, None);
+    occurrence(&conn, &local, imported, message);
+    let Filed::Local(moves) = file(
+        &conn,
+        &local,
+        &[message],
+        Filing::Move {
+            to_mailbox_id: kept,
+        },
+    )
+    .unwrap() else {
+        panic!("the local archive moves locally");
+    };
+    let Filed::Local(trashed) = file(&conn, &local, &[message], Filing::DeleteToTrash).unwrap()
+    else {
+        panic!("the local archive moves locally");
+    };
+
+    let tx = conn.unchecked_transaction().unwrap();
+    match undo_local_move(&tx, &local, &moves[0], NOW) {
+        Err(StoreError::Conflict { detail }) => assert_eq!(detail, "Moved elsewhere since"),
+        other => panic!("expected Conflict, got {other:?}"),
+    }
+    undo_local_move(&tx, &local, &trashed[0], NOW).unwrap();
+    undo_local_move(&tx, &local, &moves[0], NOW).unwrap();
+    tx.commit().unwrap();
+
+    assert_eq!(mailboxes_of(&conn, message), vec![imported]);
+}
+
+#[test]
 fn the_target_check_names_the_destination_before_planning() {
     let conn = migrated(MIGRATIONS);
     let seed = proton(&conn);
@@ -591,4 +789,82 @@ fn the_target_check_names_the_destination_before_planning() {
         ),
         Err(StoreError::InvalidInput { .. })
     ));
+}
+
+#[test]
+fn cancelling_a_filing_intent_reverts_its_local_effect() {
+    let conn = migrated(MIGRATIONS);
+    let seed = proton(&conn);
+    let home = mailbox(&conn, PROTON, "Home", "label", None);
+    file(
+        &conn,
+        PROTON,
+        &[seed.message],
+        Filing::Move {
+            to_mailbox_id: seed.archive,
+        },
+    )
+    .unwrap();
+    file(
+        &conn,
+        PROTON,
+        &[seed.message],
+        Filing::AddLabel {
+            label_mailbox_id: home,
+        },
+    )
+    .unwrap();
+    file(
+        &conn,
+        PROTON,
+        &[seed.message],
+        Filing::RemoveLabel {
+            label_mailbox_id: seed.work,
+        },
+    )
+    .unwrap();
+    assert_eq!(mailboxes_of(&conn, seed.message), vec![seed.archive, home]);
+
+    let tx = conn.unchecked_transaction().unwrap();
+    let all = ["intent-2", "intent-3", "intent-1"].map(str::to_owned);
+    cancel_intents(&tx, &all, NOW).unwrap();
+    tx.commit().unwrap();
+
+    assert_eq!(
+        mailboxes_of(&conn, seed.message),
+        vec![seed.inbox, seed.work]
+    );
+    let (flagged, inbox_rows): (i64, i64) = conn
+        .query_row(
+            "SELECT MAX(f_flagged), COUNT(*) FROM occurrences WHERE mailbox_id = ?1 AND state = 'present'",
+            [seed.inbox],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!((flagged, inbox_rows), (1, 1));
+}
+
+#[test]
+fn cancelling_a_move_since_overtaken_leaves_the_message() {
+    let conn = migrated(MIGRATIONS);
+    let seed = proton(&conn);
+    file(
+        &conn,
+        PROTON,
+        &[seed.message],
+        Filing::Move {
+            to_mailbox_id: seed.archive,
+        },
+    )
+    .unwrap();
+    file(&conn, PROTON, &[seed.message], Filing::DeleteToTrash).unwrap();
+
+    let tx = conn.unchecked_transaction().unwrap();
+    cancel_intents(&tx, &["intent-1".to_owned()], NOW).unwrap();
+    tx.commit().unwrap();
+
+    assert_eq!(
+        mailboxes_of(&conn, seed.message),
+        vec![seed.trash, seed.work]
+    );
 }
