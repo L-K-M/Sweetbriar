@@ -1259,9 +1259,15 @@ CREATE INDEX intents_runnable ON intents(account_id, state, next_attempt_at);
     surface shows the target as these occurrence ids.
   - `args_json`:
     - `set_flags`: `{"v":1,"add":[…],"remove":[…]}`;
-    - `move` and `copy`: `{"v":1,"to_mailbox_id":N}`;
+    - `move` and `copy`: `{"v":1,"to_mailbox_id":N}`; `copy` adds a
+      label (04). A Proton `move` (M5) adds `"from_mailbox_id":N`, or
+      `null` for a message without a folder;
     - `delete_to_trash`: `{"v":1}`, with the destination resolved when
-      the intent runs.
+      the intent runs; a Proton one (M5) adds `"from_mailbox_id":N` or
+      `null` likewise;
+    - `remove_label` (Proton, M5): `{"v":1,"from_mailbox_id":N}`, the
+      user label's mailbox. Migration 35 (plan M5.1a) adds it to the
+      `op` CHECK above, rebuilding the table as migration 28 did.
   - **Proton (M3.1):** `target_json` is `{"v":1,"occurrence_ids":[…],
     "provider_key":"…"}`, the occurrence ids being the message's
     occurrences on the account when the intent was planned.
@@ -1270,7 +1276,11 @@ CREATE INDEX intents_runnable ON intents(account_id, state, next_attempt_at);
     flag and the other list is empty. `preconditions_json` is
     `{"v":1}`: flags are deltas and the generation is a column.
     `evidence_json` stays NULL, since the live target check's read is
-    also the reconcile before retry (04-sync-proton).
+    also the reconcile before retry (04-sync-proton). A `move` or
+    `delete_to_trash` (M5) records in its `args_json` the folder it
+    moves from, `"from_mailbox_id":N`, or `null` for a message without
+    one, so its undo can move it back (04-sync-proton "Intents and the
+    mutation matrix").
   - The reserved operations' args are shown as stored. Any other
     shape is `Corrupt`.
   - M3.1's spec revision may extend these shapes, and the reader
