@@ -1219,7 +1219,7 @@ CREATE TABLE intents (
   intent_id          TEXT PRIMARY KEY,
   account_id         TEXT NOT NULL REFERENCES accounts(account_id),
   config_generation  INTEGER NOT NULL,             -- account generation it was planned against
-  op                 TEXT NOT NULL CHECK (op IN ('set_flags','move','copy','delete_to_trash','remove_label','expunge_scoped','append','submit')), -- 'expunge_scoped', 'append', 'submit': reserved, not produced in the pilot (sends use send_attempts, 05)
+  op                 TEXT NOT NULL CHECK (op IN ('set_flags','move','copy','delete_to_trash','expunge_scoped','append','submit')), -- 'expunge_scoped', 'append', 'submit': reserved, not produced in the pilot (sends use send_attempts, 05)
   target_json        TEXT NOT NULL,                -- scoped target: occurrence ids with (mailbox, uidvalidity, uid); every *_json payload here carries "v": 1
   args_json          TEXT NOT NULL,                -- e.g. {"add":["\\Seen"],"remove":[]} or destination mailbox id
   preconditions_json TEXT NOT NULL,                -- what must still be true to act (04)
@@ -1264,7 +1264,8 @@ CREATE INDEX intents_runnable ON intents(account_id, state, next_attempt_at);
     - `delete_to_trash`: `{"v":1}`, with the destination resolved when
       the intent runs;
     - `remove_label` (Proton, M5): `{"v":1,"from_mailbox_id":N}`, the
-      user label's mailbox.
+      user label's mailbox. Migration 35 (plan M5.1a) adds it to the
+      `op` CHECK above, rebuilding the table as migration 28 did.
   - **Proton (M3.1):** `target_json` is `{"v":1,"occurrence_ids":[…],
     "provider_key":"…"}`, the occurrence ids being the message's
     occurrences on the account when the intent was planned.
