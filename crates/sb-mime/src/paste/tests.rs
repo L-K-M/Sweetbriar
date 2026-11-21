@@ -166,6 +166,10 @@ fn emphasis_moves_edge_whitespace_out_and_drops_when_empty() {
 fn inline_code_uses_a_longer_fence_and_pads_backtick_edges() {
     assert_eq!(md("<p><code>a ` b</code></p>"), "``a ` b``");
     assert_eq!(md("<p><code>`a</code></p>"), "`` `a ``");
+    // CommonMark strips one space from each side of " x ", so a span
+    // that begins and ends with a space is padded too.
+    assert_eq!(md("<p>a<code> x </code>b</p>"), "a`  x  `b");
+    assert_eq!(md("<p>a<code>x </code>b</p>"), "a`x `b");
     // An empty span would render as two literal backticks.
     assert_eq!(md("<p>a<code></code>b</p>"), "ab");
 }

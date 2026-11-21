@@ -462,9 +462,12 @@ impl Emitter {
             return;
         }
         let fence = "`".repeat(longest_run(&inner, '`') + 1);
-        // Pad both sides when either edge is a backtick; CommonMark strips
-        // one space from each side again.
-        let pad = inner.starts_with('`') || inner.ends_with('`');
+        // Pad both sides when either edge is a backtick, or when both edges
+        // are spaces around other text; CommonMark strips one space from
+        // each side again.
+        let spaced =
+            inner.starts_with(' ') && inner.ends_with(' ') && !inner.trim_matches(' ').is_empty();
+        let pad = inner.starts_with('`') || inner.ends_with('`') || spaced;
         self.buf.push_str(&fence);
         if pad {
             self.buf.push(' ');
