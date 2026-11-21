@@ -35,13 +35,13 @@ pub(crate) struct Migration {
 /// The migrations that rewrite or drop data and so take the
 /// `VACUUM INTO` snapshot first (spec/02 "Migrations"). Migration 28 is
 /// the first; migration 1 has none.
-const SNAPSHOTTED_MIGRATIONS: &[u32] = &[28];
+const SNAPSHOTTED_MIGRATIONS: &[u32] = &[28, 35];
 
 /// The migrations that rebuild a table and so run their transaction
 /// with `foreign_keys` off, since the pragma cannot change inside one
 /// (spec/02 "Migrations"); the in-transaction `foreign_key_check`
 /// still verifies the result.
-const FOREIGN_KEYS_OFF_MIGRATIONS: &[u32] = &[28];
+const FOREIGN_KEYS_OFF_MIGRATIONS: &[u32] = &[28, 35];
 
 /// The production migration list, in order. Version 1 creates schema
 /// v1 (spec/02, spec/06); version 2 adds durable imports; version 3
@@ -60,7 +60,9 @@ const FOREIGN_KEYS_OFF_MIGRATIONS: &[u32] = &[28];
 /// Proton listing listed and the disappearances a listing alone saw;
 /// version 32 indexes a fetched body's source once per account; version
 /// 33 adds `accounts.restore_pending` (02, 03 "Restore"); version 34
-/// adds the Proton send columns and the runnable index (02, 05).
+/// adds the Proton send columns and the runnable index (02, 05);
+/// version 35 adds the `remove_label` intent op and rebuilds `intents`
+/// for its CHECK (02).
 pub(crate) const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 1,
@@ -197,6 +199,10 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 34,
         run: migration_34,
+    },
+    Migration {
+        version: 35,
+        run: migration_35,
     },
 ];
 
@@ -1114,6 +1120,15 @@ fn migration_34(tx: &Transaction, _seams: &Seams) -> Result<(), StoreError> {
          CREATE INDEX send_attempts_runnable ON send_attempts(account_id, state);",
     )
     .map_err(bug)
+}
+
+/// Version 35 (spec/02 "Intents"): the M5 filing intent. It rebuilds
+/// `intents` for the `remove_label` op in its CHECK, copying every row
+/// and recreating the runnable index. The runner snapshots first and
+/// runs the transaction with `foreign_keys` off.
+fn migration_35(tx: &Transaction, _seams: &Seams) -> Result<(), StoreError> {
+    tx.execute_batch(include_str!("schema/v35.sql"))
+        .map_err(bug)
 }
 
 /// One version-4 UUID from the randomness seam. A seam that can't

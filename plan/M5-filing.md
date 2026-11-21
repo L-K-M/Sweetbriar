@@ -74,6 +74,36 @@ verified before it completes.
   - crash cuts across move steps never lose or duplicate a message
     (fake server state check);
   - the `go-proton-api` lane passes the matrix.
+- **Split (2026-11-21):** M5.1 follows its spec commit (02's
+  `remove_label` op and a Proton move's recorded source folder,
+  04-sync-proton's move row and undo, 07's `remove_label`) and lands as
+  three PRs, estimated from M3.1 and M3.2 at about 3,400 lines in all:
+  - M5.1a (~1,300): the migration adding `remove_label`;
+    `move_messages`, `delete_to_trash`, `add_label` and `remove_label`
+    in the store and engine, with the policy checks, the local effect
+    and intent in one transaction for Proton and the local commands for
+    the local archive; undo tokens for moves, none for labels, and
+    undo's "Moved elsewhere since" refusal; tested on the store and the
+    fake without execution. Written, it came to about 2,650 lines, so
+    it lands as three stacked PRs (2026-11-21):
+    - M5.1a1 (~400): migration 35 and the `remove_label` kind and
+      effect through the reader, service, FFI and bridge;
+    - M5.1a2 (~1,100): the four commands' policy checks and plans in
+      the store: a Proton account's intents with their local effect,
+      the local archive's moves and its Trash;
+    - M5.1a3 (~1,200): the engine commands with their undo tokens,
+      undo of a move ("Moved elsewhere since") and of the local
+      archive's moves, and the revert of a cancelled filing intent's
+      local effect;
+  - M5.1b (~1,300): execution on the Proton account worker: body
+    pre-acquisition, `label` then `unlabel` of the previous folder, the
+    confirming read, reconcile after a drop re-issuing a missing label,
+    the quarantine of a third folder or of neither, the crash cuts and
+    the fake's refusal of permanent
+    deletes and emptying, asserted as never attempted;
+  - M5.1c (~800): the commands through the service and FFI with the
+    regenerated bindings, and the mutation-matrix suite on the
+    `go-proton-api` lane.
 
 ### M5.2 Filing in the app — M, macos-ci + owner
 

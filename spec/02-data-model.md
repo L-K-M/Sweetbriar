@@ -1219,7 +1219,7 @@ CREATE TABLE intents (
   intent_id          TEXT PRIMARY KEY,
   account_id         TEXT NOT NULL REFERENCES accounts(account_id),
   config_generation  INTEGER NOT NULL,             -- account generation it was planned against
-  op                 TEXT NOT NULL CHECK (op IN ('set_flags','move','copy','delete_to_trash','expunge_scoped','append','submit')), -- 'expunge_scoped', 'append', 'submit': reserved, not produced in the pilot (sends use send_attempts, 05)
+  op                 TEXT NOT NULL CHECK (op IN ('set_flags','move','copy','delete_to_trash','remove_label','expunge_scoped','append','submit')), -- 'expunge_scoped', 'append', 'submit': reserved, not produced in the pilot (sends use send_attempts, 05)
   target_json        TEXT NOT NULL,                -- scoped target: occurrence ids with (mailbox, uidvalidity, uid); every *_json payload here carries "v": 1
   args_json          TEXT NOT NULL,                -- e.g. {"add":["\\Seen"],"remove":[]} or destination mailbox id
   preconditions_json TEXT NOT NULL,                -- what must still be true to act (04)
@@ -1259,9 +1259,14 @@ CREATE INDEX intents_runnable ON intents(account_id, state, next_attempt_at);
     surface shows the target as these occurrence ids.
   - `args_json`:
     - `set_flags`: `{"v":1,"add":[…],"remove":[…]}`;
-    - `move` and `copy`: `{"v":1,"to_mailbox_id":N}`;
+    - `move` and `copy`: `{"v":1,"to_mailbox_id":N}`; `copy` adds a
+      label (04). A Proton `move` (M5) adds `"from_mailbox_id":N` or
+      `null`, as below;
     - `delete_to_trash`: `{"v":1}`, with the destination resolved when
-      the intent runs.
+      the intent runs; a Proton one (M5) adds `"from_mailbox_id"`
+      the same way;
+    - `remove_label` (Proton, M5): `{"v":1,"from_mailbox_id":N}`, the
+      user label's mailbox.
   - **Proton (M3.1):** `target_json` is `{"v":1,"occurrence_ids":[…],
     "provider_key":"…"}`, the occurrence ids being the message's
     occurrences on the account when the intent was planned.
@@ -1270,7 +1275,11 @@ CREATE INDEX intents_runnable ON intents(account_id, state, next_attempt_at);
     flag and the other list is empty. `preconditions_json` is
     `{"v":1}`: flags are deltas and the generation is a column.
     `evidence_json` stays NULL, since the live target check's read is
-    also the reconcile before retry (04-sync-proton).
+    also the reconcile before retry (04-sync-proton). A `move` or
+    `delete_to_trash` (M5) records in its `args_json` the folder it
+    moves from, `"from_mailbox_id":N`, or `null` for a message without
+    one, so its undo can move it back (04-sync-proton "Intents and the
+    mutation matrix").
   - The reserved operations' args are shown as stored. Any other
     shape is `Corrupt`.
   - M3.1's spec revision may extend these shapes, and the reader
@@ -1781,6 +1790,9 @@ CREATE INDEX d_message_bindings_by_assembly ON d_message_bindings(acquisition_id
   transaction with `foreign_keys` off, since the pragma cannot change
   inside one; the `foreign_key_check` inside the transaction still
   verifies the result.
+- **Migration 35 (plan M5.1a)** rebuilds `intents` the same way for the
+  `remove_label` op in its `CHECK`, keeping every row and id; as a
+  rewrite it brings the `VACUUM INTO` snapshot.
 - **Before any migration that rewrites or drops data,** the engine takes a
   `VACUUM INTO` snapshot, keeping the last two. Migration 28 is the first;
   migration 1 has none. A new store migrating from version 0 holds
