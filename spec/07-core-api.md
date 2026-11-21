@@ -475,9 +475,11 @@ async fn Core::shutdown(self);   // flush writer, release the lease
     their content without a loss.
   - Text collapses whitespace as HTML renders it, except in `pre`.
     Characters Markdown would read as syntax are backslash-escaped, so
-    the text renders as itself; `<` stays as is, since 05 disables raw
-    HTML and it renders as literal text. Blocks are separated by one
-    blank line, lines end in `\n` and nothing trails.
+    the text renders as itself. That includes `<`: 05 shows raw HTML as
+    literal text, but as its source, so escapes inside a tag or an HTML
+    block would show their backslashes. Blocks are separated by one
+    blank line (inside a quote, a `>` line), lines end in `\n` and
+    nothing trails.
 
 ## Queries
 
