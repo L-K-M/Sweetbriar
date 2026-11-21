@@ -247,7 +247,11 @@ fn a_message_without_a_folder_moves_from_none() {
     .unwrap();
 
     let (_, args, _, _) = stored(&conn, "intent-1");
-    assert_eq!(args["from_mailbox_id"], serde_json::Value::Null);
+    assert_eq!(
+        args.get("from_mailbox_id"),
+        Some(&serde_json::Value::Null),
+        "a move from no folder records null, not an absent key"
+    );
     assert_eq!(mailboxes_of(&conn, loose), vec![seed.archive, seed.work]);
 }
 
