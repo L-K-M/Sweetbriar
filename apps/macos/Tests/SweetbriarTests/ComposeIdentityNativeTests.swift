@@ -141,8 +141,10 @@ private actor NativeIdentitySource: DraftStore, ComposeCatalogSource, RecipientS
 }
 
 @MainActor
-private func identityEventually(_ check: @MainActor () async -> Bool) async -> Bool {
-    let deadline = ContinuousClock.now + .seconds(10)
+private func identityEventually(
+    within limit: Duration = .seconds(10), _ check: @MainActor () async -> Bool
+) async -> Bool {
+    let deadline = ContinuousClock.now + limit
     while !(await check()) {
         if ContinuousClock.now >= deadline { return false }
         try? await Task.sleep(for: .milliseconds(5))
@@ -173,6 +175,10 @@ private func signatureButton(_ title: String, on controller: ComposeWindowContro
     let content = try #require(sheet.contentView)
     return try #require(identityViews(content).compactMap { $0 as? NSButton }.first { $0.title == title })
 }
+/// A full-screen transition animates a new Space in; on CI runners it
+/// has taken longer than the 10 s other checks allow.
+private let fullScreenTransition: Duration = .seconds(30)
+
 @MainActor
 private final class NativeFullScreenEvents: NSObject {
     private(set) var entered: Set<ObjectIdentifier> = []
@@ -207,7 +213,7 @@ private func withFullScreenWindows(
             window.makeKeyAndOrderFront(nil)
             window.toggleFullScreen(nil)
             try #require(
-                await identityEventually {
+                await identityEventually(within: fullScreenTransition) {
                     events.entered.contains(ObjectIdentifier(window))
                         && window.styleMask.contains(.fullScreen)
                 })
@@ -219,7 +225,7 @@ private func withFullScreenWindows(
         window.makeKeyAndOrderFront(nil)
         window.toggleFullScreen(nil)
         #expect(
-            await identityEventually {
+            await identityEventually(within: fullScreenTransition) {
                 events.exited.contains(ObjectIdentifier(window)) && !window.styleMask.contains(.fullScreen)
             })
     }
