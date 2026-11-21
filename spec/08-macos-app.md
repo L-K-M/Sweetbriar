@@ -603,7 +603,9 @@ M4.4c. Choosing Out Box shows the Out Box in the list pane, as Drafts
     reason, and is deleted with its directory.
   - The shell watches the file's directory, since editors save by
     replacing the file, and reads it once changes have been quiet for
-    250 ms, so an in-place save isn't read half-written. Each change it
+    250 ms, which usually keeps an in-place save from being read
+    half-written; the final read on Done or close (below) replaces
+    whatever a mid-write read caught. Each change it
     reads replaces the whole body as one undoable edit ("Undo External
     Edit") and goes through autosave as any edit. A file that isn't
     valid UTF-8 or is over 16 MiB changes nothing and the banner shows

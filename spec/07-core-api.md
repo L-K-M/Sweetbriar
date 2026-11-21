@@ -444,10 +444,10 @@ async fn Core::shutdown(self);   // flush writer, release the lease
   `MarkdownFromHtml { markdown, losses }` is a pure function: no store,
   network or clock, and the same input always gives the same output.
   Input HTML over 2 MiB of UTF-8 is `InvalidInput` ("too large"), and so
-  is HTML past the parser's node or work budget ("too complex").
-  `losses`
-  lists, once each and in this order, what didn't survive: `images`,
-  `styling`, `links`, `tables`, `other`. An empty list means lossless.
+  is HTML that builds more than 200,000 nodes or exceeds the parser's
+  fixed work budget ("too complex"). `losses` lists, once each and in
+  this order, what didn't survive: `images`, `styling`, `links`,
+  `tables`, `other`. An empty list means lossless.
   - The HTML is parsed with `html5ever` as a fragment. Comments and
     `head`, `script`, `style`, `template` and `noscript` are dropped
     without a loss; nothing is fetched or run.
