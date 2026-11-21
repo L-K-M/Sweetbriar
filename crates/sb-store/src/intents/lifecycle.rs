@@ -555,6 +555,7 @@ pub fn release_intents(
     intent_ids: &[String],
     now: i64,
 ) -> Result<(), StoreError> {
+    let mut targets = Vec::with_capacity(intent_ids.len());
     for intent_id in intent_ids {
         let row = intent_row(tx, intent_id)?;
         if !matches!(row.state.as_str(), "parked" | "quarantined") {
@@ -563,15 +564,15 @@ pub fn release_intents(
                 row.state
             )));
         }
+        targets.push(row);
     }
-    for intent_id in intent_ids {
-        let row = intent_row(tx, intent_id)?;
+    for row in targets {
         tx.execute(
             "UPDATE intents SET state = 'pending', attempts = 0, next_attempt_at = NULL,
              wait_reason = NULL, quarantine_reason = NULL, config_generation =
              (SELECT config_generation FROM accounts WHERE account_id = ?2),
              updated_at = ?3 WHERE intent_id = ?1",
-            params![intent_id, row.account_id, now],
+            params![row.intent_id, row.account_id, now],
         )
         .map_err(|e| classify(e, "release an intent"))?;
     }
@@ -596,6 +597,12 @@ pub fn cancel_intents(tx: &Transaction, intent_ids: &[String], now: i64) -> Resu
         }
         targets.push(row);
     }
+
+    // Latest first: each revert then undoes the plan write just after
+    // the one before it, and a sibling this call cancels has already
+    // stopped being a later live intent, so the ids' order can't
+    // change the result.
+    targets.sort_by_key(|row| std::cmp::Reverse(row.rowid));
 
     let mut touched = BTreeSet::new();
     for row in targets {

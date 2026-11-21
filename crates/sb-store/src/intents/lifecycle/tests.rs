@@ -723,6 +723,30 @@ fn cancel_reverts_and_keeps_a_later_live_effect() {
     assert_eq!(stored(&conn, &pending).state, "pending");
 }
 
+/// Cancelling two intents on one flag in a single call restores the
+/// value from before both, whichever order the ids come in: a sibling
+/// the same call cancels is not a later live intent.
+#[test]
+fn cancelling_siblings_together_ignores_their_order() {
+    for reversed in [false, true] {
+        let conn = store();
+        let seed = seed(&conn);
+        let mut next = 0;
+        let star_intent = plan(&conn, &mut next, &[seed.message], star()).remove(0);
+        let unstar_intent = plan(&conn, &mut next, &[seed.message], unstar()).remove(0);
+        let mut ids = vec![star_intent, unstar_intent];
+        if reversed {
+            ids.reverse();
+        }
+        with_tx(&conn, |tx| cancel_intents(tx, &ids, NOW)).unwrap();
+        assert!(
+            flag(&conn, seed.first, IntentFlag::Flagged) == 0
+                && flag(&conn, seed.second, IntentFlag::Flagged) == 0,
+            "reversed: {reversed}"
+        );
+    }
+}
+
 /// `intent_for_undo` resolves the message and keeps its state.
 #[test]
 fn intent_for_undo_resolves_the_message() {

@@ -281,6 +281,9 @@ fn a_malformed_token_is_invalid_input() {
         r#"{"v":1,"account_id":"acct-1","intents":[]}"#,
         r#"{"v":2,"account_id":"acct-1","intents":["i"]}"#,
         r#"{"v":1,"account_id":"","intents":["i"]}"#,
+        r#"{"v":1,"account_id":"acct-1","intents":[1]}"#,
+        r#"{"v":1,"account_id":"acct-1","intents":"i"}"#,
+        r#"{"v":1,"intents":["i"]}"#,
     ] {
         let error = UndoToken::from_string(token).unwrap_err();
         assert!(
