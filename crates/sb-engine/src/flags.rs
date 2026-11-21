@@ -8,8 +8,9 @@
 use std::collections::VecDeque;
 
 use sb_resources::{
-    FlagChange, IntentFlag, IntentOrigin, StoreError, WritePriority, flag_selection_account,
-    intent_for_undo, plan_flag_intents, proton_account, run_once,
+    FlagChange, IntentFlag, IntentOrigin, LocalMove, StoreError, WritePriority,
+    flag_selection_account, intent_for_undo, move_for_undo, plan_flag_intents, plan_move_undo,
+    proton_account, run_once, undo_local_move,
 };
 
 use crate::engine::validate_idempotency_key;
@@ -20,9 +21,11 @@ const SET_FLAGS: &str = "set_flags";
 const UNDO: &str = "undo";
 
 /// An opaque undo token (spec/07 "Undo"): for remote effects it names
-/// the account and the intents the command planned. Its JSON is
-/// `{"v":1,"account_id":"…","intents":["…"]}`; a token that doesn't
-/// parse, or names no intent, is `InvalidInput`.
+/// the account and the intents the command planned,
+/// `{"v":1,"account_id":"…","intents":["…"]}`; for the local archive's
+/// moves it names each move,
+/// `{"v":1,"account_id":"…","moves":[{"message_id":N,"from":N,"to":N}]}`.
+/// A token that doesn't parse, or names nothing, is `InvalidInput`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UndoToken(String);
 
@@ -40,14 +43,20 @@ impl UndoToken {
         Ok(Self(token.to_owned()))
     }
 
-    /// The token's account and intent ids.
-    fn parts(&self) -> Result<(String, Vec<String>), EngineError> {
+    /// The token's account and what it undoes.
+    fn parts(&self) -> Result<(String, Undoes), EngineError> {
         parse_token(&self.0)
     }
 }
 
+/// What a token undoes.
+enum Undoes {
+    Intents(Vec<String>),
+    LocalMoves(Vec<LocalMove>),
+}
+
 /// Parse and validate the token's JSON shape.
-fn parse_token(token: &str) -> Result<(String, Vec<String>), EngineError> {
+fn parse_token(token: &str) -> Result<(String, Undoes), EngineError> {
     let invalid = || EngineError::invalid_input("token", "the undo token is malformed");
     let parsed: serde_json::Value = serde_json::from_str(token).map_err(|_| invalid())?;
     let object = parsed.as_object().ok_or_else(invalid)?;
@@ -60,6 +69,29 @@ fn parse_token(token: &str) -> Result<(String, Vec<String>), EngineError> {
         .filter(|account| !account.is_empty())
         .ok_or_else(invalid)?
         .to_owned();
+    if let Some(moves) = object.get("moves") {
+        let moves = moves
+            .as_array()
+            .filter(|moves| !moves.is_empty())
+            .ok_or_else(invalid)?;
+        let field = |value: &serde_json::Value, name: &str| {
+            value
+                .get(name)
+                .and_then(serde_json::Value::as_i64)
+                .ok_or_else(invalid)
+        };
+        let moves = moves
+            .iter()
+            .map(|value| {
+                Ok(LocalMove {
+                    message_id: field(value, "message_id")?,
+                    from_mailbox_id: field(value, "from")?,
+                    to_mailbox_id: field(value, "to")?,
+                })
+            })
+            .collect::<Result<Vec<_>, EngineError>>()?;
+        return Ok((account_id, Undoes::LocalMoves(moves)));
+    }
     let intents = object
         .get("intents")
         .and_then(serde_json::Value::as_array)
@@ -71,7 +103,7 @@ fn parse_token(token: &str) -> Result<(String, Vec<String>), EngineError> {
         .iter()
         .map(|value| value.as_str().map(str::to_owned).ok_or_else(invalid))
         .collect::<Result<Vec<_>, _>>()?;
-    Ok((account_id, intents))
+    Ok((account_id, Undoes::Intents(intents)))
 }
 
 impl Engine {
@@ -207,15 +239,22 @@ impl Engine {
     }
 
     /// `undo(token)` (spec/07 "Undo"): for each intent the token names,
-    /// plan the inverse change on its message with `origin='undo'`,
-    /// skipping cancelled intents. The planner already skips a message
-    /// whose flag holds the inverse value. A repeated key replays
-    /// without planning again. A token that names an unknown intent, or
-    /// one from another account, is `InvalidInput`.
+    /// plan its inverse with `origin='undo'`, skipping cancelled
+    /// intents: the inverse flag change, which the planner skips while
+    /// the flag holds it, or the move back to the folder a move left.
+    /// The local archive's moves go back at once. A move whose message
+    /// has moved on since is `Conflict` "Moved elsewhere since", and
+    /// nothing is undone. A repeated key replays without planning
+    /// again. A token that names an unknown intent, or one from another
+    /// account, is `InvalidInput`.
     pub async fn undo(&self, idempotency_key: &str, token: &UndoToken) -> Result<(), EngineError> {
         validate_idempotency_key(idempotency_key)?;
-        let (account_id, intents) = token.parts()?;
-        let mut ids: VecDeque<String> = (0..intents.len())
+        let (account_id, undoes) = token.parts()?;
+        let count = match &undoes {
+            Undoes::Intents(intents) => intents.len(),
+            Undoes::LocalMoves(_) => 0,
+        };
+        let mut ids: VecDeque<String> = (0..count)
             .map(|_| self.resources().new_uuid_string())
             .collect();
         let now = self.resources().now();
@@ -225,32 +264,42 @@ impl Engine {
                 .resources()
                 .write(WritePriority::User, move |tx| {
                     run_once(tx, &key, UNDO, now, |tx| {
+                        let mut next = || {
+                            ids.pop_front()
+                                .expect("one intent id was minted per intent")
+                        };
+                        let intents = match undoes {
+                            Undoes::LocalMoves(moves) => {
+                                for moved in &moves {
+                                    undo_local_move(tx, &account_id, moved, now.as_millis())?;
+                                }
+                                return Ok(encode_local_receipt(&account_id, &moves));
+                            }
+                            Undoes::Intents(intents) => intents,
+                        };
                         for intent_id in &intents {
-                            let Some(intent) = intent_for_undo(tx, intent_id)? else {
+                            if let Some(intent) = intent_for_undo(tx, intent_id)? {
+                                require_account(&intent.account_id, &account_id)?;
+                                if intent.state == "cancelled" {
+                                    continue;
+                                }
+                                plan_flag_intents(
+                                    tx,
+                                    &intent.account_id,
+                                    std::slice::from_ref(&intent.message_id),
+                                    intent.change.inverse(),
+                                    IntentOrigin::Undo,
+                                    now.as_millis(),
+                                    &mut next,
+                                )?;
+                            } else if let Some(moved) = move_for_undo(tx, intent_id)? {
+                                require_account(&moved.account_id, &account_id)?;
+                                plan_move_undo(tx, &moved, now.as_millis(), &mut next)?;
+                            } else {
                                 return Err(StoreError::InvalidInput {
                                     message: "the token names no intent".to_owned(),
                                 });
-                            };
-                            if intent.account_id != account_id {
-                                return Err(StoreError::InvalidInput {
-                                    message: "the token names another account's intent".to_owned(),
-                                });
                             }
-                            if intent.state == "cancelled" {
-                                continue;
-                            }
-                            plan_flag_intents(
-                                tx,
-                                &intent.account_id,
-                                std::slice::from_ref(&intent.message_id),
-                                intent.change.inverse(),
-                                IntentOrigin::Undo,
-                                now.as_millis(),
-                                &mut || {
-                                    ids.pop_front()
-                                        .expect("one intent id was minted per intent")
-                                },
-                            )?;
                         }
                         Ok(encode_receipt(&account_id, &intents))
                     })
@@ -321,9 +370,19 @@ fn flag_changes(add: &[String], remove: &[String]) -> Result<Vec<FlagChange>, En
     Ok(changes)
 }
 
+/// A token's intent may only belong to the token's account.
+fn require_account(intent_account: &str, token_account: &str) -> Result<(), StoreError> {
+    if intent_account == token_account {
+        return Ok(());
+    }
+    Err(StoreError::InvalidInput {
+        message: "the token names another account's intent".to_owned(),
+    })
+}
+
 /// The receipt body: the same shape as the token, so a replay answers
 /// the token that was first minted.
-fn encode_receipt(account_id: &str, intents: &[String]) -> String {
+pub(crate) fn encode_receipt(account_id: &str, intents: &[String]) -> String {
     let mut body = serde_json::Map::new();
     body.insert("v".to_owned(), 1.into());
     body.insert("account_id".to_owned(), account_id.into());
@@ -339,16 +398,32 @@ fn encode_receipt(account_id: &str, intents: &[String]) -> String {
     serde_json::Value::Object(body).to_string()
 }
 
+/// The local archive's receipt body, shaped as its token.
+pub(crate) fn encode_local_receipt(account_id: &str, moves: &[LocalMove]) -> String {
+    let moves: Vec<serde_json::Value> = moves
+        .iter()
+        .map(|moved| {
+            serde_json::json!({
+                "message_id": moved.message_id,
+                "from": moved.from_mailbox_id,
+                "to": moved.to_mailbox_id,
+            })
+        })
+        .collect();
+    serde_json::json!({"v": 1, "account_id": account_id, "moves": moves}).to_string()
+}
+
 /// The token a stored receipt names, or `None` when the command planned
-/// nothing.
-fn token_from_receipt(result_json: &str) -> Result<Option<UndoToken>, EngineError> {
+/// or moved nothing.
+pub(crate) fn token_from_receipt(result_json: &str) -> Result<Option<UndoToken>, EngineError> {
     let empty = serde_json::from_str::<serde_json::Value>(result_json)
         .ok()
         .and_then(|value| {
             value
                 .get("intents")
+                .or_else(|| value.get("moves"))
                 .and_then(serde_json::Value::as_array)
-                .map(|intents| intents.is_empty())
+                .map(|items| items.is_empty())
         })
         .unwrap_or(false);
     if empty {
