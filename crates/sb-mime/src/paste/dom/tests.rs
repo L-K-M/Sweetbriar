@@ -124,12 +124,17 @@ fn a_long_token_of_attributes_is_refused() {
     assert_eq!(parse_fragment(&html).err(), Some(HtmlLimit::PendingToken));
     let quoted = format!("<a title=\"{}\">x</a>", "x ".repeat(MAX_PENDING_BYTES));
     assert_eq!(parse_fragment(&quoted).err(), Some(HtmlLimit::PendingToken));
+    // A `/` outside a value also starts an attribute.
+    let slashed: String = (0..MAX_PENDING_BYTES).map(|n| format!("/a{n}")).collect();
+    let html = format!("<a{slashed}>x</a>");
+    assert_eq!(parse_fragment(&html).err(), Some(HtmlLimit::PendingToken));
 }
 
 #[test]
 fn a_long_attribute_value_parses() {
     // A pasted screenshot arrives as one base64 `data:` URL.
-    let data = "A".repeat(200_000);
+    let alphabet = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let data: String = (0..200_000).map(|i| alphabet[i % 64] as char).collect();
     let tree = parse(&format!(
         "<img src=\"data:image/png;base64,{data}\" alt=p>y"
     ));

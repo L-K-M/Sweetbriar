@@ -28,8 +28,8 @@ const MAX_WORK: usize = 80_000_000;
 // html5ever compares each new attribute with every earlier one in its
 // tag before the tag reaches the tree, so one long token of attributes
 // costs quadratic time no budget sees. A token may run past this many
-// bytes only while it holds few attribute separators: a pasted image's
-// base64 `data:` URL is one long attribute value.
+// bytes only while it holds few places an attribute can start: a pasted
+// image's base64 `data:` URL is one long quoted value.
 const MAX_PENDING_BYTES: usize = 16_384;
 const MAX_PENDING_SEPARATORS: usize = 1_024;
 
@@ -111,6 +111,7 @@ pub(super) struct Tree {
     nodes: RefCell<Vec<Handle>>,
     work: Cell<usize>,
     mutations: Cell<usize>,
+    parse_errors: Cell<usize>,
 }
 
 impl Tree {
@@ -362,6 +363,10 @@ impl TokenSink for BudgetedBuilder {
     fn process_token(&self, token: Token, line: u64) -> TokenSinkResult<Handle> {
         let tree = &self.inner.sink;
         tree.charge(1);
+        if matches!(token, Token::ParseError(_)) {
+            tree.parse_errors
+                .set(tree.parse_errors.get().saturating_add(1));
+        }
         // The caller discards this candidate after the current bounded
         // feed; give the tree builder no more work once budget is gone.
         if tree.check_budget().is_err() {
@@ -432,6 +437,7 @@ pub(super) fn parse_fragment(html: &str) -> Result<Tree, HtmlLimit> {
         {
             let tree = &tokenizer.sink.inner.sink;
             let before = tree.mutations.get();
+            let errors_before = tree.parse_errors.get();
             tree.charge(end - offset);
             input.push_back(StrTendril::from_slice(&html[offset..end]));
             while !matches!(tokenizer.feed(&input), TokenizerResult::Done) {}
@@ -439,7 +445,8 @@ pub(super) fn parse_fragment(html: &str) -> Result<Tree, HtmlLimit> {
             tree.check_budget()?;
             if tree.mutations.get() == before {
                 pending += end - offset;
-                separators += attribute_separators(&html[offset..end]);
+                separators += attribute_separators(&html[offset..end])
+                    + (tree.parse_errors.get() - errors_before);
             } else {
                 pending = 0;
                 separators = 0;
@@ -456,11 +463,14 @@ pub(super) fn parse_fragment(html: &str) -> Result<Tree, HtmlLimit> {
     Ok(tree)
 }
 
-/// An upper bound on the attributes `text` can start: every attribute
-/// after a tag's first follows whitespace, a `/` or a closing quote.
+/// With the parse errors fed alongside, an upper bound on the
+/// attributes `text` can start: every attribute after a tag's first
+/// follows whitespace, a closing quote, or a `/`, which outside a value
+/// is an unexpected-solidus parse error. Inside a quoted value a `/`
+/// is neither, so base64 adds nothing.
 fn attribute_separators(text: &str) -> usize {
     text.bytes()
-        .filter(|b| b.is_ascii_whitespace() || matches!(b, b'/' | b'"' | b'\''))
+        .filter(|b| b.is_ascii_whitespace() || matches!(b, b'"' | b'\''))
         .count()
 }
 
