@@ -780,3 +780,53 @@ fn intent_for_undo_resolves_the_message() {
             .is_none()
     );
 }
+
+/// A message's live flag intents hold their values over a stored
+/// event's: per flag the latest `pending` or `in_flight` one, while a
+/// done, parked or cancelled one holds nothing (spec/04-sync-imap "Flag
+/// conflicts"). The other flags and keywords stay the event's.
+#[test]
+fn live_flag_intents_hold_their_values_over_an_event() {
+    let conn = store();
+    let seed = seed(&conn);
+    let mut next = 0;
+    let listed = SyncedFlags {
+        answered: true,
+        keywords: vec!["$label".to_owned()],
+        ..SyncedFlags::default()
+    };
+    let held = |conn: &Connection| {
+        with_tx(conn, |tx| {
+            LiveFlagIntents::read(tx, ACCOUNT)?.held(PROVIDER_KEY)
+        })
+        .unwrap()
+        .over(&listed)
+    };
+    assert_eq!(held(&conn), listed, "nothing live holds nothing");
+
+    let starred = plan(&conn, &mut next, &[seed.message], star()).remove(0);
+    let read = plan(&conn, &mut next, &[seed.message], seen()).remove(0);
+    let both = held(&conn);
+    assert!(both.flagged && both.seen && both.answered);
+    assert_eq!(both.keywords, listed.keywords);
+
+    with_tx(&conn, |tx| claim_next_intent(tx, ACCOUNT, NOW))
+        .unwrap()
+        .expect("the star claims");
+    assert_eq!(stored(&conn, &starred).state, "in_flight");
+    assert!(held(&conn).flagged, "in flight still holds");
+
+    let unstarred = plan(&conn, &mut next, &[seed.message], unstar()).remove(0);
+    assert!(!held(&conn).flagged, "the latest of a flag holds");
+
+    with_tx(&conn, |tx| finish_intent_done(tx, &starred, NOW)).unwrap();
+    with_tx(&conn, |tx| park_intent(tx, &unstarred, "no", NOW)).unwrap();
+    let parked = held(&conn);
+    assert!(
+        !parked.flagged && parked.seen,
+        "done and parked hold nothing"
+    );
+
+    with_tx(&conn, |tx| cancel_intents(tx, &[read], NOW)).unwrap();
+    assert_eq!(held(&conn), listed);
+}

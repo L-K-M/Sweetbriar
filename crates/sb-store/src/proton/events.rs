@@ -15,8 +15,8 @@ use sb_types::time::Timestamp;
 
 use super::breaker::{self, Classified};
 use super::listing::{
-    ListedMessage, ListedPageStats, ObservedLabel, invalid, live_mailboxes,
-    reconcile_proton_labels, store_message, store_reread_message,
+    ListedMessage, ListedPageStats, ObservedLabel, StoreBatch, invalid, reconcile_proton_labels,
+    store_message, store_reread_message,
 };
 use super::{ProtonListingState, require_account, require_revision, set_event_cursor};
 use crate::schema::classify;
@@ -96,7 +96,7 @@ pub fn apply_event_chunk(
     if let Some(labels) = chunk.labels {
         reconcile_proton_labels(tx, chunk.account_id, labels)?;
     }
-    let mailboxes = live_mailboxes(tx, chunk.account_id)?;
+    let batch = StoreBatch::read(tx, chunk.account_id)?;
     let inbox = inbox_mailbox(tx, chunk.account_id)?;
 
     let mut remaining = MAX_HEADER_BATCH_BYTES;
@@ -117,7 +117,7 @@ pub fn apply_event_chunk(
                     tx,
                     chunk.account_id,
                     message,
-                    &mailboxes,
+                    &batch,
                     now,
                     &mut applied.messages,
                     &mut changed,
@@ -131,7 +131,7 @@ pub fn apply_event_chunk(
                         message
                             .label_ids
                             .iter()
-                            .any(|label| mailboxes.get(label) == Some(&inbox))
+                            .any(|label| batch.mailboxes.get(label) == Some(&inbox))
                     })
                 {
                     applied.new_inbox.push(message_id);
@@ -234,7 +234,7 @@ pub fn apply_reread_message(
             "the Proton account is not done listing",
         ));
     }
-    let mailboxes = live_mailboxes(tx, reread.account_id)?;
+    let batch = StoreBatch::read(tx, reread.account_id)?;
     let mut remaining = MAX_HEADER_BATCH_BYTES;
     remaining = remaining
         .checked_sub(reread.message.raw_metadata.len() + 1024)
@@ -245,7 +245,7 @@ pub fn apply_reread_message(
         tx,
         reread.account_id,
         reread.message,
-        &mailboxes,
+        &batch,
         now,
         &mut stats,
         &mut changed,

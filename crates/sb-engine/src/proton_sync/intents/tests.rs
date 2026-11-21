@@ -19,10 +19,10 @@ use super::is_terminal_refusal;
 use crate::proton_send::crash_tests::MovableClock;
 use crate::{BeginProtonSignIn, Engine, ProtonSignInParams, ProtonSignInState};
 
-const USER: &str = "owner@example.test";
+pub(super) const USER: &str = "owner@example.test";
 const PASSWORD: &str = "synthetic-proton-password";
-const KEY: &str = "m1";
-const LABEL_PATH: &str = "/mail/v4/messages/label";
+pub(super) const KEY: &str = "m1";
+pub(super) const LABEL_PATH: &str = "/mail/v4/messages/label";
 const MODERN_MS: i64 = 1_700_000_000_000;
 
 pub(super) const STAR: FlagChange = FlagChange {
@@ -30,16 +30,16 @@ pub(super) const STAR: FlagChange = FlagChange {
     set: true,
 };
 
-struct Harness {
+pub(super) struct Harness {
     _scratch: ScratchDir,
-    server: FakeProtonServer,
-    clock: Arc<MovableClock>,
-    engine: Engine,
-    account_id: String,
+    pub(super) server: FakeProtonServer,
+    pub(super) clock: Arc<MovableClock>,
+    pub(super) engine: Engine,
+    pub(super) account_id: String,
 }
 
 /// A signed-in engine whose listing holds `m1`, unread and unstarred.
-async fn signed_in() -> Harness {
+pub(super) async fn signed_in() -> Harness {
     let server = FakeProtonServer::serve(vec![TestAccount::new(USER, PASSWORD)])
         .await
         .expect("the fake serves");
@@ -93,7 +93,7 @@ async fn signed_in() -> Harness {
     h
 }
 
-fn count(h: &Harness, sql: &str) -> i64 {
+pub(super) fn count(h: &Harness, sql: &str) -> i64 {
     h.engine
         .resources()
         .read(|tx| {
@@ -103,7 +103,7 @@ fn count(h: &Harness, sql: &str) -> i64 {
         .expect("the count reads")
 }
 
-fn message_id(h: &Harness) -> i64 {
+pub(super) fn message_id(h: &Harness) -> i64 {
     count(
         h,
         "SELECT message_id FROM logical_messages WHERE provider_key = 'm1'",
@@ -111,9 +111,9 @@ fn message_id(h: &Harness) -> i64 {
 }
 
 /// One intent's (state, attempts, wait_reason, quarantine_reason).
-type Row = (String, i64, Option<String>, Option<String>);
+pub(super) type Row = (String, i64, Option<String>, Option<String>);
 
-fn intent(h: &Harness, intent_id: &str) -> Row {
+pub(super) fn intent(h: &Harness, intent_id: &str) -> Row {
     let id = intent_id.to_owned();
     h.engine
         .resources()
@@ -129,7 +129,7 @@ fn intent(h: &Harness, intent_id: &str) -> Row {
         .expect("the intent reads")
 }
 
-fn intent_ids(h: &Harness) -> Vec<String> {
+pub(super) fn intent_ids(h: &Harness) -> Vec<String> {
     h.engine
         .resources()
         .read(|tx| {
@@ -145,7 +145,7 @@ fn intent_ids(h: &Harness) -> Vec<String> {
 }
 
 /// Wait until `done` holds, waking the worker's poll meanwhile.
-async fn until(h: &Harness, what: &str, done: impl Fn(&Harness) -> bool) {
+pub(super) async fn until(h: &Harness, what: &str, done: impl Fn(&Harness) -> bool) {
     let deadline = Instant::now() + Duration::from_secs(30);
     while !done(h) {
         assert!(Instant::now() < deadline, "timed out waiting for {what}");
@@ -154,12 +154,12 @@ async fn until(h: &Harness, what: &str, done: impl Fn(&Harness) -> bool) {
     }
 }
 
-async fn until_state(h: &Harness, intent_id: &str, state: &str) -> Row {
+pub(super) async fn until_state(h: &Harness, intent_id: &str, state: &str) -> Row {
     until(h, state, |h| intent(h, intent_id).0 == state).await;
     intent(h, intent_id)
 }
 
-fn starred_on_proton(h: &Harness) -> bool {
+pub(super) fn starred_on_proton(h: &Harness) -> bool {
     let message = h.server.message(USER, KEY).expect("m1 on the fake");
     message.label_ids.iter().any(|label| label == "10")
 }
