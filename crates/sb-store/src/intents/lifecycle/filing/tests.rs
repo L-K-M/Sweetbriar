@@ -257,6 +257,43 @@ fn a_message_without_a_folder_moves_from_none() {
 }
 
 #[test]
+fn a_queued_move_uses_the_previous_moves_destination_after_remote_echoes() {
+    let conn = migrated(MIGRATIONS);
+    let seed = proton(&conn);
+    assert_eq!(
+        file(
+            &conn,
+            PROTON,
+            &[seed.message],
+            Filing::Move {
+                to_mailbox_id: seed.archive,
+            },
+        )
+        .unwrap(),
+        intents(&["intent-1"])
+    );
+
+    // A queued event still shows Inbox alone. Sync vanishes the
+    // optimistic Archive occurrence and lists Inbox again. Then the
+    // server applies the first label, and an event lists both folders
+    // before the worker can finish removing Inbox.
+    conn.execute(
+        "UPDATE occurrences SET state = 'vanished' WHERE mailbox_id = ?1 AND message_id = ?2",
+        params![seed.archive, seed.message],
+    )
+    .unwrap();
+    occurrence(&conn, PROTON, seed.inbox, seed.message);
+    occurrence(&conn, PROTON, seed.archive, seed.message);
+
+    assert_eq!(
+        file(&conn, PROTON, &[seed.message], Filing::DeleteToTrash).unwrap(),
+        intents(&["intent-2"])
+    );
+    let (_, args, _, _) = stored(&conn, "intent-2");
+    assert_eq!(args["from_mailbox_id"], seed.archive);
+}
+
+#[test]
 fn messages_already_in_the_destination_are_skipped_and_all_of_them_refuse() {
     let conn = migrated(MIGRATIONS);
     let seed = proton(&conn);
