@@ -218,7 +218,7 @@ public final class MarkReadTimer {
     public typealias Sleep = @Sendable (Duration) async throws -> Void
 
     /// The last mark's refusal, or the setting's unreadable value; the
-    /// row stays unread.
+    /// row stays unread. Nil again after a mark succeeds.
     public private(set) var lastError: (any Error)?
     /// Called after each mark that failed.
     public var onError: (@MainActor (any Error) -> Void)?
@@ -259,6 +259,8 @@ public final class MarkReadTimer {
                     idempotencyKey: UUID().uuidString,
                     selection: .occurrenceIds([target.occurrenceId]),
                     add: [MessageFlag.seen.name], remove: [])
+                // A later mark that succeeds clears an earlier refusal.
+                self?.lastError = nil
             } catch is CancellationError {
             } catch {
                 guard let self, !Task.isCancelled else { return }

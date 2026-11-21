@@ -80,7 +80,7 @@ final class MainMenuBuilder: NSObject {
 
     /// `NSMenuItem.identifier`s that `validateMenuItem` treats
     /// specially.
-    private enum ItemID {
+    enum ItemID {
         /// Both "List Implementation" submenu items — the radio pair.
         static let implementation = NSUserInterfaceItemIdentifier(
             "debug.listImplementation"
