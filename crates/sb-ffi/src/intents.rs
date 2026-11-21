@@ -24,6 +24,7 @@ pub enum IntentKind {
     Move,
     Copy,
     DeleteToTrash,
+    RemoveLabel,
     /// Reserved, not produced in the pilot (spec/02).
     ExpungeScoped,
     /// Reserved, not produced in the pilot (spec/02).
@@ -53,6 +54,9 @@ pub enum IntentEffect {
         mailbox_id: i64,
     },
     DeleteToTrash,
+    RemoveLabel {
+        mailbox_id: i64,
+    },
     /// A reserved operation, not produced in the pilot (spec/02).
     Reserved {
         args_json: String,
@@ -131,6 +135,9 @@ impl IntentEffect {
             sb_service::IntentEffect::SetFlags { add, remove } => Self::SetFlags { add, remove },
             sb_service::IntentEffect::ToMailbox { mailbox_id } => Self::ToMailbox { mailbox_id },
             sb_service::IntentEffect::DeleteToTrash => Self::DeleteToTrash,
+            sb_service::IntentEffect::RemoveLabel { mailbox_id } => {
+                Self::RemoveLabel { mailbox_id }
+            }
             sb_service::IntentEffect::Reserved { args_json } => Self::Reserved { args_json },
         }
     }
@@ -146,6 +153,7 @@ impl Intent {
                 sb_service::IntentKind::Move => IntentKind::Move,
                 sb_service::IntentKind::Copy => IntentKind::Copy,
                 sb_service::IntentKind::DeleteToTrash => IntentKind::DeleteToTrash,
+                sb_service::IntentKind::RemoveLabel => IntentKind::RemoveLabel,
                 sb_service::IntentKind::ExpungeScoped => IntentKind::ExpungeScoped,
                 sb_service::IntentKind::Append => IntentKind::Append,
                 sb_service::IntentKind::Submit => IntentKind::Submit,

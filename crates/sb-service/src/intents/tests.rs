@@ -56,7 +56,10 @@ fn intents_cross_field_by_field_and_page() {
                 '{{"v":1,"to_mailbox_id":42}}', '{{}}', 'quarantined', 'epoch_change', NULL,
                 'i2', 'user', 2, 2),
                ('i3', '{ACCOUNT}', 1, 'delete_to_trash', '{{"v":1,"occurrence_ids":[8]}}',
-                '{{"v":1}}', '{{}}', 'parked', NULL, NULL, 'i3', 'user', 3, 3);"#
+                '{{"v":1}}', '{{}}', 'parked', NULL, NULL, 'i3', 'user', 3, 3),
+               ('i4', '{archive}', 1, 'remove_label', '{{"v":1,"occurrence_ids":[9]}}',
+                '{{"v":1,"from_mailbox_id":42}}', '{{}}', 'parked', NULL, NULL,
+                'i4', 'user', 4, 4);"#
         ),
     );
     let core = sb_test_support::block_on(open_core(config(&scratch))).unwrap();
@@ -92,8 +95,14 @@ fn intents_cross_field_by_field_and_page() {
         2,
     ))
     .unwrap();
-    assert_eq!(next.rows.len(), 1);
+    assert_eq!(next.rows.len(), 2);
     assert_eq!(next.rows[0].intent_id, "i3");
+    assert_eq!(next.rows[1].intent_id, "i4");
+    assert_eq!(next.rows[1].kind, IntentKind::RemoveLabel);
+    assert_eq!(
+        next.rows[1].effect,
+        IntentEffect::RemoveLabel { mailbox_id: 42 }
+    );
     assert!(!next.has_more);
 
     let parked = IntentFilter {
@@ -106,7 +115,7 @@ fn intents_cross_field_by_field_and_page() {
             .iter()
             .map(|row| row.intent_id.as_str())
             .collect::<Vec<_>>(),
-        vec!["i1", "i3"]
+        vec!["i1", "i3", "i4"]
     );
 
     let work = IntentFilter {

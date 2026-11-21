@@ -19,6 +19,7 @@ pub enum IntentKind {
     Move,
     Copy,
     DeleteToTrash,
+    RemoveLabel,
     /// Reserved, not produced in the pilot (spec/02).
     ExpungeScoped,
     /// Reserved, not produced in the pilot (spec/02).
@@ -49,6 +50,9 @@ pub enum IntentEffect {
         mailbox_id: i64,
     },
     DeleteToTrash,
+    RemoveLabel {
+        mailbox_id: i64,
+    },
     /// A reserved operation, not produced in the pilot (spec/02).
     Reserved {
         args_json: String,
@@ -130,6 +134,7 @@ impl Intent {
                 sb_engine::IntentKind::Move => IntentKind::Move,
                 sb_engine::IntentKind::Copy => IntentKind::Copy,
                 sb_engine::IntentKind::DeleteToTrash => IntentKind::DeleteToTrash,
+                sb_engine::IntentKind::RemoveLabel => IntentKind::RemoveLabel,
                 sb_engine::IntentKind::ExpungeScoped => IntentKind::ExpungeScoped,
                 sb_engine::IntentKind::Append => IntentKind::Append,
                 sb_engine::IntentKind::Submit => IntentKind::Submit,
@@ -155,6 +160,9 @@ impl Intent {
                     IntentEffect::ToMailbox { mailbox_id }
                 }
                 sb_engine::IntentEffect::DeleteToTrash => IntentEffect::DeleteToTrash,
+                sb_engine::IntentEffect::RemoveLabel { mailbox_id } => {
+                    IntentEffect::RemoveLabel { mailbox_id }
+                }
                 sb_engine::IntentEffect::Reserved { args_json } => {
                     IntentEffect::Reserved { args_json }
                 }
