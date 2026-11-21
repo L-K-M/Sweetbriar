@@ -606,7 +606,9 @@ impl Emitter {
     }
 
     fn hard_break(&mut self) {
-        if self.flat || !self.inline.is_empty() {
+        // An ATX heading is a single line, so a break inside one is a
+        // space.
+        if self.flat || self.in_heading || !self.inline.is_empty() {
             if !self.buf.ends_with(' ') {
                 self.buf.push(' ');
             }

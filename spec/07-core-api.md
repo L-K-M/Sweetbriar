@@ -455,7 +455,8 @@ async fn Core::shutdown(self);   // flush writer, release the lease
     paragraphs, `h1`–`h6` ATX headings, `blockquote` `>` quotes,
     `ul`/`ol`/`li` lists (nested, with `ol`'s `start`), `pre` a fenced
     code block whose fence is longer than any backtick run inside, `hr`
-    `---`, and `br` a hard break (`\` at the line's end).
+    `---`, and `br` a hard break (`\` at the line's end; inside a
+    heading, a space).
   - Inline: `strong`/`b` → `**`, `em`/`i` → `*`, `del`/`s`/`strike` →
     `~~`, `code` → a backtick run longer than any inside. An `a` whose
     `href` is `http`, `https` or `mailto` becomes `[text](url)`; with

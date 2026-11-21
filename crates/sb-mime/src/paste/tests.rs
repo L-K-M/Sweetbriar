@@ -83,6 +83,13 @@ fn headings_use_atx_levels() {
 }
 
 #[test]
+fn a_break_inside_a_heading_is_a_space() {
+    // An ATX heading is one line, so a hard break would end it.
+    assert_eq!(md("<h1>a<br>b</h1>"), "# a b");
+    assert_eq!(md("<h2>a<br><br>b<br></h2>"), "## a b");
+}
+
+#[test]
 fn blockquotes_prefix_every_line() {
     assert_eq!(md("<blockquote>a</blockquote>"), "> a");
     assert_eq!(
