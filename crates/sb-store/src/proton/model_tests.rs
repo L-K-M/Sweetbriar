@@ -22,6 +22,11 @@ use sb_types::time::Timestamp;
 
 use super::breaker::{MAX_DISAPPEARANCES_PER_MAILBOX, MIN_MAILBOX_FOR_SHARE};
 use super::*;
+use crate::intents::{
+    FlagChange, IntentFlag, IntentOrigin, QuarantineReason, cancel_intents, claim_next_intent,
+    finish_intent_done, plan_flag_intents, quarantine_intent, record_intent_failure,
+    recover_in_flight_intents, release_intents,
+};
 use crate::lists::MailboxRole;
 use crate::sidebar::MailboxKind;
 use crate::sync::{HeaderColumns, SyncedFlags};
@@ -76,6 +81,7 @@ struct Held {
     location: &'static str,
     travel: bool,
     seen: bool,
+    starred: bool,
 }
 
 impl Held {
@@ -101,6 +107,7 @@ impl Held {
             size: Some(100),
             flags: SyncedFlags {
                 seen: self.seen,
+                flagged: self.starred,
                 ..SyncedFlags::default()
             },
         }
@@ -128,6 +135,9 @@ struct Server {
     log: Vec<Logged>,
     next_id: usize,
     responses: Responses,
+    /// The intents the model's executor ran, in order. A claim runs
+    /// once, so no id repeats.
+    applied_intents: Vec<String>,
 }
 
 /// How many events one response carries.
@@ -166,6 +176,7 @@ impl Server {
             log: Vec::new(),
             next_id: 0,
             responses,
+            applied_intents: Vec::new(),
         }
     }
 
@@ -532,13 +543,15 @@ fn assert_invariants(store: &Store) {
     );
 }
 
-/// Each message's current occurrences, as (label, state, seen).
-fn stored(store: &Store) -> BTreeMap<String, BTreeSet<(String, String, bool)>> {
-    let rows: Vec<(String, String, String, bool)> = reading(store, |tx| {
+/// Each message's current occurrences, as (label, state, seen,
+/// starred).
+fn stored(store: &Store) -> BTreeMap<String, BTreeSet<(String, String, bool, bool)>> {
+    let rows: Vec<(String, String, String, bool, bool)> = reading(store, |tx| {
         let read = |e| crate::schema::classify(e, "read the stored occurrences");
         let mut statement = tx
             .prepare(
-                "SELECT l.provider_key, m.provider_key, o.state, o.f_seen FROM occurrences o
+                "SELECT l.provider_key, m.provider_key, o.state, o.f_seen, o.f_flagged
+                 FROM occurrences o
                  JOIN logical_messages l ON l.message_id = o.message_id
                  JOIN mailboxes m ON m.mailbox_id = o.mailbox_id
                  WHERE o.state IN ('present', 'vanish_pending')",
@@ -546,23 +559,29 @@ fn stored(store: &Store) -> BTreeMap<String, BTreeSet<(String, String, bool)>> {
             .map_err(read)?;
         let rows = statement
             .query_map([], |row| {
-                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
             })
             .map_err(read)?;
         rows.collect::<Result<_, _>>().map_err(read)
     });
     let mut stored: BTreeMap<_, BTreeSet<_>> = BTreeMap::new();
-    for (message, label, state, seen) in rows {
+    for (message, label, state, seen, starred) in rows {
         stored
             .entry(message)
             .or_default()
-            .insert((label, state, seen));
+            .insert((label, state, seen, starred));
     }
     stored
 }
 
 /// The server's messages as the store holds them once converged.
-fn expected(server: &Server) -> BTreeMap<String, BTreeSet<(String, String, bool)>> {
+fn expected(server: &Server) -> BTreeMap<String, BTreeSet<(String, String, bool, bool)>> {
     server
         .messages
         .iter()
@@ -570,11 +589,62 @@ fn expected(server: &Server) -> BTreeMap<String, BTreeSet<(String, String, bool)
             let occurrences = held
                 .label_ids()
                 .into_iter()
-                .map(|label| (label, "present".to_owned(), held.seen))
+                .map(|label| (label, "present".to_owned(), held.seen, held.starred))
                 .collect();
             (id.clone(), occurrences)
         })
         .collect()
+}
+
+/// The messages the store holds, by Proton id, ascending.
+fn held_keys(store: &Store) -> Vec<String> {
+    reading(store, |tx| {
+        let read = |e| crate::schema::classify(e, "read the stored messages");
+        let mut statement = tx
+            .prepare(
+                "SELECT DISTINCT l.provider_key FROM logical_messages l
+                 JOIN occurrences o ON o.message_id = l.message_id
+                 WHERE o.state IN ('present', 'vanish_pending')
+                 ORDER BY l.provider_key",
+            )
+            .map_err(read)?;
+        let rows = statement.query_map([], |row| row.get(0)).map_err(read)?;
+        rows.collect::<Result<_, _>>().map_err(read)
+    })
+}
+
+/// A held message's logical id and current occurrence ids.
+fn held_message(store: &Store, provider_key: &str) -> Option<(i64, Vec<i64>)> {
+    let provider_key = provider_key.to_owned();
+    reading(store, move |tx| {
+        let read = |e| crate::schema::classify(e, "read a held message");
+        let message: Option<i64> = tx
+            .query_row(
+                "SELECT message_id FROM logical_messages
+                 WHERE account_id = ?1 AND provider_key = ?2",
+                params![ACCOUNT, provider_key],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(read)?;
+        let Some(message) = message else {
+            return Ok(None);
+        };
+        let mut statement = tx
+            .prepare(
+                "SELECT occurrence_id FROM occurrences
+                 WHERE message_id = ?1 AND state IN ('present', 'vanish_pending')
+                 ORDER BY occurrence_id",
+            )
+            .map_err(read)?;
+        let rows = statement
+            .query_map(params![message], |row| row.get(0))
+            .map_err(read)?;
+        Ok(Some((
+            message,
+            rows.collect::<Result<_, _>>().map_err(read)?,
+        )))
+    })
 }
 
 /// The messages only a listing missed so far: withheld, unconfirmed,
@@ -592,6 +662,219 @@ fn waiting(store: &Store) -> BTreeSet<String> {
         let rows = statement.query_map([], |row| row.get(0)).map_err(read)?;
         rows.collect::<Result<_, _>>().map_err(read)
     })
+}
+
+fn seen_change() -> FlagChange {
+    FlagChange {
+        flag: IntentFlag::Seen,
+        set: true,
+    }
+}
+
+fn unseen_change() -> FlagChange {
+    FlagChange {
+        flag: IntentFlag::Seen,
+        set: false,
+    }
+}
+
+fn star_change() -> FlagChange {
+    FlagChange {
+        flag: IntentFlag::Flagged,
+        set: true,
+    }
+}
+
+fn unstar_change() -> FlagChange {
+    FlagChange {
+        flag: IntentFlag::Flagged,
+        set: false,
+    }
+}
+
+/// Apply one flag delta to the server's message, as Proton's mutation
+/// call would (spec/04-sync-proton "Running an intent": Act).
+fn apply_flag(held: &mut Held, change: FlagChange) {
+    match change.flag {
+        IntentFlag::Seen => held.seen = change.set,
+        IntentFlag::Flagged => held.starred = change.set,
+    }
+}
+
+/// The user changes a flag on a message the store holds: the local
+/// effect and the pending intent commit together (M3.1b1).
+fn plan_flag(store: &Store, provider_key: &str, change: FlagChange) {
+    let Some((message, _)) = held_message(store, provider_key) else {
+        return;
+    };
+    block_on(store.write(WritePriority::User, move |tx| {
+        let count: i64 = tx
+            .query_row("SELECT COUNT(*) FROM intents", [], |row| row.get(0))
+            .map_err(|e| crate::schema::classify(e, "count the intents"))?;
+        let mut next = count;
+        plan_flag_intents(
+            tx,
+            ACCOUNT,
+            &[message],
+            change,
+            IntentOrigin::User,
+            now().as_millis(),
+            &mut || {
+                next += 1;
+                format!("model-{next}")
+            },
+        )
+        .map(drop)
+    }))
+    .expect("the flag plan");
+}
+
+/// The client deletes a message it holds with a `done`
+/// `delete_to_trash` intent, as M5's planner will; the server deletes
+/// it and reports the delete event. The intent explains the
+/// disappearance, so it never opens a breaker event.
+fn delete_with_intent(store: &Store, server: &mut Server, provider_key: &str) {
+    let Some((_, occurrences)) = held_message(store, provider_key) else {
+        return;
+    };
+    let target = serde_json::json!({"v": 1, "occurrence_ids": occurrences}).to_string();
+    let count = count(store, "SELECT COUNT(*) FROM intents");
+    let intent_id = format!("model-delete-{provider_key}-{count}");
+    block_on(store.write(WritePriority::User, move |tx| {
+        tx.execute(
+            "INSERT INTO intents (intent_id, account_id, config_generation, op, target_json,
+             args_json, preconditions_json, state, attempts, idempotency_key, origin,
+             created_at, updated_at)
+             VALUES (?1, ?2, (SELECT config_generation FROM accounts WHERE account_id = ?2),
+                     'delete_to_trash', ?3, '{\"v\":1}', '{\"v\":1}', 'done', 0, ?1,
+                     'user', 0, 0)",
+            params![intent_id, ACCOUNT, target],
+        )
+        .map_err(|e| crate::schema::classify(e, "insert the delete intent"))?;
+        Ok(())
+    }))
+    .expect("the delete intent");
+    server.delete(provider_key);
+}
+
+/// The model's executor (there is no worker yet, M3.1c): claim the
+/// account's runnable intents in order, apply each change to the
+/// server, which reports it as an update event as Proton does, and
+/// finish the intent `done`. A message the server no longer holds
+/// quarantines the intent (`ambiguous_match`); `fail_first` counts
+/// one failure instead, leaving that intent to retry later.
+fn run_intents(store: &Store, server: &mut Server, fail_first: bool, now: i64) {
+    let mut fail = fail_first;
+    loop {
+        let claimed = block_on(store.write(WritePriority::Sync, move |tx| {
+            claim_next_intent(tx, ACCOUNT, now)
+        }))
+        .expect("the claim");
+        let Some(claimed) = claimed else {
+            return;
+        };
+        let intent_id = claimed.intent_id.clone();
+        if fail {
+            fail = false;
+            block_on(store.write(WritePriority::Sync, move |tx| {
+                record_intent_failure(tx, &intent_id, "the model's refusal", now).map(drop)
+            }))
+            .expect("the failure");
+            continue;
+        }
+        let Some(mut held) = server.messages.get(&claimed.provider_key).cloned() else {
+            block_on(store.write(WritePriority::Sync, move |tx| {
+                quarantine_intent(tx, &intent_id, QuarantineReason::AmbiguousMatch, now).map(drop)
+            }))
+            .expect("the quarantine");
+            continue;
+        };
+        apply_flag(&mut held, claimed.change);
+        server.put(claimed.provider_key.clone(), held);
+        server.applied_intents.push(intent_id.clone());
+        block_on(store.write(WritePriority::Sync, move |tx| {
+            finish_intent_done(tx, &intent_id, now).map(drop)
+        }))
+        .expect("the finish");
+    }
+}
+
+/// Run every remaining runnable intent once the history is over, as
+/// the worker would: startup recovers `in_flight`, the health action
+/// releases `parked`, and each claim applies and finishes. `later`
+/// makes every retry due.
+fn run_all_intents(store: &Store, server: &mut Server) {
+    let later = now().as_millis() + 24 * 60 * 60 * 1000;
+    block_on(store.write(WritePriority::Sync, move |tx| {
+        recover_in_flight_intents(tx, ACCOUNT, later).map(drop)
+    }))
+    .expect("the recovery");
+    let parked: Vec<String> = reading(store, |tx| {
+        let read = |e| crate::schema::classify(e, "read parked intents");
+        let mut statement = tx
+            .prepare("SELECT intent_id FROM intents WHERE account_id = ?1 AND state = 'parked'")
+            .map_err(read)?;
+        let rows = statement
+            .query_map(params![ACCOUNT], |row| row.get(0))
+            .map_err(read)?;
+        rows.collect::<Result<_, _>>().map_err(read)
+    });
+    if !parked.is_empty() {
+        block_on(store.write(WritePriority::User, move |tx| {
+            release_intents(tx, &parked, later).map(drop)
+        }))
+        .expect("the release");
+    }
+    // A message the server no longer holds quarantines its intent, and
+    // a later intent of the same message waits on it. The user's
+    // `cancel_intents` ends the quarantine so the later one can run;
+    // the model runs until nothing is left to claim.
+    loop {
+        run_intents(store, server, false, later);
+        let quarantined: Vec<String> = reading(store, |tx| {
+            let read = |e| crate::schema::classify(e, "read quarantined intents");
+            let mut statement = tx
+                .prepare(
+                    "SELECT intent_id FROM intents
+                     WHERE account_id = ?1 AND state = 'quarantined'",
+                )
+                .map_err(read)?;
+            let rows = statement
+                .query_map(params![ACCOUNT], |row| row.get(0))
+                .map_err(read)?;
+            rows.collect::<Result<_, _>>().map_err(read)
+        });
+        if quarantined.is_empty() {
+            return;
+        }
+        block_on(store.write(WritePriority::User, move |tx| {
+            cancel_intents(tx, &quarantined, later).map(drop)
+        }))
+        .expect("the cancellation");
+    }
+}
+
+/// No intent is left pending or in flight once the history's intents
+/// have run.
+fn assert_no_live_intents(store: &Store) {
+    assert_eq!(
+        count(
+            store,
+            "SELECT COUNT(*) FROM intents WHERE state IN ('pending', 'in_flight')"
+        ),
+        0,
+        "an intent never ran"
+    );
+}
+
+/// A claim applies once, so no intent id runs twice.
+fn assert_no_double_run(server: &Server) {
+    let unique: BTreeSet<_> = server.applied_intents.iter().collect();
+    assert_eq!(
+        unique.len(),
+        server.applied_intents.len(),
+        "an intent ran twice for one claim"
+    );
 }
 
 /// Listed, at the server's last cursor, with the server's labels, and
@@ -630,6 +913,11 @@ fn assert_settled(store: &Store, server: &Server) {
 fn converge(store: &Store, server: &mut Server) {
     sync(store, server);
     accept_all(store);
+    run_all_intents(store, server);
+    sync(store, server);
+    accept_all(store);
+    assert_no_live_intents(store);
+    assert_no_double_run(server);
     assert_invariants(store);
     assert_settled(store, server);
     let waiting = waiting(store);
@@ -645,7 +933,7 @@ fn converge(store: &Store, server: &mut Server) {
         assert!(
             occurrences
                 .iter()
-                .all(|(_, state, _)| state == "vanish_pending"),
+                .all(|(_, state, _, _)| state == "vanish_pending"),
             "{id}: {occurrences:?}"
         );
     }
@@ -714,6 +1002,20 @@ enum Op {
     Accept,
     /// The user keeps what the open events hold, for now.
     Keep,
+    /// The user changes a flag on a message the store holds, planning
+    /// the intent with its local effect.
+    Flag {
+        pick: Index,
+        change: FlagChange,
+    },
+    /// Run the account's runnable intents; `fail_first` counts one
+    /// failure instead of applying the first claim.
+    RunIntents {
+        fail_first: bool,
+    },
+    /// Delete a held message with a done `delete_to_trash` intent; the
+    /// server deletes it and reports the delete.
+    DeleteWithIntent(Index),
 }
 
 fn op() -> impl Strategy<Value = Op> {
@@ -731,6 +1033,18 @@ fn op() -> impl Strategy<Value = Op> {
             .prop_map(|(writes, reopen)| Op::Sync { writes, reopen }),
         1 => Just(Op::Accept),
         1 => Just(Op::Keep),
+        2 => (
+            any::<Index>(),
+            prop_oneof![
+                Just(seen_change()),
+                Just(unseen_change()),
+                Just(star_change()),
+                Just(unstar_change())
+            ],
+        )
+            .prop_map(|(pick, change)| Op::Flag { pick, change }),
+        1 => any::<bool>().prop_map(|fail_first| Op::RunIntents { fail_first }),
+        1 => any::<Index>().prop_map(Op::DeleteWithIntent),
     ]
 }
 
@@ -749,13 +1063,31 @@ proptest! {
             match op {
                 Op::Add { time, location, travel } => {
                     let location = LOCATIONS[location];
-                    server.add(Held { time, location, travel, seen: false });
+                    server.add(Held {
+                        time,
+                        location,
+                        travel,
+                        seen: false,
+                        starred: false,
+                    });
                 }
-                Op::Change { pick, location, travel, seen } => {
+                Op::Change {
+                    pick,
+                    location,
+                    travel,
+                    seen,
+                } => {
                     if let Some(id) = server.pick(&pick) {
-                        let time = server.messages[&id].time;
+                        let held = &server.messages[&id];
+                        let (time, starred) = (held.time, held.starred);
                         let location = LOCATIONS[location];
-                        server.put(id, Held { time, location, travel, seen });
+                        server.put(id, Held {
+                            time,
+                            location,
+                            travel,
+                            seen,
+                            starred,
+                        });
                     }
                 }
                 Op::Delete(pick) => {
@@ -786,6 +1118,22 @@ proptest! {
                 }
                 Op::Accept => accept_all(&store),
                 Op::Keep => drop(resolve(&store, BreakerResolution::Keep)),
+                Op::Flag { pick, change } => {
+                    let keys = held_keys(&store);
+                    if !keys.is_empty() {
+                        plan_flag(&store, &keys[pick.index(keys.len())], change);
+                    }
+                }
+                Op::RunIntents { fail_first } => {
+                    run_intents(&store, &mut server, fail_first, now().as_millis());
+                }
+                Op::DeleteWithIntent(pick) => {
+                    let keys = held_keys(&store);
+                    if !keys.is_empty() {
+                        let key = keys[pick.index(keys.len())].clone();
+                        delete_with_intent(&store, &mut server, &key);
+                    }
+                }
             }
             assert_invariants(&store);
         }
@@ -812,6 +1160,7 @@ fn breaker_case(
                 location,
                 travel: false,
                 seen: false,
+                starred: false,
             })
         })
         .collect();
@@ -821,6 +1170,7 @@ fn breaker_case(
             location: other,
             travel: false,
             seen: false,
+            starred: false,
         });
     }
     sync(&store, &server);
@@ -950,4 +1300,107 @@ fn the_breaker_opens_just_past_each_threshold() {
             breaker_case(location, held, deleted, 1, by_listing).expect("the breaker's rule holds");
         }
     }
+}
+
+/// A client delete with a `done` `delete_to_trash` intent explains
+/// the disappearance: 30 in Inbox in one pass apply and open nothing.
+#[test]
+fn explained_client_deletes_in_bulk_open_nothing() {
+    let (_scratch, _paths, store) = signed_in("proton-model-explained");
+    let mut server = Server::new(Responses::All);
+    let ids: Vec<String> = (0..100)
+        .map(|time| {
+            server.add(Held {
+                time: small(time),
+                location: INBOX,
+                travel: false,
+                seen: false,
+                starred: false,
+            })
+        })
+        .collect();
+    sync(&store, &server);
+    for id in &ids[..30] {
+        delete_with_intent(&store, &mut server, id);
+    }
+    sync(&store, &server);
+    assert_eq!(count(&store, "SELECT COUNT(*) FROM breaker_events"), 0);
+    assert_eq!(
+        count(
+            &store,
+            "SELECT COUNT(*) FROM occurrences WHERE state = 'vanished'"
+        ),
+        60
+    );
+    assert_eq!(
+        count(
+            &store,
+            "SELECT COUNT(*) FROM occurrences WHERE state = 'vanish_pending'"
+        ),
+        0
+    );
+    assert_eq!(stored(&store), expected(&server));
+}
+
+/// One message's two intents run in planned order, each once, and the
+/// server ends with the second change.
+#[test]
+fn an_intent_runs_once_and_the_last_change_wins() {
+    let (_scratch, _paths, store) = signed_in("proton-model-intent-order");
+    let mut server = Server::new(Responses::All);
+    server.add(Held {
+        time: 1,
+        location: INBOX,
+        travel: false,
+        seen: false,
+        starred: false,
+    });
+    sync(&store, &server);
+    let key = held_keys(&store)[0].clone();
+    plan_flag(&store, &key, star_change());
+    plan_flag(&store, &key, unstar_change());
+    run_intents(&store, &mut server, false, now().as_millis());
+    assert_eq!(server.applied_intents.len(), 2);
+    let unique: BTreeSet<_> = server.applied_intents.iter().collect();
+    assert_eq!(unique.len(), 2, "an intent ran twice for one claim");
+    assert_no_live_intents(&store);
+    assert!(!server.messages[&key].starred, "the second change won");
+    assert_eq!(stored(&store), expected(&server));
+}
+
+/// A failed attempt leaves the intent to retry; a later run applies
+/// it once and the store converges to the server's flag.
+#[test]
+fn a_failed_attempt_retries_and_converges() {
+    let (_scratch, _paths, store) = signed_in("proton-model-intent-retry");
+    let mut server = Server::new(Responses::All);
+    server.add(Held {
+        time: 1,
+        location: INBOX,
+        travel: false,
+        seen: false,
+        starred: false,
+    });
+    sync(&store, &server);
+    let key = held_keys(&store)[0].clone();
+    plan_flag(&store, &key, seen_change());
+    run_intents(&store, &mut server, true, now().as_millis());
+    assert_eq!(
+        count(
+            &store,
+            "SELECT COUNT(*) FROM intents WHERE state = 'pending'"
+        ),
+        1,
+        "the failure left the intent pending"
+    );
+    assert!(
+        !server.messages[&key].seen,
+        "the failed attempt applied nothing"
+    );
+    run_all_intents(&store, &mut server);
+    sync(&store, &server);
+    accept_all(&store);
+    assert_no_live_intents(&store);
+    assert!(server.messages[&key].seen, "the retry reached the server");
+    assert_eq!(stored(&store), expected(&server));
 }
