@@ -367,7 +367,9 @@ M3 and M5 qualify each call on the fake server and the
   the message where Proton reports per message, or an empty body, as
   `go-proton-api`'s server gives) is followed by the confirming read.
   Any other code, top-level or for the message, and any 4xx answer
-  are refusals; a 2xx body that doesn't parse is a lost reply.
+  but 429 are refusals. A 5xx answer other than 503, or a 2xx body
+  that doesn't parse, is a lost reply: the change may have been
+  applied.
 - **Failures** count: a refused call, a connection lost after the
   request was sent, or a confirming read without the requested state.
   The intent returns to `pending` with `last_error`, its `attempts`
