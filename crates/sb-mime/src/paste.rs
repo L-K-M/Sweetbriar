@@ -17,6 +17,8 @@ mod dom;
 pub const MAX_PASTE_HTML_BYTES: usize = 2 * 1024 * 1024;
 
 const MAX_NESTING: usize = 32;
+/// The largest list number CommonMark reads (nine digits).
+const MAX_LIST_NUMBER: i64 = 999_999_999;
 
 /// What did not survive the conversion, in spec order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -255,7 +257,7 @@ impl Emitter {
                 self.enter_quote();
                 false
             }
-            "ul" | "ol" => {
+            "ul" | "ol" | "menu" | "dir" => {
                 self.enter_list(tag, node);
                 false
             }
@@ -298,7 +300,7 @@ impl Emitter {
         let tag: &str = node.name.local.as_ref();
         match tag {
             "blockquote" => self.exit_quote(),
-            "ul" | "ol" => self.exit_list(),
+            "ul" | "ol" | "menu" | "dir" => self.exit_list(),
             "li" => self.exit_item(),
             "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => self.end_heading(),
             "strong" | "b" => self.close_emphasis(id, "**"),
@@ -357,7 +359,16 @@ impl Emitter {
             let line = self.buf.trim_end_matches(is_html_ws).to_string();
             self.buf = line;
             self.buf.push('\\');
-            self.flush_line();
+            if self.inline.is_empty() {
+                self.flush_line();
+            } else {
+                // Inside emphasis or a link the break stays in the run,
+                // so its markers span it: `**a\` then `b**`.
+                self.buf.push('\n');
+                self.buf.push_str(&self.prefix.clone());
+                self.digit_run = false;
+                self.last_close = None;
+            }
         }
         self.inline_started = false;
     }
@@ -574,9 +585,9 @@ impl Emitter {
             return;
         }
         self.end_block();
-        self.quote_depth -= 1;
+        self.quote_depth = self.quote_depth.saturating_sub(1);
         if self.quote_depth < MAX_NESTING {
-            self.prefix.truncate(self.prefix.len() - 2);
+            self.prefix.truncate(self.prefix.len().saturating_sub(2));
         }
     }
 
@@ -592,8 +603,15 @@ impl Emitter {
                 .map(|ctx| ctx.base.clone())
                 .unwrap_or_default()
         };
+        // CommonMark reads at most nine digits as a list number.
         let ordered = if tag == "ol" {
-            Some(node.attrs.borrow().start.unwrap_or(1).max(1) as u64)
+            Some(
+                node.attrs
+                    .borrow()
+                    .start
+                    .unwrap_or(1)
+                    .clamp(1, MAX_LIST_NUMBER) as u64,
+            )
         } else {
             None
         };
@@ -614,13 +632,16 @@ impl Emitter {
             }
             return;
         }
+        // An `li` outside any list (the parser keeps a stray one) is a
+        // paragraph.
         let Some(ctx) = self.lists.last_mut() else {
+            self.start_block();
             return;
         };
         let marker = match ctx.ordered {
             Some(number) => {
                 let marker = format!("{number}. ");
-                ctx.ordered = Some(number + 1);
+                ctx.ordered = Some((number + 1).min(MAX_LIST_NUMBER as u64));
                 marker
             }
             None => "- ".to_string(),
@@ -640,18 +661,18 @@ impl Emitter {
             }
             return;
         }
+        let Some(base) = self.lists.last().map(|ctx| ctx.base.clone()) else {
+            self.end_block();
+            return;
+        };
         self.flush_line();
-        self.prefix = self
-            .lists
-            .last()
-            .map(|ctx| ctx.base.clone())
-            .unwrap_or_default();
+        self.prefix = base;
     }
 
     fn hard_break(&mut self) {
-        // An ATX heading is a single line, so a break inside one is a
-        // space.
-        if self.flat || self.in_heading || !self.inline.is_empty() {
+        // An ATX heading is a single line, and a code span can't hold a
+        // break, so a break inside either is a space.
+        if self.flat || self.in_heading || self.code > 0 {
             if !self.buf.ends_with(' ') {
                 self.buf.push(' ');
             }
@@ -798,11 +819,14 @@ fn is_block_container(tag: &str) -> bool {
             | "figure"
             | "footer"
             | "form"
+            | "header"
             | "hgroup"
+            | "legend"
             | "main"
             | "menu"
             | "nav"
             | "p"
+            | "search"
             | "section"
             | "summary"
     )

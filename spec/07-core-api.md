@@ -453,7 +453,8 @@ async fn Core::shutdown(self);   // flush writer, release the lease
     without a loss; nothing is fetched or run.
   - Blocks: `p`, `div` and the other block containers become
     paragraphs, `h1`–`h6` ATX headings, `blockquote` `>` quotes,
-    `ul`/`ol`/`li` lists (nested, with `ol`'s `start`), `pre` a fenced
+    `ul`/`ol`/`li` lists (nested, with `ol`'s `start` up to nine
+    digits; `menu` and `dir` read as `ul`), `pre` a fenced
     code block whose fence is longer than any backtick run inside, `hr`
     `---`, and `br` a hard break (`\` at the line's end; inside a
     heading, a space).

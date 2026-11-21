@@ -441,3 +441,51 @@ fn inline_frames_around_blocks_keep_their_text_in_order() {
         "- a\n  - b"
     );
 }
+
+#[test]
+fn a_stray_item_or_menu_list_keeps_the_structure() {
+    assert_eq!(
+        md("<blockquote><li>x</li><p>y</p></blockquote>"),
+        "> x\n>\n> y"
+    );
+    assert_eq!(md("<menu><li>a</li><li>b</li></menu>"), "- a\n- b");
+    assert_eq!(md("<dir><li>a</li></dir>"), "- a");
+    assert_eq!(md("<div>a</div><header>d</header>e"), "a\n\nd\n\ne");
+}
+
+#[test]
+fn a_list_number_stays_within_nine_digits() {
+    assert_eq!(
+        md("<ol start=999999999><li>a</li><li>b</li></ol>"),
+        "999999999. a\n999999999. b"
+    );
+    assert_eq!(
+        md("<ol start=9223372036854775807><li>a</li></ol>"),
+        "999999999. a"
+    );
+}
+
+#[test]
+fn a_break_inside_emphasis_or_a_link_is_a_hard_break() {
+    assert_eq!(md("<p><b>a<br>b</b></p>"), "**a\\\nb**");
+    assert_eq!(
+        md("<p><a href=\"https://x\">a<br>b</a></p>"),
+        "[a\\\nb](https://x)"
+    );
+    assert_eq!(md("<blockquote><i>a<br>b</i></blockquote>"), "> *a\\\n> b*");
+    assert_eq!(md("<p><b>a<br></b>b</p>"), "**a**\\\nb");
+    assert_eq!(md("<p><code>a<br>b</code></p>"), "`a b`");
+}
+
+#[test]
+fn deep_inline_nesting_converts_quickly_or_is_refused() {
+    // The parse's work budget refuses depth long before the frames'
+    // rebuilding costs anything.
+    assert_eq!(
+        markdown_from_html(&format!("{}x", "<em>".repeat(10_000))),
+        Err(PasteError::TooComplex)
+    );
+    let started = std::time::Instant::now();
+    assert!(markdown_from_html(&format!("{}x", "<em>".repeat(1_000))).is_ok());
+    assert!(started.elapsed() < std::time::Duration::from_secs(2));
+}
