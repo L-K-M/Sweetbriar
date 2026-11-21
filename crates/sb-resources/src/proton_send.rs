@@ -82,10 +82,12 @@ pub fn frozen_send(bytes: &[u8]) -> Result<FrozenSend, String> {
             // An inline image is one of the HTML part's related
             // resources; a plain draft's attachment never is.
             let content_id = input.html().and_then(|_| {
-                input.resources().iter().find_map(|resource| {
-                    (resource.part_id().as_str() == attachment.part_id().as_str())
-                        .then(|| resource.content_id().to_owned())
-                })
+                input
+                    .resources()
+                    .iter()
+                    .find(|resource| resource.part_id().as_str() == attachment.part_id().as_str())
+                    .map(|resource| resource.content_id().to_owned())
+                    .filter(|content_id| !content_id.is_empty())
             });
             FrozenAttachment {
                 name: attachment.display_name().to_owned(),

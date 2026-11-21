@@ -1586,6 +1586,15 @@ fn an_inline_content_id_saves_and_reads_back() {
         media_type: "image/png".to_owned(),
         content_id: Some(content_id.to_owned()),
     }];
+    // Media types compare without regard to case.
+    with_image.attachments.push(DraftAttachment::New {
+        object: std::sync::Arc::new(
+            block_on(engine.publish_draft_attachment(Cursor::new(b"photo"))).unwrap(),
+        ),
+        filename: "photo.jpg".to_owned(),
+        media_type: "Image/JPEG".to_owned(),
+        content_id: Some("photo@sweetbriar.invalid".to_owned()),
+    });
     save(&engine, draft.draft_id(), None, with_image);
 
     let revision = block_on(engine.draft(draft.draft_id()))

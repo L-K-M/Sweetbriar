@@ -690,14 +690,15 @@ fn reconcile_draft_uploads(
         // the unrecorded tail is this attempt's own uploads of these
         // frozen parts. An inline image's ContentID is the bare value
         // the frozen MIME's Content-ID header carried.
+        let disposition = if expected.content_id.is_some() {
+            Disposition::Inline
+        } else {
+            Disposition::Attachment
+        };
         if attachment.name != expected.name
             || attachment.mime_type != expected.media_type
-            || (attachment.disposition == Disposition::Inline) != expected.content_id.is_some()
-        {
-            return Err(mismatch());
-        }
-        if let Some(content_id) = &expected.content_id
-            && attachment.content_id.as_deref() != Some(content_id.as_str())
+            || attachment.disposition != Some(disposition)
+            || attachment.content_id != expected.content_id
         {
             return Err(mismatch());
         }
@@ -1119,7 +1120,7 @@ mod tests {
         id: &str,
         name: &str,
         size: i64,
-        disposition: Disposition,
+        disposition: Option<Disposition>,
         content_id: Option<&str>,
     ) -> ProtonDraftAttachment {
         ProtonDraftAttachment {
@@ -1145,7 +1146,7 @@ mod tests {
                     "att-1",
                     "notes.txt",
                     reported,
-                    Disposition::Attachment,
+                    Some(Disposition::Attachment),
                     None,
                 )],
                 &[frozen("notes.txt", Some(12), None)],
@@ -1162,7 +1163,7 @@ mod tests {
                 "att-1",
                 "notes.txt",
                 0,
-                Disposition::Attachment,
+                Some(Disposition::Attachment),
                 None,
             )],
             &[frozen("notes.txt", None, None)],
@@ -1180,7 +1181,7 @@ mod tests {
                 "att-1",
                 "other.txt",
                 12,
-                Disposition::Attachment,
+                Some(Disposition::Attachment),
                 None,
             )],
             &[frozen("notes.txt", Some(12), None)],
@@ -1197,7 +1198,7 @@ mod tests {
                 "att-1",
                 "chart.png",
                 0,
-                Disposition::Inline,
+                Some(Disposition::Inline),
                 Some("a@b"),
             )],
             &[frozen("chart.png", Some(12), Some("a@b"))],
@@ -1209,6 +1210,23 @@ mod tests {
     }
 
     #[test]
+    fn a_stray_content_id_or_unknown_disposition_is_refused() {
+        // An ordinary frozen part never adopts an upload that carries a
+        // Content-ID, or one whose disposition Sweetbriar doesn't know.
+        for (disposition, content_id) in
+            [(Some(Disposition::Attachment), Some("a@b")), (None, None)]
+        {
+            let refused = reconcile_draft_uploads(
+                "draft-1",
+                &[on_draft("att-1", "notes.txt", 0, disposition, content_id)],
+                &[frozen("notes.txt", Some(12), None)],
+                &[],
+            );
+            assert!(refused.is_err());
+        }
+    }
+
+    #[test]
     fn an_inline_shape_mismatch_is_refused() {
         // Inline on the draft but ordinary in the frozen message.
         let refused = reconcile_draft_uploads(
@@ -1217,7 +1235,7 @@ mod tests {
                 "att-1",
                 "chart.png",
                 0,
-                Disposition::Inline,
+                Some(Disposition::Inline),
                 Some("a@b"),
             )],
             &[frozen("chart.png", Some(12), None)],
@@ -1231,7 +1249,7 @@ mod tests {
                 "att-1",
                 "chart.png",
                 0,
-                Disposition::Attachment,
+                Some(Disposition::Attachment),
                 None,
             )],
             &[frozen("chart.png", Some(12), Some("a@b"))],
@@ -1245,7 +1263,7 @@ mod tests {
                 "att-1",
                 "chart.png",
                 0,
-                Disposition::Inline,
+                Some(Disposition::Inline),
                 Some("c@d"),
             )],
             &[frozen("chart.png", Some(12), Some("a@b"))],

@@ -309,8 +309,9 @@ pub struct ProtonDraftAttachment {
     pub size: i64,
     pub mime_type: String,
     /// The upload's disposition: `inline` for a Markdown draft's
-    /// inline image, `attachment` otherwise.
-    pub disposition: Disposition,
+    /// inline image, `attachment` otherwise; `None` for one Sweetbriar
+    /// doesn't know, which matches no frozen part.
+    pub disposition: Option<Disposition>,
     /// The bare Content-ID when inline, `None` otherwise.
     pub content_id: Option<String>,
     pub key_packets: Vec<u8>,
@@ -340,19 +341,52 @@ struct DraftReadAttachment {
     size: i64,
     #[serde(rename = "MIMEType", default)]
     mime_type: String,
-    /// Absent reads as an ordinary attachment, what Proton's own
-    /// clients do.
-    #[serde(rename = "Disposition", default = "attachment_disposition")]
-    disposition: Disposition,
+    /// Read leniently: one unknown value must not fail the whole draft
+    /// read (see [`draft_disposition`]).
+    #[serde(rename = "Disposition", default)]
+    disposition: Option<String>,
     #[serde(rename = "Headers", default)]
     headers: Value,
     #[serde(rename = "KeyPackets", default)]
     key_packets: String,
 }
 
-/// The disposition a draft read omits.
-fn attachment_disposition() -> Disposition {
-    Disposition::Attachment
+/// A draft attachment's disposition. Absent reads as an ordinary
+/// attachment, what Proton's own clients do; an unknown value is `None`.
+fn draft_disposition(value: Option<&str>) -> Option<Disposition> {
+    match value.map(str::to_ascii_lowercase).as_deref() {
+        None | Some("attachment") => Some(Disposition::Attachment),
+        Some("inline") => Some(Disposition::Inline),
+        Some(_) => None,
+    }
+}
+
+/// One draft attachment as the reconciliation reads it. Only an inline
+/// attachment has a Content-ID: an ordinary one may carry the header
+/// too, but nothing reads it there.
+fn draft_attachment(
+    path: &str,
+    attachment: DraftReadAttachment,
+) -> Result<ProtonDraftAttachment, SendTransportError> {
+    let key_packets = base64::engine::general_purpose::STANDARD
+        .decode(attachment.key_packets.as_bytes())
+        .map_err(|_| SendTransportError::OutcomeUnknown {
+            message: format!("the {path} attachment key packets didn't decode"),
+        })?;
+    let disposition = draft_disposition(attachment.disposition.as_deref());
+    let content_id = match disposition {
+        Some(Disposition::Inline) => content_id_of(&attachment.headers),
+        _ => None,
+    };
+    Ok(ProtonDraftAttachment {
+        id: attachment.id,
+        name: attachment.name,
+        size: attachment.size,
+        mime_type: attachment.mime_type,
+        disposition,
+        content_id,
+        key_packets,
+    })
 }
 
 #[derive(Deserialize)]
@@ -559,22 +593,7 @@ impl Client {
             .message
             .attachments
             .into_iter()
-            .map(|attachment| {
-                let key_packets = base64::engine::general_purpose::STANDARD
-                    .decode(attachment.key_packets.as_bytes())
-                    .map_err(|_| SendTransportError::OutcomeUnknown {
-                        message: format!("the {path} attachment key packets didn't decode"),
-                    })?;
-                Ok(ProtonDraftAttachment {
-                    id: attachment.id,
-                    name: attachment.name,
-                    size: attachment.size,
-                    mime_type: attachment.mime_type,
-                    disposition: attachment.disposition,
-                    content_id: content_id_of(&attachment.headers),
-                    key_packets,
-                })
-            })
+            .map(|attachment| draft_attachment(&path, attachment))
             .collect()
     }
 
@@ -1432,9 +1451,9 @@ mod tests {
             }
         }))
         .expect("the inline draft read decodes");
-        let attachment = &inline.message.attachments[0];
-        assert_eq!(attachment.disposition, Disposition::Inline);
-        assert_eq!(content_id_of(&attachment.headers).as_deref(), Some("a@b"));
+        let attachment = first_attachment(inline);
+        assert_eq!(attachment.disposition, Some(Disposition::Inline));
+        assert_eq!(attachment.content_id.as_deref(), Some("a@b"));
 
         let ordinary: DraftReadResponse = serde_json::from_value(serde_json::json!({
             "Message": {
@@ -1449,9 +1468,52 @@ mod tests {
             }
         }))
         .expect("the ordinary draft read decodes");
-        let attachment = &ordinary.message.attachments[0];
-        assert_eq!(attachment.disposition, Disposition::Attachment);
-        assert_eq!(content_id_of(&attachment.headers), None);
+        let attachment = first_attachment(ordinary);
+        assert_eq!(attachment.disposition, Some(Disposition::Attachment));
+        assert_eq!(attachment.content_id, None);
+
+        // A Content-ID header on an ordinary attachment isn't read, and an
+        // unknown disposition fails only its own match, not the read.
+        let odd: DraftReadResponse = serde_json::from_value(serde_json::json!({
+            "Message": {
+                "ID": "draft-1",
+                "Attachments": [{
+                    "ID": "att-3",
+                    "Name": "notes.txt",
+                    "MIMEType": "text/plain",
+                    "Disposition": "Attachment",
+                    "Headers": {"content-id": "<x@y>"},
+                    "KeyPackets": "",
+                }, {
+                    "ID": "att-4",
+                    "Name": "new.bin",
+                    "MIMEType": "application/octet-stream",
+                    "Disposition": "something-new",
+                    "Headers": {"content-id": "<z@y>"},
+                    "KeyPackets": "",
+                }],
+            }
+        }))
+        .expect("an unknown disposition still decodes");
+        let mut attachments = odd.message.attachments.into_iter();
+        let ordinary =
+            draft_attachment("draft", attachments.next().expect("first")).expect("the first maps");
+        assert_eq!(ordinary.disposition, Some(Disposition::Attachment));
+        assert_eq!(ordinary.content_id, None);
+        let unknown = draft_attachment("draft", attachments.next().expect("second"))
+            .expect("the second maps");
+        assert_eq!(unknown.disposition, None);
+        assert_eq!(unknown.content_id, None);
+    }
+
+    fn first_attachment(response: DraftReadResponse) -> ProtonDraftAttachment {
+        let attachment = response
+            .message
+            .attachments
+            .into_iter()
+            .next()
+            .expect("one");
+        draft_attachment("draft", attachment).expect("the attachment maps")
     }
 
     #[test]

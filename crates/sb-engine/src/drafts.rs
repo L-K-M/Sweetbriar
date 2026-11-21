@@ -772,8 +772,9 @@ fn validate_draft(
                 format!("attachment {filename:?}: the Content-ID is already used in this draft"),
             ));
         }
+        // Media types compare without regard to case (RFC 2045).
         if !matches!(
-            media_type.as_str(),
+            media_type.to_ascii_lowercase().as_str(),
             "image/png" | "image/jpeg" | "image/gif"
         ) {
             return Err(EngineError::invalid_input(
