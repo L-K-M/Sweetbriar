@@ -250,6 +250,10 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     /// "Activity / account health").
     var onOpenActivity: (@MainActor () -> Void)?
 
+    /// Tests hold the default Unified Inbox choice here, after the
+    /// sidebar's first reload, to order it against an explicit choice.
+    var beforeDefaultChoice: (@MainActor () async -> Void)?
+
     /// File → Import…, once the core is up.
     func beginImport() {
         guard backups.canWrite else { return }
@@ -366,6 +370,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
             await sidebarModel.reload()
             guard let self, !Task.isCancelled, contentSerial == serial else { return }
             sidebar.reloadSections()
+            await beforeDefaultChoice?()
+            guard !Task.isCancelled, contentSerial == serial else { return }
             sidebar.choose(entryID: SidebarModel.unifiedInboxID)
             await imports?.reattach()
         }
