@@ -268,6 +268,50 @@ struct ArchiveShellLifecycleTests {
         }
     }
 
+    /// The default Unified Inbox choice waits for the sidebar's first
+    /// reload, so a list chosen meanwhile must not be replaced by it
+    /// (the restore test below raced exactly this).
+    @Test
+    func aListChosenBeforeTheSidebarLoadsSurvivesTheDefaultChoice() async throws {
+        try await withShellBridge { bridge in
+            let mailbox = try await shellImport(bridge, label: "Chosen")
+            let appearance = SharedAppearance()
+            let gate = ShellGate()
+            let state = ShellWaitState()
+            let controller = MainWindowController(
+                session: CoreSession { bridge }, appearance: appearance,
+                backups: SharedBackups(didRestore: {}, didClose: {}),
+                readingViewMemory: SharedReadingViewMemory()
+            )
+            controller.beforeDefaultChoice = {
+                state.entered = true
+                await gate.wait()
+                state.finished = true
+            }
+            do {
+                controller.start()
+                try #require(await shellEventually { state.entered })
+                let list = try #require(controller.messageList)
+                list.show(.mailbox(mailbox))
+                try #require(await shellEventually { list.model?.ids.count == 1 })
+                await gate.open()
+                try #require(await shellEventually { state.finished })
+                try await Task.sleep(for: .milliseconds(100))
+                #expect(list.shownSpec == .mailbox(mailbox))
+                #expect(list.model?.ids.count == 1)
+                await controller.retireContent()
+                await appearance.reset()
+                controller.window?.close()
+            } catch {
+                await gate.open()
+                await controller.retireContent()
+                await appearance.reset()
+                controller.window?.close()
+                throw error
+            }
+        }
+    }
+
     @Test
     func aRealRestoreRecreatesMainContentEvenWhenTheListGenerationDecreases() async throws {
         try await withShellBridge { bridge in
