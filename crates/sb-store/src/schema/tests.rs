@@ -1078,9 +1078,14 @@ fn migration_28_snapshot_is_taken_before_the_rewrite() {
     store.close().unwrap();
 
     let found = snapshots(&paths);
-    assert_eq!(found.len(), 1, "{found:?}");
-    let snapshot = Connection::open(&found[0]).unwrap();
-    assert_eq!(one_int(&snapshot, "PRAGMA user_version"), 27);
+    assert_eq!(found.len(), 2, "{found:?}");
+    let user_version = |path: &std::path::PathBuf| {
+        let snapshot = Connection::open(path).unwrap();
+        one_int(&snapshot, "PRAGMA user_version")
+    };
+    // Migration 28 snapshots at 27 and migration 35 at 34.
+    let before_28 = found.iter().find(|path| user_version(path) == 27).unwrap();
+    let snapshot = Connection::open(before_28).unwrap();
     assert_eq!(
         one_int(
             &snapshot,
@@ -1088,6 +1093,15 @@ fn migration_28_snapshot_is_taken_before_the_rewrite() {
         ),
         1
     );
+    assert_eq!(
+        one_int(
+            &snapshot,
+            "SELECT count(*) FROM intents WHERE intent_id = 'intent-2'"
+        ),
+        1
+    );
+    let before_35 = found.iter().find(|path| user_version(path) == 34).unwrap();
+    let snapshot = Connection::open(before_35).unwrap();
     assert_eq!(
         one_int(
             &snapshot,
@@ -1386,6 +1400,90 @@ fn migration_34_adds_the_proton_send_columns_and_checks_the_request_time() {
         tx.execute(
             "UPDATE send_attempts
              SET proton_draft_id = 'pd', send_requested_at = 1 WHERE attempt_id = 'a'",
+            [],
+        )
+        .map_err(bug)?;
+        Ok(())
+    });
+    store.close().unwrap();
+}
+
+/// A store at version 34 holding an intent row, so migration 35's
+/// rebuild has a row to keep.
+fn store_at_34(label: &str) -> (ScratchDir, StorePaths, Seams) {
+    let (scratch, paths) = scratch_paths(label);
+    let seams = test_seams(real_fs());
+    let store = crate::store::open_with(
+        &paths,
+        &seams,
+        WRITER_PRAGMAS,
+        crate::store::READER_PRAGMAS,
+        &PINNED_SQLITE,
+        &MIGRATIONS[..34],
+    )
+    .unwrap();
+    let local: String = reading(&store, |tx| {
+        Ok(tx
+            .query_row(
+                "SELECT account_id FROM accounts WHERE provider = 'local_archive'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap())
+    });
+    writing(&store, move |tx| {
+        tx.execute(
+            "INSERT INTO intents
+             (intent_id, account_id, config_generation, op, target_json, args_json,
+              preconditions_json, state, idempotency_key, origin, created_at, updated_at)
+             VALUES ('intent-1', ?1, 1, 'move', '{}', '{}', '{}', 'pending',
+                     'key-1', 'user', 8, 8)",
+            [&local],
+        )
+        .map_err(bug)?;
+        Ok(())
+    });
+    store.close().unwrap();
+    (scratch, paths, seams)
+}
+
+/// Migration 35 keeps the intent row and id, admits `remove_label` and
+/// recreates the runnable index (spec/02 "Intents").
+#[test]
+fn migration_35_keeps_the_intent_row_and_admits_remove_label() {
+    let (_scratch, paths, seams) = store_at_34("schema-remove-label-migration");
+    let before = {
+        let raw = Connection::open(paths.state_db()).unwrap();
+        assert_eq!(one_int(&raw, "PRAGMA user_version"), 34);
+        let rows = table_rows(&raw, "intents", 18, "intent_id");
+        raw.close().unwrap();
+        rows
+    };
+
+    let store = crate::open(&paths, &seams).unwrap();
+    assert_eq!(
+        reading(&store, |tx| Ok(one_int(tx, "PRAGMA user_version"))),
+        i64::from(LATEST_SCHEMA_VERSION)
+    );
+    let after = reading(&store, |tx| Ok(table_rows(tx, "intents", 18, "intent_id")));
+    assert_eq!(before, after, "migration 35 changed the intent row");
+    writing(&store, |tx| {
+        assert_eq!(
+            one_int(
+                tx,
+                "SELECT count(*) FROM sqlite_schema
+                 WHERE type = 'index' AND name = 'intents_runnable'"
+            ),
+            1
+        );
+        tx.execute(
+            "INSERT INTO intents
+             (intent_id, account_id, config_generation, op, target_json, args_json,
+              preconditions_json, state, idempotency_key, origin, created_at, updated_at)
+             SELECT 'intent-2', account_id, 1, 'remove_label', '{}',
+                    '{\"v\":1,\"from_mailbox_id\":3}', '{}', 'pending', 'key-2',
+                    'user', 9, 9
+               FROM accounts WHERE provider = 'local_archive'",
             [],
         )
         .map_err(bug)?;

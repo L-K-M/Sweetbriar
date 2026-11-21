@@ -84,7 +84,17 @@ verified before it completes.
     and intent in one transaction for Proton and the local commands for
     the local archive; undo tokens for moves, none for labels, and
     undo's "Moved elsewhere since" refusal; tested on the store and the
-    fake without execution;
+    fake without execution. Written, it came to about 2,650 lines, so
+    it lands as three stacked PRs (2026-11-21):
+    - M5.1a1 (~400): migration 35 and the `remove_label` kind and
+      effect through the reader, service, FFI and bridge;
+    - M5.1a2 (~1,100): the four commands' policy checks and plans in
+      the store: a Proton account's intents with their local effect,
+      the local archive's moves and its Trash;
+    - M5.1a3 (~1,200): the engine commands with their undo tokens,
+      undo of a move ("Moved elsewhere since") and of the local
+      archive's moves, and the revert of a cancelled filing intent's
+      local effect;
   - M5.1b (~1,300): execution on the Proton account worker: body
     pre-acquisition, `label` then `unlabel` of the previous folder, the
     confirming read, reconcile after a drop re-issuing a missing label,

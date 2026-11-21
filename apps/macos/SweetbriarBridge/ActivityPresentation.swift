@@ -133,6 +133,7 @@ public struct ActivityPresentation: Sendable {
         case .move: return "Move"
         case .copy: return "Copy"
         case .deleteToTrash: return "Delete to trash"
+        case .removeLabel: return "Remove label"
         case .expungeScoped: return "Expunge"
         case .append: return "Append"
         case .submit: return "Submit"

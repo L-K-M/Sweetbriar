@@ -44,7 +44,10 @@ fn the_intent_query_round_trips_over_the_exported_path() {
                 'i1', 'user', 1, 1),
                ('i2', '{ACCOUNT}', 1, 'move', '{{"v":1,"occurrence_ids":[8]}}',
                 '{{"v":1,"to_mailbox_id":42}}', '{{}}', 'quarantined', 'epoch_change', NULL,
-                'i2', 'user', 2, 2);"#
+                'i2', 'user', 2, 2),
+               ('i3', '{ACCOUNT}', 1, 'remove_label', '{{"v":1,"occurrence_ids":[9]}}',
+                '{{"v":1,"from_mailbox_id":42}}', '{{}}', 'parked', NULL, NULL,
+                'i3', 'user', 3, 3);"#
         ),
     );
     let core = sb_test_support::block_on(open_core(token(), config(&scratch))).unwrap();
@@ -56,7 +59,7 @@ fn the_intent_query_round_trips_over_the_exported_path() {
         10,
     ))
     .unwrap();
-    assert_eq!(page.rows.len(), 2);
+    assert_eq!(page.rows.len(), 3);
     assert_eq!(
         page.rows[0],
         Intent {
@@ -84,6 +87,13 @@ fn the_intent_query_round_trips_over_the_exported_path() {
         page.rows[1].effect,
         IntentEffect::ToMailbox { mailbox_id: 42 }
     );
+    assert_eq!(page.rows[2].intent_id, "i3");
+    assert_eq!(page.rows[2].kind, IntentKind::RemoveLabel);
+    assert_eq!(page.rows[2].state, IntentState::Parked);
+    assert_eq!(
+        page.rows[2].effect,
+        IntentEffect::RemoveLabel { mailbox_id: 42 }
+    );
 
     let filtered = IntentFilter {
         account_id: Some(ACCOUNT.to_owned()),
@@ -106,6 +116,14 @@ fn the_intent_query_round_trips_over_the_exported_path() {
     assert!(matches!(error, CoreError::Cancelled));
 
     sb_test_support::block_on(core.shutdown());
+}
+
+/// A `remove_label` effect keeps its mailbox across the boundary.
+#[test]
+fn a_remove_label_effect_keeps_its_mailbox() {
+    let effect =
+        IntentEffect::from_service(sb_service::IntentEffect::RemoveLabel { mailbox_id: 7 });
+    assert_eq!(effect, IntentEffect::RemoveLabel { mailbox_id: 7 });
 }
 
 /// A reserved operation's raw args survive the boundary.

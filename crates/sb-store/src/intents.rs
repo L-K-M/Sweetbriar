@@ -49,6 +49,7 @@ pub enum IntentKind {
     Move,
     Copy,
     DeleteToTrash,
+    RemoveLabel,
     /// Reserved, not produced in the pilot (spec/02).
     ExpungeScoped,
     /// Reserved, not produced in the pilot (spec/02).
@@ -64,6 +65,7 @@ impl IntentKind {
             "move" => Some(Self::Move),
             "copy" => Some(Self::Copy),
             "delete_to_trash" => Some(Self::DeleteToTrash),
+            "remove_label" => Some(Self::RemoveLabel),
             "expunge_scoped" => Some(Self::ExpungeScoped),
             "append" => Some(Self::Append),
             "submit" => Some(Self::Submit),
@@ -118,6 +120,9 @@ pub enum IntentEffect {
         mailbox_id: i64,
     },
     DeleteToTrash,
+    RemoveLabel {
+        mailbox_id: i64,
+    },
     /// A reserved operation, not produced in the pilot (spec/02); its
     /// args stay inspectable rather than guessed at.
     Reserved {
@@ -459,10 +464,32 @@ pub(crate) fn parse_effect(kind: IntentKind, text: &str) -> Result<IntentEffect,
                 .get("to_mailbox_id")
                 .and_then(Json::as_i64)
                 .ok_or_else(malformed)?;
+            optional_from_mailbox_id(object).ok_or_else(malformed)?;
             Ok(IntentEffect::ToMailbox { mailbox_id })
         }
-        IntentKind::DeleteToTrash => Ok(IntentEffect::DeleteToTrash),
+        IntentKind::DeleteToTrash => {
+            optional_from_mailbox_id(object).ok_or_else(malformed)?;
+            Ok(IntentEffect::DeleteToTrash)
+        }
+        IntentKind::RemoveLabel => {
+            let mailbox_id = object
+                .get("from_mailbox_id")
+                .and_then(Json::as_i64)
+                .ok_or_else(malformed)?;
+            Ok(IntentEffect::RemoveLabel { mailbox_id })
+        }
         IntentKind::ExpungeScoped | IntentKind::Append | IntentKind::Submit => unreachable!(),
+    }
+}
+
+/// The optional `"from_mailbox_id"` a Proton `move`, `copy` or
+/// `delete_to_trash` carries (spec/02): `Some(None)` when the key is
+/// absent or null, `Some(Some(id))` for an integer, and `None` when it
+/// is anything else.
+fn optional_from_mailbox_id(object: &serde_json::Map<String, Json>) -> Option<Option<i64>> {
+    match object.get("from_mailbox_id") {
+        None | Some(Json::Null) => Some(None),
+        Some(value) => value.as_i64().map(Some),
     }
 }
 

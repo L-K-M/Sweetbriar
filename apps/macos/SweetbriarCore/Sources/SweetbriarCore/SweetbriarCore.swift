@@ -13435,6 +13435,8 @@ public enum IntentEffect: Equatable, Hashable {
     case toMailbox(mailboxId: Int64
     )
     case deleteToTrash
+    case removeLabel(mailboxId: Int64
+    )
     /**
      * A reserved operation, not produced in the pilot (spec/02).
      */
@@ -13469,7 +13471,10 @@ public struct FfiConverterTypeIntentEffect: FfiConverterRustBuffer {
         
         case 3: return .deleteToTrash
         
-        case 4: return .reserved(argsJson: try FfiConverterString.read(from: &buf)
+        case 4: return .removeLabel(mailboxId: try FfiConverterInt64.read(from: &buf)
+        )
+        
+        case 5: return .reserved(argsJson: try FfiConverterString.read(from: &buf)
         )
         
         default: throw UniffiInternalError.unexpectedEnumCase
@@ -13495,8 +13500,13 @@ public struct FfiConverterTypeIntentEffect: FfiConverterRustBuffer {
             writeInt(&buf, Int32(3))
         
         
-        case let .reserved(argsJson):
+        case let .removeLabel(mailboxId):
             writeInt(&buf, Int32(4))
+            FfiConverterInt64.write(mailboxId, into: &buf)
+            
+        
+        case let .reserved(argsJson):
+            writeInt(&buf, Int32(5))
             FfiConverterString.write(argsJson, into: &buf)
             
         }
@@ -13530,6 +13540,7 @@ public enum IntentKind: Equatable, Hashable {
     case move
     case copy
     case deleteToTrash
+    case removeLabel
     /**
      * Reserved, not produced in the pilot (spec/02).
      */
@@ -13571,11 +13582,13 @@ public struct FfiConverterTypeIntentKind: FfiConverterRustBuffer {
         
         case 4: return .deleteToTrash
         
-        case 5: return .expungeScoped
+        case 5: return .removeLabel
         
-        case 6: return .append
+        case 6: return .expungeScoped
         
-        case 7: return .submit
+        case 7: return .append
+        
+        case 8: return .submit
         
         default: throw UniffiInternalError.unexpectedEnumCase
         }
@@ -13601,16 +13614,20 @@ public struct FfiConverterTypeIntentKind: FfiConverterRustBuffer {
             writeInt(&buf, Int32(4))
         
         
-        case .expungeScoped:
+        case .removeLabel:
             writeInt(&buf, Int32(5))
         
         
-        case .append:
+        case .expungeScoped:
             writeInt(&buf, Int32(6))
         
         
-        case .submit:
+        case .append:
             writeInt(&buf, Int32(7))
+        
+        
+        case .submit:
+            writeInt(&buf, Int32(8))
         
         }
     }
