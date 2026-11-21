@@ -69,6 +69,10 @@ fn parse_token(token: &str) -> Result<(String, Undoes), EngineError> {
         .filter(|account| !account.is_empty())
         .ok_or_else(invalid)?
         .to_owned();
+    // A minted token names intents or local moves, never both.
+    if object.contains_key("moves") && object.contains_key("intents") {
+        return Err(invalid());
+    }
     if let Some(moves) = object.get("moves") {
         let moves = moves
             .as_array()
