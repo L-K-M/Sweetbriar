@@ -331,7 +331,14 @@ M4.4c. Choosing Out Box shows the Out Box in the list pane, as Drafts
 - **Keyboard:**
   - arrows, Return to open, Space to page the reader;
   - `⌘⌫` delete to trash, `⌃⌘A` archive;
-  - `⇧⌘U` mark read or unread, `⇧⌘L` star or unstar;
+  - `⇧⌘U` mark read or unread, `⇧⌘L` star or unstar (M3.2). Each
+    toggles the selection: when any selected row is unread (unstarred)
+    it marks every row read (starred), otherwise unread (unstarred).
+    The Message menu and the toolbar carry both commands. They act
+    through `set_flags` (07), one call per account of the selection,
+    and are disabled when the selection holds a local-archive row. The
+    rows change at once from the local effect; a failed call shows its
+    error and changes nothing;
   - type-to-file (below);
   - every command is also in a menu.
 - **Performance budget:** switching mailbox shows the first rows within
@@ -443,6 +450,14 @@ M4.4c. Choosing Out Box shows the Out Box in the list pane, as Drafts
     layout; remote ones stay blocked in both.
   - Per-category defaults wait for the fidelity corpus (D16).
   - "Sender layout" and "View source" are always one click away.
+- **Marking read (M3.2):** when the reader shows one unread message of
+  a Proton account, it marks that occurrence read through `set_flags`
+  as `reader.mark_read` (02) says: at once, after that many seconds
+  while the same message stays shown, or never (`manual`). Another
+  selection, a multi-row selection or a closed pane cancels a pending
+  mark. A message marked unread while it is shown stays unread until
+  it is shown again. Settings → Reading chooses the setting:
+  Immediately, After 2, 5 or 10 seconds, or Manually.
 - **Header area:**
   - from, to and date;
   - the "Received in <account>" chip in the account color with its

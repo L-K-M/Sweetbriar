@@ -1378,6 +1378,7 @@ extend:
 | `sending.undo_seconds` | `5`, `7`, `10`, `20`, `30`: the undo-send window a new attempt is held for (05, M4.3; Settings → Sending safety, M4.4) | `7` |
 | `notifications.previews` | `off`, `on`: whether new-mail notifications show sender and subject (10, M2.7) | `off` |
 | `backups.destination` | Empty for the default, or an absolute directory path without NUL (M1.8j1b) | Empty: the data root's `backups/` |
+| `reader.mark_read` | `immediately`, `2`, `5`, `10`, `manual`: when the reader marks a shown unread message read, at once, after that many seconds, or never (08 Reader, M3.2) | `immediately` |
 | `reader.reading_view_senders` | The senders whose messages open in the Reading view (08, M6.3b2): lowercase addresses, each with one `@` and at most 254 bytes, sorted, unique, joined by newlines; at most 1,000 | Empty: every message opens in sender layout |
 
 The sender list must already be canonical; any other spelling is
