@@ -379,7 +379,10 @@ impl Client {
                             .map_err(TransportFailure::from_proton)?;
                         // A server error answered a request that reached
                         // Proton, so only an idempotent one is sent again.
-                        if !may_retry(&method, true) || network_attempt >= MAX_NETWORK_RETRIES {
+                        if replies == Replies::NoReplay
+                            || !may_retry(&method, true)
+                            || network_attempt >= MAX_NETWORK_RETRIES
+                        {
                             return Err(TransportFailure::ServerRefused {
                                 status,
                                 message: error_message(&body),
@@ -404,6 +407,19 @@ impl Client {
                     });
                 }
                 Ok(Err(error)) => {
+                    // A mutation's lost reply is never replayed here: the
+                    // executor reconciles from the metadata (plan M3.1a).
+                    if replies == Replies::NoReplay {
+                        return Err(if error.is_connect() {
+                            TransportFailure::NeverEstablished {
+                                message: error.to_string(),
+                            }
+                        } else {
+                            TransportFailure::OutcomeUnknown {
+                                message: error.to_string(),
+                            }
+                        });
+                    }
                     if !may_retry(&method, !error.is_connect())
                         || network_attempt >= MAX_NETWORK_RETRIES
                     {
@@ -423,6 +439,9 @@ impl Client {
                     tokio::time::sleep(delay).await;
                 }
                 Err(_) => {
+                    if replies == Replies::NoReplay {
+                        return Err(TransportFailure::Timeout);
+                    }
                     if !may_retry(&method, true) || network_attempt >= MAX_NETWORK_RETRIES {
                         return Err(TransportFailure::Timeout);
                     }
@@ -590,6 +609,11 @@ pub(crate) enum Replies {
     /// the send worker interprets once `send_requested_at` is committed
     /// (spec/05 step 5), so sending it again would replay the POST.
     Return,
+    /// Wait out a rate limit, then return every other outcome as it
+    /// came: a flag mutation's PUT is idempotent, but the executor
+    /// reconciles from the metadata (plan M3.1a), so a lost reply, a
+    /// deadline or a 5xx is never sent again here.
+    NoReplay,
 }
 
 /// A request failure before it is mapped to [`ProtonError`], keeping

@@ -299,7 +299,7 @@ pub(crate) fn content_id_of(headers: &Value) -> Option<String> {
 /// A message id sent as a query value. Proton ids are base64url, whose
 /// alphabet needs no query encoding; anything else (`&`, `+`, a space)
 /// could change the query, so it is refused before the request.
-fn validate_query_id(id: &str, what: &str) -> Result<(), ProtonError> {
+pub(crate) fn validate_query_id(id: &str, what: &str) -> Result<(), ProtonError> {
     let base64url = !id.is_empty()
         && id
             .bytes()

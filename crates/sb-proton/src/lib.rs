@@ -8,6 +8,7 @@ mod client;
 mod error;
 mod keys;
 mod mail;
+mod mutate;
 mod send;
 mod send_transport;
 
@@ -28,6 +29,7 @@ pub use mail::{
     MESSAGE_PATH, MESSAGES_PATH, MailAddress, MessageEvent, MessageMetadata, MessagePage,
     REFRESH_MAIL,
 };
+pub use mutate::{MessageMutation, MutationError, STARRED_LABEL_ID};
 pub use send::{
     CLEAR_SCHEME, EncryptedAttachment, INTERNAL_SCHEME, PackageRecipient, RECIPIENT_TYPE_EXTERNAL,
     RECIPIENT_TYPE_INTERNAL, RecipientKeys, RecipientPublicKey, SIGNATURE_DETACHED, SendAttachment,

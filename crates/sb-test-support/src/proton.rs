@@ -474,9 +474,9 @@ pub struct RecordedRequest {
 /// A fault knob. `Drop` closes the connection; `Stall` delays every
 /// response; `RateLimit` answers 429/503 with an optional
 /// `Retry-After`; `Code` answers a status and Proton code;
-/// `DropAfterApply` applies a send call then drops the reply;
-/// `ApplyThenRefuseConnection` applies it, closes the connection and
-/// refuses every later one; `RefuseConnection` closes the next
+/// `DropAfterApply` applies a send or mutation call then drops the
+/// reply; `ApplyThenRefuseConnection` applies it, closes the connection
+/// and refuses every later one; `RefuseConnection` closes the next
 /// accepted connection before any TLS byte; `RefuseConnections` closes
 /// every one; `OnceSend` waits for the next send; `StallHandshake`
 /// sends nothing for a duration before the TLS handshake; a bad server
@@ -507,16 +507,18 @@ pub enum Fault {
     /// /mail/v4/messages`) passes meanwhile, so a test can fault the
     /// send without naming the draft id the server will choose.
     OnceSend(Box<Fault>),
-    /// Applies a draft creation, attachment upload or send, then drops
-    /// the reply: the effect stays, the client sees a lost reply
-    /// (05's `outcome_unknown`). One-shot through [`Fault::Once`].
+    /// Applies a draft creation, attachment upload, send or flag
+    /// mutation, then drops the reply: the effect stays, the client
+    /// sees a lost reply (05's `outcome_unknown`). One-shot through
+    /// [`Fault::Once`].
     DropAfterApply,
-    /// Applies a draft creation, attachment upload or send, serves the
-    /// reply with `connection: close`, and refuses every later accepted
-    /// connection. The client's pool discards the closed connection, so
-    /// its next request finds one that was never established (05's
-    /// pre-request retry), and the transport's own connect retries all
-    /// fail. One-shot through [`Fault::Once`] or [`Fault::OnceAt`].
+    /// Applies a draft creation, attachment upload, send or flag
+    /// mutation, serves the reply with `connection: close`, and refuses
+    /// every later accepted connection. The client's pool discards the
+    /// closed connection, so its next request finds one that was never
+    /// established (05's pre-request retry), and the transport's own
+    /// connect retries all fail. One-shot through [`Fault::Once`] or
+    /// [`Fault::OnceAt`].
     ApplyThenRefuseConnection,
     /// Closes the next accepted TCP connection before any TLS byte, so
     /// a client's handshake fails: it can tell the connection was never
@@ -666,6 +668,9 @@ struct State {
     external_keys: HashMap<String, Vec<String>>,
     /// Every applied send, in order, with the packages it carried.
     recorded_sends: Vec<send::RecordedSend>,
+    /// Mutation-route calls the server has handled (plan M3.1a), so a
+    /// test can assert a mutation went out exactly once.
+    mutation_calls: usize,
     /// The fake's own page-size cap; the transport clamps to the same
     /// 150 (research `mail-sync.md` §3).
     max_page_size: u32,
@@ -709,6 +714,7 @@ impl FakeProtonServer {
             public_key,
             external_keys: HashMap::new(),
             recorded_sends: Vec::new(),
+            mutation_calls: 0,
             max_page_size: 150,
             max_events_per_response: 0,
             stale: false,
@@ -1048,6 +1054,16 @@ impl FakeProtonServer {
     /// Every request the server has seen, in order.
     pub fn requests(&self) -> Vec<RecordedRequest> {
         self.log.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    /// How many flag mutation calls the server has handled (plan
+    /// M3.1a). A fault answered before the route, or a refused
+    /// connection, does not count: nothing reached the handler.
+    pub fn mutation_calls(&self) -> usize {
+        self.state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .mutation_calls
     }
 
     pub fn set_fault(&self, fault: Option<Fault>) {
@@ -1485,6 +1501,20 @@ async fn dispatch(
         ("POST", "/mail/v4/attachments") => send::handle_upload_attachment(state, headers, &body),
         ("GET", "/core/v4/events/latest") => handle_latest_event(state, headers),
         ("GET", "/tests/ping") => Ok(json_response(200, json!({"Code": 1000}))),
+        // The exact-match arms must precede the `/mail/v4/messages/{id}`
+        // catch-all, which would otherwise take "read" as a draft id.
+        ("PUT", "/mail/v4/messages/read") => {
+            handle_mutation(state, headers, &body, MutationKind::Read)
+        }
+        ("PUT", "/mail/v4/messages/unread") => {
+            handle_mutation(state, headers, &body, MutationKind::Unread)
+        }
+        ("PUT", "/mail/v4/messages/label") => {
+            handle_mutation(state, headers, &body, MutationKind::Label)
+        }
+        ("PUT", "/mail/v4/messages/unlabel") => {
+            handle_mutation(state, headers, &body, MutationKind::Unlabel)
+        }
         _ => {
             if let Some(id) = path.strip_prefix("/mail/v4/messages/") {
                 match method.as_str() {
@@ -1547,14 +1577,23 @@ async fn dispatch(
 }
 
 /// Whether a call is one whose effect [`Fault::DropAfterApply`] covers:
-/// a draft creation, an attachment upload or a send.
+/// a draft creation, an attachment upload, a send, or a flag mutation.
 fn is_apply_call(method: &str, path: &str) -> bool {
-    if method != "POST" {
-        return false;
+    match method {
+        "POST" => {
+            path == "/mail/v4/messages"
+                || path == "/mail/v4/attachments"
+                || path.starts_with("/mail/v4/messages/")
+        }
+        "PUT" => matches!(
+            path,
+            "/mail/v4/messages/read"
+                | "/mail/v4/messages/unread"
+                | "/mail/v4/messages/label"
+                | "/mail/v4/messages/unlabel"
+        ),
+        _ => false,
     }
-    path == "/mail/v4/messages"
-        || path == "/mail/v4/attachments"
-        || path.starts_with("/mail/v4/messages/")
 }
 
 fn handle_info(body: &[u8], state: &Arc<Mutex<State>>) -> Result<Response<Full<Bytes>>, io::Error> {
@@ -2073,6 +2112,96 @@ fn handle_labels(
         .map(|label| label.to_json())
         .collect();
     Ok(json_response(200, json!({"Code": 1000, "Labels": labels})))
+}
+
+/// Which flag mutation a route carries (plan M3.1a; research
+/// `mail-sync.md` §6).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MutationKind {
+    Read,
+    Unread,
+    Label,
+    Unlabel,
+}
+
+/// `PUT /mail/v4/messages/{read,unread,label,unlabel}`: applies one
+/// message's flag change, records the same update event
+/// `update_message` emits, and answers the multi-response envelope
+/// go-proton-api's client parses for label/unlabel
+/// (`LabelMessagesRes.Responses[].Response.Code`,
+/// `go-proton-api/message_types.go:198-216`). The pinned development
+/// server's handlers for these four routes answer a bare 200 with no
+/// body (`server/messages.go:196-314`), and it gives an unknown message
+/// id no per-message failure (it skips the id for label, and
+/// dereferences nil for read). The client accepts that empty 200 too,
+/// but the fake answers `Code` 1001 with one response per id, so tests
+/// reach the per-message path, and gives an unknown id Proton's
+/// invalid-value code 2001.
+fn handle_mutation(
+    state: &Arc<Mutex<State>>,
+    headers: &hyper::HeaderMap,
+    body: &[u8],
+    kind: MutationKind,
+) -> Result<Response<Full<Bytes>>, io::Error> {
+    let mut state = state.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(username) = authenticated(&mut state, headers) else {
+        return Ok(unauthorized());
+    };
+    let value: Value = serde_json::from_slice(body).unwrap_or(json!({}));
+    let ids: Vec<String> = value
+        .get("IDs")
+        .and_then(Value::as_array)
+        .map(|ids| {
+            ids.iter()
+                .filter_map(|id| id.as_str().map(str::to_owned))
+                .collect()
+        })
+        .unwrap_or_default();
+    let label_id = value.get("LabelID").and_then(Value::as_str);
+    let labelled = matches!(kind, MutationKind::Label | MutationKind::Unlabel);
+    if ids.is_empty() || (labelled && label_id.is_none()) {
+        return Ok(json_response(
+            400,
+            json!({"Code": 2001, "Error": "invalid mutation body"}),
+        ));
+    }
+    let account = state
+        .accounts
+        .get_mut(&username)
+        .expect("the session's account exists");
+    let mut responses = Vec::with_capacity(ids.len());
+    let mut updated = Vec::new();
+    for id in ids {
+        let Some(message) = account.messages.iter_mut().find(|message| message.id == id) else {
+            responses
+                .push(json!({"ID": id, "Response": {"Code": 2001, "Error": "message not found"}}));
+            continue;
+        };
+        match kind {
+            MutationKind::Read => message.unread = false,
+            MutationKind::Unread => message.unread = true,
+            MutationKind::Label => {
+                let label = label_id.expect("a label mutation carries its label id");
+                if !message.label_ids.iter().any(|existing| existing == label) {
+                    message.label_ids.push(label.to_owned());
+                }
+            }
+            MutationKind::Unlabel => {
+                let label = label_id.expect("a label mutation carries its label id");
+                message.label_ids.retain(|existing| existing != label);
+            }
+        }
+        updated.push((id.clone(), message.clone()));
+        responses.push(json!({"ID": id, "Response": {"Code": 1000}}));
+    }
+    for (id, message) in updated {
+        account.record(FakeEvent::message(id, 2, Some(message)));
+    }
+    state.mutation_calls += 1;
+    Ok(json_response(
+        200,
+        json!({"Code": 1001, "Responses": responses}),
+    ))
 }
 
 fn handle_messages(
