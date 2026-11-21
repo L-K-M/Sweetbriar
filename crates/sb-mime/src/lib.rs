@@ -47,6 +47,9 @@ pub use mbox::{
     MboxVariant, MboxrdRecordInfo, inventory_mbox, unquote_range, write_mboxrd_record,
 };
 pub use outcome::{ParseFailure, ParseOutcome, ParseWarning};
+pub use paste::{
+    MAX_PASTE_HTML_BYTES, MarkdownFromHtml, PasteError, PasteLoss, markdown_from_html,
+};
 pub use reader::{
     AttachmentDescriptor, AttachmentError, PartId, RelatedResource, RenderInput, RenderWarning,
     RenderWarningCode, SelectedBody, extract_attachment, render_input,
