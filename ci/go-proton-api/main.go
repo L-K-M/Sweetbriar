@@ -45,10 +45,11 @@ import (
 )
 
 const (
-	defaultUsername     = "laneuser"
-	defaultPassword     = "lane-password"
-	defaultSendUsername = "lanesender"
-	defaultPeerUsername = "lanepeer"
+	defaultUsername      = "laneuser"
+	defaultPassword      = "lane-password"
+	defaultSendUsername  = "lanesender"
+	defaultPeerUsername  = "lanepeer"
+	defaultFlagsUsername = "laneflags"
 )
 
 // One seeded message, as the Rust lane asserts it: the server's message
@@ -83,6 +84,10 @@ type report struct {
 	// its HTTP status, Proton code/error and whether the recipient's
 	// inbox grew, so the lane can tell a refusal that sent nothing.
 	SendLog string `json:"send_log,omitempty"`
+	// The flag suite's synthetic account (M3.2d) and its one message,
+	// unread and unstarred in Archive. It shares the lane password.
+	FlagsUsername string `json:"flags_username"`
+	FlagsMessage  string `json:"flags_message"`
 }
 
 // The user labels and folders the driver creates.
@@ -113,6 +118,7 @@ func run() error {
 	password := flag.String("password", defaultPassword, "synthetic password")
 	sendUsername := flag.String("send-username", defaultSendUsername, "synthetic send-suite sender user name")
 	peerUsername := flag.String("peer-username", defaultPeerUsername, "synthetic send-suite recipient user name")
+	flagsUsername := flag.String("flags-username", defaultFlagsUsername, "synthetic flag-suite user name")
 	requestLog := flag.String("request-log", "", "append every server call after the JSON line to this file")
 	sendLogPath := flag.String("send-log", "", "append one JSON record per send-suite call to this file")
 	flag.Parse()
@@ -167,6 +173,36 @@ func run() error {
 	}
 	defer peerClient.Close()
 
+	// The flag suite's account: its own, so reading, starring and
+	// undoing never change the read-only suite's messages. Its message
+	// is in Archive: the development server's message counts are not
+	// per user, and the read-only suite asserts no Archive total.
+	if _, _, err := s.CreateUser(*flagsUsername, []byte(*password)); err != nil {
+		return fmt.Errorf("create the flag-suite user: %w", err)
+	}
+	flagsSession, err := signIn(ctx, s.GetHostURL(), *flagsUsername, *password)
+	if err != nil {
+		return err
+	}
+	defer flagsSession.client.Close()
+	flagsKeyRing := flagsSession.keyRings[flagsSession.addressID]
+	if flagsKeyRing == nil {
+		return errors.New("the flag-suite address key did not unlock")
+	}
+	flagsMessage, err := importOne(
+		ctx,
+		flagsSession.client,
+		flagsKeyRing,
+		flagsSession.addressID,
+		[]string{proton.ArchiveLabel},
+		true,
+		"lane flags archive",
+		*flagsUsername,
+	)
+	if err != nil {
+		return err
+	}
+
 	sends, err := newSendLog(*sendLogPath, peerClient)
 	if err != nil {
 		return err
@@ -189,18 +225,20 @@ func run() error {
 	defer frontend.Close()
 
 	line := report{
-		BaseURL:      "https://" + frontend.Addr().String(),
-		CertPEM:      certificatePEM(cert),
-		Username:     *username,
-		Password:     *password,
-		ModulusKey:   srp.GetModulusKey(),
-		SRPSaltBytes: session.srpSaltBytes,
-		LabelCounts:  counts,
-		Messages:     seeded,
-		SendUsername: *sendUsername,
-		SendEmail:    *sendUsername + "@" + s.GetDomain(),
-		PeerEmail:    *peerUsername + "@" + s.GetDomain(),
-		SendLog:      *sendLogPath,
+		BaseURL:       "https://" + frontend.Addr().String(),
+		CertPEM:       certificatePEM(cert),
+		Username:      *username,
+		Password:      *password,
+		ModulusKey:    srp.GetModulusKey(),
+		SRPSaltBytes:  session.srpSaltBytes,
+		LabelCounts:   counts,
+		Messages:      seeded,
+		SendUsername:  *sendUsername,
+		SendEmail:     *sendUsername + "@" + s.GetDomain(),
+		PeerEmail:     *peerUsername + "@" + s.GetDomain(),
+		SendLog:       *sendLogPath,
+		FlagsUsername: *flagsUsername,
+		FlagsMessage:  flagsMessage,
 	}
 
 	// The watcher starts before the line is printed, so no lane request
@@ -704,6 +742,9 @@ func rewriteLaneResponse(path string, body []byte) ([]byte, bool) {
 	if path == "/mail/v4/messages" && replaceNullLists(response) {
 		changed = true
 	}
+	if isEventsPath(path) && replaceNullEventLists(response) {
+		changed = true
+	}
 
 	if !changed {
 		return body, false
@@ -720,6 +761,40 @@ func isKeyPath(path string) bool {
 	return path == "/core/v4/users" ||
 		path == "/core/v4/addresses" ||
 		strings.HasPrefix(path, "/core/v4/addresses/")
+}
+
+// An events page (`/core/v4/events/{id}`), not the latest cursor.
+func isEventsPath(path string) bool {
+	return strings.HasPrefix(path, "/core/v4/events/") && path != "/core/v4/events/latest"
+}
+
+// replaceNullEventLists turns an events page's `null` change lists into
+// empty arrays, and its messages' `null` address lists likewise: the
+// development server flattens `proton.Event`, whose nil slices marshal
+// as null, while Sweetbriar's events deserializer expects a sequence or
+// no field at all, as production sends. The flag suite (M3.2d) is the
+// first lane suite that follows events after the listing.
+func replaceNullEventLists(response map[string]any) bool {
+	changed := false
+	for _, field := range []string{"Messages", "Labels", "Addresses", "Notifications"} {
+		if value, present := response[field]; present && value == nil {
+			response[field] = []any{}
+			changed = true
+		}
+	}
+	events, _ := response["Messages"].([]any)
+	for _, item := range events {
+		event, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		if message, ok := event["Message"].(map[string]any); ok {
+			if replaceNullLists(map[string]any{"Messages": []any{message}}) {
+				changed = true
+			}
+		}
+	}
+	return changed
 }
 
 // replaceNullLists turns the `null` address lists the development
