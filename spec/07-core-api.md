@@ -407,8 +407,9 @@ async fn Core::shutdown(self);   // flush writer, release the lease
   command, never a rollback of history. An `UndoToken` is an opaque
   string to the shell; for remote effects it names the account and the
   intents the command planned, and `undo` plans their inverses
-  (04-sync-proton "Running an intent"). A token that doesn't parse, or
-  names no intent, is `InvalidInput`.
+  (04-sync-proton "Running an intent"). A token that doesn't parse,
+  names no intent, or names an intent of another account than its
+  own is `InvalidInput`.
 - **Selected-file attachment publication:** `publish_draft_attachment_file(path)`
   accepts an absolute path supplied by the shell after a user picks or drops
   a file. The core trusts the shell to pass only user-authorized paths and

@@ -367,9 +367,11 @@ M3 and M5 qualify each call on the fake server and the
   the message where Proton reports per message, or an empty body, as
   `go-proton-api`'s server gives) is followed by the confirming read.
   Any other code, top-level or for the message, and any 4xx answer
-  but 429 are refusals. A 5xx answer other than 503, or a 2xx body
-  that doesn't parse, is a lost reply: the change may have been
-  applied.
+  but 429 are refusals. 429 and 503 are the `throttled` wait above. A
+  5xx answer other than 503, or a 2xx body that doesn't parse, is a
+  lost reply: the change may have been applied, so it counts as a
+  failure like a lost connection, and the next attempt's live check
+  reconciles before anything is sent again.
 - **Failures** count: a refused call, a connection lost after the
   request was sent, or a confirming read without the requested state.
   The intent returns to `pending` with `last_error`, its `attempts`
@@ -378,7 +380,9 @@ M3 and M5 qualify each call on the fake server and the
   refusal other than 429 parks it at once.
 - **Undo** plans, for each message the token names, the inverse change
   with `origin='undo'`, unless the message's flag already has the
-  inverse value. A cancelled intent has nothing to undo.
+  inverse value. A cancelled intent has nothing to undo. Undoing the
+  same token again therefore plans nothing while the inverse holds,
+  and a repeated idempotency key replays the first undo.
 - **Health actions** (07) act on all their ids or none, refusing the
   call with `Conflict` when one doesn't qualify:
   - `release_intents`: a `parked` or `quarantined` intent becomes
