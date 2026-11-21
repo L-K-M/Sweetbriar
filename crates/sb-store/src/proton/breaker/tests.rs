@@ -235,6 +235,7 @@ fn retention_and_a_few_deletes_apply_at_once() {
             6,
             Classified {
                 applied: 3,
+                explained: 0,
                 opened: 0
             }
         )
@@ -281,6 +282,7 @@ fn a_mass_delete_over_two_chunks_opens_an_event_that_pauses_the_account() {
         kept,
         Classified {
             applied: 1,
+            explained: 0,
             opened: 0
         }
     );
@@ -411,6 +413,7 @@ fn deletes_in_no_folder_count_only_against_the_cap() {
             applied.breaker,
             Classified {
                 applied: pass.len(),
+                explained: 0,
                 opened: 0
             }
         );
@@ -442,6 +445,262 @@ fn deletes_in_no_folder_count_only_against_the_cap() {
     });
     assert_eq!(no_mailbox, 1);
     assert_eq!(states(&store, "n1"), pending());
+}
+
+/// The current occurrence ids of `id`'s message, ascending.
+fn occurrence_ids(store: &Store, id: &str) -> Vec<i64> {
+    let id = id.to_owned();
+    reading(store, move |tx| {
+        let mut statement = tx
+            .prepare(
+                "SELECT o.occurrence_id FROM occurrences o
+                 JOIN logical_messages l ON l.message_id = o.message_id
+                 WHERE l.provider_key = ?1 AND o.state IN ('present', 'vanish_pending')
+                 ORDER BY o.occurrence_id",
+            )
+            .unwrap();
+        let rows = statement.query_map(params![id], |row| row.get(0)).unwrap();
+        Ok(rows.map(Result::unwrap).collect())
+    })
+}
+
+/// Insert an intent directly, as M5's planner will (M3 creates only
+/// read and star intents, so the breaker's Explained class is tested
+/// with rows written here). `state` is `done` unless a test says
+/// otherwise.
+fn insert_intent(
+    store: &Store,
+    account_id: &str,
+    intent_id: &str,
+    op: &str,
+    occurrence_ids: &[i64],
+    args_json: &str,
+    state: &str,
+) {
+    let target = serde_json::json!({"v": 1, "occurrence_ids": occurrence_ids}).to_string();
+    let (intent_id, account_id, op, args_json, state) = (
+        intent_id.to_owned(),
+        account_id.to_owned(),
+        op.to_owned(),
+        args_json.to_owned(),
+        state.to_owned(),
+    );
+    write(store, move |tx| {
+        tx.execute(
+            "INSERT INTO intents (intent_id, account_id, config_generation, op, target_json,
+             args_json, preconditions_json, state, attempts, idempotency_key, origin,
+             created_at, updated_at)
+             VALUES (?1, ?2, (SELECT config_generation FROM accounts WHERE account_id = ?2),
+                     ?3, ?4, ?5, '{\"v\":1}', ?6, 0, ?1, 'user', 0, 0)",
+            params![intent_id, account_id, op, target, args_json, state],
+        )
+        .unwrap();
+        Ok(())
+    })
+    .unwrap();
+}
+
+/// A done `delete_to_trash` intent naming `id`'s current occurrences.
+fn explained_delete(store: &Store, intent_id: &str, id: &str) {
+    let occurrences = occurrence_ids(store, id);
+    insert_intent(
+        store,
+        ACCOUNT,
+        intent_id,
+        "delete_to_trash",
+        &occurrences,
+        "{\"v\":1}",
+        "done",
+    );
+}
+
+/// A second Proton account, for the same-account rule.
+fn other_account(store: &Store) -> &'static str {
+    const OTHER: &str = "00000000-0000-4000-8000-0000000000e3";
+    write(store, |tx| {
+        tx.execute(
+            "INSERT INTO accounts (account_id, kind, provider, display_name, state,
+             config_generation, sort_order, created_at)
+             VALUES (?1, 'proton', 'proton_api', 'Other', 'active', 1, 2, 0)",
+            params![OTHER],
+        )
+        .unwrap();
+        Ok(())
+    })
+    .unwrap();
+    OTHER
+}
+
+/// A mailbox whose deletes are all explained opens nothing: 30 in
+/// Inbox, past the cap, apply and never count.
+#[test]
+fn explained_deletes_apply_without_counting_toward_the_thresholds() {
+    let (_scratch, store) = listed("proton-breaker-explained", ids("m", 100, "0"));
+    for n in 1..=30 {
+        explained_delete(&store, &format!("d{n}"), &format!("m{n}"));
+    }
+    let gone: Vec<String> = (1..=30).map(|n| format!("m{n}")).collect();
+    let gone: Vec<&str> = gone.iter().map(String::as_str).collect();
+    let applied = apply(&store, deletes(&gone), true);
+    assert_eq!(
+        applied.breaker,
+        Classified {
+            applied: 30,
+            explained: 30,
+            opened: 0
+        }
+    );
+    for n in 1..=30 {
+        assert_eq!(states(&store, &format!("m{n}")), vanished());
+    }
+    assert_eq!(states(&store, "m31"), vec!["present"; 2]);
+    assert!(events(&store).is_empty());
+    assert_eq!(recorded(&store), 0);
+}
+
+/// A `pending` intent explains nothing: 26 deletes in Inbox still open
+/// an event, and the intent's message waits with the rest.
+#[test]
+fn a_pending_intent_explains_nothing() {
+    let (_scratch, store) = listed("proton-breaker-pending", ids("m", 100, "0"));
+    let occurrences = occurrence_ids(&store, "m1");
+    insert_intent(
+        &store,
+        ACCOUNT,
+        "move-1",
+        "move",
+        &occurrences,
+        "{\"v\":1,\"to_mailbox_id\":6}",
+        "pending",
+    );
+    let gone: Vec<String> = (1..=26).map(|n| format!("m{n}")).collect();
+    let gone: Vec<&str> = gone.iter().map(String::as_str).collect();
+    let applied = apply(&store, deletes(&gone), true);
+    assert_eq!(
+        applied.breaker,
+        Classified {
+            applied: 0,
+            explained: 0,
+            opened: 1
+        }
+    );
+    assert_eq!(states(&store, "m1"), pending());
+    assert_eq!(
+        events(&store)[0].3,
+        r#"{"disappeared":26,"mailbox_messages":100}"#
+    );
+}
+
+/// A done intent naming another message's occurrence, or belonging to
+/// another account, explains nothing; a `set_flags` intent explains
+/// nothing either.
+#[test]
+fn only_a_done_move_or_trash_intent_for_the_same_message_explains() {
+    // m1's intent, m2..m27 deleted: 26 unexplained.
+    let (_scratch, store) = listed("proton-breaker-other-occurrence", ids("m", 100, "0"));
+    let occurrences = occurrence_ids(&store, "m1");
+    insert_intent(
+        &store,
+        ACCOUNT,
+        "d1",
+        "delete_to_trash",
+        &occurrences,
+        "{\"v\":1}",
+        "done",
+    );
+    let gone: Vec<String> = (2..=27).map(|n| format!("m{n}")).collect();
+    let gone: Vec<&str> = gone.iter().map(String::as_str).collect();
+    let applied = apply(&store, deletes(&gone), true);
+    assert_eq!(applied.breaker.opened, 1);
+    assert_eq!(applied.breaker.explained, 0);
+    assert_eq!(states(&store, "m1"), vec!["present"; 2]);
+
+    // Another account's intent names m1's occurrences.
+    let (_scratch, store) = listed("proton-breaker-other-account", ids("m", 100, "0"));
+    let other = other_account(&store);
+    let occurrences = occurrence_ids(&store, "m1");
+    insert_intent(
+        &store,
+        other,
+        "d1",
+        "move",
+        &occurrences,
+        "{\"v\":1,\"to_mailbox_id\":6}",
+        "done",
+    );
+    let gone: Vec<String> = (1..=26).map(|n| format!("m{n}")).collect();
+    let gone: Vec<&str> = gone.iter().map(String::as_str).collect();
+    let applied = apply(&store, deletes(&gone), true);
+    assert_eq!(applied.breaker.opened, 1);
+    assert_eq!(applied.breaker.explained, 0);
+
+    // A done set_flags intent is not an explanation.
+    let (_scratch, store) = listed("proton-breaker-set-flags", ids("m", 100, "0"));
+    let occurrences = occurrence_ids(&store, "m1");
+    insert_intent(
+        &store,
+        ACCOUNT,
+        "f1",
+        "set_flags",
+        &occurrences,
+        "{\"v\":1,\"add\":[\"\\Seen\"],\"remove\":[]}",
+        "done",
+    );
+    let gone: Vec<String> = (1..=26).map(|n| format!("m{n}")).collect();
+    let gone: Vec<&str> = gone.iter().map(String::as_str).collect();
+    let applied = apply(&store, deletes(&gone), true);
+    assert_eq!(applied.breaker.opened, 1);
+    assert_eq!(applied.breaker.explained, 0);
+}
+
+/// Explained and unexplained deletes in one mailbox count only the
+/// unexplained toward its thresholds: 30 explained plus 3 open
+/// nothing; 30 explained plus 26 open one event holding 26.
+#[test]
+fn a_mix_counts_only_the_unexplained() {
+    let (_scratch, store) = listed("proton-breaker-mix", ids("m", 100, "0"));
+    for n in 1..=30 {
+        explained_delete(&store, &format!("d{n}"), &format!("m{n}"));
+    }
+    let gone: Vec<String> = (1..=33).map(|n| format!("m{n}")).collect();
+    let gone: Vec<&str> = gone.iter().map(String::as_str).collect();
+    let applied = apply(&store, deletes(&gone), true);
+    assert_eq!(
+        applied.breaker,
+        Classified {
+            applied: 33,
+            explained: 30,
+            opened: 0
+        }
+    );
+    for n in 1..=33 {
+        assert_eq!(states(&store, &format!("m{n}")), vanished());
+    }
+    assert!(events(&store).is_empty());
+
+    let (_scratch, store) = listed("proton-breaker-mix-breach", ids("m", 100, "0"));
+    for n in 1..=30 {
+        explained_delete(&store, &format!("d{n}"), &format!("m{n}"));
+    }
+    let gone: Vec<String> = (1..=56).map(|n| format!("m{n}")).collect();
+    let gone: Vec<&str> = gone.iter().map(String::as_str).collect();
+    let applied = apply(&store, deletes(&gone), true);
+    assert_eq!(
+        applied.breaker,
+        Classified {
+            applied: 30,
+            explained: 30,
+            opened: 1
+        }
+    );
+    // The 30 explained are back in the mailbox's pre-pass count, so
+    // the share rule sees 26 of 100, not 26 of 70.
+    assert_eq!(
+        events(&store)[0].3,
+        r#"{"disappeared":26,"mailbox_messages":100}"#
+    );
+    assert_eq!(states(&store, "m1"), vanished());
+    assert_eq!(states(&store, "m31"), pending());
 }
 
 mod refresh;

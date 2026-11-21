@@ -10,11 +10,14 @@
 //! While an account has an `open` event its deletes are recorded but
 //! not classified: destructive reconciliation is paused. A message only
 //! a listing missed waits, unconfirmed, for a second listing or a
-//! delete event (`refresh`). Explained
-//! deletes (a matching `done` intent) arrive with M3's intents.
+//! delete event (`refresh`). A delete that a `done` `move` or
+//! `delete_to_trash` intent explains applies without counting toward
+//! the thresholds, whatever the mailbox (spec/04-sync-proton "Running
+//! an intent": Explained).
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 
+use rusqlite::types::ValueRef;
 use rusqlite::{OptionalExtension, Transaction, params};
 use sb_types::time::Timestamp;
 
@@ -34,6 +37,9 @@ pub const MIN_MAILBOX_FOR_SHARE: usize = 8;
 pub struct Classified {
     /// Deletes applied: their occurrences became `vanished`.
     pub applied: usize,
+    /// Of those, the ones a `done` `move` or `delete_to_trash` intent
+    /// explained (spec/04-sync-proton "Running an intent": Explained).
+    pub explained: usize,
     /// Events opened.
     pub opened: usize,
 }
@@ -201,7 +207,7 @@ pub(super) fn classify_deletes(
         return Ok(classified);
     }
     let read = |e| classify(e, "read the account's undecided Proton deletes");
-    let mut by_mailbox: BTreeMap<Option<i64>, (Option<String>, Vec<i64>)> = BTreeMap::new();
+    let mut rows = Vec::new();
     {
         let mut statement = tx
             .prepare(
@@ -213,29 +219,53 @@ pub(super) fn classify_deletes(
                  ORDER BY d.message_id",
             )
             .map_err(read)?;
-        let rows = statement
+        let held = statement
             .query_map(params![account_id, pass == Pass::ResponseEnd], |row| {
                 Ok((row.get(0)?, row.get(1)?, row.get(2)?))
             })
             .map_err(read)?;
-        for row in rows {
-            let (message_id, mailbox_id, role): (i64, Option<i64>, Option<String>) =
-                row.map_err(read)?;
-            by_mailbox
-                .entry(mailbox_id)
-                .or_insert_with(|| (role, Vec::new()))
-                .1
-                .push(message_id);
+        for row in held {
+            rows.push(row.map_err(read)?);
         }
+    }
+
+    // Explained first, per message and before any mailbox's threshold:
+    // a `done` `move` or `delete_to_trash` intent whose target names
+    // one of the message's withheld occurrences applies it, and it never
+    // counts toward `breach` (spec/04-sync-proton "Running an intent":
+    // Explained).
+    // The done intents are read once per pass, not once per delete:
+    // nothing prunes them, so their number only grows.
+    let explaining = if rows.is_empty() {
+        HashSet::new()
+    } else {
+        explaining_occurrences(tx, account_id)?
+    };
+    let mut by_mailbox: BTreeMap<Option<i64>, (Option<String>, Vec<i64>)> = BTreeMap::new();
+    let mut explained_per_mailbox: BTreeMap<Option<i64>, usize> = BTreeMap::new();
+    for (message_id, mailbox_id, role) in rows {
+        if is_explained(tx, &explaining, message_id)? {
+            vanish(tx, message_id)?;
+            classified.explained += 1;
+            classified.applied += 1;
+            *explained_per_mailbox.entry(mailbox_id).or_default() += 1;
+            continue;
+        }
+        by_mailbox
+            .entry(mailbox_id)
+            .or_insert_with(|| (role, Vec::new()))
+            .1
+            .push(message_id);
     }
 
     for (mailbox_id, (role, messages)) in by_mailbox {
         // Proton can empty Trash and Spam by itself: retention.
         let retention = matches!(role.as_deref(), Some("trash" | "junk"));
+        let explained = explained_per_mailbox.get(&mailbox_id).copied().unwrap_or(0);
         let opens = if retention {
             None
         } else {
-            breach(tx, mailbox_id, messages.len())?
+            breach(tx, mailbox_id, messages.len(), explained)?
         };
         match opens {
             None => {
@@ -253,14 +283,76 @@ pub(super) fn classify_deletes(
     Ok(classified)
 }
 
+/// The occurrences the account's `done` `move` and `delete_to_trash`
+/// intents name in their `target_json` (spec/02). An id that isn't a
+/// JSON integer names no occurrence.
+fn explaining_occurrences(tx: &Transaction, account_id: &str) -> Result<HashSet<i64>, StoreError> {
+    let read = |e| classify(e, "read the account's done filing intents");
+    let mut statement = tx
+        .prepare_cached(
+            "SELECT j.value FROM intents i, json_each(i.target_json, '$.occurrence_ids') j
+             WHERE i.account_id = ?1 AND i.state = 'done'
+               AND i.op IN ('move', 'delete_to_trash')",
+        )
+        .map_err(read)?;
+    let ids = statement
+        .query_map(params![account_id], |row| {
+            Ok(match row.get_ref(0)? {
+                ValueRef::Integer(id) => Some(id),
+                _ => None,
+            })
+        })
+        .map_err(read)?;
+    let mut explaining = HashSet::new();
+    for id in ids {
+        explaining.extend(id.map_err(read)?);
+    }
+    Ok(explaining)
+}
+
+/// Whether one of the message's withheld (`vanish_pending`) occurrences
+/// is in `explaining`. A disappearance holds exactly those occurrences
+/// (see `withhold`), so a match on any of them explains the whole
+/// message.
+fn is_explained(
+    tx: &Transaction,
+    explaining: &HashSet<i64>,
+    message_id: i64,
+) -> Result<bool, StoreError> {
+    if explaining.is_empty() {
+        return Ok(false);
+    }
+    let read = |e| classify(e, "match a Proton delete to a done intent");
+    let mut statement = tx
+        .prepare_cached(
+            "SELECT occurrence_id FROM occurrences
+             WHERE message_id = ?1 AND state = 'vanish_pending'",
+        )
+        .map_err(read)?;
+    let withheld = statement
+        .query_map(params![message_id], |row| row.get::<_, i64>(0))
+        .map_err(read)?;
+    for id in withheld {
+        if explaining.contains(&id.map_err(read)?) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 /// The event kind and the mailbox's count before the pass, when
 /// `disappeared` unexplained deletes from the mailbox breach a
 /// threshold (04-sync-imap "Pause, conservative defaults"). A delete
 /// with no location counts only against the per-mailbox count.
+/// `explained` is the mailbox's own explained deletes: they were in
+/// the mailbox before the pass, so they belong in its count, but they
+/// never count as disappearances (spec/04-sync-proton "Running an
+/// intent": Explained).
 pub(super) fn breach(
     tx: &Transaction,
     mailbox_id: Option<i64>,
     disappeared: usize,
+    explained: usize,
 ) -> Result<Option<(&'static str, Option<usize>)>, StoreError> {
     let Some(mailbox_id) = mailbox_id else {
         return Ok(
@@ -275,7 +367,7 @@ pub(super) fn breach(
         )
         .map_err(|e| classify(e, "count a mailbox's present messages"))?;
     let remaining = usize::try_from(remaining).unwrap_or(usize::MAX);
-    let before = remaining + disappeared;
+    let before = remaining + disappeared + explained;
     if remaining == 0 {
         return Ok(Some(("folder_emptied", Some(before))));
     }

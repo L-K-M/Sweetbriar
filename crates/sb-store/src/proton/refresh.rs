@@ -196,7 +196,9 @@ pub(super) fn conclude(
         if matches!(role.as_deref(), Some("trash" | "junk")) {
             continue;
         }
-        if breaker::breach(tx, mailbox_id, count)?.is_some() {
+        // A listing's new misses are unconfirmed, so none is
+        // explained yet (spec/04-sync-proton "Refresh" step 3).
+        if breaker::breach(tx, mailbox_id, count, 0)?.is_some() {
             breached = true;
             break;
         }
