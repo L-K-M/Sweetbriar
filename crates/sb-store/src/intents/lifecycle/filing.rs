@@ -259,7 +259,13 @@ fn plan(
                     .filter(|&(_, mailbox)| mailbox != target)
                     .collect();
                 let arrived = folders.iter().any(|&(_, mailbox)| mailbox == target);
-                if left.is_empty() && arrived {
+                let previous_destination = match provider_key.as_deref() {
+                    Some(key) if kind == AccountKind::Proton => {
+                        live_move_destination(tx, account_id, key)?
+                    }
+                    _ => None,
+                };
+                if previous_destination.map_or(left.is_empty() && arrived, |id| id == target) {
                     continue;
                 }
                 for &(occurrence_id, _) in &left {
@@ -270,7 +276,8 @@ fn plan(
                 }
                 moved_any = true;
                 Change::Moved {
-                    from: left.first().map(|&(_, mailbox)| mailbox),
+                    from: previous_destination
+                        .or_else(|| left.first().map(|&(_, mailbox)| mailbox)),
                 }
             }
             Filing::AddLabel { .. } => {
@@ -423,6 +430,31 @@ pub(super) fn revert_filing(
         }
     }
     Ok(touched)
+}
+
+/// The last live move must finish before a newly planned move can run.
+/// Its destination is the next move's source even if events still list
+/// the earlier folder or temporarily show both.
+fn live_move_destination(
+    tx: &Transaction,
+    account_id: &str,
+    provider_key: &str,
+) -> Result<Option<i64>, StoreError> {
+    let previous = tx
+        .query_row(
+            "SELECT op, args_json FROM intents
+             WHERE account_id = ?1 AND op IN ('move', 'delete_to_trash')
+               AND state IN ('pending', 'in_flight', 'parked', 'quarantined')
+               AND json_extract(target_json, '$.provider_key') = ?2
+             ORDER BY rowid DESC LIMIT 1",
+            params![account_id, provider_key],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        )
+        .optional()
+        .map_err(|error| classify(error, "read a live move's destination"))?;
+    previous
+        .map(|(op, args)| stored_move(tx, account_id, &op, &args).map(|(to, _)| to))
+        .transpose()
 }
 
 /// A stored move's destination and source; `delete_to_trash` resolves
