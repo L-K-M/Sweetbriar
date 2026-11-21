@@ -87,6 +87,19 @@ async fn Core::shutdown(self);   // flush writer, release the lease
   Search machinery as `Search`, so its results equal its query's.
   `date_desc` and `relevance` are the pilot's sorts; `date_asc` stays
   reserved, and saving it is `InvalidInput` on `sort`.
+- **Flags (M3.2):** `set_flags(selection, add, remove)` takes the
+  flags `\Seen` and `\Flagged`, as in the intent payload (02); another
+  name, a name given twice (in one list or in both), or two empty lists
+  is `InvalidInput`. The
+  selection's occurrences must belong to one Proton (`proton_api`)
+  account; an empty selection, occurrences of several accounts, or of
+  the local archive are `InvalidInput` on `selection`, and the shell
+  calls once per account. Changing the local archive's flags is
+  deferred to a later step.
+  Each change is planned per logical message in one transaction
+  (04-sync-proton "Running an intent"), skipping messages whose flag
+  already holds; the call returns an `UndoToken` naming every planned
+  intent, or none when nothing was planned.
 - **Tags and notes:** `add_tag(selection, tag)` takes a tag name,
   creating the definition when it is new; `remove_tag` detaches it and
   keeps the definition (02 rule 8). Both attach to the selected

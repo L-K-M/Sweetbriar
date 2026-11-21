@@ -113,6 +113,20 @@ the intent framework every later mutation uses.
   - the UI updates instantly (local effect) and stays correct after the
     next events poll;
   - the `go-proton-api` lane passes the flag tests.
+- **Split (2026-11-21, M3.2):** the deliverables are estimated at
+  about 3,800 lines, so M3.2 lands as four PRs:
+  - M3.2a (~900): the flag-conflict rule on Proton events and listings,
+    and the engine acceptance on the fake through `plan_flag_change`
+    (one call and its confirming read, the label and Starred views,
+    another client's later change preserved, correct after the next
+    poll);
+  - M3.2b (~1,100): `set_flags` through the engine, service and FFI, and
+    the `reader.mark_read` setting (spec revision 2026-11-21: 02, 07);
+  - M3.2c (~1,200): macOS: the Message menu and toolbar commands, `⇧⌘U`
+    and `⇧⌘L`, the reader's mark-read timer and Settings → Reading (08);
+  - M3.2d (~600): the flag suite in the `go-proton-api` lane.
+  M3.2a and M3.2b need M3.1c and run in parallel; M3.2c and M3.2d need
+  M3.2b.
 
 ### M3.Q Qualification
 
