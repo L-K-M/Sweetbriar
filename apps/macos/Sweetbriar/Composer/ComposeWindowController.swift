@@ -1183,7 +1183,7 @@ extension ComposeWindowController: ComposerImagePasting {
     }
 
     func canPasteImage() -> Bool {
-        ComposeAttachmentControls.holdsPastedImage(pasteboard)
+        attachmentControls.canInsertImages && ComposeAttachmentControls.holdsPastedImage(pasteboard)
     }
 
     func pasteImage() -> Bool {

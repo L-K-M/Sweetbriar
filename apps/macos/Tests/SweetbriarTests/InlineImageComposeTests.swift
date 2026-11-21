@@ -10,7 +10,7 @@ import Testing
 private func imageEventually(_ predicate: @MainActor () -> Bool) async -> Bool {
     let deadline = ContinuousClock.now + .seconds(10)
     while !predicate() {
-        if ContinuousClock.now >= deadline { return false }
+        if ContinuousClock.now >= deadline || Task.isCancelled { return false }
         try? await Task.sleep(for: .milliseconds(5))
     }
     return true
@@ -134,7 +134,7 @@ struct InlineImageComposeTests {
             #expect(controller.model.content?.attachments.first?.contentId == contentId)
 
             #expect(await controller.saveAndWait())
-            let stored = try await bridge.draft(id: controller.model.draftId).revision?.attachments ?? []
+            let stored = try #require(try await bridge.draft(id: controller.model.draftId).revision).attachments
             #expect(stored.map(\.contentId) == [contentId])
             #expect(stored.map(\.mediaType) == ["image/png"])
             #expect(try await bridge.draft(id: controller.model.draftId).revision?.bodySource
