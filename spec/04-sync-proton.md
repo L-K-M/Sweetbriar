@@ -363,8 +363,9 @@ M3 and M5 qualify each call on the fake server and the
   already holds, the intent is `done` without a call: this read is
   the reconcile before retry, so no flag is stored for it.
 - **The call** carries one message ID and isn't retried by the
-  transport. A response code of 1000 (and 1000 for the message, where
-  Proton reports per message) is followed by the confirming read.
+  transport. A 2xx answer that refuses nothing (code 1000, 1000 for
+  the message where Proton reports per message, or an empty body, as
+  `go-proton-api`'s server gives) is followed by the confirming read.
 - **Failures** count: a refused call, a connection lost after the
   request was sent, or a confirming read without the requested state.
   The intent returns to `pending` with `last_error`, its `attempts`
