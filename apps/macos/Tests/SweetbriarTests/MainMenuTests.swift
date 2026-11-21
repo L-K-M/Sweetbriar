@@ -221,5 +221,27 @@ struct MessageMenuTests {
         #expect(probe.replyAllRuns == 1)
         #expect(probe.forwardRuns == 1)
     }
+
+    @Test("Mark as Read and Star are nil-target ⇧⌘U and ⇧⌘L commands")
+    func flagCommands() throws {
+        let builder = MainMenuBuilder(
+            onFillSynthetic: {}, onShowPrototype: {}, onImplementationChanged: { _ in },
+            onRunBenchmark: {}, onRunStoreBenchmark: {}, onRunSearchBenchmark: {},
+            isBenchmarkEnabled: { true }, onShowComposerProbe: {}, onImport: {})
+        let message = try #require(
+            builder.makeMainMenu().items.compactMap(\.submenu).first { $0.title == "Message" })
+        let find = { (id: String) in message.items.first { $0.identifier?.rawValue == id } }
+        let read = try #require(find("ch.lkmc.Sweetbriar.cmd.toggleRead"))
+        let star = try #require(find("ch.lkmc.Sweetbriar.cmd.toggleStar"))
+        #expect(read.title == "Mark as Read")
+        #expect(star.title == "Star")
+        #expect(read.keyEquivalent == "U" && star.keyEquivalent == "L")
+        #expect(read.keyEquivalentModifierMask == .command)
+        #expect(star.keyEquivalentModifierMask == .command)
+        // The main window answers them down the responder chain.
+        #expect(read.target == nil && star.target == nil)
+        #expect(read.action == #selector(MessageFlagCommands.toggleRead(_:)))
+        #expect(star.action == #selector(MessageFlagCommands.toggleStar(_:)))
+    }
 }
 #endif

@@ -441,6 +441,21 @@ public final class CoreBridge: Sendable {
         return Receipt(receipt)
     }
 
+    /// `set_flags(selection, add, remove)` (spec/07 "Flags") under a
+    /// shell-made key: the undo token, or nil when every flag held.
+    @discardableResult
+    public func setFlags(
+        idempotencyKey: String, selection: MessageSelection, add: [String], remove: [String]
+    ) async throws -> String? {
+        let token = SweetbriarCore.CancelToken()
+        return try await Self.withCancellation(token: token) {
+            try await self.core.setFlags(
+                token: token, idempotencyKey: idempotencyKey,
+                selection: selection.generated, add: add, remove: remove
+            )
+        }
+    }
+
     /// `remove_tag(selection, tag)` (spec/07 Messages) under a shell-made key.
     @discardableResult
     public func removeTag(
