@@ -83,6 +83,17 @@ pub enum QuarantineReason {
 }
 
 impl QuarantineReason {
+    /// The stored word (spec/02 `quarantine_reason`).
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::EpochChange => "epoch_change",
+            Self::Restore => "restore",
+            Self::AmbiguousMatch => "ambiguous_match",
+            Self::ConfigChange => "config_change",
+            Self::Breaker => "breaker",
+        }
+    }
+
     fn parse(text: &str) -> Option<Self> {
         match text {
             "epoch_change" => Some(Self::EpochChange),
@@ -383,25 +394,46 @@ impl StoredRow {
 }
 
 /// `target_json`'s occurrence ids: `{"v":1,"occurrence_ids":[…]}`.
-fn parse_target(text: &str) -> Result<Vec<i64>, StoreError> {
-    let malformed = || StoreError::corrupt(format!("an intent's target_json is malformed: {text}"));
-    let json: Json = serde_json::from_str(text).map_err(|_| malformed())?;
-    let object = json.as_object().ok_or_else(malformed)?;
-    if object.get("v").and_then(Json::as_u64) != Some(1) {
-        return Err(malformed());
-    }
-    let ids = object
+pub(crate) fn parse_target(text: &str) -> Result<Vec<i64>, StoreError> {
+    let json = parse_target_json(text)?;
+    let ids = json
         .get("occurrence_ids")
         .and_then(Json::as_array)
-        .ok_or_else(malformed)?;
+        .ok_or_else(|| malformed_target(text))?;
     ids.iter()
-        .map(|id| id.as_i64().ok_or_else(malformed))
+        .map(|id| id.as_i64().ok_or_else(|| malformed_target(text)))
         .collect()
+}
+
+/// `target_json`'s optional provider key, which the reader ignores
+/// but the writers and the lifecycle need (spec/02's Proton shape).
+pub(crate) fn parse_provider_key(text: &str) -> Result<Option<String>, StoreError> {
+    let json = parse_target_json(text)?;
+    Ok(json
+        .get("provider_key")
+        .and_then(Json::as_str)
+        .map(str::to_owned))
+}
+
+/// `target_json` as an object with `"v": 1`, or `Corrupt`.
+fn parse_target_json(text: &str) -> Result<serde_json::Map<String, Json>, StoreError> {
+    let json: Json = serde_json::from_str(text).map_err(|_| malformed_target(text))?;
+    let Json::Object(object) = json else {
+        return Err(malformed_target(text));
+    };
+    if object.get("v").and_then(Json::as_u64) != Some(1) {
+        return Err(malformed_target(text));
+    }
+    Ok(object)
+}
+
+fn malformed_target(text: &str) -> StoreError {
+    StoreError::corrupt(format!("an intent's target_json is malformed: {text}"))
 }
 
 /// `args_json` as the operation's typed effect (spec/02's `args_json`
 /// examples: `{"add":["\\Seen"],"remove":[]}`, a destination mailbox).
-fn parse_effect(kind: IntentKind, text: &str) -> Result<IntentEffect, StoreError> {
+pub(crate) fn parse_effect(kind: IntentKind, text: &str) -> Result<IntentEffect, StoreError> {
     let malformed = || StoreError::corrupt(format!("an intent's args_json is malformed: {text}"));
     if matches!(
         kind,
@@ -444,6 +476,9 @@ fn string_array(object: &serde_json::Map<String, Json>, key: &str) -> Option<Vec
 fn sql_error(error: rusqlite::Error) -> StoreError {
     classify(error, "an intent read")
 }
+
+mod lifecycle;
+pub use lifecycle::*;
 
 #[cfg(test)]
 mod tests;

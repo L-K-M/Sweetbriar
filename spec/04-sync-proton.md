@@ -373,7 +373,8 @@ M3 and M5 qualify each call on the fake server and the
   failure like a lost connection, and the next attempt's live check
   reconciles before anything is sent again.
 - **Failures** count: a refused call, a connection lost after the
-  request was sent, or a confirming read without the requested state.
+  request was sent, a lost reply, or a confirming read without the
+  requested state.
   The intent returns to `pending` with `last_error`, its `attempts`
   incremented and `next_attempt_at` 30 s × 4^(attempts − 1) later
   (30 s, 2 min, 8 min, 32 min); the fifth failure parks it. A 4xx
@@ -382,7 +383,7 @@ M3 and M5 qualify each call on the fake server and the
   with `origin='undo'`, unless the message's flag already has the
   inverse value. A cancelled intent has nothing to undo. Undoing the
   same token again therefore plans nothing while the inverse holds,
-  and a repeated idempotency key replays the first undo.
+  and a repeated command idempotency key (07) replays the first undo.
 - **Health actions** (07) act on all their ids or none, refusing the
   call with `Conflict` when one doesn't qualify:
   - `release_intents`: a `parked` or `quarantined` intent becomes

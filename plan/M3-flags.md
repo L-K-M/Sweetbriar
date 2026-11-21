@@ -81,6 +81,11 @@ the intent framework every later mutation uses.
     with intents.
   M3.1a and M3.1b run in parallel; M3.1c needs both, and M3.1d and
   M3.1e need M3.1b.
+- **Split (2026-11-21, M3.1b):** M3.1b measured 2,277 lines, so it
+  lands as two PRs: M3.1b1 (~1,350), planning with the local effect,
+  the claim and its order, and the transitions with their backoff and
+  waits; M3.1b2 (~950), `release_intents`, `cancel_intents` and the
+  engine's undo token and inverse planning. M3.1b2 needs M3.1b1.
 
 ### M3.2 Read and star on Proton — M, linux + macos-ci
 
