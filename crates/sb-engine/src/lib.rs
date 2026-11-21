@@ -25,7 +25,9 @@ pub use bodies::{
     AttachmentLease, BodyKind, BodyLease, LeaseReleaser, RenderWarning, RenderWarningCode,
 };
 mod compose;
-pub use sb_resources::{ComposeCatalog, ComposeIdentity};
+pub use sb_resources::{
+    ComposeCatalog, ComposeIdentity, MAX_PASTE_HTML_BYTES, MarkdownFromHtml, PasteLoss,
+};
 mod diagnostics;
 pub use diagnostics::{
     DiagnosticsAccount, DiagnosticsCoverage, DiagnosticsIntegrity, DiagnosticsPackage,

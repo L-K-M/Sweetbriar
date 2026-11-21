@@ -76,6 +76,16 @@ public final class CoreBridge: Sendable {
         return values.map(DraftRecipient.init)
     }
 
+    /// Paste as Markdown's conversion (spec/07). Too large or too complex
+    /// HTML throws `InvalidInput`; there is no partial answer.
+    public func markdownFromHtml(html: String) async throws -> MarkdownPaste {
+        let token = SweetbriarCore.CancelToken()
+        let value = try await Self.withCancellation(token: token) {
+            try await self.core.markdownFromHtml(token: token, html: html)
+        }
+        return MarkdownPaste(value)
+    }
+
     /// Literal, bounded address-history suggestions. Errors are not empty success.
     public func recipientCompletions(prefix: String, limit: UInt32 = 20) async throws -> [DraftRecipient] {
         let token = SweetbriarCore.CancelToken()

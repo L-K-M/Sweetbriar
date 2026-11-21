@@ -185,7 +185,8 @@ final class ComposeWindows {
                 try await openCopy(source: $0, content: $1, createKey: $2, saveKey: $3)
             },
             sendSource: source as? any SendSource,
-            settingsSource: source as? any SendSafetySettingsSource)
+            settingsSource: source as? any SendSafetySettingsSource,
+            pasteSource: source as? any PasteConversionSource)
         windows[draftId] = controller
         controller.onClosed = { [weak self] in
             guard let self else { return }

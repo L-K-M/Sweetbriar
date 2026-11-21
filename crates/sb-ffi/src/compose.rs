@@ -58,6 +58,34 @@ impl From<sb_service::ComposeCatalog> for ComposeCatalog {
     }
 }
 
+/// What a paste conversion couldn't keep (spec/07), in the spec's order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum PasteLoss {
+    Images,
+    Styling,
+    Links,
+    Tables,
+    Other,
+}
+impl From<sb_service::PasteLoss> for PasteLoss {
+    fn from(value: sb_service::PasteLoss) -> Self {
+        match value {
+            sb_service::PasteLoss::Images => Self::Images,
+            sb_service::PasteLoss::Styling => Self::Styling,
+            sb_service::PasteLoss::Links => Self::Links,
+            sb_service::PasteLoss::Tables => Self::Tables,
+            sb_service::PasteLoss::Other => Self::Other,
+        }
+    }
+}
+
+/// Paste as Markdown's source and its losses, empty when lossless.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct MarkdownPaste {
+    pub markdown: String,
+    pub losses: Vec<PasteLoss>,
+}
+
 #[uniffi::export]
 impl Core {
     /// Metadata/defaults only. Cancellation/failure is never an empty success.
@@ -86,6 +114,22 @@ impl Core {
             })
             .await?;
         Ok(values.into_iter().map(Into::into).collect())
+    }
+
+    /// Paste as Markdown's pure conversion on the native compute pool;
+    /// a refusal is `InvalidInput` on `html`, never a partial answer.
+    pub async fn markdown_from_html(
+        &self,
+        token: Arc<CancelToken>,
+        html: String,
+    ) -> Result<MarkdownPaste, CoreError> {
+        let value = self
+            .query(&token, async |core| core.markdown_from_html(&html).await)
+            .await?;
+        Ok(MarkdownPaste {
+            markdown: value.markdown,
+            losses: value.losses.into_iter().map(Into::into).collect(),
+        })
     }
 
     /// Bounded literal history suggestions, with no partial-answer fallback.
@@ -307,6 +351,48 @@ mod tests {
         ));
         assert!(matches!(
             block_on(core.recipient_completions(CancelToken::new(), "x".into(), 1)),
+            Err(CoreError::Unavailable { .. })
+        ));
+    }
+
+    #[test]
+    fn paste_conversion_answers_losses_refuses_whole_and_closes() {
+        let s = ScratchDir::new("ffi-compose-paste");
+        let core = block_on(open_core(CancelToken::new(), config(&s))).unwrap();
+        let lossless = block_on(core.markdown_from_html(
+            CancelToken::new(),
+            "<p><b>Hi</b> <a href=\"https://example.test\">there</a></p>".into(),
+        ))
+        .unwrap();
+        assert_eq!(
+            lossless,
+            MarkdownPaste {
+                markdown: "**Hi** [there](https://example.test)".into(),
+                losses: vec![]
+            }
+        );
+        let lossy = block_on(core.markdown_from_html(
+            CancelToken::new(),
+            "<p style=\"color:red\">a<img alt=\"b\" src=\"x.png\"></p>".into(),
+        ))
+        .unwrap();
+        assert_eq!(lossy.losses, [PasteLoss::Images, PasteLoss::Styling]);
+        assert_eq!(round_trip(lossy.clone()), lossy);
+        // spec/07: input over 2 MiB is too large.
+        let too_large = "a".repeat(2 * 1024 * 1024 + 1);
+        assert!(matches!(
+            block_on(core.markdown_from_html(CancelToken::new(), too_large)),
+            Err(CoreError::InvalidInput { field, .. }) if field == "html"
+        ));
+        let cancelled = CancelToken::new();
+        cancelled.cancel();
+        assert!(matches!(
+            block_on(core.markdown_from_html(cancelled, "<p>a</p>".into())),
+            Err(CoreError::Cancelled)
+        ));
+        block_on(core.shutdown());
+        assert!(matches!(
+            block_on(core.markdown_from_html(CancelToken::new(), "<p>a</p>".into())),
             Err(CoreError::Unavailable { .. })
         ));
     }

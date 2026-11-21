@@ -153,6 +153,10 @@ pub use sb_mime::{
 // above, so the MIME one keeps its module's qualifier.
 pub use sb_mime::ComposeFormat as MimeComposeFormat;
 pub use sb_mime::{ComposeAddress, ComposeAttachment, ComposeError, ComposeInput, compose};
+// Paste as Markdown's pure conversion (spec/07 "Paste conversion").
+pub use sb_mime::{
+    MAX_PASTE_HTML_BYTES, MarkdownFromHtml, PasteError, PasteLoss, markdown_from_html,
+};
 pub use sb_platform::{default_cache_root, default_data_root};
 pub use sb_store::ACCOUNT_PALETTE_V1;
 pub use sb_store::appearance::{

@@ -24,7 +24,45 @@ pub struct ComposeCatalog {
     pub default_identity_id: Option<String>,
 }
 
+/// What a paste conversion couldn't keep (spec/07), in the spec's order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum PasteLoss {
+    Images,
+    Styling,
+    Links,
+    Tables,
+    Other,
+}
+
+/// `markdown_from_html`'s answer: the Markdown source and its losses,
+/// empty when the conversion was lossless.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MarkdownPaste {
+    pub markdown: String,
+    pub losses: Vec<PasteLoss>,
+}
+
 impl Core {
+    /// `markdown_from_html`: pure and deterministic; too large or too
+    /// complex HTML is `InvalidInput`, never a partial conversion.
+    pub async fn markdown_from_html(&self, html: &str) -> Result<MarkdownPaste, CoreError> {
+        let converted = self.engine().markdown_from_html(html).await?;
+        Ok(MarkdownPaste {
+            markdown: converted.markdown,
+            losses: converted
+                .losses
+                .into_iter()
+                .map(|loss| match loss {
+                    sb_engine::PasteLoss::Images => PasteLoss::Images,
+                    sb_engine::PasteLoss::Styling => PasteLoss::Styling,
+                    sb_engine::PasteLoss::Links => PasteLoss::Links,
+                    sb_engine::PasteLoss::Tables => PasteLoss::Tables,
+                    sb_engine::PasteLoss::Other => PasteLoss::Other,
+                })
+                .collect(),
+        })
+    }
+
     /// `compose_catalog`: no mutation, arbitrary first-sender fallback or secret.
     pub async fn compose_catalog(
         &self,

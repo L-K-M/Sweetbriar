@@ -138,6 +138,25 @@ final class ComposerTextView: NSTextView {
         return true
     }
 
+    /// Paste as Markdown's insertion (spec/08 "Paste"): the source
+    /// replaces the selection as one undoable edit of its own, never
+    /// coalesced with the typing around it.
+    @discardableResult
+    func insertMarkdownPaste(_ source: String) -> Bool {
+        guard isEditable, mode == .markdown, !hasMarkedText(), let textStorage else { return false }
+        let range = selectedRange()
+        breakUndoCoalescing()
+        guard shouldChangeText(in: range, replacementString: source) else { return false }
+        contentStorage.performEditingTransaction {
+            textStorage.replaceCharacters(in: range, with: source)
+        }
+        didChangeText()
+        undoManager?.setActionName("Paste as Markdown")
+        breakUndoCoalescing()
+        setSelectedRange(NSRange(location: range.location + (source as NSString).length, length: 0))
+        return true
+    }
+
     // MARK: formatting commands
 
     /// Format ▸ Bold (⌘B), reached through the responder chain.

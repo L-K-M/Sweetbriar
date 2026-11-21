@@ -2,8 +2,7 @@
 //! M4.4e1). No store, clock, network or randomness: the same input always
 //! gives the same output. Parsing uses the real HTML5 algorithm and both
 //! parsing and traversal are bounded, so hostile nesting cannot exhaust
-//! memory or overflow the stack. Tables come in M4.4e1c; until then a
-//! table's cells read as running text.
+//! memory or overflow the stack.
 
 use std::fmt;
 
@@ -12,6 +11,7 @@ use html5ever::ns;
 use dom::{Handle, Tree, parse_fragment};
 
 mod dom;
+mod table;
 
 /// Largest HTML fragment [`markdown_from_html`] accepts, in UTF-8 bytes.
 pub const MAX_PASTE_HTML_BYTES: usize = 2 * 1024 * 1024;
@@ -247,6 +247,10 @@ impl Emitter {
             "pre" => {
                 let text = gather_text(tree, id);
                 self.emit_pre(&text);
+                true
+            }
+            "table" => {
+                self.emit_table(tree, id);
                 true
             }
             "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => {
@@ -995,5 +999,7 @@ pub fn markdown_from_html(html: &str) -> Result<MarkdownFromHtml, PasteError> {
     Ok(MarkdownFromHtml { markdown, losses })
 }
 
+#[cfg(test)]
+mod proptests;
 #[cfg(test)]
 mod tests;

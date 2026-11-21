@@ -300,16 +300,69 @@ fn line_initial_syntax_is_escaped() {
 }
 
 #[test]
+fn a_simple_table_becomes_gfm_with_a_dashed_separator() {
+    assert_eq!(
+        md("<table><tr><th>a</th><th>b</th></tr><tr><td>c</td><td>d</td></tr></table>"),
+        "| a | b |\n| --- | --- |\n| c | d |"
+    );
+    assert_eq!(
+        md("<table><tr><td>a</td><td>b</td></tr></table>"),
+        "| a | b |\n| --- | --- |"
+    );
+    assert_eq!(
+        md("<table><tr><td colspan=\"1\">a|b</td></tr></table>"),
+        "| a\\|b |\n| --- |"
+    );
+}
+
+#[test]
+fn a_complex_table_falls_back_to_one_paragraph_per_row() {
+    let converted = convert("<table><tr><td colspan=2>a</td></tr></table><font color=red>b</font>");
+    assert_eq!(converted.markdown, "a\n\nb");
+    assert_eq!(
+        converted.losses,
+        vec![PasteLoss::Styling, PasteLoss::Tables]
+    );
+
+    let converted = convert("<table><tr><td><p>x</p></td></tr></table>");
+    assert_eq!(converted.markdown, "x");
+    assert_eq!(converted.losses, vec![PasteLoss::Tables]);
+
+    let converted = convert("<table><tr><td rowspan=2>a</td></tr></table>");
+    assert_eq!(converted.markdown, "a");
+    assert_eq!(converted.losses, vec![PasteLoss::Tables]);
+
+    for block in [
+        "<blockquote>x</blockquote>",
+        "<ul><li>x</li></ul>",
+        "<pre>x</pre>",
+        "<h2>x</h2>",
+        "<hr>x",
+    ] {
+        let converted = convert(&format!("<table><tr><td>{block}</td></tr></table>"));
+        assert_eq!(converted.markdown, "x", "{block}");
+        assert_eq!(converted.losses, vec![PasteLoss::Tables], "{block}");
+    }
+
+    // A GFM cell can't hold a line break.
+    let converted = convert("<table><tr><td>a<br>b</td><td>c</td></tr></table>");
+    assert_eq!(converted.markdown, "a b | c");
+    assert_eq!(converted.losses, vec![PasteLoss::Tables]);
+}
+
+#[test]
 fn losses_are_sorted_in_enum_order_and_deduplicated() {
-    let html = "<p style=x>a</p><img src=x><a href=\"javascript:x\">l</a><input><u>b</u>";
+    let html = "<p style=x>a</p><img src=x><a href=\"javascript:x\">l</a>\
+        <table><tr><td colspan=2>t</td></tr></table><input>";
     let converted = convert(html);
-    assert_eq!(converted.markdown, "a\n\nlb");
+    assert_eq!(converted.markdown, "a\n\nl\n\nt");
     assert_eq!(
         converted.losses,
         vec![
             PasteLoss::Images,
             PasteLoss::Styling,
             PasteLoss::Links,
+            PasteLoss::Tables,
             PasteLoss::Other,
         ]
     );
@@ -320,6 +373,12 @@ fn the_bridge_contract_examples_convert_as_expected() {
     let converted = convert("<h2>Plan</h2><ul><li><em>one</em></li></ul>");
     assert_eq!(converted.markdown, "## Plan\n\n- *one*");
     assert!(converted.losses.is_empty());
+
+    let converted = convert("<table><tr><td colspan=2>a</td></tr></table><font color=red>b</font>");
+    assert_eq!(
+        converted.losses,
+        vec![PasteLoss::Styling, PasteLoss::Tables]
+    );
 }
 
 #[test]

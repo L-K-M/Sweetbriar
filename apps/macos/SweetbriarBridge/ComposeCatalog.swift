@@ -82,4 +82,39 @@ public protocol RecipientSource: AnyObject, Sendable {
     func recipientCompletions(prefix: String, limit: UInt32) async throws -> [DraftRecipient]
 }
 
-extension CoreBridge: ComposeCatalogSource, RecipientSource {}
+/// What a paste conversion couldn't keep, in the core's order (spec/07).
+public enum PasteLoss: Sendable, Equatable {
+    case images, styling, links, tables, other
+
+    init(_ value: SweetbriarCore.PasteLoss) {
+        switch value {
+        case .images: self = .images
+        case .styling: self = .styling
+        case .links: self = .links
+        case .tables: self = .tables
+        case .other: self = .other
+        }
+    }
+}
+
+/// Paste as Markdown's source and its losses, empty when lossless.
+public struct MarkdownPaste: Sendable, Equatable {
+    public var markdown: String
+    public var losses: [PasteLoss]
+
+    public init(markdown: String, losses: [PasteLoss]) {
+        self.markdown = markdown
+        self.losses = losses
+    }
+
+    init(_ value: SweetbriarCore.MarkdownPaste) {
+        self.init(markdown: value.markdown, losses: value.losses.map(PasteLoss.init))
+    }
+}
+
+/// The core's pure HTML-to-Markdown conversion for Paste as Markdown.
+public protocol PasteConversionSource: AnyObject, Sendable {
+    func markdownFromHtml(html: String) async throws -> MarkdownPaste
+}
+
+extension CoreBridge: ComposeCatalogSource, RecipientSource, PasteConversionSource {}

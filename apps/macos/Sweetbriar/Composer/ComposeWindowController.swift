@@ -60,6 +60,11 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
     private let preferredAccountId: String?
     private let sendSource: (any SendSource)?
     private let sendSettingsSource: (any SendSafetySettingsSource)?
+    private let pasteSource: (any PasteConversionSource)?
+    private let pasteboard: NSPasteboard
+    /// Paste as Markdown's open sheet and its conversion, if any.
+    private(set) var pasteSheet: PasteMarkdownSheet?
+    private var pasteConversion: Task<Void, Never>?
     /// Built once, from the sources this archive actually offers; nil
     /// keeps Send disabled.
     private(set) lazy var sendModel: ComposeSendModel? = {
@@ -146,6 +151,8 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
         openCopy: OpenCopy? = nil,
         sendSource: (any SendSource)? = nil,
         settingsSource: (any SendSafetySettingsSource)? = nil,
+        pasteSource: (any PasteConversionSource)? = nil,
+        pasteboard: NSPasteboard = .general,
         announceRoute: @escaping @MainActor (String) -> Void = { message in
             NSAccessibility.post(
                 element: NSApp!, notification: .announcementRequested,
@@ -159,6 +166,8 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
         self.openCopy = openCopy
         self.sendSource = sendSource
         self.sendSettingsSource = settingsSource
+        self.pasteSource = pasteSource
+        self.pasteboard = pasteboard
         catalogSource = source
         self.preferredAccountId = preferredAccountId
         let policy = ComposeSavePolicy(source: source, canWrite: canWrite)
@@ -612,6 +621,7 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
             autosave.stop()
             attachmentControls.stop()
         }
+        pasteSheet?.cancel(nil)
         closeIntent = mode
         identityControls.cancelDecision()
         render()
@@ -1092,6 +1102,50 @@ private final class ComposeSavePolicy: DraftStore {
                 reason:
                     "Archive writes are unavailable. Keep this draft open or explicitly close without saving."
             )
+        }
+    }
+}
+
+// MARK: Paste as Markdown (spec/08 "Paste")
+
+extension ComposeWindowController: NSMenuItemValidation {
+    /// Enabled only for an editable Markdown body that has focus, with
+    /// HTML on the pasteboard and no sheet already open.
+    var canPasteAsMarkdown: Bool {
+        pasteSource != nil && pasteSheet == nil && window?.firstResponder === textView
+            && textView.isEditable && textView.mode == .markdown && !textView.hasMarkedText()
+            && pasteboard.availableType(from: [.html]) != nil
+    }
+
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        guard menuItem.action == #selector(pasteAsMarkdown(_:)) else { return true }
+        return canPasteAsMarkdown
+    }
+
+    /// Edit ▸ Paste as Markdown (⌥⌘V): capture the HTML once, convert it
+    /// in the core, and insert the source only when the user confirms.
+    @objc func pasteAsMarkdown(_ sender: Any?) {
+        guard canPasteAsMarkdown, let pasteSource, let window,
+            let html = pasteboard.string(forType: .html)
+        else { return }
+        let sheet = PasteMarkdownSheet()
+        pasteSheet = sheet
+        sheet.begin(on: window) { [weak self] markdown in
+            guard let self else { return }
+            pasteConversion?.cancel()
+            pasteConversion = nil
+            pasteSheet = nil
+            if let markdown { textView.insertMarkdownPaste(markdown) }
+        }
+        pasteConversion = Task { [weak sheet] in
+            do {
+                let converted = try await pasteSource.markdownFromHtml(html: html)
+                sheet?.show(.ready(converted))
+            } catch is CancellationError {
+            } catch {
+                let reason = (error as? CoreFailure)?.errorDescription ?? error.localizedDescription
+                sheet?.show(.refused(reason))
+            }
         }
     }
 }
