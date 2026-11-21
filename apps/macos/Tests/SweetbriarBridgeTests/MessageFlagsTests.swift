@@ -193,5 +193,10 @@ private actor ManualSleep {
         await marker.pendingTask?.value
         #expect(marker.lastError != nil)
         #expect(reported == 1)
+
+        marker.show(target(8, "a", unread: true))
+        await marker.pendingTask?.value
+        #expect(marker.lastError == nil, "a later successful mark clears the refusal")
+        #expect(reported == 1)
     }
 }

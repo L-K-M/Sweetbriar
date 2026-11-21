@@ -329,9 +329,10 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
             guard let self, !closed, contentSerial == serial else { return }
             guard self.listPane?.pane == .messages else { return }
             self.reader?.select(ids)
-            // One shown Proton row may be marked read; anything else
-            // ends a pending mark (spec/08 "Reader").
-            let targets = self.flagTargets
+            // One shown Proton row may be marked read; anything else,
+            // or an archive that can't be written, ends a pending mark
+            // (spec/08 "Reader").
+            let targets = self.backups.canWrite ? self.flagTargets : nil
             self.markRead?.show(targets?.count == 1 ? targets?.first : nil)
         }
         messageList.onViewSaved = { [weak self] view in
@@ -566,8 +567,8 @@ extension MainWindowController: NSMenuItemValidation, NSToolbarItemValidation {
 }
 
 extension MainWindowController: NSToolbarDelegate {
-    private static let readItem = NSToolbarItem.Identifier("ch.lkmc.Sweetbriar.cmd.toggleRead")
-    private static let starItem = NSToolbarItem.Identifier("ch.lkmc.Sweetbriar.cmd.toggleStar")
+    private static let readItem = NSToolbarItem.Identifier(MainMenuBuilder.ItemID.toggleRead.rawValue)
+    private static let starItem = NSToolbarItem.Identifier(MainMenuBuilder.ItemID.toggleStar.rawValue)
 
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
         [.flexibleSpace, Self.readItem, Self.starItem]
