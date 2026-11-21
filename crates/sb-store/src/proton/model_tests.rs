@@ -23,9 +23,9 @@ use sb_types::time::Timestamp;
 use super::breaker::{MAX_DISAPPEARANCES_PER_MAILBOX, MIN_MAILBOX_FOR_SHARE};
 use super::*;
 use crate::intents::{
-    FlagChange, IntentFlag, IntentOrigin, QuarantineReason, cancel_intents, claim_next_intent,
-    finish_intent_done, plan_flag_intents, quarantine_intent, record_intent_failure,
-    recover_in_flight_intents, release_intents,
+    FlagChange, IntentAction, IntentFlag, IntentOrigin, QuarantineReason, cancel_intents,
+    claim_next_intent, finish_intent_done, plan_flag_intents, quarantine_intent,
+    record_intent_failure, recover_in_flight_intents, release_intents,
 };
 use crate::lists::MailboxRole;
 use crate::sidebar::MailboxKind;
@@ -789,7 +789,10 @@ fn run_intents(store: &Store, server: &mut Server, fail_first: bool, now: i64) {
             .expect("the quarantine");
             continue;
         };
-        apply_flag(&mut held, claimed.change);
+        let IntentAction::Flags(change) = claimed.action else {
+            panic!("the model plans flag intents only");
+        };
+        apply_flag(&mut held, change);
         server.put(claimed.provider_key.clone(), held);
         server.applied_intents.push(intent_id.clone());
         block_on(store.write(WritePriority::Sync, move |tx| {

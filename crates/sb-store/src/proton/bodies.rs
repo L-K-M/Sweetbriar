@@ -266,6 +266,49 @@ pub fn pending_proton_bodies(
     Ok(pending)
 }
 
+/// Where a message's body stands before a move sends anything
+/// (04-sync-imap's "Before the move", which 04-sync-proton keeps).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BodyBeforeMove {
+    /// The body is acquired: the move may run.
+    Acquired,
+    /// The body queue would fetch it: fetch it first.
+    Fetch(PendingBody),
+    /// The body can't be fetched now: a failure recorded at the
+    /// account's key generation, no present occurrence, or no such
+    /// message.
+    Unavailable,
+}
+
+/// Whether `provider_key`'s body is acquired, or may be fetched before
+/// its move runs.
+pub fn body_before_move(
+    tx: &Transaction,
+    account_id: &str,
+    provider_key: &str,
+) -> Result<BodyBeforeMove, StoreError> {
+    let account = super::require_account(tx, account_id)?;
+    let acquisition: Option<Option<i64>> = tx
+        .query_row(
+            "SELECT acquisition_id FROM logical_messages
+             WHERE account_id = ?1 AND provider_key = ?2",
+            params![account_id, provider_key],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|e| classify(e, "read a message's acquisition"))?;
+    Ok(match acquisition {
+        Some(Some(_)) => BodyBeforeMove::Acquired,
+        Some(None) => {
+            match qualifying_message(tx, account_id, provider_key, account.key_generation)? {
+                Some(body) => BodyBeforeMove::Fetch(body),
+                None => BodyBeforeMove::Unavailable,
+            }
+        }
+        None => BodyBeforeMove::Unavailable,
+    })
+}
+
 /// The one `provider_key` the user opened, if it still qualifies.
 fn qualifying_message(
     tx: &Transaction,

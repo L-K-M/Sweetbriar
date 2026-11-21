@@ -292,7 +292,7 @@ fn claim_orders_a_message_and_marks_the_next_dependency() {
             && claimed.config_generation == 1
     );
     assert_eq!(claimed.occurrence_ids, [seed.first, seed.second]);
-    assert_eq!(claimed.change, star());
+    assert_eq!(claimed.action, IntentAction::Flags(star()));
     assert_eq!(claimed.attempts, 0);
     assert_eq!(
         stored(&conn, &second[0]).wait_reason.as_deref(),
@@ -345,8 +345,8 @@ fn claim_orders_a_message_and_marks_the_next_dependency() {
     assert_eq!(follows.intent_id, second[0]);
     with_tx(&conn, |tx| finish_intent_done(tx, &second[0], NOW)).unwrap();
 
-    // Another message's intent was never blocked; another operation's
-    // pending intent is skipped.
+    // Another message's intent was never blocked; a reserved
+    // operation's pending intent is skipped.
     let third = plan(&conn, &mut next, &[other], star());
     assert_eq!(stored(&conn, &third[0]).wait_reason, None);
     let last = with_tx(&conn, |tx| claim_next_intent(tx, ACCOUNT, NOW))
@@ -357,8 +357,8 @@ fn claim_orders_a_message_and_marks_the_next_dependency() {
     conn.execute(
         "INSERT INTO intents (intent_id, account_id, config_generation, op, target_json,
          args_json, preconditions_json, state, idempotency_key, origin, created_at, updated_at)
-         VALUES ('move-1', ?1, 1, 'move', '{\"v\":1,\"occurrence_ids\":[]}', '{}', '{}',
-         'pending', 'move-1', 'user', 0, 0)",
+         VALUES ('append-1', ?1, 1, 'append', '{\"v\":1,\"occurrence_ids\":[]}', '{}', '{}',
+         'pending', 'append-1', 'user', 0, 0)",
         params![ACCOUNT],
     )
     .unwrap();

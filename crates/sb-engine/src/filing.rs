@@ -3,7 +3,8 @@
 //! `move_messages`, `delete_to_trash`, `add_label` and `remove_label`
 //! plan a Proton account's intents with their local effect, or act on
 //! the local archive at once, in one user-priority write. Moves answer
-//! an undo token; labels answer none. Nothing executes until M5.1b.
+//! an undo token; labels answer none. The account worker runs the
+//! intents (`proton_sync::intents`).
 
 use std::collections::VecDeque;
 use std::sync::Arc;

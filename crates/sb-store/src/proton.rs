@@ -1080,8 +1080,8 @@ mod events;
 mod listing;
 mod refresh;
 pub use bodies::{
-    MAX_PENDING_BODIES, PendingBody, ProtonBody, ProtonBodyCommit, ProtonOpenState,
-    commit_proton_body, pending_proton_bodies, proton_open_state,
+    BodyBeforeMove, MAX_PENDING_BODIES, PendingBody, ProtonBody, ProtonBodyCommit, ProtonOpenState,
+    body_before_move, commit_proton_body, pending_proton_bodies, proton_open_state,
 };
 pub use breaker::{
     BreakerResolution, Classified, StoredBreakerEvent, open_breaker_events, resolve_breaker_event,

@@ -1,7 +1,7 @@
 //! Filing (spec/04-sync-proton "Intents and the mutation matrix",
 //! spec/07 "Local archive", plan M5.1a): moves, Trash and labels planned
 //! with their local effect in the caller's transaction. A Proton
-//! account gets one intent per message, which M5.1b executes; the local
+//! account gets one intent per message, which its worker executes; the local
 //! archive acts at once and answers what undo needs to move back.
 
 use std::collections::BTreeSet;
@@ -9,8 +9,8 @@ use std::collections::BTreeSet;
 use rusqlite::{OptionalExtension, Transaction, params};
 
 use super::{
-    IntentOrigin, account_generation, current_occurrence_ids, logical_message, not_found_message,
-    refresh, resolve_message, target_json,
+    IntentAction, IntentOrigin, account_generation, current_occurrence_ids, logical_message,
+    not_found_message, refresh, resolve_message, target_json,
 };
 use crate::StoreError;
 use crate::schema::classify;
@@ -482,9 +482,89 @@ fn stored_move(
     Ok((to, from))
 }
 
-/// Undo's refusal when the message has moved on (spec/04-sync-proton
-/// "Intents and the mutation matrix").
-const MOVED_ELSEWHERE: &str = "Moved elsewhere since";
+/// What a claimed `move`, `delete_to_trash`, `copy` or `remove_label`
+/// intent sends, its mailboxes resolved to their Proton label ids;
+/// `None` when one of them no longer has a label id.
+pub(super) fn claimed_action(
+    tx: &Transaction,
+    account_id: &str,
+    op: &str,
+    args_json: &str,
+) -> Result<Option<IntentAction>, StoreError> {
+    let label = |mailbox_id| mailbox_label(tx, account_id, mailbox_id);
+    let labelled = |key: &str| -> Result<Option<String>, StoreError> {
+        let corrupt = || StoreError::corrupt(format!("a {op} intent has malformed args"));
+        let args: serde_json::Value = serde_json::from_str(args_json).map_err(|_| corrupt())?;
+        let mailbox_id = args
+            .get(key)
+            .and_then(serde_json::Value::as_i64)
+            .ok_or_else(corrupt)?;
+        label(mailbox_id)
+    };
+    match op {
+        "move" | "delete_to_trash" => {
+            let (to, from) = stored_move(tx, account_id, op, args_json)?;
+            let Some(to) = label(to)? else {
+                return Ok(None);
+            };
+            let from = match from {
+                Some(from) => match label(from)? {
+                    Some(from) => Some(from),
+                    None => return Ok(None),
+                },
+                None => None,
+            };
+            Ok(Some(IntentAction::Move {
+                to,
+                from,
+                folders: folder_labels(tx, account_id)?,
+            }))
+        }
+        "copy" => Ok(labelled("to_mailbox_id")?.map(IntentAction::Label)),
+        "remove_label" => Ok(labelled("from_mailbox_id")?.map(IntentAction::Unlabel)),
+        other => Err(StoreError::corrupt(format!(
+            "an intent op {other} isn't filing"
+        ))),
+    }
+}
+
+/// The Proton label id of one of the account's mailboxes.
+fn mailbox_label(
+    tx: &Transaction,
+    account_id: &str,
+    mailbox_id: i64,
+) -> Result<Option<String>, StoreError> {
+    tx.query_row(
+        "SELECT provider_key FROM mailboxes WHERE mailbox_id = ?1 AND account_id = ?2",
+        params![mailbox_id, account_id],
+        |row| row.get::<_, Option<String>>(0),
+    )
+    .optional()
+    .map(Option::flatten)
+    .map_err(|e| classify(e, "read a mailbox's label id"))
+}
+
+/// The label ids of the account's folders: Proton keeps a message in
+/// one of them, and its other labels aren't a location.
+fn folder_labels(tx: &Transaction, account_id: &str) -> Result<BTreeSet<String>, StoreError> {
+    let read = |e| classify(e, "read the account's folders");
+    let mut statement = tx
+        .prepare_cached(
+            "SELECT provider_key FROM mailboxes
+             WHERE account_id = ?1 AND kind = 'folder' AND provider_key IS NOT NULL",
+        )
+        .map_err(read)?;
+    statement
+        .query_map([account_id], |row| row.get(0))
+        .map_err(read)?
+        .collect::<Result<_, _>>()
+        .map_err(read)
+}
+
+/// Undo's refusal when the message has moved on, and a move's
+/// quarantine when a read finds it moved by someone else
+/// (spec/04-sync-proton "Intents and the mutation matrix").
+pub const MOVED_ELSEWHERE: &str = "Moved elsewhere since";
 
 /// Who files: a command keeps to the matrix's destinations, and undo
 /// may also move a message back into Sent or Drafts.
