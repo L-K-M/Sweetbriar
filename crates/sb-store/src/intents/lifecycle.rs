@@ -17,6 +17,7 @@ use super::{
     IntentEffect, IntentKind, QuarantineReason, parse_effect, parse_provider_key, parse_target,
 };
 use crate::schema::classify;
+use crate::sync::SyncedFlags;
 use crate::{StoreError, list_rows};
 
 /// The attempts after which an intent parks (spec/04-sync-proton
@@ -848,6 +849,63 @@ fn later_live_same_flag(
         }
     }
     Ok(false)
+}
+
+/// The values a Proton message's live flag intents hold: per flag, what
+/// its latest `pending` or `in_flight` `set_flags` intent asks for. A
+/// stored event or listing keeps these on every occurrence, so it can't
+/// undo the local effect before the intent is done; once it is, the
+/// next one wins (spec/04-sync-imap "Flag conflicts").
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct HeldFlags {
+    seen: Option<bool>,
+    flagged: Option<bool>,
+}
+
+impl HeldFlags {
+    /// `flags` with the held values in place of the listed ones.
+    pub(crate) fn over(self, flags: &SyncedFlags) -> SyncedFlags {
+        let mut held = flags.clone();
+        if let Some(seen) = self.seen {
+            held.seen = seen;
+        }
+        if let Some(flagged) = self.flagged {
+            held.flagged = flagged;
+        }
+        held
+    }
+}
+
+/// The [`HeldFlags`] of the account's message `provider_key`.
+pub(crate) fn held_flags(
+    tx: &Transaction,
+    account_id: &str,
+    provider_key: &str,
+) -> Result<HeldFlags, StoreError> {
+    let read = |e| classify(e, "read a message's live flag intents");
+    let mut statement = tx
+        .prepare_cached(
+            "SELECT args_json FROM intents
+             WHERE account_id = ?1 AND state IN ('pending', 'in_flight')
+               AND op = 'set_flags'
+               AND json_extract(target_json, '$.provider_key') = ?2
+             ORDER BY rowid",
+        )
+        .map_err(read)?;
+    let rows = statement
+        .query_map(params![account_id, provider_key], |row| {
+            row.get::<_, String>(0)
+        })
+        .map_err(read)?;
+    let mut held = HeldFlags::default();
+    for args_json in rows {
+        let change = parse_flag_change(&args_json.map_err(read)?)?;
+        match change.flag {
+            IntentFlag::Seen => held.seen = Some(change.set),
+            IntentFlag::Flagged => held.flagged = Some(change.set),
+        }
+    }
+    Ok(held)
 }
 
 /// Resolve a target's logical message: its first occurrence id, else

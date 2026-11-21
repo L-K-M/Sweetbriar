@@ -18,6 +18,7 @@ use sb_types::time::Timestamp;
 use super::{
     ProtonAccount, ProtonListingState, complete_listing, require_account, require_revision,
 };
+use crate::intents::held_flags;
 use crate::lists::MailboxRole;
 use crate::schema::classify;
 use crate::sidebar::MailboxKind;
@@ -540,11 +541,13 @@ fn store_occurrences(
         .collect();
     let live: HashSet<i64> = mailboxes.values().copied().collect();
 
+    // A live flag intent's value stays until the intent is done.
+    let flags = held_flags(tx, account_id, &message.provider_key)?.over(&message.flags);
     let current = current_occurrences(tx, message_id)?;
     let mut present = BTreeSet::new();
     for (occurrence_id, mailbox_id) in current {
         if wanted.contains(&mailbox_id) && present.insert(mailbox_id) {
-            refresh_occurrence(tx, occurrence_id, message, now)?;
+            refresh_occurrence(tx, occurrence_id, message, &flags, now)?;
             stats.refreshed += 1;
         } else if live.contains(&mailbox_id) {
             // A label the message lost, or a second current occurrence
@@ -567,6 +570,7 @@ fn store_occurrences(
             *mailbox_id,
             message_id,
             message,
+            &flags,
             now,
         )?);
         stats.inserted += 1;
@@ -692,9 +696,9 @@ fn insert_occurrence(
     mailbox_id: i64,
     message_id: i64,
     message: &ListedMessage,
+    flags: &SyncedFlags,
     now: Timestamp,
 ) -> Result<i64, StoreError> {
-    let flags = &message.flags;
     tx.execute(
         "INSERT INTO occurrences
          (account_id, mailbox_id, uidvalidity, uid, message_id, internal_date, rfc822_size,
@@ -723,9 +727,9 @@ fn refresh_occurrence(
     tx: &Transaction,
     occurrence_id: i64,
     message: &ListedMessage,
+    flags: &SyncedFlags,
     now: Timestamp,
 ) -> Result<(), StoreError> {
-    let flags = &message.flags;
     tx.execute(
         "UPDATE occurrences
          SET internal_date = ?2, rfc822_size = ?3, f_seen = ?4, f_flagged = ?5,

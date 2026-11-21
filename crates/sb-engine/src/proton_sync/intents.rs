@@ -385,6 +385,8 @@ fn holds(metadata: &MessageMetadata, change: FlagChange) -> bool {
 }
 
 #[cfg(test)]
+mod conflict_tests;
+#[cfg(test)]
 mod crash_tests;
 #[cfg(test)]
 mod tests;
