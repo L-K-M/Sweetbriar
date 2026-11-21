@@ -61,6 +61,26 @@ the intent framework every later mutation uses.
   - undoing a completed star plans the inverse intent, which unstars
     the message on the fake;
   - the proptest model (M2.15c4b) includes intents and converges.
+- **Split (2026-11-21):** M3.1 follows a spec revision (02, 04-sync-proton
+  "Running an intent", 07) and lands as five PRs, estimated from the
+  code it touches at about 5,600 lines in all:
+  - M3.1a (~900): the transport's read, unread, label and unlabel
+    calls with their response codes, and the fake server's routes, its
+    mutation count and the drop-after-apply fault on them;
+  - M3.1b (~1,250): planning a flag change with its local effect in one
+    transaction, the store's claim, ordering and state transitions,
+    `release_intents` and `cancel_intents` in the store, and the
+    engine's undo token and inverse planning;
+  - M3.1c (~1,400): the executor on the Proton account worker, with
+    every acceptance check on execution: the crash cuts, reconcile after
+    a drop, `resync`, `ambiguous_match`, `config_change`, parking and
+    undoing a star on the fake;
+  - M3.1d (~1,150): the health actions through the service and FFI, and
+    the Activity window's Retry and Cancel on intent rows;
+  - M3.1e (~950): the breaker's Explained class and the proptest model
+    with intents.
+  M3.1a and M3.1b run in parallel; M3.1c needs both, and M3.1d and
+  M3.1e need M3.1b.
 
 ### M3.2 Read and star on Proton — M, linux + macos-ci
 
