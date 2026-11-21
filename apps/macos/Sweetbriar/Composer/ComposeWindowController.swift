@@ -138,6 +138,30 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
     private var closing: Task<Bool, Never>?
     private var closeIntent: CloseMode?
     private var abandonAlert: NSAlert?
+    /// Where external edits go and what opens them; nil offers none.
+    private let externalEditor: ExternalEditor?
+    /// The body out in an external editor, if any.
+    private(set) var externalEdit: ExternalEdit?
+    /// Close's or quit's settling of `externalEdit`, shared by callers.
+    private var externalSettle: Task<Bool, Never>?
+    /// The discard question an invalid final read asks, while it is up.
+    private(set) var externalDiscardAlert: NSAlert?
+    private let externalEditLabel = NSTextField(wrappingLabelWithString: "")
+    private let externalEditDoneButton = NSButton(title: "Done", target: nil, action: nil)
+    private(set) lazy var externalEditBanner: NSStackView = {
+        externalEditLabel.setAccessibilityIdentifier("externalEditBannerLabel")
+        externalEditDoneButton.target = self
+        externalEditDoneButton.action = #selector(externalEditDone(_:))
+        externalEditDoneButton.setAccessibilityIdentifier("externalEditDone")
+        let stack = NSStackView(views: [externalEditLabel, externalEditDoneButton])
+        stack.orientation = .horizontal
+        stack.spacing = 8
+        stack.alignment = .centerY
+        stack.setAccessibilityIdentifier("externalEditBanner")
+        externalEditLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        stack.isHidden = true
+        return stack
+    }()
     /// Send's cross-account confirmation, while its sheet is up: the
     /// window's close ends it and cancels the send. The flag fences the
     /// handler and the close against resuming the continuation twice.
@@ -157,6 +181,7 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
         settingsSource: (any SendSafetySettingsSource)? = nil,
         pasteSource: (any PasteConversionSource)? = nil,
         pasteboard: NSPasteboard = .general,
+        externalEditor: ExternalEditor? = nil,
         announceRoute: @escaping @MainActor (String) -> Void = { message in
             NSAccessibility.post(
                 element: NSApp!, notification: .announcementRequested,
@@ -172,6 +197,7 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
         self.sendSettingsSource = settingsSource
         self.pasteSource = pasteSource
         self.pasteboard = pasteboard
+        self.externalEditor = externalEditor
         catalogSource = source
         self.preferredAccountId = preferredAccountId
         let policy = ComposeSavePolicy(source: source, canWrite: canWrite)
@@ -309,7 +335,7 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
             width: scroll.contentSize.width, height: CGFloat.greatestFiniteMagnitude)
         textView.textContainer?.widthTracksTextView = true
         let stack = NSStackView(
-            views: [crossAccountBannerView, identity as NSView] + recipientRows + [
+            views: [crossAccountBannerView, externalEditBanner, identity as NSView] + recipientRows + [
                 subjectField, attachmentControls.list, controls, sendBar, scroll, statusLabel,
                 cueStatusLabel,
             ])
@@ -331,6 +357,7 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
                 toItem: contentGuide, attribute: .top, multiplier: 1, constant: 16),
             stack.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -12),
             crossAccountBannerView.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            externalEditBanner.widthAnchor.constraint(equalTo: stack.widthAnchor),
             identity.widthAnchor.constraint(equalTo: stack.widthAnchor),
             subjectField.widthAnchor.constraint(equalTo: stack.widthAnchor),
             attachmentControls.list.widthAnchor.constraint(equalTo: stack.widthAnchor),
@@ -594,6 +621,7 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
 
     private func close(mode: CloseMode) async -> Bool {
         if finished { return true }
+        if mode == .save, !(await settleExternalEdit()) { return false }
         guard let task = beginClose(mode: mode) else { return false }
         return await task.value
     }
@@ -612,6 +640,12 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
                 alert.window.orderOut(nil)
                 abandonAlert = nil
             }
+            // Close settles an external edit first; its final read
+            // must reach the model before the close fences edits.
+            guard externalEdit == nil else {
+                statusLabel.stringValue = "Finish the external edit before closing this draft."
+                return nil
+            }
             // Let the field editor/input method commit before freezing controls.
             guard !recipientFields.contains(where: \.hasMarkedText),
                 window?.makeFirstResponder(nil) != false, !textView.hasMarkedText()
@@ -625,6 +659,8 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
             // the drain task; a begun publication's result is dropped.
             autosave.stop()
             attachmentControls.stop()
+            // Close Without Saving drops the external edits too.
+            endExternalEdit(discarding: true)
         }
         pasteSheet?.cancel(nil)
         closeIntent = mode
@@ -662,7 +698,14 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
 
     func windowShouldClose(_ sender: NSWindow) -> Bool {
         if finished { return true }
-        _ = beginClose(mode: .save)
+        guard externalEdit != nil else {
+            _ = beginClose(mode: .save)
+            return false
+        }
+        Task { [weak self] in
+            guard let self, await settleExternalEdit() else { return }
+            _ = beginClose(mode: .save)
+        }
         return false
     }
 
@@ -972,12 +1015,15 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
         let editable = model.content != nil && !isClosing && !finished && keepingBoth == nil
             && keepBothIntent == nil && !busy
         subjectField.isEditable = editable
-        textView.isEditable = editable
-        modeControl.isEnabled = editable
+        // A body out in an external editor is read-only; recipients,
+        // subject and attachments stay editable (spec/08).
+        textView.isEditable = editable && externalEdit == nil
+        modeControl.isEnabled = editable && externalEdit == nil
         for field in recipientFields { field.control.isEditable = editable }
         saveButton.isEnabled = editable && canWrite() && !model.isSaving && model.conflict == nil
         attachmentControls.render()
         renderCrossAccountBanner()
+        renderExternalEditBanner()
         renderSendChrome()
         abandonButton.isEnabled = !isClosing && !finished && keepingBoth == nil
         keepBothButton.isHidden = model.conflict == nil || openCopy == nil
@@ -1131,6 +1177,7 @@ extension ComposeWindowController: NSMenuItemValidation {
         switch menuItem.action {
         case #selector(pasteAsMarkdown(_:)): canPasteAsMarkdown
         case #selector(insertImage(_:)): canInsertImage
+        case #selector(editInExternalEditor(_:)): canEditExternally
         default: true
         }
     }
@@ -1188,5 +1235,152 @@ extension ComposeWindowController: ComposerImagePasting {
 
     func pasteImage() -> Bool {
         attachmentControls.pasteImage(from: pasteboard)
+    }
+}
+
+// MARK: External editor (spec/08 "External editor", M4.4e4)
+
+extension ComposeWindowController {
+    /// Enabled for an editable body with no edit already out.
+    var canEditExternally: Bool {
+        externalEditor != nil && externalEdit == nil && model.content != nil
+            && textView.isEditable && !textView.hasMarkedText() && window?.attachedSheet == nil
+    }
+
+    /// Edit ▸ Edit in External Editor (⇧⌘E): write the body to a private
+    /// file, open it in the default app for its type, and keep the body
+    /// read-only while it is out. A file no app opens leaves the body
+    /// editable, says why and is deleted.
+    @objc func editInExternalEditor(_ sender: Any?) {
+        guard canEditExternally, let externalEditor else { return }
+        let body = textView.string
+        let format: ComposeFormat = textView.mode == .plain ? .plain : .markdown
+        let file: URL
+        do {
+            file = try ExternalEditFiles.create(body: body, format: format, in: externalEditor.root)
+        } catch {
+            statusLabel.stringValue = Self.reason(error)
+            return
+        }
+        guard let appName = externalEditor.opener.applicationName(for: file) else {
+            ExternalEditFiles.remove(file)
+            statusLabel.stringValue = "No app can open \(file.lastPathComponent) files."
+            return
+        }
+        let watch = ExternalEditWatch(file: file, original: body)
+        watch.onChange = { [weak self] text in self?.applyExternalEdit(text) }
+        watch.onFailureChange = { [weak self] in self?.renderExternalEditBanner() }
+        let edit = ExternalEdit(watch: watch, appName: appName)
+        externalEdit = edit
+        watch.start()
+        render()
+        let opener = externalEditor.opener
+        Task { [weak self] in
+            do {
+                try await opener.open(file)
+            } catch {
+                guard let self, externalEdit === edit else { return }
+                endExternalEdit(discarding: true)
+                statusLabel.stringValue = "\(appName) couldn't open the message: \(Self.reason(error))"
+            }
+        }
+    }
+
+    /// Each change replaces the whole body as one undoable edit and
+    /// goes through autosave as any edit.
+    private func applyExternalEdit(_ text: String) {
+        guard externalEdit != nil, !isClosing, !textView.hasMarkedText() else { return }
+        let undo = window?.undoManager
+        // The body is read-only while the edit is out; only this
+        // replacement may change it.
+        textView.isEditable = true
+        textView.breakUndoCoalescing()
+        undo?.beginUndoGrouping()
+        let replaced = textView.replaceSourceUndoably(text)
+        undo?.setActionName("External Edit")
+        undo?.endUndoGrouping()
+        textView.breakUndoCoalescing()
+        textView.isEditable = false
+        // The text view's change notification captured the edit.
+        if !replaced { NSSound.beep() }
+        render()
+    }
+
+    /// Done: wait for quiet, read once more and end the edit. An invalid
+    /// read keeps it open, its reason in the banner, and answers false.
+    @discardableResult
+    func finishExternalEdit() async -> Bool {
+        guard let edit = externalEdit else { return true }
+        guard !edit.isFinishing else { return false }
+        edit.isFinishing = true
+        renderExternalEditBanner()
+        let failure = await edit.watch.finish()
+        edit.isFinishing = false
+        guard externalEdit === edit else { return failure == nil }
+        if failure == nil { externalEdit = nil }
+        render()
+        return failure == nil
+    }
+
+    /// End the edit without reading it: the file and its directory go.
+    private func endExternalEdit(discarding: Bool) {
+        guard let edit = externalEdit else { return }
+        if discarding { edit.watch.discard() } else { edit.watch.stop() }
+        externalEdit = nil
+        render()
+    }
+
+    /// Close and quit first end an edit as Done does; when that read is
+    /// invalid they ask whether to discard the external edits. False
+    /// keeps the window open.
+    private func settleExternalEdit() async -> Bool {
+        guard externalEdit != nil else { return true }
+        if let externalSettle { return await externalSettle.value }
+        let task = Task { [self] () -> Bool in
+            defer { externalSettle = nil }
+            if await finishExternalEdit() { return true }
+            guard await confirmDiscardExternalEdits() else { return false }
+            endExternalEdit(discarding: true)
+            return true
+        }
+        externalSettle = task
+        return await task.value
+    }
+
+    private func confirmDiscardExternalEdits() async -> Bool {
+        guard let window, window.attachedSheet == nil, let failure = externalEdit?.watch.failure else {
+            return false
+        }
+        let alert = NSAlert()
+        alert.messageText = "Discard the external edits?"
+        alert.informativeText =
+            "\(failure.message) Discarding keeps the message as it is here and deletes the edited file."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: "Discard External Edits").hasDestructiveAction = true
+        externalDiscardAlert = alert
+        let response = await alert.beginSheetModal(for: window)
+        externalDiscardAlert = nil
+        return response == .alertSecondButtonReturn
+    }
+
+    private func renderExternalEditBanner() {
+        guard let edit = externalEdit else {
+            externalEditBanner.isHidden = true
+            return
+        }
+        externalEditBanner.isHidden = false
+        externalEditLabel.stringValue =
+            edit.watch.failure?.message
+            ?? "Editing in \(edit.appName). Changes you save there appear here."
+        externalEditDoneButton.isEnabled = !edit.isFinishing && !isClosing
+    }
+
+    @objc private func externalEditDone(_ sender: Any?) {
+        Task { await finishExternalEdit() }
+    }
+
+    private static func reason(_ error: any Error) -> String {
+        (error as? CoreFailure)?.errorDescription ?? error.localizedDescription
     }
 }
