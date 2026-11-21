@@ -34,9 +34,9 @@ use sb_resources::{
     APP_IDENTITY_REFUSED_REASON, AccountState, ApiCode, BackoffKind, EventAction, EventBatch,
     EventId, HUMAN_VERIFICATION_REASON, KeyStore, ListingAnchor, PROTON_MAX_PAGE_SIZE,
     ProtonClient, ProtonError, Receipt, Secret, Session, StoreError, StoredAccount, Transaction,
-    WritePriority, accounts, earliest_hold_until, mark_send_accepted, pause_for_reason,
-    proton_account, proton_identities, queue_due_held, recover_proton_submitting, run_once,
-    unknown_proton_attempts,
+    WaitReason, WritePriority, accounts, clear_account_intents_waiting, earliest_hold_until,
+    mark_send_accepted, pause_for_reason, proton_account, proton_identities, queue_due_held,
+    recover_proton_submitting, run_once, set_account_intents_waiting, unknown_proton_attempts,
 };
 
 use std::collections::{BTreeSet, HashSet};
@@ -71,6 +71,8 @@ const CHANGES_PER_WRITE: usize = PAGE_SIZE as usize;
 /// Bodies per queue round: small enough that an event poll follows
 /// promptly (spec/04 "Sync loop" step 3: events stay timely).
 const BODY_BATCH: usize = 20;
+
+mod intents;
 
 /// The provider keys the user opened, per Proton account, most recent
 /// first and bounded (spec/04 "Acquire bodies": opened first, then
@@ -513,6 +515,9 @@ impl Attempt<'_> {
         if let Err(halt) = self.queue_due_held().await {
             return halt;
         }
+        if let Err(halt) = self.recover_intents().await {
+            return halt;
+        }
         loop {
             let halt = match self.bootstrap().await {
                 Ok(()) => {
@@ -623,6 +628,12 @@ impl Attempt<'_> {
         if account.listing_state == ProtonListingState::Complete {
             return Ok(());
         }
+        // Intents wait for the listing, none quarantined
+        // (spec/04-sync-proton "Waiting": `resync`).
+        let id = self.account_id.to_owned();
+        let now = self.worker.resources().now().as_millis();
+        self.write(move |tx| set_account_intents_waiting(tx, &id, WaitReason::Resync, now))
+            .await?;
         let mut revision = account.revision;
         let mut after = None;
         match (account.listing_state, account.pending_cursor) {
@@ -738,8 +749,11 @@ impl Attempt<'_> {
             .collect();
         let id = self.account_id.to_owned();
         let now = self.worker.resources().now();
-        self.write(move |tx| finish_listing(tx, &id, &totals, revision, now).map(drop))
-            .await
+        self.write(move |tx| {
+            finish_listing(tx, &id, &totals, revision, now)?;
+            clear_account_intents_waiting(tx, &id, WaitReason::Resync, now.as_millis())
+        })
+        .await
     }
 
     /// spec/04-sync-proton "Sync loop" steps 2 and 3: poll the
@@ -758,6 +772,11 @@ impl Attempt<'_> {
                 Ok(true) => continue,
                 Ok(false) => {}
                 Err(halt) => return halt,
+            }
+            // The intents run once the poll has applied what Proton
+            // changed (spec/04-sync-proton "Claim").
+            if let Err(halt) = self.run_intents().await {
+                return halt;
             }
             // Each poll also ends the undo windows that passed since
             // the last one (spec/05 step 2).

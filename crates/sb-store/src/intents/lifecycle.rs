@@ -362,6 +362,23 @@ pub fn finish_intent_done(tx: &Transaction, intent_id: &str, now: i64) -> Result
     Ok(())
 }
 
+/// The generation precondition (spec/04-sync-proton "Before the
+/// call"): a claimed intent planned against an older
+/// `config_generation` than its account's is quarantined
+/// (`config_change`). Returns whether it was; the intent must be one
+/// [`quarantine_intent`] accepts.
+pub fn quarantine_if_reconfigured(
+    tx: &Transaction,
+    claimed: &ClaimedIntent,
+    now: i64,
+) -> Result<bool, StoreError> {
+    if claimed.config_generation >= account_generation(tx, &claimed.account_id)? {
+        return Ok(false);
+    }
+    quarantine_intent(tx, &claimed.intent_id, QuarantineReason::ConfigChange, now)?;
+    Ok(true)
+}
+
 /// Count one failure (spec/04-sync-proton "Failures"): `attempts`
 /// grows, `last_error` records the reason, and the intent returns to
 /// `pending` with `next_attempt_at` 30 s × 4^(attempts − 1) later, or
