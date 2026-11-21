@@ -23,13 +23,13 @@ fn flag_refusals_name_their_field() {
         },
     ))
     .unwrap();
-    let set = |key: &str, ids: Vec<i64>, add: &[&str]| {
+    let set = |key: &str, ids: Vec<i64>, add: &[&str], remove: &[&str]| {
         block_on(core.set_flags(
             CancelToken::new(),
             key.to_owned(),
             MessageSelection::OccurrenceIds(ids),
             add.iter().map(|name| (*name).to_owned()).collect(),
-            Vec::new(),
+            remove.iter().map(|name| (*name).to_owned()).collect(),
         ))
     };
 
@@ -37,9 +37,22 @@ fn flag_refusals_name_their_field() {
         "30000000-0000-4000-8000-000000000001",
         vec![1],
         &["\\Draft"],
+        &[],
     );
     assert_eq!(field(unknown.unwrap_err()), "add");
-    let empty = set("30000000-0000-4000-8000-000000000002", vec![], &["\\Seen"]);
+    let removed = set(
+        "30000000-0000-4000-8000-000000000004",
+        vec![1],
+        &[],
+        &["\\Draft"],
+    );
+    assert_eq!(field(removed.unwrap_err()), "remove");
+    let empty = set(
+        "30000000-0000-4000-8000-000000000002",
+        vec![],
+        &["\\Seen"],
+        &[],
+    );
     assert_eq!(field(empty.unwrap_err()), "selection");
     let undo = block_on(core.undo(
         CancelToken::new(),

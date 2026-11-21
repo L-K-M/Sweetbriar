@@ -161,8 +161,13 @@ impl Engine {
                     .resources()
                     .write(WritePriority::User, move |tx| {
                         run_once(tx, &key, SET_FLAGS, now, |tx| {
-                            let account = flag_selection_account(tx, &messages)?
-                                .expect("a non-empty selection has an account");
+                            // The selection was resolved before this write
+                            // ran; refuse rather than assume it still is.
+                            let Some(account) = flag_selection_account(tx, &messages)? else {
+                                return Err(StoreError::InvalidInput {
+                                    message: "a flag change needs at least one message".to_owned(),
+                                });
+                            };
                             if proton_account(tx, &account)?.is_none() {
                                 return Err(StoreError::InvalidInput {
                                     message: "flag changes need a Proton account".to_owned(),
