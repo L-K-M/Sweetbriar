@@ -25,7 +25,13 @@ const MAX_NODES: usize = 200_000;
 // stack stays shallow; quadratic hostile structure runs out long before
 // it costs a second.
 const MAX_WORK: usize = 80_000_000;
+// html5ever compares each new attribute with every earlier one in its
+// tag before the tag reaches the tree, so one long token of attributes
+// costs quadratic time no budget sees. A token may run past this many
+// bytes only while it holds few attribute separators: a pasted image's
+// base64 `data:` URL is one long attribute value.
 const MAX_PENDING_BYTES: usize = 16_384;
+const MAX_PENDING_SEPARATORS: usize = 1_024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum HtmlLimit {
@@ -420,6 +426,7 @@ pub(super) fn parse_fragment(html: &str) -> Result<Tree, HtmlLimit> {
     let input = BufferQueue::default();
     let mut offset = 0;
     let mut pending = 0;
+    let mut separators = 0;
     while offset < html.len() {
         let end = html.floor_char_boundary((offset + INPUT_CHUNK_BYTES).min(html.len()));
         {
@@ -430,12 +437,14 @@ pub(super) fn parse_fragment(html: &str) -> Result<Tree, HtmlLimit> {
             while !matches!(tokenizer.feed(&input), TokenizerResult::Done) {}
             let tree = &tokenizer.sink.inner.sink;
             tree.check_budget()?;
-            pending = if tree.mutations.get() == before {
-                pending + end - offset
+            if tree.mutations.get() == before {
+                pending += end - offset;
+                separators += attribute_separators(&html[offset..end]);
             } else {
-                0
-            };
-            if pending > MAX_PENDING_BYTES {
+                pending = 0;
+                separators = 0;
+            }
+            if pending > MAX_PENDING_BYTES && separators > MAX_PENDING_SEPARATORS {
                 return Err(HtmlLimit::PendingToken);
             }
         }
@@ -445,6 +454,14 @@ pub(super) fn parse_fragment(html: &str) -> Result<Tree, HtmlLimit> {
     let tree = tokenizer.sink.inner.sink;
     tree.check_budget()?;
     Ok(tree)
+}
+
+/// An upper bound on the attributes `text` can start: every attribute
+/// after a tag's first follows whitespace, a `/` or a closing quote.
+fn attribute_separators(text: &str) -> usize {
+    text.bytes()
+        .filter(|b| b.is_ascii_whitespace() || matches!(b, b'/' | b'"' | b'\''))
+        .count()
 }
 
 #[cfg(test)]

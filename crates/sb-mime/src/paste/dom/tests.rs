@@ -118,7 +118,33 @@ fn the_work_budget_refuses_deep_nesting_without_recursing() {
 }
 
 #[test]
-fn an_unterminated_token_is_refused() {
-    let html = format!("<a title=\"{}", "x".repeat(MAX_PENDING_BYTES * 2));
+fn a_long_token_of_attributes_is_refused() {
+    let names: String = (0..MAX_PENDING_BYTES).map(|n| format!(" a{n}")).collect();
+    let html = format!("<a{names}>x</a>");
     assert_eq!(parse_fragment(&html).err(), Some(HtmlLimit::PendingToken));
+    let quoted = format!("<a title=\"{}\">x</a>", "x ".repeat(MAX_PENDING_BYTES));
+    assert_eq!(parse_fragment(&quoted).err(), Some(HtmlLimit::PendingToken));
+}
+
+#[test]
+fn a_long_attribute_value_parses() {
+    // A pasted screenshot arrives as one base64 `data:` URL.
+    let data = "A".repeat(200_000);
+    let tree = parse(&format!(
+        "<img src=\"data:image/png;base64,{data}\" alt=p>y"
+    ));
+    let images = elements(&tree, "img");
+    assert_eq!(images.len(), 1);
+    assert_eq!(images[0].attrs.borrow().alt.as_deref(), Some("p"));
+    assert_eq!(text(&tree), "y");
+
+    let unterminated = format!("<a title=\"{}", "x".repeat(MAX_PENDING_BYTES * 2));
+    assert!(parse_fragment(&unterminated).is_ok());
+}
+
+#[test]
+fn template_contents_stay_inert() {
+    let tree = parse("<template><b>x</b></template>y");
+    assert!(elements(&tree, "b").is_empty());
+    assert_eq!(text(&tree), "y");
 }
