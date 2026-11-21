@@ -191,7 +191,8 @@ and D24, D29.
   It goes in a new directory under the cache root's `external-edit/`,
   `0700` and named by a random UUID; the `0600` file inside is named by
   the draft's type (`draft.md` or `draft.txt`), never by subject. The
-  shell deletes it when the edit ends, and deletes whatever a crash left
+  shell deletes it when the edit ends (not after an unreadable final
+  read the user hasn't discarded, 08), and deletes whatever a crash left
   there at the next launch without reading it. The cache root is
   excluded from Time Machine (03).
 - **Notifications:** show sender and subject only if the user enables
