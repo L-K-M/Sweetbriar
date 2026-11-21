@@ -18,7 +18,7 @@ use sb_types::time::Timestamp;
 use super::{
     ProtonAccount, ProtonListingState, complete_listing, require_account, require_revision,
 };
-use crate::intents::held_flags;
+use crate::intents::LiveFlagIntents;
 use crate::lists::MailboxRole;
 use crate::schema::classify;
 use crate::sidebar::MailboxKind;
@@ -235,7 +235,7 @@ pub fn commit_listed_page(
     if account.listing_state != ProtonListingState::Listing {
         return Err(StoreError::conflict("the Proton account is not listing"));
     }
-    let mailboxes = live_mailboxes(tx, page.account_id)?;
+    let batch = StoreBatch::read(tx, page.account_id)?;
 
     let mut remaining = MAX_HEADER_BATCH_BYTES;
     let mut stats = ListedPageStats::default();
@@ -252,7 +252,7 @@ pub fn commit_listed_page(
             tx,
             page.account_id,
             message,
-            &mailboxes,
+            &batch,
             now,
             &mut stats,
             &mut changed,
@@ -452,11 +452,27 @@ pub(super) fn live_mailboxes(
     rows.collect::<Result<HashMap<_, _>, _>>().map_err(read)
 }
 
+/// What a batch of stored messages reads once: the account's live
+/// mailboxes by label, and its live flag intents.
+pub(super) struct StoreBatch {
+    pub(super) mailboxes: HashMap<String, i64>,
+    flag_intents: LiveFlagIntents,
+}
+
+impl StoreBatch {
+    pub(super) fn read(tx: &Transaction, account_id: &str) -> Result<Self, StoreError> {
+        Ok(Self {
+            mailboxes: live_mailboxes(tx, account_id)?,
+            flag_intents: LiveFlagIntents::read(tx, account_id)?,
+        })
+    }
+}
+
 pub(super) fn store_message(
     tx: &Transaction,
     account_id: &str,
     message: &ListedMessage,
-    mailboxes: &HashMap<String, i64>,
+    batch: &StoreBatch,
     now: Timestamp,
     stats: &mut ListedPageStats,
     changed: &mut BTreeSet<i64>,
@@ -465,15 +481,7 @@ pub(super) fn store_message(
     let message_id = find_or_create_message(tx, account_id, message, now, stats)?;
     super::breaker::reappeared(tx, message_id, now)?;
     let mut writes = OccurrenceWrites { stats, changed };
-    store_occurrences(
-        tx,
-        message_id,
-        account_id,
-        message,
-        mailboxes,
-        now,
-        &mut writes,
-    )
+    store_occurrences(tx, message_id, account_id, message, batch, now, &mut writes)
 }
 
 /// `store_message` without the breaker's reappearance: a message's
@@ -483,7 +491,7 @@ pub(super) fn store_reread_message(
     tx: &Transaction,
     account_id: &str,
     message: &ListedMessage,
-    mailboxes: &HashMap<String, i64>,
+    batch: &StoreBatch,
     now: Timestamp,
     stats: &mut ListedPageStats,
     changed: &mut BTreeSet<i64>,
@@ -491,15 +499,7 @@ pub(super) fn store_reread_message(
     require_canonical_metadata(message)?;
     let message_id = find_or_create_message(tx, account_id, message, now, stats)?;
     let mut writes = OccurrenceWrites { stats, changed };
-    store_occurrences(
-        tx,
-        message_id,
-        account_id,
-        message,
-        mailboxes,
-        now,
-        &mut writes,
-    )
+    store_occurrences(tx, message_id, account_id, message, batch, now, &mut writes)
 }
 
 /// Checked before the message's first write, so invalid metadata
@@ -528,7 +528,7 @@ fn store_occurrences(
     message_id: i64,
     account_id: &str,
     message: &ListedMessage,
-    mailboxes: &HashMap<String, i64>,
+    batch: &StoreBatch,
     now: Timestamp,
     writes: &mut OccurrenceWrites<'_>,
 ) -> Result<i64, StoreError> {
@@ -537,12 +537,15 @@ fn store_occurrences(
     let wanted: BTreeSet<i64> = message
         .label_ids
         .iter()
-        .filter_map(|label| mailboxes.get(label).copied())
+        .filter_map(|label| batch.mailboxes.get(label).copied())
         .collect();
-    let live: HashSet<i64> = mailboxes.values().copied().collect();
+    let live: HashSet<i64> = batch.mailboxes.values().copied().collect();
 
     // A live flag intent's value stays until the intent is done.
-    let flags = held_flags(tx, account_id, &message.provider_key)?.over(&message.flags);
+    let flags = batch
+        .flag_intents
+        .held(&message.provider_key)?
+        .over(&message.flags);
     let current = current_occurrences(tx, message_id)?;
     let mut present = BTreeSet::new();
     for (occurrence_id, mailbox_id) in current {

@@ -796,9 +796,11 @@ fn live_flag_intents_hold_their_values_over_an_event() {
         ..SyncedFlags::default()
     };
     let held = |conn: &Connection| {
-        with_tx(conn, |tx| held_flags(tx, ACCOUNT, PROVIDER_KEY))
-            .unwrap()
-            .over(&listed)
+        with_tx(conn, |tx| {
+            LiveFlagIntents::read(tx, ACCOUNT)?.held(PROVIDER_KEY)
+        })
+        .unwrap()
+        .over(&listed)
     };
     assert_eq!(held(&conn), listed, "nothing live holds nothing");
 

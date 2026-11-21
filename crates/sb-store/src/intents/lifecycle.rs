@@ -9,7 +9,7 @@
 //! Flag changes also refresh the list projection they touch, so a window
 //! bound to the list generation sees the new flags.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 
 use rusqlite::{OptionalExtension, Transaction, params, params_from_iter};
 
@@ -876,36 +876,54 @@ impl HeldFlags {
     }
 }
 
-/// The [`HeldFlags`] of the account's message `provider_key`.
-pub(crate) fn held_flags(
-    tx: &Transaction,
-    account_id: &str,
-    provider_key: &str,
-) -> Result<HeldFlags, StoreError> {
-    let read = |e| classify(e, "read a message's live flag intents");
-    let mut statement = tx
-        .prepare_cached(
-            "SELECT args_json FROM intents
-             WHERE account_id = ?1 AND state IN ('pending', 'in_flight')
-               AND op = 'set_flags'
-               AND json_extract(target_json, '$.provider_key') = ?2
-             ORDER BY rowid",
-        )
-        .map_err(read)?;
-    let rows = statement
-        .query_map(params![account_id, provider_key], |row| {
-            row.get::<_, String>(0)
-        })
-        .map_err(read)?;
-    let mut held = HeldFlags::default();
-    for args_json in rows {
-        let change = parse_flag_change(&args_json.map_err(read)?)?;
-        match change.flag {
-            IntentFlag::Seen => held.seen = Some(change.set),
-            IntentFlag::Flagged => held.flagged = Some(change.set),
+/// The account's live `set_flags` intents by message provider key, in
+/// planning order. A batch of stored messages reads them once, so its
+/// cost follows the live intents rather than the batch size times them.
+#[derive(Debug, Default)]
+pub(crate) struct LiveFlagIntents {
+    args_by_key: HashMap<String, Vec<String>>,
+}
+
+impl LiveFlagIntents {
+    pub(crate) fn read(tx: &Transaction, account_id: &str) -> Result<Self, StoreError> {
+        let read = |e| classify(e, "read the account's live flag intents");
+        let mut statement = tx
+            .prepare_cached(
+                "SELECT json_extract(target_json, '$.provider_key'), args_json FROM intents
+                 WHERE account_id = ?1 AND state IN ('pending', 'in_flight')
+                   AND op = 'set_flags'
+                 ORDER BY rowid",
+            )
+            .map_err(read)?;
+        let rows = statement
+            .query_map(params![account_id], |row| {
+                Ok((row.get::<_, Option<String>>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(read)?;
+        let mut args_by_key: HashMap<String, Vec<String>> = HashMap::new();
+        for row in rows {
+            let (provider_key, args_json) = row.map_err(read)?;
+            if let Some(provider_key) = provider_key {
+                args_by_key.entry(provider_key).or_default().push(args_json);
+            }
         }
+        Ok(Self { args_by_key })
     }
-    Ok(held)
+
+    /// The [`HeldFlags`] of the message `provider_key`.
+    pub(crate) fn held(&self, provider_key: &str) -> Result<HeldFlags, StoreError> {
+        let mut held = HeldFlags::default();
+        for args_json in self.args_by_key.get(provider_key).into_iter().flatten() {
+            // Fail closed: skipping an unreadable live intent would drop
+            // its hold, and a stored event could undo the pending change.
+            let change = parse_flag_change(args_json)?;
+            match change.flag {
+                IntentFlag::Seen => held.seen = Some(change.set),
+                IntentFlag::Flagged => held.flagged = Some(change.set),
+            }
+        }
+        Ok(held)
+    }
 }
 
 /// Resolve a target's logical message: its first occurrence id, else

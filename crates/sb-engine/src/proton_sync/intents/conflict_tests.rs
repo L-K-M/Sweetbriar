@@ -44,7 +44,9 @@ async fn plan(h: &Harness, change: FlagChange) -> String {
         .await
         .expect("the change plans")
         .expect("the flag didn't hold yet");
-    intent_ids(h).pop().expect("one intent")
+    let mut ids = intent_ids(h);
+    assert_eq!(ids.len(), 1, "exactly one planned intent: {ids:?}");
+    ids.pop().expect("one intent")
 }
 
 #[tokio::test]
