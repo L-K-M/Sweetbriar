@@ -1580,11 +1580,32 @@ public protocol CoreProtocol: AnyObject, Sendable {
     func startImport(token: CancelToken, idempotencyKey: String, paths: [String], target: ImportTarget) async throws  -> ImportStarted
     
     /**
+     * `cancel_intents(key, ids)` (spec/07 "Intents",
+     * spec/04-sync-proton "Health actions") under a key the shell
+     * made: every named pending, parked or quarantined intent becomes
+     * cancelled, and a flag intent's local effect is reverted unless a
+     * later live intent changes the same flag. All or nothing. A
+     * command: a repeated key answers its stored receipt and cancels
+     * nothing again.
+     */
+    func cancelIntents(token: CancelToken, idempotencyKey: String, intentIds: [String]) async throws  -> Receipt
+    
+    /**
      * `intents(filter)` (spec/07): parked and quarantined intents,
      * oldest first, at most `limit` rows. A query: the token races the
      * core's lock and the read itself.
      */
     func intents(token: CancelToken, filter: IntentFilter, anchor: IntentAnchor, limit: UInt32) async throws  -> IntentPage
+    
+    /**
+     * `release_intents(key, ids)` (spec/07 "Intents",
+     * spec/04-sync-proton "Health actions") under a key the shell
+     * made: every named parked or quarantined intent becomes pending
+     * again, ready for the account worker's next poll. All or nothing.
+     * A command: a repeated key answers its stored receipt and
+     * releases nothing again.
+     */
+    func releaseIntents(token: CancelToken, idempotencyKey: String, intentIds: [String]) async throws  -> Receipt
     
     /**
      * `add_tag(selection, tag)` (spec/07 Messages): attach the named
@@ -2836,6 +2857,31 @@ open func startImport(token: CancelToken, idempotencyKey: String, paths: [String
 }
     
     /**
+     * `cancel_intents(key, ids)` (spec/07 "Intents",
+     * spec/04-sync-proton "Health actions") under a key the shell
+     * made: every named pending, parked or quarantined intent becomes
+     * cancelled, and a flag intent's local effect is reverted unless a
+     * later live intent changes the same flag. All or nothing. A
+     * command: a repeated key answers its stored receipt and cancels
+     * nothing again.
+     */
+open func cancelIntents(token: CancelToken, idempotencyKey: String, intentIds: [String])async throws  -> Receipt  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_sb_ffi_fn_method_core_cancel_intents(
+                        self.uniffiCloneHandle(),FfiConverterTypeCancelToken_lower(token),FfiConverterString.lower(idempotencyKey),FfiConverterSequenceString.lower(intentIds)
+                )
+            },
+            pollFunc: ffi_sb_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_sb_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_sb_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeReceipt_lift,
+            errorHandler: FfiConverterTypeCoreError_lift
+        )
+}
+    
+    /**
      * `intents(filter)` (spec/07): parked and quarantined intents,
      * oldest first, at most `limit` rows. A query: the token races the
      * core's lock and the read itself.
@@ -2852,6 +2898,30 @@ open func intents(token: CancelToken, filter: IntentFilter, anchor: IntentAnchor
             completeFunc: ffi_sb_ffi_rust_future_complete_rust_buffer,
             freeFunc: ffi_sb_ffi_rust_future_free_rust_buffer,
             liftFunc: FfiConverterTypeIntentPage_lift,
+            errorHandler: FfiConverterTypeCoreError_lift
+        )
+}
+    
+    /**
+     * `release_intents(key, ids)` (spec/07 "Intents",
+     * spec/04-sync-proton "Health actions") under a key the shell
+     * made: every named parked or quarantined intent becomes pending
+     * again, ready for the account worker's next poll. All or nothing.
+     * A command: a repeated key answers its stored receipt and
+     * releases nothing again.
+     */
+open func releaseIntents(token: CancelToken, idempotencyKey: String, intentIds: [String])async throws  -> Receipt  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_sb_ffi_fn_method_core_release_intents(
+                        self.uniffiCloneHandle(),FfiConverterTypeCancelToken_lower(token),FfiConverterString.lower(idempotencyKey),FfiConverterSequenceString.lower(intentIds)
+                )
+            },
+            pollFunc: ffi_sb_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_sb_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_sb_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeReceipt_lift,
             errorHandler: FfiConverterTypeCoreError_lift
         )
 }
@@ -17785,7 +17855,13 @@ private let initializationResult: InitializationResult = {
     if (uniffi_sb_ffi_checksum_method_core_start_import() != 35998) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_sb_ffi_checksum_method_core_cancel_intents() != 47772) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_sb_ffi_checksum_method_core_intents() != 34827) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sb_ffi_checksum_method_core_release_intents() != 36028) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sb_ffi_checksum_method_core_add_tag() != 58021) {

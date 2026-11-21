@@ -1,10 +1,12 @@
-//! `intents(filter)` over FFI (spec/07 "Other queries"): records and
-//! enums mirroring `sb-service`'s DTOs field by field, and the exported
-//! query. Cursors cross as opaque strings the shell carries unchanged.
+//! `intents(filter)` and the intent health actions over FFI (spec/07
+//! "Other queries", "Intents"): records and enums mirroring
+//! `sb-service`'s DTOs field by field, the exported query and the two
+//! exported commands. Cursors cross as opaque strings the shell
+//! carries unchanged.
 
 use std::sync::Arc;
 
-use crate::api::Core;
+use crate::api::{Core, Receipt};
 use crate::cancel::CancelToken;
 use crate::error::CoreError;
 
@@ -196,6 +198,47 @@ impl Core {
             })
             .await?;
         Ok(IntentPage::from_service(page))
+    }
+
+    /// `release_intents(key, ids)` (spec/07 "Intents",
+    /// spec/04-sync-proton "Health actions") under a key the shell
+    /// made: every named parked or quarantined intent becomes pending
+    /// again, ready for the account worker's next poll. All or nothing.
+    /// A command: a repeated key answers its stored receipt and
+    /// releases nothing again.
+    pub async fn release_intents(
+        &self,
+        token: Arc<CancelToken>,
+        idempotency_key: String,
+        intent_ids: Vec<String>,
+    ) -> Result<Receipt, CoreError> {
+        let receipt = self
+            .command(&token, async |core| {
+                core.release_intents(&idempotency_key, intent_ids).await
+            })
+            .await?;
+        Ok(Receipt::from_service(&receipt))
+    }
+
+    /// `cancel_intents(key, ids)` (spec/07 "Intents",
+    /// spec/04-sync-proton "Health actions") under a key the shell
+    /// made: every named pending, parked or quarantined intent becomes
+    /// cancelled, and a flag intent's local effect is reverted unless a
+    /// later live intent changes the same flag. All or nothing. A
+    /// command: a repeated key answers its stored receipt and cancels
+    /// nothing again.
+    pub async fn cancel_intents(
+        &self,
+        token: Arc<CancelToken>,
+        idempotency_key: String,
+        intent_ids: Vec<String>,
+    ) -> Result<Receipt, CoreError> {
+        let receipt = self
+            .command(&token, async |core| {
+                core.cancel_intents(&idempotency_key, intent_ids).await
+            })
+            .await?;
+        Ok(Receipt::from_service(&receipt))
     }
 }
 

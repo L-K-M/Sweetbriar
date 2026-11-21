@@ -478,9 +478,19 @@ uint64_t uniffi_sb_ffi_fn_method_core_import_report(uint64_t ptr, uint64_t token
 uint64_t uniffi_sb_ffi_fn_method_core_start_import(uint64_t ptr, uint64_t token, RustBuffer idempotency_key, RustBuffer paths, RustBuffer target
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_CANCEL_INTENTS
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_CANCEL_INTENTS
+uint64_t uniffi_sb_ffi_fn_method_core_cancel_intents(uint64_t ptr, uint64_t token, RustBuffer idempotency_key, RustBuffer intent_ids
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_INTENTS
 #define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_INTENTS
 uint64_t uniffi_sb_ffi_fn_method_core_intents(uint64_t ptr, uint64_t token, RustBuffer filter, RustBuffer anchor, uint32_t limit
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_RELEASE_INTENTS
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_RELEASE_INTENTS
+uint64_t uniffi_sb_ffi_fn_method_core_release_intents(uint64_t ptr, uint64_t token, RustBuffer idempotency_key, RustBuffer intent_ids
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_ADD_TAG
@@ -1348,9 +1358,21 @@ uint16_t uniffi_sb_ffi_checksum_method_core_start_import(void
     
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_CANCEL_INTENTS
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_CANCEL_INTENTS
+uint16_t uniffi_sb_ffi_checksum_method_core_cancel_intents(void
+    
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_INTENTS
 #define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_INTENTS
 uint16_t uniffi_sb_ffi_checksum_method_core_intents(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_RELEASE_INTENTS
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_RELEASE_INTENTS
+uint16_t uniffi_sb_ffi_checksum_method_core_release_intents(void
     
 );
 #endif

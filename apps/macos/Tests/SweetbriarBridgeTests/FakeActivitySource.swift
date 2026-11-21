@@ -80,12 +80,19 @@ actor FakeActivitySource: ActivitySource {
         case recovery(String?, String?, UInt32)
         case subscribe
         case resolve(String, String, BreakerResolution)
+        case release(String, [String])
+        case cancel(String, [String])
     }
 
     struct ResolveCall: Equatable {
         var key: String
         var eventId: String
         var resolution: BreakerResolution
+    }
+
+    struct IntentActionCall: Equatable {
+        var key: String
+        var intentIds: [String]
     }
 
     private(set) var calls: [Call] = []
@@ -96,9 +103,11 @@ actor FakeActivitySource: ActivitySource {
     private var healthGate: Gate?
     private var subscribeGate: Gate?
     private var resolveGate: Gate?
+    private var intentActionGate: Gate?
     private var intentsFailure: (any Error)?
     private var subscribeFailure: (any Error)?
     private var resolveFailure: (any Error)?
+    private var intentActionFailure: (any Error)?
     private var receipt = Receipt(
         command: "resolve_breaker_event", resultJson: "{}", createdAtMs: 1_001)
 
@@ -107,12 +116,21 @@ actor FakeActivitySource: ActivitySource {
     func setRecovery(_ page: RecoveryPage) { recoveryPage = page }
     func holdHealth(_ gate: Gate?) { healthGate = gate }
     func holdResolve(_ gate: Gate?) { resolveGate = gate }
+    func holdIntentAction(_ gate: Gate?) { intentActionGate = gate }
     func holdSubscribe(_ gate: Gate?) { subscribeGate = gate }
     func failIntents(_ error: (any Error)?) { intentsFailure = error }
     func failSubscribe(_ error: (any Error)?) { subscribeFailure = error }
     func failResolve(_ error: (any Error)?) { resolveFailure = error }
+    func failIntentAction(_ error: (any Error)?) { intentActionFailure = error }
 
     var healthReads: Int { calls.filter { $0 == .accountHealth }.count }
+    /// The intents query's reads, including a health action's re-read.
+    var intentReads: Int {
+        calls.reduce(0) { count, call in
+            if case .intents = call { return count + 1 }
+            return count
+        }
+    }
     /// Every subscribe attempt, including one that failed: a failed
     /// subscription leaves no feed behind.
     var subscribeCount: Int { calls.filter { $0 == .subscribe }.count }
@@ -120,6 +138,22 @@ actor FakeActivitySource: ActivitySource {
         calls.compactMap { call in
             if case .resolve(let key, let eventId, let resolution) = call {
                 return ResolveCall(key: key, eventId: eventId, resolution: resolution)
+            }
+            return nil
+        }
+    }
+    var releaseCalls: [IntentActionCall] {
+        calls.compactMap { call in
+            if case .release(let key, let intentIds) = call {
+                return IntentActionCall(key: key, intentIds: intentIds)
+            }
+            return nil
+        }
+    }
+    var cancelCalls: [IntentActionCall] {
+        calls.compactMap { call in
+            if case .cancel(let key, let intentIds) = call {
+                return IntentActionCall(key: key, intentIds: intentIds)
             }
             return nil
         }
@@ -159,6 +193,26 @@ actor FakeActivitySource: ActivitySource {
         if let resolveFailure { throw resolveFailure }
         let value = receipt
         if let resolveGate { await resolveGate.wait() }
+        return value
+    }
+
+    func releaseIntents(
+        idempotencyKey: String, intentIds: [String]
+    ) async throws -> Receipt {
+        calls.append(.release(idempotencyKey, intentIds))
+        if let intentActionFailure { throw intentActionFailure }
+        let value = receipt
+        if let intentActionGate { await intentActionGate.wait() }
+        return value
+    }
+
+    func cancelIntents(
+        idempotencyKey: String, intentIds: [String]
+    ) async throws -> Receipt {
+        calls.append(.cancel(idempotencyKey, intentIds))
+        if let intentActionFailure { throw intentActionFailure }
+        let value = receipt
+        if let intentActionGate { await intentActionGate.wait() }
         return value
     }
 }

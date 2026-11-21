@@ -1,7 +1,7 @@
 // The Activity window (spec/08 "Activity / account health"; plan
 // M2.7d2): per-account state and condition with "Sign in again" where
 // it applies, coverage, open breaker events with Accept and Keep, the
-// parked and quarantined intents (read only until M3.1) and the
+// parked and quarantined intents with Retry and Cancel, and the
 // Recovery list. It observes the app's one shared `ActivityModel`;
 // the model's life belongs to the main window's core session.
 
@@ -164,6 +164,25 @@ private struct ActivityView: View {
         .accessibilityIdentifier("breaker-\(event.eventId)")
     }
 
+    /// One parked or quarantined intent, with the health actions the
+    /// model exposes. Both are disabled while that intent's action is
+    /// in flight, so a double click can't run it twice.
+    private func intentRow(_ intent: Intent) -> some View {
+        let acting = model.acting.contains(intent.intentId)
+        return HStack(alignment: .firstTextBaseline) {
+            line(Self.presentation.intent(intent))
+            Spacer()
+            Button("Retry") { model.release(intentIds: [intent.intentId]) }
+                .disabled(acting)
+                .accessibilityIdentifier("retry-\(intent.intentId)")
+            Button("Cancel") { model.cancel(intentIds: [intent.intentId]) }
+                .disabled(acting)
+                .accessibilityIdentifier("cancel-\(intent.intentId)")
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("intent-\(intent.intentId)")
+    }
+
     private var intentsSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Intents").font(.headline)
@@ -171,7 +190,7 @@ private struct ActivityView: View {
                 Text("No parked or quarantined changes").foregroundStyle(.secondary)
             } else {
                 ForEach(model.intents, id: \.intentId) { intent in
-                    line(Self.presentation.intent(intent))
+                    intentRow(intent)
                 }
             }
             if model.intentsTruncated {

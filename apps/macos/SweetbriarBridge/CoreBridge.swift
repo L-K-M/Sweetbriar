@@ -582,6 +582,39 @@ public final class CoreBridge: Sendable {
         return Receipt(receipt)
     }
 
+    /// `release_intents` (spec/07 "Intents") under a shell-made key:
+    /// every named parked or quarantined intent becomes pending again,
+    /// ready for the account worker's next poll. All or nothing. A
+    /// repeated key answers its stored receipt.
+    public func releaseIntents(
+        idempotencyKey: String, intentIds: [String]
+    ) async throws -> Receipt {
+        let token = SweetbriarCore.CancelToken()
+        let receipt = try await Self.withCancellation(token: token) {
+            try await self.core.releaseIntents(
+                token: token, idempotencyKey: idempotencyKey, intentIds: intentIds
+            )
+        }
+        return Receipt(receipt)
+    }
+
+    /// `cancel_intents` (spec/07 "Intents") under a shell-made key:
+    /// every named pending, parked or quarantined intent becomes
+    /// cancelled, and a flag intent's local effect is reverted unless a
+    /// later live intent changes the same flag. All or nothing. A
+    /// repeated key answers its stored receipt.
+    public func cancelIntents(
+        idempotencyKey: String, intentIds: [String]
+    ) async throws -> Receipt {
+        let token = SweetbriarCore.CancelToken()
+        let receipt = try await Self.withCancellation(token: token) {
+            try await self.core.cancelIntents(
+                token: token, idempotencyKey: idempotencyKey, intentIds: intentIds
+            )
+        }
+        return Receipt(receipt)
+    }
+
     /// `set_app_active` (spec/07 "Account management"): a lifecycle
     /// signal, not a command — no key, no receipt, nothing stored.
     public func setAppActive(_ active: Bool) async throws {

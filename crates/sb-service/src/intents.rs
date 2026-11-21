@@ -1,8 +1,9 @@
-//! `intents(filter)` (spec/07 "Other queries"): service-owned DTOs and
-//! `Core`'s query, mirroring the engine's types field by field
+//! `intents(filter)` and the intent health actions (spec/07 "Other
+//! queries", "Intents"): service-owned DTOs, `Core`'s query and the
+//! two commands, mirroring the engine's types field by field
 //! (spec/01 rule 3). Cursors cross as opaque strings.
 
-use crate::{Core, CoreError};
+use crate::{Core, CoreError, Receipt};
 
 /// The states the health surface lists (spec/02).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -187,6 +188,45 @@ impl Core {
             .intents(filter.into_engine(), anchor.into_engine(), limit)
             .await?;
         Ok(IntentPage::from_engine(&page))
+    }
+
+    /// `release_intents(key, ids)` (spec/07 "Intents",
+    /// spec/04-sync-proton "Health actions") under an idempotency key:
+    /// every named parked or quarantined intent becomes pending again,
+    /// its attempts, reasons and backoff cleared and its configuration
+    /// generation refreshed. All or nothing: one id that is missing or
+    /// doesn't qualify leaves every row unchanged. A repeated key
+    /// answers its stored receipt and releases nothing again.
+    pub async fn release_intents(
+        &self,
+        idempotency_key: &str,
+        intent_ids: Vec<String>,
+    ) -> Result<Receipt, CoreError> {
+        let receipt = self
+            .engine()
+            .release_intents(idempotency_key, intent_ids)
+            .await?;
+        Ok(Receipt::from_engine(&receipt))
+    }
+
+    /// `cancel_intents(key, ids)` (spec/07 "Intents",
+    /// spec/04-sync-proton "Health actions") under an idempotency key:
+    /// every named pending, parked or quarantined intent becomes
+    /// cancelled, and a flag intent's local effect is reverted unless a
+    /// later live intent changes the same flag. All or nothing: one id
+    /// that is missing, in flight or terminal leaves every row
+    /// unchanged. A repeated key answers its stored receipt and cancels
+    /// nothing again.
+    pub async fn cancel_intents(
+        &self,
+        idempotency_key: &str,
+        intent_ids: Vec<String>,
+    ) -> Result<Receipt, CoreError> {
+        let receipt = self
+            .engine()
+            .cancel_intents(idempotency_key, intent_ids)
+            .await?;
+        Ok(Receipt::from_engine(&receipt))
     }
 }
 

@@ -167,6 +167,52 @@ struct ActivityModelTests {
     }
 
     @Test
+    func releaseAndCancelPassFreshKeysAndGuardTheInFlightIntent() async throws {
+        let source = FakeActivitySource()
+        let gate = Gate()
+        await source.holdIntentAction(gate)
+        let model = ActivityModel(source: source)
+        model.release(intentIds: ["intent-1"])
+        #expect(model.acting == ["intent-1"])
+        // The same ids are ignored while in flight; other ids run.
+        model.release(intentIds: ["intent-1"])
+        model.cancel(intentIds: ["intent-1"])
+        model.cancel(intentIds: ["intent-2"])
+        try #require(await eventually { await source.releaseCalls.count == 1 })
+        try #require(await eventually { await source.cancelCalls.count == 1 })
+        await gate.open()
+        try #require(await eventually { await model.acting.isEmpty })
+        let release = try #require(await source.releaseCalls.first)
+        let cancel = try #require(await source.cancelCalls.first)
+        #expect(release.intentIds == ["intent-1"])
+        #expect(cancel.intentIds == ["intent-2"])
+        #expect(release.key != cancel.key)
+        #expect([release.key, cancel.key].allSatisfy { UUID(uuidString: $0) != nil })
+        #expect(
+            await eventually { await source.intentReads == 2 },
+            "each success re-reads the intents list")
+        #expect(model.actionError == nil)
+        model.stop()
+    }
+
+    @Test
+    func aFailedIntentActionSetsAnErrorAndTheNextSuccessClearsIt() async throws {
+        let source = FakeActivitySource()
+        let model = ActivityModel(source: source)
+        await source.failIntentAction(CoreFailure.notFound(what: "intent"))
+        model.release(intentIds: ["intent-1"])
+        try #require(await eventually { await model.actionError != nil })
+        #expect(model.acting.isEmpty)
+        #expect(model.actionError as? CoreFailure == .notFound(what: "intent"))
+        await source.failIntentAction(nil)
+        model.cancel(intentIds: ["intent-1"])
+        try #require(await eventually { await model.actionError == nil })
+        #expect(model.acting.isEmpty)
+        #expect(await source.cancelCalls.count == 1)
+        model.stop()
+    }
+
+    @Test
     func aSubscriptionErrorSetsTheErrorAndRetryRestarts() async throws {
         let source = FakeActivitySource()
         let model = ActivityModel(source: source)
