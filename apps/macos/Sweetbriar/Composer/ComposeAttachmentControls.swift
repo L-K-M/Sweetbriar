@@ -5,7 +5,9 @@ import UniformTypeIdentifiers
 /// The compose window's attachment controls (spec/08 "Attachments",
 /// M1.9c2cc): the Attach… button, file drops, one row per attachment
 /// and per unfinished or failed publication, and undoable attach and
-/// remove on the window's undo stack. Content edits go through
+/// remove on the window's undo stack. Inline images (M4.4e3) come from
+/// Insert Image… and pasted image data; each joins with its reference
+/// at the selection as one undoable edit. Content edits go through
 /// `DraftModel`; publication through `DraftAttachmentPublications`.
 @MainActor
 final class ComposeAttachmentControls: NSObject {
@@ -19,15 +21,22 @@ final class ComposeAttachmentControls: NSObject {
     private let admitted: @MainActor () -> Bool
     private let changed: @MainActor () -> Void
     private let breakCoalescing: @MainActor () -> Void
+    private let inlineAdmitted: @MainActor () -> Bool
+    private let insertReference: @MainActor (String) -> Bool
     private var panel: NSOpenPanel?
 
     /// `admitted` answers whether new attachments may start now: the
     /// editor is editable and archive writes are available.
     /// `breakCoalescing` keeps an attachment edit out of typing's undo.
+    /// `inlineAdmitted` answers whether the body takes an image's
+    /// reference now, and `insertReference` puts one at the selection
+    /// inside the caller's undo group.
     init(
         model: DraftModel, publications: DraftAttachmentPublications, window: NSWindow,
         admitted: @escaping @MainActor () -> Bool, changed: @escaping @MainActor () -> Void,
-        breakCoalescing: @escaping @MainActor () -> Void
+        breakCoalescing: @escaping @MainActor () -> Void,
+        inlineAdmitted: @escaping @MainActor () -> Bool,
+        insertReference: @escaping @MainActor (String) -> Bool
     ) {
         self.model = model
         self.publications = publications
@@ -35,6 +44,8 @@ final class ComposeAttachmentControls: NSObject {
         self.admitted = admitted
         self.changed = changed
         self.breakCoalescing = breakCoalescing
+        self.inlineAdmitted = inlineAdmitted
+        self.insertReference = insertReference
         super.init()
         attachButton.target = self
         attachButton.action = #selector(chooseFiles)
@@ -44,6 +55,7 @@ final class ComposeAttachmentControls: NSObject {
         list.spacing = 4
         list.setAccessibilityIdentifier("composeAttachments")
         publications.onAttached = { [weak self] index in self?.didAttach(at: index) }
+        publications.admitsInlineImage = { [weak self] in self?.inlineAdmitted() == true }
     }
 
     private var undoManager: UndoManager? { window?.undoManager }
@@ -85,14 +97,107 @@ final class ComposeAttachmentControls: NSObject {
         return !started.isEmpty
     }
 
+    // MARK: Inline images (spec/08 "Inline images")
+
+    /// Whether Insert Image… may start: new attachments are admitted and
+    /// the body is an editable Markdown source.
+    var canInsertImages: Bool { admitted() && inlineAdmitted() && panel == nil }
+
+    /// Edit ▸ Insert Image…: pick PNG, JPEG or GIF files in a sheet.
+    func chooseImages() {
+        guard canInsertImages, let window, window.attachedSheet == nil else { return }
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = true
+        panel.resolvesAliases = true
+        panel.allowedContentTypes = [.png, .jpeg, .gif]
+        panel.prompt = "Insert"
+        self.panel = panel
+        panel.beginSheetModal(for: window) { [weak self] response in
+            guard let self else { return }
+            self.panel = nil
+            if response == .OK { insertImages(panel.urls) } else { render() }
+        }
+    }
+
+    /// Start publishing each image file inline; answers whether any
+    /// started. Files of another type are skipped.
+    @discardableResult
+    func insertImages(_ urls: [URL]) -> Bool {
+        guard admitted(), inlineAdmitted() else { return false }
+        let started = urls.filter(\.isFileURL).compactMap { publications.insertImage(file: $0) }
+        render()
+        return !started.isEmpty
+    }
+
+    /// Start publishing the pasteboard's image inline; false when it
+    /// holds none or the body can't take one.
+    @discardableResult
+    func pasteImage(from pasteboard: NSPasteboard) -> Bool {
+        guard admitted(), inlineAdmitted(), let image = Self.pastedImage(on: pasteboard),
+            publications.insertImage(data: image.data, mediaType: image.mediaType) != nil
+        else { return false }
+        render()
+        return true
+    }
+
+    private static let jpegType = NSPasteboard.PasteboardType(UTType.jpeg.identifier)
+
+    /// Whether ⌘V would paste an image: image data and no text, since
+    /// text always pastes as text (spec/08 "Paste").
+    static func holdsPastedImage(_ pasteboard: NSPasteboard) -> Bool {
+        pasteboard.availableType(from: [.string]) == nil
+            && pasteboard.availableType(from: [.png, jpegType, .tiff]) != nil
+    }
+
+    /// The pasteboard's image: PNG or JPEG as is, TIFF converted to PNG.
+    static func pastedImage(on pasteboard: NSPasteboard) -> (data: Data, mediaType: String)? {
+        guard holdsPastedImage(pasteboard) else { return nil }
+        if let png = pasteboard.data(forType: .png) { return (png, "image/png") }
+        if let jpeg = pasteboard.data(forType: jpegType) { return (jpeg, "image/jpeg") }
+        guard let tiff = pasteboard.data(forType: .tiff),
+            let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:])
+        else { return nil }
+        return (png, "image/png")
+    }
+
+    // MARK: Undo
+
     private enum Action: String {
         case attach = "Attach File"
         case remove = "Remove Attachment"
+        case insertImage = "Insert Image"
     }
 
     private func didAttach(at index: Int) {
         guard let attachment = attachment(at: index) else { return }
+        if let contentId = attachment.contentId {
+            didInsertImage(attachment, at: index, contentId: contentId)
+            return
+        }
         registerUndo(.attach) { $0.remove(at: index, expecting: attachment, as: .attach) }
+        changed()
+    }
+
+    /// The image joined; its reference goes in at the selection, and
+    /// both are one undoable edit. The publication admitted it only
+    /// while the body took Markdown, so the insertion runs in the same
+    /// turn; should it still fail, the image stays as an Inline row.
+    private func didInsertImage(_ attachment: DraftAttachment, at index: Int, contentId: String) {
+        let name = InlineImage.name(forFilename: Self.filename(of: attachment))
+        let reference = InlineImage.reference(name: name, contentId: contentId)
+        breakCoalescing()
+        let undo = undoManager
+        undo?.beginUndoGrouping()
+        undo?.registerUndo(withTarget: self) {
+            $0.remove(at: index, expecting: attachment, as: .insertImage)
+        }
+        let inserted = insertReference(reference)
+        undo?.setActionName(Action.insertImage.rawValue)
+        undo?.endUndoGrouping()
+        breakCoalescing()
+        if !inserted { NSSound.beep() }
         changed()
     }
 
@@ -162,7 +267,7 @@ final class ComposeAttachmentControls: NSObject {
             remove.isEnabled = editable
             remove.setAccessibilityLabel("Remove \(name)")
             remove.setAccessibilityIdentifier("composeRemoveAttachment-\(index)")
-            rows.append(row(label: name, button: remove))
+            rows.append(row(label: Self.rowLabel(of: attachment), button: remove))
         }
         for publication in publications.publications {
             let label: String
@@ -194,9 +299,15 @@ final class ComposeAttachmentControls: NSObject {
         return row
     }
 
+    /// The file name; an inline image's row also says "Inline".
+    static func rowLabel(of attachment: DraftAttachment) -> String {
+        let name = filename(of: attachment)
+        return attachment.contentId == nil ? name : "\(name) (Inline)"
+    }
+
     static func filename(of attachment: DraftAttachment) -> String {
         switch attachment {
-        case .new(_, let filename, _): return filename
+        case .new(_, let filename, _, _): return filename
         case .retained(let reference): return reference.filename
         }
     }

@@ -269,6 +269,11 @@ final class MainMenuBuilder: NSObject {
             key: "v",
             modifiers: [.option, .command]
         ))
+        menu.addItem(Self.item(
+            "Insert Image…",
+            action: #selector(ComposeWindowController.insertImage(_:)),
+            key: ""
+        ))
         menu.addItem(.separator())
         menu.addItem(Self.item(
             "Select All",

@@ -70,6 +70,13 @@ private actor AttachmentEditStore: DraftStore {
         return object
     }
 
+    func publishDraftAttachment(bytes: Data) async throws -> DraftAttachmentObject {
+        publicationsBegun += 1
+        let object = try await bridge.publishDraftAttachment(bytes: bytes)
+        publicationsFinished += 1
+        return object
+    }
+
     func republishDraftAttachment(
         draftId: String, revisionId: String, reference: DraftAttachmentRef
     ) async throws -> DraftAttachmentObject {
@@ -382,7 +389,7 @@ func aFinishedPublicationJoinsTheCurrentContent() async throws {
 
     #expect(publications.publications.isEmpty && attached.values == [0])
     #expect(session.model.content?.subject == "Typed while the file streamed")
-    guard case .new(_, let filename, let mediaType) = try #require(session.model.content?.attachments.first)
+    guard case .new(_, let filename, let mediaType, _) = try #require(session.model.content?.attachments.first)
     else {
         Issue.record("the publication joined as a new handle")
         await session.finish()
@@ -482,6 +489,85 @@ func mediaTypesFollowTheFilenameExtension() {
     #expect(
         DraftAttachmentPublications.mediaType(of: URL(fileURLWithPath: "/x/README"))
             == "application/octet-stream")
+}
+
+// MARK: - Inline images (M4.4e3)
+
+/// A 1×1 PNG.
+private let pngBytes = Data(
+    base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=")!
+
+/// Pasted image data joins with a minted Content-ID that the save
+/// stores, and the acknowledged reference keeps it.
+@MainActor
+@Test(.timeLimit(.minutes(1)))
+func aPastedImageJoinsInlineAndItsSaveStoresTheContentId() async throws {
+    let session = try await Session.open()
+    let publications = DraftAttachmentPublications(model: session.model, source: session.store)
+    publications.admitsInlineImage = { true }
+    let attached = AttachedIndices()
+    publications.onAttached = { attached.values.append($0) }
+    #expect(publications.insertImage(data: pngBytes, mediaType: "image/png") != nil)
+    await publications.settle()
+
+    #expect(attached.values == [0] && publications.publications.isEmpty)
+    let joined = try #require(session.model.content?.attachments.first)
+    guard case .new(_, let filename, let mediaType, let contentId?) = joined else {
+        Issue.record("the image joined as a new inline handle, got \(joined)")
+        await session.finish()
+        return
+    }
+    #expect(filename == "Image.png" && mediaType == "image/png")
+    #expect(contentId.hasSuffix("@sweetbriar.invalid"))
+
+    await session.saveCleanly()
+    #expect(try await session.stored().map(\.contentId) == [contentId])
+    #expect(session.model.content?.attachments.first?.contentId == contentId)
+    #expect(isRetained(session.model.content?.attachments.first))
+    await session.finish()
+}
+
+/// Undoing a saved removal republishes the image and keeps its
+/// Content-ID, so the reference still names it.
+@MainActor
+@Test(.timeLimit(.minutes(1)))
+func aRestoredInlineImageKeepsItsContentId() async throws {
+    let session = try await Session.open()
+    let object = try await session.bridge.publishDraftAttachment(bytes: pngBytes)
+    let contentId = InlineImage.mintContentId()
+    session.model.appendAttachment(
+        .new(object: object, filename: "Chart.png", mediaType: "image/png", contentId: contentId))
+    await session.saveCleanly()
+    let removal = try #require(session.model.removeAttachment(at: 0))
+    await session.saveCleanly()
+    #expect(try await session.stored().isEmpty)
+
+    session.model.restoreAttachment(removal)
+    await session.saveCleanly()
+    #expect(await session.store.republications == 1)
+    #expect(try await session.stored().map(\.contentId) == [contentId])
+    await session.finish()
+}
+
+/// Only PNG, JPEG and GIF go inline, and only while the body takes the
+/// reference; otherwise the row fails and nothing joins.
+@MainActor
+@Test(.timeLimit(.minutes(1)))
+func anImageTheBodyCantTakeFailsItsRow() async throws {
+    let session = try await Session.open()
+    let publications = DraftAttachmentPublications(model: session.model, source: session.store)
+    #expect(publications.insertImage(data: pngBytes, mediaType: "image/webp") == nil)
+    let text = try writeFile(session, "notes.txt", "text")
+    #expect(publications.insertImage(file: text) == nil)
+    #expect(publications.publications.isEmpty)
+
+    publications.admitsInlineImage = { false }
+    let id = try #require(publications.insertImage(data: pngBytes, mediaType: "image/jpeg"))
+    await publications.settle()
+    let row = try #require(publications.publications.first { $0.id == id })
+    #expect(row.isInline && row.filename == "Image.jpeg" && row.failure != nil)
+    #expect(session.model.content?.attachments.isEmpty == true)
+    await session.finish()
 }
 
 @MainActor

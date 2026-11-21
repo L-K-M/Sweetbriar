@@ -278,19 +278,31 @@ public final class DraftAttachmentObject: Sendable, Equatable {
 }
 
 /// One attachment in a save's content: a newly published object, or
-/// an unchanged reference from the base revision (spec/02).
+/// an unchanged reference from the base revision (spec/02). A
+/// `contentId` makes it an inline image (spec/05).
 public enum DraftAttachment: Sendable, Equatable {
-    case new(object: DraftAttachmentObject, filename: String, mediaType: String)
+    case new(
+        object: DraftAttachmentObject, filename: String, mediaType: String,
+        contentId: String? = nil)
     case retained(DraftAttachmentRef)
+
+    /// The bare Content-ID of an inline image; nil for an ordinary
+    /// attachment.
+    public var contentId: String? {
+        switch self {
+        case .new(_, _, _, let contentId): contentId
+        case .retained(let reference): reference.contentId
+        }
+    }
 
     /// Map the bridge enum onto the generated one; a new object keeps
     /// its native handle.
     var generated: SweetbriarCore.DraftAttachment {
         switch self {
-        case .new(let object, let filename, let mediaType):
+        case .new(let object, let filename, let mediaType, let contentId):
             return .new(
                 object: object.native, filename: filename, mediaType: mediaType,
-                contentId: nil)
+                contentId: contentId)
         case .retained(let reference):
             return .retained(reference.generated)
         }

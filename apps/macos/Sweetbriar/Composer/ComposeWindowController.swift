@@ -128,7 +128,11 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
             model: model, publications: publications, window: window,
             admitted: { [weak self] in self?.canAttach == true },
             changed: { [weak self] in self?.attachmentsChanged() },
-            breakCoalescing: { [weak self] in self?.textView.breakUndoCoalescing() })
+            breakCoalescing: { [weak self] in self?.textView.breakUndoCoalescing() },
+            inlineAdmitted: { [weak self] in self?.textView.canInsertMarkdown == true },
+            insertReference: { [weak self] reference in
+                self?.textView.insertMarkdownSource(reference, actionName: nil) ?? false
+            })
     }()
     private var loadTask: Task<Void, Never>?
     private var closing: Task<Bool, Never>?
@@ -251,6 +255,7 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
         textView.delegate = self
         textView.setAccessibilityIdentifier("composeBody")
         textView.fileDropHandler = { [weak self] urls in self?.attachmentControls.attach(urls) ?? false }
+        textView.imagePasteTarget = self
         modeControl.target = self
         modeControl.action = #selector(modeChanged)
         saveButton.target = self
@@ -1089,6 +1094,10 @@ private final class ComposeSavePolicy: DraftStore {
         try requireWrites()
         return try await source.publishDraftAttachment(file: file)
     }
+    func publishDraftAttachment(bytes: Data) async throws -> DraftAttachmentObject {
+        try requireWrites()
+        return try await source.publishDraftAttachment(bytes: bytes)
+    }
     func republishDraftAttachment(
         draftId: String, revisionId: String, reference: DraftAttachmentRef
     ) async throws -> DraftAttachmentObject {
@@ -1119,8 +1128,11 @@ extension ComposeWindowController: NSMenuItemValidation {
     }
 
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
-        guard menuItem.action == #selector(pasteAsMarkdown(_:)) else { return true }
-        return canPasteAsMarkdown
+        switch menuItem.action {
+        case #selector(pasteAsMarkdown(_:)): canPasteAsMarkdown
+        case #selector(insertImage(_:)): canInsertImage
+        default: true
+        }
     }
 
     /// Edit ▸ Paste as Markdown (⌥⌘V): capture the HTML once, convert it
@@ -1153,5 +1165,28 @@ extension ComposeWindowController: NSMenuItemValidation {
                 sheet?.show(.refused(reason))
             }
         }
+    }
+}
+
+// MARK: Inline images (spec/08 "Inline images")
+
+extension ComposeWindowController: ComposerImagePasting {
+    /// Enabled for an editable Markdown body with no sheet open.
+    var canInsertImage: Bool {
+        window?.attachedSheet == nil && attachmentControls.canInsertImages
+    }
+
+    /// Edit ▸ Insert Image…: pick PNG, JPEG or GIF files to insert.
+    @objc func insertImage(_ sender: Any?) {
+        guard canInsertImage else { return }
+        attachmentControls.chooseImages()
+    }
+
+    func canPasteImage() -> Bool {
+        attachmentControls.canInsertImages && ComposeAttachmentControls.holdsPastedImage(pasteboard)
+    }
+
+    func pasteImage() -> Bool {
+        attachmentControls.pasteImage(from: pasteboard)
     }
 }

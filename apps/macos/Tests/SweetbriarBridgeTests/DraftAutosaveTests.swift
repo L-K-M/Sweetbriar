@@ -115,11 +115,11 @@ private actor AutosaveStore: DraftStore {
             attachments: content.attachments.map {
                 switch $0 {
                 case .retained(let reference): return reference
-                case .new(let object, let filename, let mediaType):
+                case .new(let object, let filename, let mediaType, let contentId):
                     return DraftAttachmentRef(
                         objectSha256: object.objectSha256,
                         filename: filename, mediaType: mediaType, size: object.byteLength,
-                        contentId: nil)
+                        contentId: contentId)
                 }
             }, createdAtMs: seq
         )
@@ -134,6 +134,9 @@ private actor AutosaveStore: DraftStore {
         return Receipt(command: "discard_draft", resultJson: "{}", createdAtMs: 2)
     }
     func publishDraftAttachment(file: URL) async throws -> DraftAttachmentObject {
+        throw CoreFailure.internalError(detail: "attachment publication is not used by this fixture")
+    }
+    func publishDraftAttachment(bytes: Data) async throws -> DraftAttachmentObject {
         throw CoreFailure.internalError(detail: "attachment publication is not used by this fixture")
     }
     func republishDraftAttachment(

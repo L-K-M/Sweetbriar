@@ -1,4 +1,4 @@
-// Selected-file attachment publication for one compose session.
+// Selected-file and inline-image publication for one compose session.
 import Foundation
 import Observation
 import UniformTypeIdentifiers
@@ -12,6 +12,10 @@ import UniformTypeIdentifiers
 /// completion; a result nobody wants any more is dropped unreferenced.
 /// Close and restore call `stopAndWait`: it fences new work and returns
 /// only after every begun native command has finished.
+///
+/// An inline image (spec/08 "Inline images") publishes the same way and
+/// joins with a fresh Content-ID, but only while `admitsInlineImage`
+/// says the body can take its reference; otherwise its row fails.
 @MainActor
 @Observable
 public final class DraftAttachmentPublications {
@@ -19,6 +23,8 @@ public final class DraftAttachmentPublications {
     public struct Publication: Identifiable, Sendable {
         public let id: UUID
         public let filename: String
+        /// Whether it joins as an inline image.
+        public let isInline: Bool
         /// Why the publication failed; the row stays until dismissed.
         public fileprivate(set) var failure: CoreFailure?
     }
@@ -32,6 +38,10 @@ public final class DraftAttachmentPublications {
     /// Called with the attachment's index once it joined the content, so
     /// the window can register the add's undo.
     @ObservationIgnored public var onAttached: (@MainActor (Int) -> Void)?
+    /// Whether a finished inline image may join now: the body is an
+    /// editable Markdown source that can take its reference. Nil admits
+    /// none.
+    @ObservationIgnored public var admitsInlineImage: (@MainActor () -> Bool)?
 
     private let model: DraftModel
     private let source: any DraftStore
@@ -45,18 +55,49 @@ public final class DraftAttachmentPublications {
     /// Start publishing one file; nil when this session takes no new work.
     @discardableResult
     public func attach(file: URL) -> UUID? {
+        publish(
+            filename: file.lastPathComponent, mediaType: Self.mediaType(of: file), inline: false
+        ) { try await $0.publishDraftAttachment(file: file) }
+    }
+
+    /// Start publishing a PNG, JPEG or GIF file as an inline image; nil
+    /// for another type or when this session takes no new work.
+    @discardableResult
+    public func insertImage(file: URL) -> UUID? {
+        let mediaType = Self.mediaType(of: file)
+        guard InlineImage.mediaTypes.contains(mediaType) else { return nil }
+        return publish(filename: file.lastPathComponent, mediaType: mediaType, inline: true) {
+            try await $0.publishDraftAttachment(file: file)
+        }
+    }
+
+    /// Start publishing pasted image data as an inline image named
+    /// "Image"; nil for another type or when this session takes no new
+    /// work.
+    @discardableResult
+    public func insertImage(data: Data, mediaType: String) -> UUID? {
+        guard InlineImage.mediaTypes.contains(mediaType),
+            let ext = UTType(mimeType: mediaType)?.preferredFilenameExtension
+        else { return nil }
+        return publish(
+            filename: "\(InlineImage.pastedName).\(ext)", mediaType: mediaType, inline: true
+        ) { try await $0.publishDraftAttachment(bytes: data) }
+    }
+
+    private func publish(
+        filename: String, mediaType: String, inline: Bool,
+        _ command: @escaping @Sendable (any DraftStore) async throws -> DraftAttachmentObject
+    ) -> UUID? {
         guard !isStopped, !model.isStopped, !model.isDiscarded, model.content != nil else {
             return nil
         }
         let id = UUID()
-        let filename = file.lastPathComponent
-        let mediaType = Self.mediaType(of: file)
-        publications.append(Publication(id: id, filename: filename))
+        publications.append(Publication(id: id, filename: filename, isInline: inline))
         let source = source
         tasks[id] = Task { [weak self] in
             let outcome: Result<DraftAttachmentObject, any Error>
             do {
-                outcome = .success(try await source.publishDraftAttachment(file: file))
+                outcome = .success(try await command(source))
             } catch {
                 outcome = .failure(error)
             }
@@ -100,9 +141,17 @@ public final class DraftAttachmentPublications {
         guard !isStopped, let row = publications.firstIndex(where: { $0.id == id }) else { return }
         switch outcome {
         case .success(let object):
+            let inline = publications[row].isInline
+            if inline, admitsInlineImage?() != true {
+                publications[row].failure = .unavailable(
+                    reason: "The message body can't take an image now.")
+                return
+            }
             guard
                 let index = model.appendAttachment(
-                    .new(object: object, filename: filename, mediaType: mediaType))
+                    .new(
+                        object: object, filename: filename, mediaType: mediaType,
+                        contentId: inline ? InlineImage.mintContentId() : nil))
             else {
                 publications[row].failure = .unavailable(reason: "The draft can no longer be edited.")
                 return
