@@ -25,6 +25,9 @@ pub struct FrozenAttachment {
     pub size: Option<u64>,
     /// The reader's part id, which `extract_attachment` takes.
     pub part_id: String,
+    /// The bare Content-ID when this is an inline image of a Markdown
+    /// draft, `None` for every other attachment (spec/05).
+    pub content_id: Option<String>,
 }
 
 impl FrozenAttachment {
@@ -75,11 +78,22 @@ pub fn frozen_send(bytes: &[u8]) -> Result<FrozenSend, String> {
     let attachments = input
         .attachments()
         .iter()
-        .map(|attachment| FrozenAttachment {
-            name: attachment.display_name().to_owned(),
-            media_type: attachment.media_type().to_owned(),
-            size: attachment.decoded_length(),
-            part_id: attachment.part_id().as_str().to_owned(),
+        .map(|attachment| {
+            // An inline image is one of the HTML part's related
+            // resources; a plain draft's attachment never is.
+            let content_id = input.html().and_then(|_| {
+                input.resources().iter().find_map(|resource| {
+                    (resource.part_id().as_str() == attachment.part_id().as_str())
+                        .then(|| resource.content_id().to_owned())
+                })
+            });
+            FrozenAttachment {
+                name: attachment.display_name().to_owned(),
+                media_type: attachment.media_type().to_owned(),
+                size: attachment.decoded_length(),
+                part_id: attachment.part_id().as_str().to_owned(),
+                content_id,
+            }
         })
         .collect();
     Ok(FrozenSend {
@@ -98,7 +112,11 @@ mod tests {
 
     use super::frozen_send;
 
-    fn composed(format: ComposeFormat, attachments: &[ComposeAttachment<'_>]) -> sb_mime::Composed {
+    fn composed(
+        body: &str,
+        format: ComposeFormat,
+        attachments: &[ComposeAttachment<'_>],
+    ) -> sb_mime::Composed {
         let to = [ComposeAddress {
             name: None,
             address: "friend@example.test",
@@ -113,7 +131,7 @@ mod tests {
             bcc: &[],
             reply_to: None,
             subject: "Synthetic subject",
-            body: "Hello **there**.",
+            body,
             format,
             attachments,
             message_id: "00000000-0000-4000-8000-000000000001@example.test",
@@ -135,7 +153,11 @@ mod tests {
 
     #[test]
     fn a_plain_draft_sends_its_plain_text() {
-        let message = composed(ComposeFormat::Plain { literal: true }, &[]);
+        let message = composed(
+            "Hello **there**.",
+            ComposeFormat::Plain { literal: true },
+            &[],
+        );
         let frozen = frozen_send(&message.bytes).expect("the frozen message parses");
         assert_eq!(frozen.subject, "Synthetic subject");
         assert_eq!(frozen.body.mime_type, "text/plain");
@@ -154,7 +176,7 @@ mod tests {
             data: b"synthetic attachment",
             content_id: None,
         };
-        let message = composed(ComposeFormat::Markdown, &[attachment]);
+        let message = composed("Hello **there**.", ComposeFormat::Markdown, &[attachment]);
         let frozen = frozen_send(&message.bytes).expect("the frozen message parses");
         assert_eq!(frozen.body.mime_type, "text/html");
         let html = message.html.as_deref().expect("a Markdown draft has HTML");
@@ -163,6 +185,56 @@ mod tests {
         assert_eq!(frozen.attachments[0].name, "notes.txt");
         assert_eq!(frozen.attachments[0].media_type, "text/plain");
         assert_eq!(frozen.attachments[0].size, Some(20));
+    }
+
+    #[test]
+    fn an_inline_image_of_a_markdown_draft_carries_its_content_id() {
+        let image = ComposeAttachment {
+            name: "chart.png",
+            mime_type: "image/png",
+            data: b"synthetic image",
+            content_id: Some("a@sweetbriar.invalid"),
+        };
+        let file = ComposeAttachment {
+            name: "notes.txt",
+            mime_type: "text/plain",
+            data: b"synthetic attachment",
+            content_id: None,
+        };
+        let message = composed(
+            "![Chart](cid:a@sweetbriar.invalid)",
+            ComposeFormat::Markdown,
+            &[image, file],
+        );
+        let frozen = frozen_send(&message.bytes).expect("the frozen message parses");
+        assert_eq!(frozen.attachments.len(), 2);
+        let chart = frozen
+            .attachments
+            .iter()
+            .find(|attachment| attachment.name == "chart.png")
+            .expect("the inline image");
+        assert_eq!(chart.content_id.as_deref(), Some("a@sweetbriar.invalid"));
+        let notes = frozen
+            .attachments
+            .iter()
+            .find(|attachment| attachment.name == "notes.txt")
+            .expect("the ordinary file");
+        assert_eq!(notes.content_id, None);
+    }
+
+    #[test]
+    fn a_content_id_attachment_of_a_plain_draft_is_ordinary() {
+        let image = ComposeAttachment {
+            name: "chart.png",
+            mime_type: "image/png",
+            data: b"synthetic image",
+            content_id: Some("a@sweetbriar.invalid"),
+        };
+        let message = composed("Hello.", ComposeFormat::Plain { literal: true }, &[image]);
+        let frozen = frozen_send(&message.bytes).expect("the frozen message parses");
+        assert_eq!(frozen.attachments.len(), 1);
+        assert_eq!(frozen.attachments[0].name, "chart.png");
+        assert_eq!(frozen.attachments[0].content_id, None);
     }
 
     #[test]

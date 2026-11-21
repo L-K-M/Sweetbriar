@@ -15,15 +15,15 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use sb_resources::{
-    APP_IDENTITY_REFUSED_REASON, AttachmentUpload, ClaimedRecipient, ClaimedSend, DraftAction,
-    DraftAddress, DraftCreate, DraftTemplate, FrozenAttachment, FrozenSend, KeyStore, ProtonClient,
-    ProtonDraftAttachment, ProtonUpload, RECIPIENT_TYPE_EXTERNAL, RECIPIENT_TYPE_INTERNAL,
-    RecipientKeys, RecipientKind, RefusalKind, SESSION_REFUSED_REASON, SendBody, SendError,
-    SendFailure, SendFailureRejection, SendPackages, SendParentKind, SendRecipient, SendRefusal,
-    SendTransportError, Session, StoreError, Timestamp, WritePriority, claim_send_attempt,
-    commit_send_requested, mark_outcome_unknown, mark_send_accepted, mark_send_failed,
-    pause_for_reason, pause_for_session, record_proton_draft, record_proton_upload,
-    requeue_before_request,
+    APP_IDENTITY_REFUSED_REASON, AttachmentUpload, ClaimedRecipient, ClaimedSend, Disposition,
+    DraftAction, DraftAddress, DraftCreate, DraftTemplate, FrozenAttachment, FrozenSend, KeyStore,
+    ProtonClient, ProtonDraftAttachment, ProtonUpload, RECIPIENT_TYPE_EXTERNAL,
+    RECIPIENT_TYPE_INTERNAL, RecipientKeys, RecipientKind, RefusalKind, SESSION_REFUSED_REASON,
+    SendBody, SendError, SendFailure, SendFailureRejection, SendPackages, SendParentKind,
+    SendRecipient, SendRefusal, SendTransportError, Session, StoreError, Timestamp, WritePriority,
+    claim_send_attempt, commit_send_requested, mark_outcome_unknown, mark_send_accepted,
+    mark_send_failed, pause_for_reason, pause_for_session, record_proton_draft,
+    record_proton_upload, requeue_before_request,
 };
 
 /// Proton's Sent and Drafts system labels (spec/05 step 6): the
@@ -511,8 +511,8 @@ async fn submit_one(
             filename: attachment.name.clone(),
             mime_type: attachment.media_type.clone(),
             encrypted,
-            inline: false,
-            content_id: None,
+            inline: attachment.content_id.is_some(),
+            content_id: attachment.content_id.clone(),
         };
         let uploaded = match client.upload_attachment(&session, &draft_id, &upload).await {
             Ok(uploaded) => uploaded,
@@ -649,9 +649,10 @@ async fn submit_one(
 /// and the frozen attachments (spec/05 step 3). The recorded uploads
 /// occupy the draft's leading positions and must still carry their
 /// ids; an unrecorded draft attachment is adopted when its reported
-/// name, MIME type and size match the next pending frozen attachment.
-/// Any other shape fails the attempt before the send request, naming
-/// the draft.
+/// name, MIME type, disposition and (for an inline one) bare
+/// Content-ID match the next pending frozen attachment. Any other
+/// shape fails the attempt before the send request, naming the
+/// draft.
 fn reconcile_draft_uploads(
     draft_id: &str,
     draft: &[ProtonDraftAttachment],
@@ -683,11 +684,21 @@ fn reconcile_draft_uploads(
     let mut recovered = Vec::new();
     for (index, attachment) in draft.iter().enumerate().skip(recorded.len()) {
         let expected = &frozen[index];
-        // Name and type only: Proton receives just the encrypted data
-        // packet, so its Size is not the part's decoded length. Uploads
-        // run in order and stop at the first failure, so the unrecorded
-        // tail is this attempt's own uploads of these frozen parts.
-        if attachment.name != expected.name || attachment.mime_type != expected.media_type {
+        // Name, type and inline shape only: Proton receives just the
+        // encrypted data packet, so its Size is not the part's decoded
+        // length. Uploads run in order and stop at the first failure, so
+        // the unrecorded tail is this attempt's own uploads of these
+        // frozen parts. An inline image's ContentID is the bare value
+        // the frozen MIME's Content-ID header carried.
+        if attachment.name != expected.name
+            || attachment.mime_type != expected.media_type
+            || (attachment.disposition == Disposition::Inline) != expected.content_id.is_some()
+        {
+            return Err(mismatch());
+        }
+        if let Some(content_id) = &expected.content_id
+            && attachment.content_id.as_deref() != Some(content_id.as_str())
+        {
             return Err(mismatch());
         }
         // Recorded as Proton reports it, like a confirmed upload.
@@ -1094,21 +1105,30 @@ mod tests {
         }
     }
 
-    fn frozen(name: &str, size: Option<u64>) -> FrozenAttachment {
+    fn frozen(name: &str, size: Option<u64>, content_id: Option<&str>) -> FrozenAttachment {
         FrozenAttachment {
             name: name.to_owned(),
             media_type: "text/plain".to_owned(),
             size,
             part_id: "2".to_owned(),
+            content_id: content_id.map(str::to_owned),
         }
     }
 
-    fn on_draft(id: &str, name: &str, size: i64) -> ProtonDraftAttachment {
+    fn on_draft(
+        id: &str,
+        name: &str,
+        size: i64,
+        disposition: Disposition,
+        content_id: Option<&str>,
+    ) -> ProtonDraftAttachment {
         ProtonDraftAttachment {
             id: id.to_owned(),
             name: name.to_owned(),
             size,
             mime_type: "text/plain".to_owned(),
+            disposition,
+            content_id: content_id.map(str::to_owned),
             key_packets: Vec::new(),
         }
     }
@@ -1121,8 +1141,14 @@ mod tests {
         for reported in [0, 57] {
             let adopted = reconcile_draft_uploads(
                 "draft-1",
-                &[on_draft("att-1", "notes.txt", reported)],
-                &[frozen("notes.txt", Some(12))],
+                &[on_draft(
+                    "att-1",
+                    "notes.txt",
+                    reported,
+                    Disposition::Attachment,
+                    None,
+                )],
+                &[frozen("notes.txt", Some(12), None)],
                 &[],
             )
             .expect("the lost upload is adopted");
@@ -1132,8 +1158,14 @@ mod tests {
         }
         let adopted = reconcile_draft_uploads(
             "draft-1",
-            &[on_draft("att-1", "notes.txt", 0)],
-            &[frozen("notes.txt", None)],
+            &[on_draft(
+                "att-1",
+                "notes.txt",
+                0,
+                Disposition::Attachment,
+                None,
+            )],
+            &[frozen("notes.txt", None, None)],
             &[],
         )
         .expect("a frozen part without a size is adopted too");
@@ -1144,8 +1176,79 @@ mod tests {
     fn an_unrecorded_upload_of_another_name_is_a_mismatch() {
         let refused = reconcile_draft_uploads(
             "draft-1",
-            &[on_draft("att-1", "other.txt", 12)],
-            &[frozen("notes.txt", Some(12))],
+            &[on_draft(
+                "att-1",
+                "other.txt",
+                12,
+                Disposition::Attachment,
+                None,
+            )],
+            &[frozen("notes.txt", Some(12), None)],
+            &[],
+        );
+        assert!(refused.is_err());
+    }
+
+    #[test]
+    fn an_unrecorded_inline_upload_is_adopted_with_its_content_id() {
+        let adopted = reconcile_draft_uploads(
+            "draft-1",
+            &[on_draft(
+                "att-1",
+                "chart.png",
+                0,
+                Disposition::Inline,
+                Some("a@b"),
+            )],
+            &[frozen("chart.png", Some(12), Some("a@b"))],
+            &[],
+        )
+        .expect("the lost inline upload is adopted");
+        assert_eq!(adopted.len(), 1);
+        assert_eq!(adopted[0].id, "att-1");
+    }
+
+    #[test]
+    fn an_inline_shape_mismatch_is_refused() {
+        // Inline on the draft but ordinary in the frozen message.
+        let refused = reconcile_draft_uploads(
+            "draft-1",
+            &[on_draft(
+                "att-1",
+                "chart.png",
+                0,
+                Disposition::Inline,
+                Some("a@b"),
+            )],
+            &[frozen("chart.png", Some(12), None)],
+            &[],
+        );
+        assert!(refused.is_err());
+        // Ordinary on the draft but inline in the frozen message.
+        let refused = reconcile_draft_uploads(
+            "draft-1",
+            &[on_draft(
+                "att-1",
+                "chart.png",
+                0,
+                Disposition::Attachment,
+                None,
+            )],
+            &[frozen("chart.png", Some(12), Some("a@b"))],
+            &[],
+        );
+        assert!(refused.is_err());
+        // A different ContentID.
+        let refused = reconcile_draft_uploads(
+            "draft-1",
+            &[on_draft(
+                "att-1",
+                "chart.png",
+                0,
+                Disposition::Inline,
+                Some("c@d"),
+            )],
+            &[frozen("chart.png", Some(12), Some("a@b"))],
             &[],
         );
         assert!(refused.is_err());

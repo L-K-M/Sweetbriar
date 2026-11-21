@@ -125,9 +125,23 @@ async fn queue_with(
     to: &[&str],
     attachments: &[(&str, &[u8])],
 ) -> (Queued, Vec<Vec<u8>>) {
+    let attachments = attachments
+        .iter()
+        .map(|(filename, bytes)| (*filename, "text/plain", None, *bytes))
+        .collect::<Vec<(&str, &str, Option<&str>, &[u8])>>();
+    queue_content(h, content(identity_id, to), &attachments).await
+}
+
+/// [`queue_with`] with a prepared draft body and each attachment's
+/// media type and inline Content-ID.
+async fn queue_content(
+    h: &Harness,
+    mut body: DraftContent,
+    attachments: &[(&str, &str, Option<&str>, &[u8])],
+) -> (Queued, Vec<Vec<u8>>) {
     let mut frozen = Vec::with_capacity(attachments.len());
     let mut draft_attachments = Vec::with_capacity(attachments.len());
-    for (filename, bytes) in attachments {
+    for &(filename, media_type, content_id, bytes) in attachments {
         let object = h
             .core
             .publish_draft_attachment(std::io::Cursor::new(bytes.to_vec()))
@@ -135,13 +149,12 @@ async fn queue_with(
             .expect("the attachment publishes");
         draft_attachments.push(DraftAttachment::New {
             object,
-            filename: (*filename).to_owned(),
-            media_type: "text/plain".to_owned(),
-            content_id: None,
+            filename: filename.to_owned(),
+            media_type: media_type.to_owned(),
+            content_id: content_id.map(str::to_owned),
         });
         frozen.push(bytes.to_vec());
     }
-    let mut body = content(identity_id, to);
     body.attachments = draft_attachments;
     let created = h
         .core
@@ -745,6 +758,112 @@ async fn an_attachment_is_carried_in_the_package_and_decrypts_to_the_frozen_byte
         recipient
             .decrypt_session_key(&uploaded.key_packets)
             .expect("the upload session key decrypts")
+    );
+}
+
+#[tokio::test]
+async fn a_markdown_drafts_inline_image_uploads_inline_with_its_content_id() {
+    let h = setup(vec![TestAccount::new(USER, PASSWORD)]).await;
+    let _id = sign_in(&h).await;
+    let ident = identity(&h).await;
+    let image = b"\x89PNG\r\n\x1a\n Sweetbriar synthetic inline image.";
+    let notes = b"Sweetbriar synthetic attachment bytes.";
+    let mut body = content(&ident, &[INTERNAL]);
+    body.format = ComposeFormat::Markdown;
+    body.body_source = "![Chart](cid:a@sweetbriar.invalid)".to_owned();
+    let (queued, _) = queue_content(
+        &h,
+        body,
+        &[
+            (
+                "chart.png",
+                "image/png",
+                Some("a@sweetbriar.invalid"),
+                image,
+            ),
+            ("notes.txt", "text/plain", None, notes),
+        ],
+    )
+    .await;
+
+    advance(&h, UNDO_MS).await;
+    let row = until_state(&h, &queued.attempt_id, AttemptState::Accepted).await;
+    assert_recipients(&row, RecipientState::Sent);
+    assert_eq!(h.server.sends(), 1);
+    assert_eq!(requests(&h, "POST", "/mail/v4/attachments"), 2);
+
+    let draft_id = row.proton_draft_id.as_deref().expect("the draft id");
+    let uploads = h.server.message_attachments(USER, draft_id);
+    assert_eq!(uploads.len(), 2);
+    let chart = uploads
+        .iter()
+        .find(|attachment| attachment.name == "chart.png")
+        .expect("the inline image");
+    assert!(chart.inline);
+    assert_eq!(chart.content_id.as_deref(), Some("a@sweetbriar.invalid"));
+    let file = uploads
+        .iter()
+        .find(|attachment| attachment.name == "notes.txt")
+        .expect("the ordinary file");
+    assert!(!file.inline);
+    assert_eq!(file.content_id, None);
+}
+
+#[tokio::test]
+async fn a_dropped_inline_upload_reply_is_adopted_on_retry() {
+    let h = setup(vec![TestAccount::new(USER, PASSWORD)]).await;
+    let _id = sign_in(&h).await;
+    let ident = identity(&h).await;
+    // The upload applies but its reply is lost, so nothing is recorded
+    // before the retry reads the draft.
+    h.server.set_fault(Some(Fault::OnceAt {
+        path: "/mail/v4/attachments".to_owned(),
+        fault: Box::new(Fault::DropAfterApply),
+    }));
+    let mut body = content(&ident, &[INTERNAL]);
+    body.format = ComposeFormat::Markdown;
+    body.body_source = "![Chart](cid:a@sweetbriar.invalid)".to_owned();
+    let (queued, _) = queue_content(
+        &h,
+        body,
+        &[(
+            "chart.png",
+            "image/png",
+            Some("a@sweetbriar.invalid"),
+            b"\x89PNG\r\n\x1a\n Sweetbriar synthetic inline image.",
+        )],
+    )
+    .await;
+
+    advance(&h, UNDO_MS).await;
+    until_cond(&h, "applied the upload", |h| {
+        requests(h, "POST", "/mail/v4/attachments") == 1
+    })
+    .await;
+    let _ = until_state(&h, &queued.attempt_id, AttemptState::Queued).await;
+    let draft_id = row(&h, &queued.attempt_id)
+        .await
+        .expect("the attempt")
+        .proton_draft_id
+        .expect("the draft id");
+
+    h.server.set_fault(None);
+    advance(&h, BACKOFF_MS).await;
+    let row = until_state(&h, &queued.attempt_id, AttemptState::Accepted).await;
+    assert_recipients(&row, RecipientState::Sent);
+    assert_eq!(h.server.sends(), 1);
+    assert_eq!(
+        requests(&h, "POST", "/mail/v4/attachments"),
+        1,
+        "the recovered inline upload wasn't repeated"
+    );
+    let uploads = h.server.message_attachments(USER, &draft_id);
+    assert_eq!(uploads.len(), 1, "the sent message carries it once");
+    assert_eq!(uploads[0].name, "chart.png");
+    assert!(uploads[0].inline, "the retry adopted the inline upload");
+    assert_eq!(
+        uploads[0].content_id.as_deref(),
+        Some("a@sweetbriar.invalid")
     );
 }
 

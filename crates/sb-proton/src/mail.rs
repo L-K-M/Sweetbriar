@@ -277,7 +277,7 @@ impl AttachmentMetadata {
 
 /// The first `content-id` header value, as a string or one array element,
 /// without its surrounding `<>`.
-fn content_id_of(headers: &Value) -> Option<String> {
+pub(crate) fn content_id_of(headers: &Value) -> Option<String> {
     let value = headers
         .as_object()?
         .iter()
