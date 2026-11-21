@@ -36,6 +36,7 @@ pub use diagnostics::{
 mod drafts;
 mod error;
 mod exports;
+mod flags;
 mod health;
 mod identities;
 mod imports;

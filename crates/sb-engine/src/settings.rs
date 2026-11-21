@@ -101,6 +101,11 @@ const REGISTRY: &[RegisteredSetting] = &[
         default: "",
     },
     RegisteredSetting {
+        key: "reader.mark_read",
+        values: Values::Choices(&["immediately", "2", "5", "10", "manual"]),
+        default: "immediately",
+    },
+    RegisteredSetting {
         key: "reader.reading_view_senders",
         values: Values::SenderList,
         default: "",

@@ -124,7 +124,7 @@ impl Engine {
     /// Resolve a selection to logical message ids, preserving order
     /// (`NotFound` names an unknown occurrence). A window token must be
     /// store-backed: the debug source's ids name no messages.
-    async fn selection_messages(
+    pub(crate) async fn selection_messages(
         &self,
         selection: &MessageSelection,
     ) -> Result<Vec<i64>, EngineError> {

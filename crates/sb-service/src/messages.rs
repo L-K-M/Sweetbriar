@@ -54,7 +54,7 @@ pub enum MessageSelection {
 }
 
 impl MessageSelection {
-    fn into_engine(self) -> sb_engine::MessageSelection {
+    pub(crate) fn into_engine(self) -> sb_engine::MessageSelection {
         match self {
             Self::OccurrenceIds(ids) => sb_engine::MessageSelection::OccurrenceIds(ids),
             Self::Window {

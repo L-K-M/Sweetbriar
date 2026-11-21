@@ -1536,6 +1536,24 @@ public protocol CoreProtocol: AnyObject, Sendable {
     func saveDraft(token: CancelToken, idempotencyKey: String, draftId: String, baseRevisionId: String?, content: DraftContent) async throws  -> DraftSaved
     
     /**
+     * `set_flags(selection, add, remove)` (spec/07 "Flags"): add or
+     * remove `\Seen` and `\Flagged` on the selection's logical
+     * messages, which must belong to one Proton account. Answers the
+     * undo token, or `None` when every flag already held. A repeated
+     * key answers the first call's token. Like every command it
+     * honours the cancel token only until it holds the core.
+     */
+    func setFlags(token: CancelToken, idempotencyKey: String, selection: MessageSelection, add: [String], remove: [String]) async throws  -> String?
+    
+    /**
+     * `undo(token)` (spec/07 "Undo"): plan the inverse of each change
+     * `undo_token`'s command planned, unless the flag already holds
+     * it. A malformed token, or one naming an unknown or foreign
+     * intent, is `InvalidInput` on `token`.
+     */
+    func undo(token: CancelToken, idempotencyKey: String, undoToken: String) async throws 
+    
+    /**
      * `health()` (spec/07 "Queries"): whether the store is read-only
      * after an integrity finding, with the finding, its time and its
      * copy. Answered from memory. A query: the token races the
@@ -2730,6 +2748,52 @@ open func saveDraft(token: CancelToken, idempotencyKey: String, draftId: String,
             completeFunc: ffi_sb_ffi_rust_future_complete_rust_buffer,
             freeFunc: ffi_sb_ffi_rust_future_free_rust_buffer,
             liftFunc: FfiConverterTypeDraftSaved_lift,
+            errorHandler: FfiConverterTypeCoreError_lift
+        )
+}
+    
+    /**
+     * `set_flags(selection, add, remove)` (spec/07 "Flags"): add or
+     * remove `\Seen` and `\Flagged` on the selection's logical
+     * messages, which must belong to one Proton account. Answers the
+     * undo token, or `None` when every flag already held. A repeated
+     * key answers the first call's token. Like every command it
+     * honours the cancel token only until it holds the core.
+     */
+open func setFlags(token: CancelToken, idempotencyKey: String, selection: MessageSelection, add: [String], remove: [String])async throws  -> String?  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_sb_ffi_fn_method_core_set_flags(
+                        self.uniffiCloneHandle(),FfiConverterTypeCancelToken_lower(token),FfiConverterString.lower(idempotencyKey),FfiConverterTypeMessageSelection_lower(selection),FfiConverterSequenceString.lower(add),FfiConverterSequenceString.lower(remove)
+                )
+            },
+            pollFunc: ffi_sb_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_sb_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_sb_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterOptionString.lift,
+            errorHandler: FfiConverterTypeCoreError_lift
+        )
+}
+    
+    /**
+     * `undo(token)` (spec/07 "Undo"): plan the inverse of each change
+     * `undo_token`'s command planned, unless the flag already holds
+     * it. A malformed token, or one naming an unknown or foreign
+     * intent, is `InvalidInput` on `token`.
+     */
+open func undo(token: CancelToken, idempotencyKey: String, undoToken: String)async throws   {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_sb_ffi_fn_method_core_undo(
+                        self.uniffiCloneHandle(),FfiConverterTypeCancelToken_lower(token),FfiConverterString.lower(idempotencyKey),FfiConverterString.lower(undoToken)
+                )
+            },
+            pollFunc: ffi_sb_ffi_rust_future_poll_void,
+            completeFunc: ffi_sb_ffi_rust_future_complete_void,
+            freeFunc: ffi_sb_ffi_rust_future_free_void,
+            liftFunc: { $0 },
             errorHandler: FfiConverterTypeCoreError_lift
         )
 }
@@ -18033,6 +18097,12 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sb_ffi_checksum_method_core_save_draft() != 24235) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sb_ffi_checksum_method_core_set_flags() != 29670) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sb_ffi_checksum_method_core_undo() != 60558) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sb_ffi_checksum_method_core_health() != 35765) {

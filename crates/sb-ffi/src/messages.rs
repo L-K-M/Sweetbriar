@@ -58,7 +58,7 @@ pub enum MessageSelection {
 }
 
 impl MessageSelection {
-    fn into_service(self) -> sb_service::MessageSelection {
+    pub(crate) fn into_service(self) -> sb_service::MessageSelection {
         match self {
             Self::OccurrenceIds(ids) => sb_service::MessageSelection::OccurrenceIds(ids),
             Self::Window {

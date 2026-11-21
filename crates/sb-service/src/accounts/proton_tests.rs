@@ -1143,6 +1143,7 @@ mod account_health;
 mod bodies;
 mod breaker;
 mod events;
+mod flags;
 mod health;
 mod identities;
 mod lane;
