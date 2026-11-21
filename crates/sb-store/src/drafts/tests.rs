@@ -90,6 +90,7 @@ fn a_spent_or_missing_attachment_reservation_conflicts() {
         object: std::sync::Arc::new(published),
         filename: "one.txt".to_owned(),
         media_type: "text/plain".to_owned(),
+        content_id: None,
     }];
     let error = block_on(store.write(WritePriority::User, move |tx| {
         save_draft(tx, "d1", None, with_object, now)
@@ -114,6 +115,7 @@ fn a_spent_or_missing_attachment_reservation_conflicts() {
         object: std::sync::Arc::new(foreign_object),
         filename: "two.txt".to_owned(),
         media_type: "text/plain".to_owned(),
+        content_id: None,
     }];
     let error = block_on(store.write(WritePriority::User, move |tx| {
         save_draft(tx, "d1", None, with_foreign, now)
@@ -153,5 +155,138 @@ fn the_revision_and_the_current_pointer_commit_together() {
         .collect::<Result<_, _>>()
         .unwrap();
     assert!(dangling.is_empty(), "{dangling:?}");
+    store.close().unwrap();
+}
+
+/// The M4.4e2 Content-ID is stored only when set: an ordinary entry's
+/// canonical JSON is byte-identical to the older shape.
+#[test]
+fn stored_json_omits_content_id_when_absent() {
+    let (_scratch, _paths, store) = scratch();
+    let now = crate::Timestamp::from_millis(1_735_689_600_000);
+    writing(&store, move |tx| {
+        create_draft(tx, "d1", &DraftSource::New, now)
+    });
+    let published = store
+        .objects()
+        .publish(std::io::Cursor::new(b"image".as_slice()))
+        .unwrap();
+    let sha = published.id().sha256_hex();
+    let size = published.id().byte_length();
+    let mut content = input("r1");
+    content.attachments = vec![DraftAttachment::New {
+        object: std::sync::Arc::new(published),
+        filename: "plain.txt".to_owned(),
+        media_type: "text/plain".to_owned(),
+        content_id: None,
+    }];
+    writing(&store, move |tx| save_draft(tx, "d1", None, content, now));
+
+    let stored = reading(&store, |tx| {
+        tx.query_row(
+            "SELECT attachments_json FROM draft_revisions WHERE revision_id = 'r1'",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .map_err(|e| classify(e, "read the stored attachments"))
+    });
+    assert_eq!(
+        stored,
+        format!(
+            r#"[{{"filename":"plain.txt","media_type":"text/plain","object_sha256":"{sha}","size":{size}}}]"#
+        )
+    );
+    let revision = reading(&store, |tx| draft(tx, "d1"))
+        .unwrap()
+        .revision
+        .unwrap();
+    assert_eq!(revision.attachments[0].content_id, None);
+    store.close().unwrap();
+}
+
+/// A stored Content-ID reads back on the reference, bare.
+#[test]
+fn stored_content_id_round_trips() {
+    let (_scratch, _paths, store) = scratch();
+    let now = crate::Timestamp::from_millis(1_735_689_600_000);
+    writing(&store, move |tx| {
+        create_draft(tx, "d1", &DraftSource::New, now)
+    });
+    let published = store
+        .objects()
+        .publish(std::io::Cursor::new(b"image".as_slice()))
+        .unwrap();
+    let content_id = "0f8fad5b-d9cb-469f-a165-70867728950e@sweetbriar.invalid";
+    let mut content = input("r1");
+    content.attachments = vec![DraftAttachment::New {
+        object: std::sync::Arc::new(published),
+        filename: "chart.png".to_owned(),
+        media_type: "image/png".to_owned(),
+        content_id: Some(content_id.to_owned()),
+    }];
+    writing(&store, move |tx| save_draft(tx, "d1", None, content, now));
+
+    let revision = reading(&store, |tx| draft(tx, "d1"))
+        .unwrap()
+        .revision
+        .unwrap();
+    assert_eq!(
+        revision.attachments[0].content_id.as_deref(),
+        Some(content_id)
+    );
+    store.close().unwrap();
+}
+
+/// A `content_id` that is not a string, null included, is stored
+/// damage: the writer omits an absent one.
+#[test]
+fn a_non_string_content_id_is_corrupt() {
+    for value in ["5", "null"] {
+        let json = format!(
+            r#"[{{"object_sha256":"aa","filename":"f","media_type":"text/plain","size":1,"content_id":{value}}}]"#
+        );
+        let error = parse_attachments(&json).unwrap_err();
+        assert!(
+            matches!(error, StoreError::Corrupt { .. }),
+            "{value}: {error:?}"
+        );
+    }
+}
+
+/// Republication matches the four identity fields and ignores the
+/// Content-ID, so a retained attachment may change it (spec/07).
+#[test]
+fn republish_ignores_a_changed_content_id() {
+    let (_scratch, _paths, store) = scratch();
+    let now = crate::Timestamp::from_millis(1_735_689_600_000);
+    writing(&store, move |tx| {
+        create_draft(tx, "d1", &DraftSource::New, now)
+    });
+    let published = store
+        .objects()
+        .publish(std::io::Cursor::new(b"image".as_slice()))
+        .unwrap();
+    let object_id = *published.id();
+    let mut content = input("r1");
+    content.attachments = vec![DraftAttachment::New {
+        object: std::sync::Arc::new(published),
+        filename: "chart.png".to_owned(),
+        media_type: "image/png".to_owned(),
+        content_id: Some("a@b".to_owned()),
+    }];
+    writing(&store, move |tx| save_draft(tx, "d1", None, content, now));
+
+    let stored = reading(&store, |tx| draft(tx, "d1"))
+        .unwrap()
+        .revision
+        .unwrap()
+        .attachments[0]
+        .clone();
+    for content_id in [Some("c@d".to_owned()), None] {
+        let mut changed = stored.clone();
+        changed.content_id = content_id;
+        let source = reading(&store, |tx| attachment_source(tx, "d1", "r1", &changed));
+        assert_eq!(source, object_id);
+    }
     store.close().unwrap();
 }

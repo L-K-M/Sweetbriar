@@ -66,6 +66,7 @@ fn identical_attachment_request_replays_its_receipt() {
         object,
         filename: "file.txt".into(),
         media_type: "text/plain".into(),
+        content_id: None,
     });
     let key = core.new_idempotency_key();
     let saved = block_on(core.save_draft(&key, &draft.draft_id, None, request.clone())).unwrap();
@@ -80,6 +81,7 @@ fn with_attachment(subject: &str, object: DraftAttachmentObject) -> DraftContent
         object,
         filename: "file.txt".into(),
         media_type: "text/plain".into(),
+        content_id: None,
     });
     request
 }
@@ -594,6 +596,7 @@ fn receipts_replay_the_stored_results() {
             filename: String::new(),
             media_type: String::new(),
             size: 0,
+            content_id: None,
         }));
     assert_eq!(
         block_on(core.save_draft(&save_key, "", Some(""), invalid)).unwrap(),
@@ -770,6 +773,7 @@ fn an_attachment_is_published_before_the_revision_references_it() {
         object,
         filename: "one.txt".to_owned(),
         media_type: "text/plain".to_owned(),
+        content_id: None,
     }];
     save(&core, &created.draft_id, None, with_file);
 
@@ -784,6 +788,7 @@ fn an_attachment_is_published_before_the_revision_references_it() {
             filename: "one.txt".to_owned(),
             media_type: "text/plain".to_owned(),
             size: bytes.len() as u64,
+            content_id: None,
         }]
     );
 
@@ -807,6 +812,7 @@ fn reopened_draft_retains_only_attachments_from_its_base() {
         object,
         filename: "file.txt".into(),
         media_type: "text/plain".into(),
+        content_id: None,
     });
     let saved = save(&core, &draft.draft_id, None, first);
     block_on(core.shutdown());
@@ -826,6 +832,7 @@ fn reopened_draft_retains_only_attachments_from_its_base() {
         object,
         filename: "other.txt".into(),
         media_type: "text/plain".into(),
+        content_id: None,
     });
     save(&core, &other.draft_id, None, other_content);
     let unrelated = block_on(core.draft(&other.draft_id))

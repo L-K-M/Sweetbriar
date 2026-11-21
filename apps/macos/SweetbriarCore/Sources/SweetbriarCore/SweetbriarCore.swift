@@ -6020,14 +6020,24 @@ public struct DraftAttachmentRef: Equatable, Hashable {
     public var filename: String
     public var mediaType: String
     public var size: UInt64
+    /**
+     * The bare Content-ID of an image meant inline (spec/05); `None`
+     * is an ordinary attachment.
+     */
+    public var contentId: String?
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(objectSha256: String, filename: String, mediaType: String, size: UInt64) {
+    public init(objectSha256: String, filename: String, mediaType: String, size: UInt64, 
+        /**
+         * The bare Content-ID of an image meant inline (spec/05); `None`
+         * is an ordinary attachment.
+         */contentId: String?) {
         self.objectSha256 = objectSha256
         self.filename = filename
         self.mediaType = mediaType
         self.size = size
+        self.contentId = contentId
     }
 
     
@@ -6049,7 +6059,8 @@ public struct FfiConverterTypeDraftAttachmentRef: FfiConverterRustBuffer {
                 objectSha256: FfiConverterString.read(from: &buf), 
                 filename: FfiConverterString.read(from: &buf), 
                 mediaType: FfiConverterString.read(from: &buf), 
-                size: FfiConverterUInt64.read(from: &buf)
+                size: FfiConverterUInt64.read(from: &buf), 
+                contentId: FfiConverterOptionString.read(from: &buf)
         )
     }
 
@@ -6058,6 +6069,7 @@ public struct FfiConverterTypeDraftAttachmentRef: FfiConverterRustBuffer {
         FfiConverterString.write(value.filename, into: &buf)
         FfiConverterString.write(value.mediaType, into: &buf)
         FfiConverterUInt64.write(value.size, into: &buf)
+        FfiConverterOptionString.write(value.contentId, into: &buf)
     }
 }
 
@@ -12318,7 +12330,11 @@ public func FfiConverterTypeCredentialPause_lower(_ value: CredentialPause) -> R
 
 public enum DraftAttachment {
     
-    case new(object: DraftAttachmentObject, filename: String, mediaType: String
+    case new(object: DraftAttachmentObject, filename: String, mediaType: String, 
+        /**
+         * The bare Content-ID of an image meant inline (spec/05);
+         * `None` is an ordinary attachment.
+         */contentId: String?
     )
     case retained(DraftAttachmentRef
     )
@@ -12343,7 +12359,7 @@ public struct FfiConverterTypeDraftAttachment: FfiConverterRustBuffer {
         let variant: Int32 = try readInt(&buf)
         switch variant {
         
-        case 1: return .new(object: try FfiConverterTypeDraftAttachmentObject.read(from: &buf), filename: try FfiConverterString.read(from: &buf), mediaType: try FfiConverterString.read(from: &buf)
+        case 1: return .new(object: try FfiConverterTypeDraftAttachmentObject.read(from: &buf), filename: try FfiConverterString.read(from: &buf), mediaType: try FfiConverterString.read(from: &buf), contentId: try FfiConverterOptionString.read(from: &buf)
         )
         
         case 2: return .retained(try FfiConverterTypeDraftAttachmentRef.read(from: &buf)
@@ -12357,11 +12373,12 @@ public struct FfiConverterTypeDraftAttachment: FfiConverterRustBuffer {
         switch value {
         
         
-        case let .new(object,filename,mediaType):
+        case let .new(object,filename,mediaType,contentId):
             writeInt(&buf, Int32(1))
             FfiConverterTypeDraftAttachmentObject.write(object, into: &buf)
             FfiConverterString.write(filename, into: &buf)
             FfiConverterString.write(mediaType, into: &buf)
+            FfiConverterOptionString.write(contentId, into: &buf)
             
         
         case let .retained(v1):

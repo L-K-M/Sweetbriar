@@ -155,6 +155,7 @@ mod tests {
             object,
             filename: "one.txt".to_owned(),
             media_type: "text/plain".to_owned(),
+            content_id: None,
         }];
         let id = draft_id.to_owned();
         block_on(res.write(WritePriority::User, move |tx| {

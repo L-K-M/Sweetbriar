@@ -748,7 +748,7 @@ fn compose_and_publish(
             name: &reference.filename,
             mime_type: &reference.media_type,
             data: bytes,
-            content_id: None,
+            content_id: reference.content_id.as_deref(),
         })
         .collect();
     let references: Vec<&str> = references.iter().map(String::as_str).collect();

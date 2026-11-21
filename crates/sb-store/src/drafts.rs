@@ -139,6 +139,9 @@ pub enum DraftAttachment {
         object: Arc<PublishedObject>,
         filename: String,
         media_type: String,
+        /// The bare Content-ID of an image meant inline (spec/05);
+        /// `None` is an ordinary attachment.
+        content_id: Option<String>,
     },
     Retained(AttachmentRef),
 }
@@ -190,13 +193,16 @@ pub struct StoredRevision {
 }
 
 /// One stored attachment reference (`attachments_json`), a published
-/// object's identity and size (spec/02).
+/// object's identity and size (spec/02); `content_id` is the bare
+/// Content-ID of an image meant inline (spec/05), `None` for an
+/// ordinary attachment.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AttachmentRef {
     pub object_sha256: String,
     pub filename: String,
     pub media_type: String,
     pub size: u64,
+    pub content_id: Option<String>,
 }
 
 /// A live send attempt as a draft reports it (spec/07 "any live
@@ -556,7 +562,10 @@ pub fn attachment_source(
     reference: &AttachmentRef,
 ) -> Result<ObjectId, StoreError> {
     let attachments = revision_attachments(tx, draft_id, revision_id)?;
-    if !attachments.contains(reference) {
+    if !attachments
+        .iter()
+        .any(|entry| same_object(entry, reference))
+    {
         return Err(StoreError::conflict(format!(
             "revision {revision_id} of draft {draft_id} does not reference this attachment"
         )));
@@ -796,8 +805,9 @@ fn recipients_json(recipients: &[DraftRecipient]) -> Result<String, StoreError> 
 }
 
 /// The attachments' canonical JSON: `{filename, media_type,
-/// object_sha256, size}` each (spec/02; the map's sorted keys are the
-/// canonical order).
+/// object_sha256, size, content_id?}` each (spec/02; the map's sorted
+/// keys are the canonical order; `content_id` is written only when
+/// set, so an ordinary entry is byte-identical to the older shape).
 fn attachments_json(
     attachments: &[DraftAttachment],
     base: &[AttachmentRef],
@@ -809,14 +819,16 @@ fn attachments_json(
                 object,
                 filename,
                 media_type,
+                content_id,
             } => AttachmentRef {
                 object_sha256: object.id().sha256_hex(),
                 filename: filename.clone(),
                 media_type: media_type.clone(),
                 size: object.id().byte_length(),
+                content_id: content_id.clone(),
             },
             DraftAttachment::Retained(reference) => {
-                if !base.contains(reference) {
+                if !base.iter().any(|entry| same_object(entry, reference)) {
                     return Err(StoreError::conflict(
                         "attachment is not in the base revision",
                     ));
@@ -837,6 +849,9 @@ fn attachments_json(
             "size".to_owned(),
             serde_json::Value::Number(reference.size.into()),
         );
+        if let Some(content_id) = &reference.content_id {
+            entry.insert("content_id".to_owned(), content_id.clone().into());
+        }
         list.push(serde_json::Value::Object(entry));
     }
     Ok(serde_json::Value::Array(list).to_string())
@@ -869,8 +884,9 @@ fn parse_recipients(json: &str) -> Result<Vec<DraftRecipient>, StoreError> {
 }
 
 /// A stored `attachments_json` back into references; anything but a
-/// list of complete entries is damage the writer didn't make. The
-/// backup snapshot's reference read parses through this same shape.
+/// list of complete entries is damage the writer didn't make. An
+/// absent `content_id` is `None`. The backup snapshot's
+/// reference read parses through this same shape.
 pub(crate) fn parse_attachments(json: &str) -> Result<Vec<AttachmentRef>, StoreError> {
     let parsed: serde_json::Value = serde_json::from_str(json)
         .map_err(|_| corrupt("a draft revision's attachments are not JSON"))?;
@@ -887,14 +903,31 @@ pub(crate) fn parse_attachments(json: &str) -> Result<Vec<AttachmentRef>, StoreE
         let size = entry["size"]
             .as_u64()
             .ok_or_else(|| corrupt("a draft attachment has no size"))?;
+        // The writer omits an absent Content-ID and never writes null.
+        let content_id = match entry.get("content_id") {
+            None => None,
+            Some(serde_json::Value::String(content_id)) => Some(content_id.clone()),
+            Some(_) => return Err(corrupt("a draft attachment's content_id is not a string")),
+        };
         attachments.push(AttachmentRef {
             object_sha256: string("object_sha256")?.to_owned(),
             filename: string("filename")?.to_owned(),
             media_type: string("media_type")?.to_owned(),
             size,
+            content_id,
         });
     }
     Ok(attachments)
+}
+
+/// Whether two references name the same object: hash, filename,
+/// media type and size. The Content-ID is not identity (spec/07), so
+/// a retained attachment may gain, change or lose it.
+fn same_object(left: &AttachmentRef, right: &AttachmentRef) -> bool {
+    left.object_sha256 == right.object_sha256
+        && left.filename == right.filename
+        && left.media_type == right.media_type
+        && left.size == right.size
 }
 
 fn conflict_on_state(draft_id: &str, state: DraftState) -> StoreError {

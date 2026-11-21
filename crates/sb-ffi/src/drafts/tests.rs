@@ -114,6 +114,7 @@ fn with_attachment(subject: &str, object: Arc<DraftAttachmentObject>) -> DraftCo
         object,
         filename: "file.txt".into(),
         media_type: "text/plain".into(),
+        content_id: None,
     });
     content
 }
@@ -206,6 +207,7 @@ fn draft_records_map_every_field_and_round_trip_the_codec() {
                 filename: "file".into(),
                 media_type: "type".into(),
                 size: u64::MAX,
+                content_id: Some("a@sweetbriar.invalid".into()),
             }],
             created_at_ms: -100,
         }),
@@ -248,6 +250,7 @@ fn draft_records_map_every_field_and_round_trip_the_codec() {
                 filename: "file".into(),
                 media_type: "type".into(),
                 size: u64::MAX,
+                content_id: Some("a@sweetbriar.invalid".into()),
             }],
             created_at_ms: -100,
         }),
@@ -959,6 +962,7 @@ fn save_inputs_map_every_field_and_round_trip_the_codec() {
         filename: "file".into(),
         media_type: "type".into(),
         size: u64::MAX,
+        content_id: None,
     };
     let content = DraftContent {
         identity_id: Some("identity".into()),
@@ -974,6 +978,7 @@ fn save_inputs_map_every_field_and_round_trip_the_codec() {
                 object: object.clone(),
                 filename: "new.txt".into(),
                 media_type: "text/plain".into(),
+                content_id: None,
             },
             DraftAttachment::Retained(reference.clone()),
         ],
@@ -995,11 +1000,13 @@ fn save_inputs_map_every_field_and_round_trip_the_codec() {
             object,
             filename,
             media_type,
+            content_id,
         } => {
             assert_eq!(object.object_sha256, object_sha256);
             assert_eq!(object.byte_length, byte_length);
             assert_eq!(filename, "new.txt");
             assert_eq!(media_type, "text/plain");
+            assert_eq!(content_id, &None);
         }
         other => panic!("a new attachment must map to one: {other:?}"),
     }
@@ -1048,6 +1055,7 @@ fn create_save_and_load_preserve_every_field() {
         object: object.clone(),
         filename: "one.txt".into(),
         media_type: "text/plain".into(),
+        content_id: None,
     }];
     let saved = block_on(core.save_draft(
         CancelToken::new(),
@@ -1092,6 +1100,7 @@ fn create_save_and_load_preserve_every_field() {
             filename: "one.txt".into(),
             media_type: "text/plain".into(),
             size: bytes.len() as u64,
+            content_id: None,
         }]
     );
 
@@ -1243,6 +1252,7 @@ fn fresh_keys_spend_one_reservation_and_failures_leave_no_rows() {
         object: third,
         filename: "three.txt".into(),
         media_type: "text/plain".into(),
+        content_id: None,
     });
     let saved_both = try_save(&core, "save-6", &other_id, None, both).unwrap();
     assert_eq!(
@@ -1318,6 +1328,7 @@ fn same_key_replay_precedes_replacement_validation_and_spends_nothing() {
             filename: String::new(),
             media_type: String::new(),
             size: 0,
+            content_id: None,
         }));
     let replayed = try_save(&core, "save-1", "", Some(String::new()), invalid).unwrap();
     assert_eq!(replayed, saved);
@@ -1582,6 +1593,7 @@ fn save_failures_are_typed_and_name_their_fields() {
         filename: String::new(),
         media_type: "text/plain".into(),
         size: 0,
+        content_id: None,
     })];
     invalid_input(
         try_save(
@@ -2050,6 +2062,7 @@ fn republish_after_shutdown_is_unavailable() {
             filename: "f".into(),
             media_type: "text/plain".into(),
             size: 1,
+            content_id: None,
         },
     ))
     .unwrap_err();

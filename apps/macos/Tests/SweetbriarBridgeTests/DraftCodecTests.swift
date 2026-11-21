@@ -28,7 +28,9 @@ import Testing
 
 @Test func generatedDraftRecordsPreserveEveryFieldAndNullability() throws {
     let recipient = DraftRecipient(address: "a@example.test", name: "Å")
-    let reference = DraftAttachmentRef(objectSha256: "ab", filename: "ä.txt", mediaType: "text/plain", size: 73)
+    let reference = DraftAttachmentRef(
+        objectSha256: "ab", filename: "ä.txt", mediaType: "text/plain", size: 73,
+        contentId: "c@sweetbriar.invalid")
     let revision = DraftRevision(
         revisionId: "r", seq: 9, baseRevisionId: "base", accountId: "account", identityId: "identity",
         format: .markdown, plainFlowed: false, subject: "Subject", to: [recipient],
@@ -44,7 +46,9 @@ import Testing
             to: [.init(address: "a@example.test", name: "Å")],
             cc: [.init(address: "cc@example.test", name: nil)],
             bcc: [.init(address: "bcc@example.test", name: "Hidden")], bodySource: "Body 😀",
-            attachments: [.init(objectSha256: "ab", filename: "ä.txt", mediaType: "text/plain", size: 73)],
+            attachments: [.init(
+                objectSha256: "ab", filename: "ä.txt", mediaType: "text/plain", size: 73,
+                contentId: "c@sweetbriar.invalid")],
             createdAtMs: 17
         ), attempt: .init(attemptId: "attempt", state: .outcomeUnknown), createdAtMs: 19, updatedAtMs: 23
     ))

@@ -541,7 +541,7 @@ public final class DraftModel {
     ) -> DraftAttachmentRef {
         DraftAttachmentRef(
             objectSha256: object.objectSha256, filename: filename,
-            mediaType: mediaType, size: object.byteLength)
+            mediaType: mediaType, size: object.byteLength, contentId: nil)
     }
 
     /// The core compares stored references byte for byte, not by Swift's
@@ -573,7 +573,8 @@ public final class DraftModel {
             guard acknowledged else { return attachment }
             acknowledgedAny = true
             return .retained(DraftAttachmentRef(objectSha256: object.objectSha256,
-                filename: filename, mediaType: mediaType, size: object.byteLength))
+                filename: filename, mediaType: mediaType, size: object.byteLength,
+                contentId: nil))
         }
         guard acknowledgedAny else { return }
         content = current

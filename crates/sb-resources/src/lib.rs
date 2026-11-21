@@ -83,13 +83,13 @@ pub use proton::{
 // without depending on a leaf.
 pub use sb_proton::{
     ApiCode, AttachmentMetadata, AttachmentUpload, BackoffKind, CertificateDer, Challenge,
-    Client as ProtonClient, DecryptError, DraftAction, DraftAddress, DraftCreate, DraftTemplate,
-    EventAction, EventBatch, EventId, FinishedSignIn, FullMessage, Identity, KeyStore, Label,
-    LabelKind, ListingAnchor, MAX_PAGE_SIZE as PROTON_MAX_PAGE_SIZE, ModulusSignatureVerifier,
-    ProtonDraftAttachment, ProtonError, RECIPIENT_TYPE_EXTERNAL, RECIPIENT_TYPE_INTERNAL,
-    RecipientKeys, RefusalKind, SecretBuffer, SecretString, SendAttachment, SendBody, SendError,
-    SendPackages, SendRecipient, SendRefusal, SendTransportError, Session, SignIn, SignInStep,
-    Trust,
+    Client as ProtonClient, DecryptError, Disposition, DraftAction, DraftAddress, DraftCreate,
+    DraftTemplate, EventAction, EventBatch, EventId, FinishedSignIn, FullMessage, Identity,
+    KeyStore, Label, LabelKind, ListingAnchor, MAX_PAGE_SIZE as PROTON_MAX_PAGE_SIZE,
+    ModulusSignatureVerifier, ProtonDraftAttachment, ProtonError, RECIPIENT_TYPE_EXTERNAL,
+    RECIPIENT_TYPE_INTERNAL, RecipientKeys, RefusalKind, SecretBuffer, SecretString,
+    SendAttachment, SendBody, SendError, SendPackages, SendRecipient, SendRefusal,
+    SendTransportError, Session, SignIn, SignInStep, Trust,
 };
 // The send lane's transport items (M4.3g): the lane drives the
 // submission calls and their crypto the way sb-proton's fake-server

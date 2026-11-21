@@ -34,7 +34,7 @@ private func nativeContent(route: String? = "a", body: String = "User text") -> 
             .retained(
                 .init(
                     objectSha256: String(repeating: "a", count: 64), filename: "retained.txt",
-                    mediaType: "text/plain", size: 3))
+                    mediaType: "text/plain", size: 3, contentId: nil))
         ])
 }
 

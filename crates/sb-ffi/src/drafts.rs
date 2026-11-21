@@ -107,6 +107,9 @@ pub struct DraftAttachmentRef {
     pub filename: String,
     pub media_type: String,
     pub size: u64,
+    /// The bare Content-ID of an image meant inline (spec/05); `None`
+    /// is an ordinary attachment.
+    pub content_id: Option<String>,
 }
 impl From<sb_service::DraftAttachmentRef> for DraftAttachmentRef {
     fn from(value: sb_service::DraftAttachmentRef) -> Self {
@@ -115,6 +118,7 @@ impl From<sb_service::DraftAttachmentRef> for DraftAttachmentRef {
             filename: value.filename,
             media_type: value.media_type,
             size: value.size,
+            content_id: value.content_id,
         }
     }
 }
@@ -126,6 +130,7 @@ impl From<DraftAttachmentRef> for sb_service::DraftAttachmentRef {
             filename: value.filename,
             media_type: value.media_type,
             size: value.size,
+            content_id: value.content_id,
         }
     }
 }
@@ -341,6 +346,9 @@ pub enum DraftAttachment {
         object: Arc<DraftAttachmentObject>,
         filename: String,
         media_type: String,
+        /// The bare Content-ID of an image meant inline (spec/05);
+        /// `None` is an ordinary attachment.
+        content_id: Option<String>,
     },
     Retained(DraftAttachmentRef),
 }
@@ -352,12 +360,14 @@ impl From<DraftAttachment> for sb_service::DraftAttachment {
                 object,
                 filename,
                 media_type,
+                content_id,
             } => Self::New {
                 // Cloning the service publication shares its one
                 // reservation; the save's transaction spends it.
                 object: object.inner.clone(),
                 filename,
                 media_type,
+                content_id,
             },
             DraftAttachment::Retained(reference) => Self::Retained(reference.into()),
         }
@@ -372,17 +382,20 @@ impl PartialEq for DraftAttachment {
                     object: left,
                     filename: left_filename,
                     media_type: left_media_type,
+                    content_id: left_content_id,
                 },
                 Self::New {
                     object: right,
                     filename: right_filename,
                     media_type: right_media_type,
+                    content_id: right_content_id,
                 },
             ) => {
                 left.object_sha256() == right.object_sha256()
                     && left.byte_length() == right.byte_length()
                     && left_filename == right_filename
                     && left_media_type == right_media_type
+                    && left_content_id == right_content_id
             }
             (Self::Retained(left), Self::Retained(right)) => left == right,
             _ => false,

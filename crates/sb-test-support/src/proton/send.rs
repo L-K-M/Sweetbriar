@@ -84,6 +84,10 @@ pub struct StoredAttachment {
     pub name: String,
     pub mime_type: String,
     pub size: i64,
+    /// Whether the upload carried the inline disposition.
+    pub inline: bool,
+    /// The bare Content-ID when inline, `None` otherwise.
+    pub content_id: Option<String>,
     pub key_packets: Vec<u8>,
     pub data_packet: Vec<u8>,
 }
@@ -752,6 +756,8 @@ impl FakeProtonServer {
                             name: attachment.name.clone(),
                             mime_type: attachment.mime_type.clone(),
                             size: attachment.plaintext.len() as i64,
+                            inline: attachment.inline,
+                            content_id: attachment.content_ids.first().cloned(),
                             key_packets: key_packets.clone(),
                             data_packet: data_packet.clone(),
                         },

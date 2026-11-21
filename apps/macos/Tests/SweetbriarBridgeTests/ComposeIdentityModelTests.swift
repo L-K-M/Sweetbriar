@@ -149,7 +149,8 @@ struct ComposeIdentityModelTests {
                     .retained(
                         DraftAttachmentRef(
                             objectSha256: String(repeating: "a", count: 64),
-                            filename: "Kept.txt", mediaType: "text/plain", size: 17))
+                            filename: "Kept.txt", mediaType: "text/plain", size: 17,
+                            contentId: nil))
                 ]
                 content.plainFlowed = false
                 draft.update(content)

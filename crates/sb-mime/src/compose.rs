@@ -1009,7 +1009,10 @@ fn inline_part<'a>(attachment: &ComposeAttachment<'a>) -> MimePart<'a> {
         ContentType::new(attachment.mime_type),
         BodyPart::Binary(attachment.data.into()),
     )
-    .inline()
+    .header(
+        "Content-Disposition",
+        ContentType::new("inline").attribute("filename", attachment.name),
+    )
     .cid(attachment.content_id.unwrap_or_default())
 }
 

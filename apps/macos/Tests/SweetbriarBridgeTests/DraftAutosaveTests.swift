@@ -118,7 +118,8 @@ private actor AutosaveStore: DraftStore {
                 case .new(let object, let filename, let mediaType):
                     return DraftAttachmentRef(
                         objectSha256: object.objectSha256,
-                        filename: filename, mediaType: mediaType, size: object.byteLength)
+                        filename: filename, mediaType: mediaType, size: object.byteLength,
+                        contentId: nil)
                 }
             }, createdAtMs: seq
         )

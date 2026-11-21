@@ -183,6 +183,7 @@ async fn send_crash_child() {
             object: Arc::new(attachment),
             filename: "notes.txt".to_owned(),
             media_type: "text/plain".to_owned(),
+            content_id: None,
         }],
     };
     let saved = engine

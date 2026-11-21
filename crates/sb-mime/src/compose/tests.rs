@@ -126,6 +126,50 @@ fn markdown_inline_image_and_attachment_snapshot() {
 }
 
 #[test]
+fn a_cid_source_that_names_no_attachment_is_dropped() {
+    let image = ComposeAttachment {
+        name: "logo.png",
+        mime_type: "image/png",
+        data: b"inline bytes",
+        content_id: Some("logo@example.org"),
+    };
+    let attachments = [image];
+    let mut input = base_input(
+        "![Chart](cid:unknown@example.org)\n",
+        ComposeFormat::Markdown,
+    );
+    input.attachments = &attachments;
+    let composed = compose(&input).unwrap();
+    let html = composed.html.as_deref().unwrap();
+    assert!(!html.contains("cid:unknown@example.org"), "{html}");
+    let plain = &composed.plain_text;
+    assert!(plain.contains("Chart"), "{plain}");
+    assert!(!plain.contains("cid:"), "{plain}");
+}
+
+#[test]
+fn a_plain_draft_sends_a_content_id_attachment_as_an_ordinary_file() {
+    let image = ComposeAttachment {
+        name: "logo.png",
+        mime_type: "image/png",
+        data: b"inline bytes",
+        content_id: Some("logo@example.org"),
+    };
+    let attachments = [image];
+    let mut input = base_input("Hello.\n", ComposeFormat::Plain { literal: false });
+    input.attachments = &attachments;
+    let composed = compose(&input).unwrap();
+    let text = String::from_utf8_lossy(&composed.bytes);
+    assert!(composed.html.is_none());
+    assert!(!text.contains("multipart/related"), "{text}");
+    assert!(!text.contains("Content-ID"), "{text}");
+    assert!(
+        text.contains("Content-Disposition: attachment; filename=\"logo.png\""),
+        "{text}"
+    );
+}
+
+#[test]
 fn reply_headers_snapshot() {
     let cc = [ComposeAddress {
         name: Some("CC Recipient"),
