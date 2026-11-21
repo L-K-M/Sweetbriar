@@ -63,6 +63,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     private var imports: ImportCoordinator?
     private var signIn: ProtonSignInSheet?
     private var reader: ReaderViewController?
+    /// Marks a shown unread Proton message read (spec/08 "Reader").
+    private var markRead: MarkReadTimer?
     private var closed = false
 
 
@@ -97,6 +99,10 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         window.contentView = content
         super.init(window: window)
         window.delegate = self
+        let toolbar = NSToolbar(identifier: "ch.lkmc.Sweetbriar.mainToolbar")
+        toolbar.delegate = self
+        toolbar.displayMode = .iconOnly
+        window.toolbar = toolbar
         window.center()
     }
 
@@ -134,6 +140,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         closed = true
         // Dock reopen reuses this controller, so release without retiring its model.
         reader?.select([])
+        markRead?.show(nil)
     }
 
     /// Retire all old-context work before the shell opens any new handles.
@@ -153,6 +160,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         outBox?.retire()
         messageList?.onGeneration = nil
         messageList?.onSelectionChange = nil
+        markRead?.cancel()
         retireWritersForRestore()
         let list = messageList
         let reader = self.reader
@@ -303,12 +311,14 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
             guard let self, contentSerial == serial else { return }
             listPane?.show(.drafts)
             self.reader?.select([])
+            self.markRead?.show(nil)
             drafts?.reload()
         }
         sidebar.onChooseOutBox = { [weak self, weak outBox, weak listPane] in
             guard let self, contentSerial == serial else { return }
             listPane?.show(.outBox)
             self.reader?.select([])
+            self.markRead?.show(nil)
             outBox?.reload()
         }
         messageList.onGeneration = { [weak self] generation in
@@ -319,6 +329,11 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
             guard let self, !closed, contentSerial == serial else { return }
             guard self.listPane?.pane == .messages else { return }
             self.reader?.select(ids)
+            // One shown Proton row may be marked read; anything else,
+            // or an archive that can't be written, ends a pending mark
+            // (spec/08 "Reader").
+            let targets = self.backups.canWrite ? self.flagTargets : nil
+            self.markRead?.show(targets?.count == 1 ? targets?.first : nil)
         }
         messageList.onViewSaved = { [weak self] view in
             guard let self, contentSerial == serial else { return }
@@ -344,7 +359,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         root.view.addSubview(banner)
         root.view.addSubview(split.view)
         NSLayoutConstraint.activate([
-            banner.topAnchor.constraint(equalTo: root.view.topAnchor),
+            // Below the toolbar, which the full-size content view
+            // would otherwise draw over the panes.
+            banner.topAnchor.constraint(equalTo: root.view.safeAreaLayoutGuide.topAnchor),
             banner.leadingAnchor.constraint(equalTo: root.view.leadingAnchor),
             banner.trailingAnchor.constraint(equalTo: root.view.trailingAnchor),
             split.view.topAnchor.constraint(equalTo: banner.bottomAnchor),
@@ -357,6 +374,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         window.setFrame(frame, display: true)
 
         self.bridge = bridge
+        markRead?.cancel()
+        markRead = MarkReadTimer(source: bridge)
         configureWriters()
         let imports = self.imports
 
@@ -459,5 +478,124 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
             guard let self, !Task.isCancelled, contentSerial == serial else { return }
             sidebar.reloadSections()
         }
+    }
+}
+
+// MARK: - Read and star (spec/08 "Message list" Keyboard, M3.2)
+
+extension MainWindowController: MessageFlagCommands {
+    /// The most rows one toggle acts on: `set_flags` takes at most
+    /// 1,000 occurrence ids (spec/07 "Selections").
+    private static let maxFlagSelection = 1_000
+
+    /// The list's selected rows as the flag commands see them: nil
+    /// unless the list shows messages and every selected row is loaded
+    /// and belongs to a Proton account. The local archive's flags are
+    /// later (spec/07 "Flags"), so a selection with one of its rows
+    /// disables the commands.
+    var flagTargets: [FlagTarget]? {
+        guard listPane?.pane == .messages, let model = messageList?.model,
+            let ids = messageList?.list?.selectedIDs, !ids.isEmpty,
+            ids.count <= Self.maxFlagSelection
+        else { return nil }
+        var targets: [FlagTarget] = []
+        for id in ids.sorted() {
+            guard let index = model.index(of: id), let row = model.row(at: index),
+                isProton(row.accountId)
+            else { return nil }
+            targets.append(FlagTarget(row))
+        }
+        return targets
+    }
+
+    private func isProton(_ accountId: String) -> Bool {
+        sidebarModel?.sections.first { $0.id == accountId }?.account?.kind == .proton
+    }
+
+    /// Message → Mark as Read or Unread (⇧⌘U).
+    @objc func toggleRead(_ sender: Any?) { toggle(.seen) }
+
+    /// Message → Star or Unstar (⇧⌘L).
+    @objc func toggleStar(_ sender: Any?) { toggle(.flagged) }
+
+    private func toggle(_ flag: MessageFlag) {
+        guard backups.canWrite, let bridge, let targets = flagTargets,
+            let toggle = FlagToggle.plan(flag, targets: targets)
+        else {
+            NSSound.beep()
+            return
+        }
+        // Marking the shown message unread ends its pending mark, and
+        // it stays unread until it is shown again.
+        if flag == .seen { markRead?.cancel() }
+        writes.run(revision: writes.revision) { [weak self] in
+            let failures = await toggle.run(source: bridge)
+            guard let self, let failure = failures.first, let window, !closed else { return }
+            NSAlert(error: failure).beginSheetModal(for: window) { _ in }
+        }
+    }
+
+    /// The commands' titles follow what they would do to the selection.
+    func flagCommandState(_ action: Selector) -> (enabled: Bool, title: String)? {
+        let targets = backups.canWrite ? flagTargets : nil
+        switch action {
+        case #selector(toggleRead(_:)):
+            let read = targets.map { FlagToggle.plan(.seen, targets: $0)?.set ?? true } ?? true
+            return (targets != nil, read ? "Mark as Read" : "Mark as Unread")
+        case #selector(toggleStar(_:)):
+            let star = targets.map { FlagToggle.plan(.flagged, targets: $0)?.set ?? true } ?? true
+            return (targets != nil, star ? "Star" : "Unstar")
+        default:
+            return nil
+        }
+    }
+}
+
+extension MainWindowController: NSMenuItemValidation, NSToolbarItemValidation {
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        guard let action = menuItem.action, let state = flagCommandState(action) else { return true }
+        menuItem.title = state.title
+        return state.enabled
+    }
+
+    func validateToolbarItem(_ item: NSToolbarItem) -> Bool {
+        guard let action = item.action, let state = flagCommandState(action) else { return true }
+        item.label = state.title
+        item.toolTip = state.title
+        return state.enabled
+    }
+}
+
+extension MainWindowController: NSToolbarDelegate {
+    private static let readItem = NSToolbarItem.Identifier(MainMenuBuilder.ItemID.toggleRead.rawValue)
+    private static let starItem = NSToolbarItem.Identifier(MainMenuBuilder.ItemID.toggleStar.rawValue)
+
+    func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
+        [.flexibleSpace, Self.readItem, Self.starItem]
+    }
+
+    func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
+        [.flexibleSpace, .space, Self.readItem, Self.starItem]
+    }
+
+    func toolbar(
+        _ toolbar: NSToolbar, itemForItemIdentifier itemIdentifier: NSToolbarItem.Identifier,
+        willBeInsertedIntoToolbar flag: Bool
+    ) -> NSToolbarItem? {
+        let spec: (title: String, symbol: String, action: Selector)
+        switch itemIdentifier {
+        case Self.readItem: spec = ("Mark as Read", "envelope.open", #selector(toggleRead(_:)))
+        case Self.starItem: spec = ("Star", "star", #selector(toggleStar(_:)))
+        default: return nil
+        }
+        let item = NSToolbarItem(itemIdentifier: itemIdentifier)
+        item.label = spec.title
+        item.paletteLabel = spec.title
+        item.toolTip = spec.title
+        item.image = NSImage(systemSymbolName: spec.symbol, accessibilityDescription: spec.title)
+        item.action = spec.action
+        item.target = nil
+        item.autovalidates = true
+        return item
     }
 }
