@@ -365,3 +365,30 @@ fn a_cursor_outside_the_filter_is_not_in_window() {
         PageRead::NotInWindow
     ));
 }
+
+#[test]
+fn stored_words_round_trip_and_a_non_string_provider_key_is_corrupt() {
+    for state in [IntentState::Parked, IntentState::Quarantined] {
+        assert_eq!(IntentState::parse(state.as_str()), Some(state));
+    }
+    for reason in [
+        QuarantineReason::EpochChange,
+        QuarantineReason::Restore,
+        QuarantineReason::AmbiguousMatch,
+        QuarantineReason::ConfigChange,
+        QuarantineReason::Breaker,
+    ] {
+        assert_eq!(QuarantineReason::parse(reason.as_str()), Some(reason));
+    }
+
+    let target = r#"{"v":1,"occurrence_ids":[1],"provider_key":"p"}"#;
+    assert_eq!(parse_provider_key(target).unwrap().as_deref(), Some("p"));
+    assert_eq!(
+        parse_provider_key(r#"{"v":1,"occurrence_ids":[1]}"#).unwrap(),
+        None
+    );
+    assert!(matches!(
+        parse_provider_key(r#"{"v":1,"occurrence_ids":[1],"provider_key":7}"#),
+        Err(StoreError::Corrupt { .. })
+    ));
+}
