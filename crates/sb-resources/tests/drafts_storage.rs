@@ -85,6 +85,7 @@ fn save_one_attachment(res: &Resources, bytes: &[u8], sha: &str) -> AttachmentRe
         object: std::sync::Arc::new(object),
         filename: "one.txt".to_owned(),
         media_type: "text/plain".to_owned(),
+        content_id: None,
     }];
     save(res, "d1", None, with_file);
     let reference = one(res, "d1").revision.unwrap().attachments[0].clone();
@@ -360,11 +361,13 @@ fn attachments_are_published_before_the_revision_references_them() {
             object: std::sync::Arc::new(first),
             filename: "one.txt".to_owned(),
             media_type: "text/plain".to_owned(),
+            content_id: None,
         },
         DraftAttachment::New {
             object: std::sync::Arc::new(second),
             filename: "two.txt".to_owned(),
             media_type: "text/plain".to_owned(),
+            content_id: None,
         },
     ];
     save(&res, "d1", None, with_files);
@@ -378,12 +381,14 @@ fn attachments_are_published_before_the_revision_references_them() {
                 filename: "one.txt".to_owned(),
                 media_type: "text/plain".to_owned(),
                 size: ATTACHMENT_ONE.len() as u64,
+                content_id: None,
             },
             AttachmentRef {
                 object_sha256: ATTACHMENT_TWO_SHA.to_owned(),
                 filename: "two.txt".to_owned(),
                 media_type: "text/plain".to_owned(),
                 size: ATTACHMENT_TWO.len() as u64,
+                content_id: None,
             },
         ]
     );
@@ -593,6 +598,7 @@ fn each_republication_gets_its_own_spendable_reservation() {
             object: copy,
             filename: "one.txt".to_owned(),
             media_type: "text/plain".to_owned(),
+            content_id: None,
         }];
         save(&res, draft_id, None, content);
         let stored = &one(&res, draft_id).revision.unwrap().attachments;
@@ -610,6 +616,7 @@ fn each_republication_gets_its_own_spendable_reservation() {
         object: first,
         filename: "one.txt".to_owned(),
         media_type: "text/plain".to_owned(),
+        content_id: None,
     }];
     let error = write_err(&res, move |tx| {
         save_draft(tx, "d2", Some("r2"), replay, now())
@@ -799,6 +806,7 @@ mod republish_faults {
             object: Arc::new(object),
             filename: "one.txt".to_owned(),
             media_type: "text/plain".to_owned(),
+            content_id: None,
         }];
         save(res, "d1", None, with_file);
         one(res, "d1").revision.unwrap().attachments[0].clone()

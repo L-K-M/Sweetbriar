@@ -168,7 +168,7 @@ func retainedReferenceMustMatchTheBase() async throws {
     )
     let fabricated = DraftAttachmentRef(
         objectSha256: String(repeating: "a", count: 64),
-        filename: "x", mediaType: "text/plain", size: 1
+        filename: "x", mediaType: "text/plain", size: 1, contentId: nil
     )
     do {
         _ = try await bridge.saveDraft(

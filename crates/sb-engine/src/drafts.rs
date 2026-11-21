@@ -26,6 +26,9 @@ use crate::identity::{
 };
 use crate::{Engine, EngineError};
 
+/// The spec/05 inline Content-ID length limit in bytes.
+const MAX_CONTENT_ID_BYTES: usize = 250;
+
 /// The commands' names in `command_receipts` (spec/07).
 const CREATE_DRAFT: &str = "create_draft";
 const SAVE_DRAFT: &str = "save_draft";
@@ -730,7 +733,107 @@ fn validate_draft(
             "a draft attachment needs a filename and media type",
         ));
     }
+    let mut content_ids = BTreeSet::new();
+    for attachment in &content.attachments {
+        let (filename, media_type, content_id) = match attachment {
+            DraftAttachment::New {
+                filename,
+                media_type,
+                content_id,
+                ..
+            } => (filename, media_type, content_id.as_deref()),
+            DraftAttachment::Retained(reference) => (
+                &reference.filename,
+                &reference.media_type,
+                reference.content_id.as_deref(),
+            ),
+        };
+        let Some(content_id) = content_id else {
+            continue;
+        };
+        if content_id.len() > MAX_CONTENT_ID_BYTES {
+            return Err(EngineError::invalid_input(
+                "attachments",
+                format!(
+                    "attachment {filename:?}: the Content-ID is longer than \
+                     {MAX_CONTENT_ID_BYTES} bytes"
+                ),
+            ));
+        }
+        if !valid_content_id(content_id) {
+            return Err(EngineError::invalid_input(
+                "attachments",
+                format!("attachment {filename:?}: the Content-ID is not dot-atom@dot-atom"),
+            ));
+        }
+        if !content_ids.insert(content_id) {
+            return Err(EngineError::invalid_input(
+                "attachments",
+                format!("attachment {filename:?}: the Content-ID is already used in this draft"),
+            ));
+        }
+        if !matches!(
+            media_type.as_str(),
+            "image/png" | "image/jpeg" | "image/gif"
+        ) {
+            return Err(EngineError::invalid_input(
+                "attachments",
+                format!(
+                    "attachment {filename:?}: the Content-ID needs an image/png, \
+                     image/jpeg or image/gif media type"
+                ),
+            ));
+        }
+    }
     Ok(())
+}
+
+/// The spec/05 inline Content-ID shape: a dot-atom `@` dot-atom of
+/// RFC 5322 atext ASCII, with exactly one `@`.
+fn valid_content_id(id: &str) -> bool {
+    let Some((left, right)) = id.split_once('@') else {
+        return false;
+    };
+    if right.contains('@') {
+        return false;
+    }
+    valid_dot_atom(left) && valid_dot_atom(right)
+}
+
+/// One or more non-empty atoms joined by single dots.
+fn valid_dot_atom(atoms: &str) -> bool {
+    if atoms.is_empty() {
+        return false;
+    }
+    atoms
+        .split('.')
+        .all(|atom| !atom.is_empty() && atom.bytes().all(is_atext))
+}
+
+/// RFC 5322 atext: ASCII letters, digits and the spec/05 punctuation.
+fn is_atext(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric()
+        || matches!(
+            byte,
+            b'!' | b'#'
+                | b'$'
+                | b'%'
+                | b'&'
+                | b'\''
+                | b'*'
+                | b'+'
+                | b'-'
+                | b'/'
+                | b'='
+                | b'?'
+                | b'^'
+                | b'_'
+                | b'`'
+                | b'{'
+                | b'|'
+                | b'}'
+                | b'~'
+        )
 }
 
 fn validate_draft_id(draft_id: &str) -> Result<(), EngineError> {

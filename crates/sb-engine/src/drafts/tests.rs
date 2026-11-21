@@ -387,6 +387,7 @@ fn an_attachment_is_published_before_the_revision_references_it() {
         object: std::sync::Arc::new(object),
         filename: "one.txt".to_owned(),
         media_type: "text/plain".to_owned(),
+        content_id: None,
     }];
     let saved = save(&engine, &draft_id, None, with_file);
 
@@ -417,6 +418,7 @@ fn an_attachment_is_published_before_the_revision_references_it() {
         object: std::sync::Arc::new(foreign),
         filename: "foreign.txt".to_owned(),
         media_type: "text/plain".to_owned(),
+        content_id: None,
     }];
     let key = engine.new_idempotency_key();
     match block_on(engine.save_draft(&key, &draft_id, Some(saved.revision_id()), bad)) {
@@ -441,6 +443,7 @@ fn shared_publication_replays_but_cannot_fund_a_fresh_save() {
             object: Arc::clone(&object),
             filename: "file.txt".into(),
             media_type: "text/plain".into(),
+            content_id: None,
         });
         request
     };
@@ -479,6 +482,7 @@ fn an_old_revision_republishes_into_a_fresh_draft() {
         object: Arc::new(object),
         filename: "file.txt".to_owned(),
         media_type: "text/plain".to_owned(),
+        content_id: None,
     }];
     let saved = save(&engine, source.draft_id(), None, first);
     let reference = block_on(engine.draft(source.draft_id()))
@@ -512,6 +516,7 @@ fn an_old_revision_republishes_into_a_fresh_draft() {
         object: Arc::new(copy),
         filename: "file.txt".to_owned(),
         media_type: "text/plain".to_owned(),
+        content_id: None,
     }];
     let copied = save(&engine, target.draft_id(), None, with_copy);
     let stored = block_on(engine.draft(target.draft_id()))
@@ -754,6 +759,7 @@ fn invalid_content_names_its_field() {
         object: std::sync::Arc::new(object),
         filename: String::new(),
         media_type: "text/plain".to_owned(),
+        content_id: None,
     }];
     match block_on(engine.save_draft(&key, &draft_id, None, bad)) {
         Err(EngineError::InvalidInput { field, .. }) => assert_eq!(field, "attachments"),
@@ -899,6 +905,7 @@ fn drive_cut_sequence(engine: &Engine) {
         object: std::sync::Arc::new(object),
         filename: "note.txt".to_owned(),
         media_type: "text/plain".to_owned(),
+        content_id: None,
     }];
     block_on(engine.save_draft(
         CHILD_SAVE_TWO_KEY,
@@ -1147,6 +1154,7 @@ fn draft_receipts_precede_replacement_validation() {
                         "text/plain"
                     }
                     .into(),
+                    content_id: None,
                 });
             }
         }
@@ -1221,6 +1229,7 @@ fn fresh_draft_validation_preserves_fields_and_retry() {
                         "text/plain"
                     }
                     .into(),
+                    content_id: None,
                 });
             }
         }
@@ -1559,4 +1568,194 @@ fn a_forward_body_omits_empty_header_lines_and_leaves_text_unquoted() {
         forward_body(&bare, None),
         "\n\n---------- Forwarded message ----------"
     );
+}
+
+/// The M4.4e2 inline Content-ID: a valid one saves and `draft()`
+/// returns it (spec/05).
+#[test]
+fn an_inline_content_id_saves_and_reads_back() {
+    let (_scratch, engine) = scratch_engine("engine-draft-content-id");
+    let draft = create(&engine, DraftSource::New);
+    let object = block_on(engine.publish_draft_attachment(Cursor::new(b"image"))).unwrap();
+    let content_id = "0f8fad5b-d9cb-469f-a165-70867728950e@sweetbriar.invalid";
+    let mut with_image = content("inline");
+    with_image.format = ComposeFormat::Markdown;
+    with_image.attachments = vec![DraftAttachment::New {
+        object: std::sync::Arc::new(object),
+        filename: "chart.png".to_owned(),
+        media_type: "image/png".to_owned(),
+        content_id: Some(content_id.to_owned()),
+    }];
+    save(&engine, draft.draft_id(), None, with_image);
+
+    let revision = block_on(engine.draft(draft.draft_id()))
+        .unwrap()
+        .revision
+        .unwrap();
+    assert_eq!(
+        revision.attachments[0].content_id.as_deref(),
+        Some(content_id)
+    );
+    block_on(engine.shutdown()).unwrap();
+}
+
+/// Each refused Content-ID shape is `InvalidInput` naming the
+/// attachment, and leaves the draft without a revision (spec/05).
+#[test]
+fn an_invalid_content_id_is_invalid_input_naming_the_attachment() {
+    let (_scratch, engine) = scratch_engine("engine-draft-content-id-invalid");
+    let draft = create(&engine, DraftSource::New);
+    let object =
+        Arc::new(block_on(engine.publish_draft_attachment(Cursor::new(b"image"))).unwrap());
+    let too_long = format!("{}@b", "a".repeat(249));
+    assert_eq!(too_long.len(), 251);
+
+    let cases: Vec<(&str, String, &str, &str)> = vec![
+        (
+            "no-at.png",
+            "plain".to_owned(),
+            "image/png",
+            "not dot-atom@dot-atom",
+        ),
+        (
+            "two-at.png",
+            "a@b@c".to_owned(),
+            "image/png",
+            "not dot-atom@dot-atom",
+        ),
+        (
+            "empty-atom.png",
+            "a..b@c".to_owned(),
+            "image/png",
+            "not dot-atom@dot-atom",
+        ),
+        (
+            "space.png",
+            "a b@c".to_owned(),
+            "image/png",
+            "not dot-atom@dot-atom",
+        ),
+        (
+            "angles.png",
+            "<a@b>".to_owned(),
+            "image/png",
+            "not dot-atom@dot-atom",
+        ),
+        (
+            "non-ascii.png",
+            "a@b\u{e9}".to_owned(),
+            "image/png",
+            "not dot-atom@dot-atom",
+        ),
+        (
+            "too-long.png",
+            too_long,
+            "image/png",
+            "longer than 250 bytes",
+        ),
+        (
+            "wrong-type.txt",
+            "a@b".to_owned(),
+            "text/plain",
+            "image/png",
+        ),
+    ];
+    for (filename, content_id, media_type, expected) in cases {
+        let mut bad = content("bad");
+        bad.attachments = vec![DraftAttachment::New {
+            object: Arc::clone(&object),
+            filename: filename.to_owned(),
+            media_type: media_type.to_owned(),
+            content_id: Some(content_id.clone()),
+        }];
+        let key = engine.new_idempotency_key();
+        match block_on(engine.save_draft(&key, draft.draft_id(), None, bad)) {
+            Err(EngineError::InvalidInput { field, message }) => {
+                assert_eq!(field, "attachments");
+                assert!(message.contains(filename), "{message}");
+                assert!(message.contains(expected), "{message}");
+            }
+            other => panic!("{content_id:?} must be InvalidInput: {other:?}"),
+        }
+    }
+
+    // The same Content-ID twice in one revision is refused on the
+    // second entry, named by its filename.
+    let mut duplicate = content("duplicate");
+    duplicate.attachments = vec![
+        DraftAttachment::New {
+            object: Arc::clone(&object),
+            filename: "one.png".to_owned(),
+            media_type: "image/png".to_owned(),
+            content_id: Some("a@b".to_owned()),
+        },
+        DraftAttachment::New {
+            object: Arc::clone(&object),
+            filename: "two.png".to_owned(),
+            media_type: "image/png".to_owned(),
+            content_id: Some("a@b".to_owned()),
+        },
+    ];
+    match block_on(engine.save_draft(
+        &engine.new_idempotency_key(),
+        draft.draft_id(),
+        None,
+        duplicate,
+    )) {
+        Err(EngineError::InvalidInput { field, message }) => {
+            assert_eq!(field, "attachments");
+            assert!(message.contains("two.png"), "{message}");
+            assert!(message.contains("already used"), "{message}");
+        }
+        other => panic!("a duplicate Content-ID must be InvalidInput: {other:?}"),
+    }
+
+    assert!(
+        block_on(engine.draft(draft.draft_id()))
+            .unwrap()
+            .revision
+            .is_none()
+    );
+    block_on(engine.shutdown()).unwrap();
+}
+
+/// A retained attachment may gain a Content-ID the base revision did
+/// not store; the new revision reports it (spec/07).
+#[test]
+fn a_retained_attachment_may_gain_a_content_id() {
+    let (_scratch, engine) = scratch_engine("engine-draft-content-id-retained");
+    let draft = create(&engine, DraftSource::New);
+    let object = block_on(engine.publish_draft_attachment(Cursor::new(b"image"))).unwrap();
+    let mut first = content("first");
+    first.attachments = vec![DraftAttachment::New {
+        object: std::sync::Arc::new(object),
+        filename: "chart.png".to_owned(),
+        media_type: "image/png".to_owned(),
+        content_id: None,
+    }];
+    let saved = save(&engine, draft.draft_id(), None, first);
+    let reference = block_on(engine.draft(draft.draft_id()))
+        .unwrap()
+        .revision
+        .unwrap()
+        .attachments[0]
+        .clone();
+    assert_eq!(reference.content_id, None);
+
+    let mut retained = reference.clone();
+    retained.content_id =
+        Some("0f8fad5b-d9cb-469f-a165-70867728950e@sweetbriar.invalid".to_owned());
+    let mut second = content("second");
+    second.attachments = vec![DraftAttachment::Retained(retained)];
+    save(&engine, draft.draft_id(), Some(saved.revision_id()), second);
+
+    let revision = block_on(engine.draft(draft.draft_id()))
+        .unwrap()
+        .revision
+        .unwrap();
+    assert_eq!(
+        revision.attachments[0].content_id.as_deref(),
+        Some("0f8fad5b-d9cb-469f-a165-70867728950e@sweetbriar.invalid")
+    );
+    block_on(engine.shutdown()).unwrap();
 }

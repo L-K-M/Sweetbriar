@@ -89,12 +89,19 @@ public struct DraftAttachmentRef: Sendable, Equatable {
     public var filename: String
     public var mediaType: String
     public var size: UInt64
+    /// The bare Content-ID of an image meant inline (spec/05); `nil`
+    /// is an ordinary attachment.
+    public var contentId: String?
 
-    public init(objectSha256: String, filename: String, mediaType: String, size: UInt64) {
+    public init(
+        objectSha256: String, filename: String, mediaType: String, size: UInt64,
+        contentId: String?
+    ) {
         self.objectSha256 = objectSha256
         self.filename = filename
         self.mediaType = mediaType
         self.size = size
+        self.contentId = contentId
     }
 
     /// Map the generated record field by field.
@@ -103,13 +110,14 @@ public struct DraftAttachmentRef: Sendable, Equatable {
         filename = g.filename
         mediaType = g.mediaType
         size = g.size
+        contentId = g.contentId
     }
 
     /// Map the bridge record onto the generated one.
     var generated: SweetbriarCore.DraftAttachmentRef {
         SweetbriarCore.DraftAttachmentRef(
             objectSha256: objectSha256, filename: filename,
-            mediaType: mediaType, size: size
+            mediaType: mediaType, size: size, contentId: contentId
         )
     }
 }
@@ -280,7 +288,9 @@ public enum DraftAttachment: Sendable, Equatable {
     var generated: SweetbriarCore.DraftAttachment {
         switch self {
         case .new(let object, let filename, let mediaType):
-            return .new(object: object.native, filename: filename, mediaType: mediaType)
+            return .new(
+                object: object.native, filename: filename, mediaType: mediaType,
+                contentId: nil)
         case .retained(let reference):
             return .retained(reference.generated)
         }

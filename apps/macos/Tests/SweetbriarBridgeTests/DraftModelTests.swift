@@ -95,7 +95,7 @@ private actor FakeDraftStore: DraftStore {
                 case .new(let object, let filename, let mediaType):
                     return DraftAttachmentRef(
                         objectSha256: object.objectSha256, filename: filename,
-                        mediaType: mediaType, size: object.byteLength
+                        mediaType: mediaType, size: object.byteLength, contentId: nil
                     )
                 }
             },
@@ -160,7 +160,8 @@ func revisionAndAttemptCarryEveryField() {
         to: [DraftRecipient(address: "a@example.test", name: "A")],
         cc: [], bcc: [], bodySource: "B",
         attachments: [DraftAttachmentRef(
-            objectSha256: "sha", filename: "f", mediaType: "text/plain", size: 3
+            objectSha256: "sha", filename: "f", mediaType: "text/plain", size: 3,
+            contentId: nil
         )],
         createdAtMs: 9
     )
@@ -179,7 +180,9 @@ func revisionAndAttemptCarryEveryField() {
     #expect(r.subject == "S" && r.bodySource == "B" && r.createdAtMs == 9)
     #expect(r.to == [DraftRecipient(address: "a@example.test", name: "A")])
     #expect(r.attachments == [
-        DraftAttachmentRef(objectSha256: "sha", filename: "f", mediaType: "text/plain", size: 3)
+        DraftAttachmentRef(
+            objectSha256: "sha", filename: "f", mediaType: "text/plain", size: 3,
+            contentId: nil)
     ])
 }
 
@@ -193,7 +196,8 @@ func contentMappingPreservesEveryField() {
         cc: [], bcc: [DraftRecipient(address: "c@example.test", name: nil)],
         bodySource: "B",
         attachments: [DraftAttachmentRef(
-            objectSha256: "sha", filename: "f", mediaType: "text/plain", size: 3
+            objectSha256: "sha", filename: "f", mediaType: "text/plain", size: 3,
+            contentId: nil
         )],
         createdAtMs: 9
     )

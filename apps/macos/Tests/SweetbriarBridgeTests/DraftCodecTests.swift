@@ -28,7 +28,9 @@ import Testing
 
 @Test func generatedDraftRecordsPreserveEveryFieldAndNullability() throws {
     let recipient = DraftRecipient(address: "a@example.test", name: "Å")
-    let reference = DraftAttachmentRef(objectSha256: "ab", filename: "ä.txt", mediaType: "text/plain", size: 73)
+    let reference = DraftAttachmentRef(
+        objectSha256: "ab", filename: "ä.txt", mediaType: "text/plain", size: 73,
+        contentId: nil)
     let revision = DraftRevision(
         revisionId: "r", seq: 9, baseRevisionId: "base", accountId: "account", identityId: "identity",
         format: .markdown, plainFlowed: false, subject: "Subject", to: [recipient],

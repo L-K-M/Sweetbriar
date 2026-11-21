@@ -137,6 +137,7 @@ async fn queue_with(
             object,
             filename: (*filename).to_owned(),
             media_type: "text/plain".to_owned(),
+            content_id: None,
         });
         frozen.push(bytes.to_vec());
     }

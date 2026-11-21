@@ -137,6 +137,9 @@ pub struct DraftAttachmentRef {
     pub filename: String,
     pub media_type: String,
     pub size: u64,
+    /// The bare Content-ID of an image meant inline (spec/05); `None`
+    /// is an ordinary attachment.
+    pub content_id: Option<String>,
 }
 
 impl DraftAttachmentRef {
@@ -146,6 +149,7 @@ impl DraftAttachmentRef {
             filename: self.filename,
             media_type: self.media_type,
             size: self.size,
+            content_id: self.content_id,
         }
     }
 
@@ -155,6 +159,7 @@ impl DraftAttachmentRef {
             filename: reference.filename,
             media_type: reference.media_type,
             size: reference.size,
+            content_id: reference.content_id,
         }
     }
 }
@@ -367,6 +372,9 @@ pub enum DraftAttachment {
         object: DraftAttachmentObject,
         filename: String,
         media_type: String,
+        /// The bare Content-ID of an image meant inline (spec/05);
+        /// `None` is an ordinary attachment.
+        content_id: Option<String>,
     },
     Retained(DraftAttachmentRef),
 }
@@ -424,10 +432,12 @@ impl DraftContent {
                         object,
                         filename,
                         media_type,
+                        content_id,
                     } => sb_engine::DraftAttachment::New {
                         object: object.object,
                         filename,
                         media_type,
+                        content_id,
                     },
                     DraftAttachment::Retained(reference) => {
                         sb_engine::DraftAttachment::Retained(reference.into_engine())

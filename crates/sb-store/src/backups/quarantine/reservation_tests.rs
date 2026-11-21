@@ -28,6 +28,7 @@ fn attachment(object: Arc<crate::PublishedObject>) -> Vec<DraftAttachment> {
         object,
         filename: "pending.txt".into(),
         media_type: "text/plain".into(),
+        content_id: None,
     }]
 }
 
