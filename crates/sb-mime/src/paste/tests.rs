@@ -552,3 +552,19 @@ fn deep_inline_nesting_converts_quickly_or_is_refused() {
     assert!(markdown_from_html(&format!("{}x", "<em>".repeat(1_000))).is_ok());
     assert!(started.elapsed() < std::time::Duration::from_secs(2));
 }
+fn a_ragged_table_pads_every_row_to_the_widest() {
+    let converted = convert("<table><tr><td>a</td></tr><tr><td>b</td><td>c</td></tr></table>");
+    assert_eq!(converted.markdown, "| a |  |\n| --- | --- |\n| b | c |");
+    assert!(converted.losses.is_empty());
+}
+
+#[test]
+fn a_caption_becomes_a_paragraph_before_its_table() {
+    let converted = convert("<table><caption>Totals</caption><tr><td>a</td></tr></table>");
+    assert_eq!(converted.markdown, "Totals\n\n| a |\n| --- |");
+    assert!(converted.losses.is_empty());
+    assert_eq!(
+        md("<table><caption>Cap</caption><tr><td colspan=2>a</td></tr></table>"),
+        "Cap\n\na"
+    );
+}

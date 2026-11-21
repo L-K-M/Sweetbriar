@@ -1112,7 +1112,8 @@ extension ComposeWindowController: NSMenuItemValidation {
     /// Enabled only for an editable Markdown body that has focus, with
     /// HTML on the pasteboard and no sheet already open.
     var canPasteAsMarkdown: Bool {
-        pasteSource != nil && pasteSheet == nil && window?.firstResponder === textView
+        pasteSource != nil && pasteSheet == nil && window?.attachedSheet == nil
+            && window?.firstResponder === textView
             && textView.isEditable && textView.mode == .markdown && !textView.hasMarkedText()
             && pasteboard.availableType(from: [.html]) != nil
     }
@@ -1135,7 +1136,9 @@ extension ComposeWindowController: NSMenuItemValidation {
             pasteConversion?.cancel()
             pasteConversion = nil
             pasteSheet = nil
-            if let markdown { textView.insertMarkdownPaste(markdown) }
+            // The body can stop taking edits while the sheet is open;
+            // say so rather than closing on a silent no-op.
+            if let markdown, !textView.insertMarkdownPaste(markdown) { NSSound.beep() }
         }
         pasteConversion = Task { [weak sheet] in
             do {

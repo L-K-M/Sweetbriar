@@ -8,6 +8,7 @@ struct PasteConversionBridgeTests {
     @Test(.timeLimit(.minutes(1))) @MainActor
     func theRealCoreConvertsNamesLossesAndRefusesWhole() async throws {
         let (root, config) = tempConfig()
+        defer { try? FileManager.default.removeItem(at: root) }
         let core = try await CoreBridge.open(
             config: config, snapshots: sinkBatcher(clock: ManualFrameClock()))
         do {
@@ -40,6 +41,5 @@ struct PasteConversionBridgeTests {
             await core.shutdown()
             throw error
         }
-        try FileManager.default.removeItem(at: root)
     }
 }

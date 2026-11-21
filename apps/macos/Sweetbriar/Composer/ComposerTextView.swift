@@ -154,6 +154,7 @@ final class ComposerTextView: NSTextView {
         undoManager?.setActionName("Paste as Markdown")
         breakUndoCoalescing()
         setSelectedRange(NSRange(location: range.location + (source as NSString).length, length: 0))
+        scrollRangeToVisible(selectedRange())
         return true
     }
 

@@ -10,15 +10,27 @@ import Testing
 private final class ScriptedPasteSource: PasteConversionSource, @unchecked Sendable {
     private let lock = NSLock()
     private var answers: [Result<MarkdownPaste, CoreFailure>]
-    private(set) var requests: [String] = []
+    private var recorded: [String] = []
     init(_ answers: [Result<MarkdownPaste, CoreFailure>]) { self.answers = answers }
+    var requests: [String] { lock.withLock { recorded } }
     func markdownFromHtml(html: String) async throws -> MarkdownPaste {
-        let answer = lock.withLock {
-            requests.append(html)
+        let answer: Result<MarkdownPaste, CoreFailure> = lock.withLock {
+            recorded.append(html)
+            guard !answers.isEmpty else { return .failure(.unavailable(reason: "no scripted answer for \(html)")) }
             return answers.removeFirst()
         }
         return try answer.get()
     }
+}
+
+@MainActor
+private func pasteKey(_ characters: String, keyCode: UInt16, in window: NSWindow) throws -> NSEvent {
+    try #require(
+        NSEvent.keyEvent(
+            with: .keyDown, location: .zero, modifierFlags: [],
+            timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+            context: nil, characters: characters, charactersIgnoringModifiers: characters,
+            isARepeat: false, keyCode: keyCode))
 }
 
 @MainActor
@@ -131,6 +143,29 @@ struct PasteMarkdownTests {
             #expect(undo.undoActionName == "Paste as Markdown")
             undo.undo()
             #expect(controller.textView.string == "Hi ")
+        }
+    }
+
+    @Test func returnAndEscapeReachTheButtonsWhileThePreviewHasFocus() async throws {
+        let converted = MarkdownPaste(markdown: "a", losses: [])
+        try await withPasteWindow(body: "", html: "<p>a</p>", answers: [.success(converted), .success(converted)]) {
+            controller, _, _ in
+            controller.pasteAsMarkdown(nil)
+            var sheet = try #require(controller.pasteSheet)
+            try #require(await pasteEventually { sheet.state == .ready(converted) })
+            sheet.window.makeFirstResponder(sheet.preview)
+            sheet.window.sendEvent(try pasteKey("\u{1b}", keyCode: 53, in: sheet.window))
+            #expect(controller.pasteSheet == nil)
+            #expect(controller.textView.string == "")
+
+            controller.window?.makeFirstResponder(controller.textView)
+            controller.pasteAsMarkdown(nil)
+            sheet = try #require(controller.pasteSheet)
+            try #require(await pasteEventually { sheet.state == .ready(converted) })
+            sheet.window.makeFirstResponder(sheet.preview)
+            sheet.window.sendEvent(try pasteKey("\r", keyCode: 36, in: sheet.window))
+            #expect(controller.pasteSheet == nil)
+            #expect(controller.textView.string == "a")
         }
     }
 

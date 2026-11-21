@@ -469,10 +469,11 @@ async fn Core::shutdown(self);   // flush writer, release the lease
     any other `href` it becomes its text and adds `links`; without one,
     its text.
   - A `table` without `colspan`, `rowspan`, block content or a `br` in
-    its cells becomes a GFM table, its first row the header, with `|`
-    in cell text escaped; any other
+    its cells becomes a GFM table, its first row the header, every row
+    padded with empty cells to the widest, with `|` in cell text
+    escaped; any other
     becomes one paragraph per row, cells joined by " | ", and adds
-    `tables`.
+    `tables`. A `caption` becomes a paragraph before either.
   - `img`, `picture`, `svg`, `video`, `audio`, `iframe`, `object` and
     `embed` are dropped, keeping an `img`'s `alt` as text, and add
     `images`. Form controls, `canvas` and `math` are dropped and add

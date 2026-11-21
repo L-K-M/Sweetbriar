@@ -37,10 +37,16 @@ final class PasteMarkdownSheet: NSObject {
     private var completion: (@MainActor (String?) -> Void)?
 
     override init() {
-        window = NSWindow(
+        let window = PasteSheetWindow(
             contentRect: NSRect(x: 0, y: 0, width: 520, height: 360),
             styleMask: [.titled], backing: .buffered, defer: false)
+        self.window = window
         super.init()
+        window.onReturn = { [weak self] in
+            guard let self, pasteButton.isEnabled, !pasteButton.isHidden else { return }
+            pasteButton.performClick(nil)
+        }
+        window.onEscape = { [weak self] in self?.cancelButton.performClick(nil) }
         window.title = "Paste as Markdown"
         window.setAccessibilityIdentifier("pasteMarkdownSheet")
 
@@ -112,13 +118,26 @@ final class PasteMarkdownSheet: NSObject {
             messageLabel.stringValue = Self.lossMessage(paste.losses) ?? ""
             messageLabel.isHidden = paste.losses.isEmpty
             pasteButton.isEnabled = true
+            if let message = Self.lossMessage(paste.losses) { announce(message) }
         case .refused(let reason):
             preview.string = ""
             messageLabel.stringValue = reason
             messageLabel.isHidden = false
             pasteButton.isEnabled = false
             pasteButton.isHidden = true
+            announce(reason)
         }
+    }
+
+    /// The warning or refusal arrives after the sheet opened, so VoiceOver
+    /// hears it without moving focus to the label.
+    private func announce(_ message: String) {
+        NSAccessibility.post(
+            element: window, notification: .announcementRequested,
+            userInfo: [
+                .announcement: message,
+                .priority: NSAccessibilityPriorityLevel.high.rawValue,
+            ])
     }
 
     @objc func paste(_ sender: Any?) {
@@ -134,5 +153,32 @@ final class PasteMarkdownSheet: NSObject {
         window.sheetParent?.endSheet(window)
         window.orderOut(nil)
         completion(markdown)
+    }
+}
+
+/// The sheet's window. The read-only preview is selectable, so it can hold
+/// focus, and a focused text view takes Return and Escape (`insertNewline:`,
+/// `complete:`) before the buttons' key equivalents see them; the window
+/// routes both to Paste and Cancel first.
+private final class PasteSheetWindow: NSWindow {
+    var onReturn: (@MainActor () -> Void)?
+    var onEscape: (@MainActor () -> Void)?
+
+    override func sendEvent(_ event: NSEvent) {
+        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+            .subtracting([.numericPad, .function])
+        if event.type == .keyDown, modifiers.isEmpty {
+            switch event.keyCode {
+            case 36, 76:  // Return, keypad Enter
+                onReturn?()
+                return
+            case 53:  // Escape
+                onEscape?()
+                return
+            default:
+                break
+            }
+        }
+        super.sendEvent(event)
     }
 }

@@ -1,6 +1,6 @@
 //! Tables (spec/07 "Paste conversion"): a simple table becomes a GFM
 //! table, its first row the header; any other becomes one paragraph per
-//! row and adds `tables`.
+//! row and adds `tables`. A caption is a paragraph before either.
 
 use html5ever::ns;
 
@@ -15,7 +15,10 @@ impl LossSet {
 
 impl Emitter {
     pub(super) fn emit_table(&mut self, tree: &Tree, id: usize) {
-        let rows = collect_rows(tree, id);
+        let (rows, captions) = collect_rows(tree, id);
+        for caption in captions {
+            self.emit_caption(tree, caption);
+        }
         let simple = rows
             .iter()
             .all(|cells| cells.iter().all(|cell| cell_is_simple(tree, *cell)));
@@ -66,22 +69,46 @@ impl Emitter {
                     .collect()
             })
             .collect();
-        let columns = rendered.first().map_or(0, Vec::len);
+        // GFM drops a row's cells past the header's, so every row is
+        // padded to the widest.
+        let columns = rendered.iter().map(Vec::len).max().unwrap_or(0).max(1);
         for (index, row) in rendered.iter().enumerate() {
+            let mut cells = row.clone();
+            cells.resize(columns, String::new());
             let mut line = self.prefix.clone();
             line.push_str("| ");
-            line.push_str(&row.join(" | "));
+            line.push_str(&cells.join(" | "));
             line.push_str(" |");
             self.lines.push(line);
             if index == 0 {
                 let mut separator = self.prefix.clone();
                 separator.push('|');
-                for _ in 0..columns.max(1) {
+                for _ in 0..columns {
                     separator.push_str(" --- |");
                 }
                 self.lines.push(separator);
             }
         }
+        self.end_block();
+    }
+
+    fn emit_caption(&mut self, tree: &Tree, caption: usize) {
+        let text = self.render_cell(tree, caption, false);
+        if text.is_empty() {
+            return;
+        }
+        if self.flat {
+            if self.line_has_content && !self.buf.ends_with(' ') {
+                self.buf.push(' ');
+            }
+            self.buf.push_str(&text);
+            self.line_has_content = true;
+            return;
+        }
+        self.start_block();
+        self.buf.push_str(&text);
+        self.line_has_content = true;
+        self.flush_line();
         self.end_block();
     }
 
@@ -114,10 +141,11 @@ impl Emitter {
     }
 }
 
-/// The cells of every `tr` belonging to this table, in document order.
-/// Nested tables are not descended into.
-fn collect_rows(tree: &Tree, table: usize) -> Vec<Vec<usize>> {
+/// The cells of every `tr` belonging to this table, in document order,
+/// and its captions. Nested tables are not descended into.
+fn collect_rows(tree: &Tree, table: usize) -> (Vec<Vec<usize>>, Vec<usize>) {
     let mut rows = Vec::new();
+    let mut captions = Vec::new();
     let mut stack = vec![(table, false)];
     while let Some((id, nested)) = stack.pop() {
         let node = tree.node(id);
@@ -126,6 +154,10 @@ fn collect_rows(tree: &Tree, table: usize) -> Vec<Vec<usize>> {
         }
         let tag: &str = node.name.local.as_ref();
         let nested = nested || (id != table && tag == "table");
+        if tag == "caption" && !nested {
+            captions.push(id);
+            continue;
+        }
         if tag == "tr" && !nested {
             let cells = node
                 .children
@@ -145,7 +177,7 @@ fn collect_rows(tree: &Tree, table: usize) -> Vec<Vec<usize>> {
             stack.push((child, nested));
         }
     }
-    rows
+    (rows, captions)
 }
 
 /// A cell keeps the simple GFM form only when nothing spans, blocks or
