@@ -152,6 +152,11 @@ final class PasteMarkdownSheet: NSObject {
         self.completion = nil
         window.sheetParent?.endSheet(window)
         window.orderOut(nil)
+        // The completion drops the controller's reference to this sheet,
+        // often the last one, while a button's action or the window's
+        // `sendEvent` is still on the stack: keep both alive until the
+        // next turn of the main queue.
+        DispatchQueue.main.async { [self] in withExtendedLifetime(self) {} }
         completion(markdown)
     }
 }
