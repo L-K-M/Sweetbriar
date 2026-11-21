@@ -338,8 +338,8 @@ M4.4c. Choosing Out Box shows the Out Box in the list pane, as Drafts
     through `set_flags` (07), one call per account of the selection,
     and are disabled when the selection holds a local-archive row. A
     call's local effect commits with it, so its rows change at once; a
-    refused call shows its error and changes nothing, while the other
-    accounts' calls keep their effect;
+    refused or failed call shows its error and changes nothing, while
+    the other accounts' calls still run and keep their effect;
   - type-to-file (below);
   - every command is also in a menu.
 - **Performance budget:** switching mailbox shows the first rows within
