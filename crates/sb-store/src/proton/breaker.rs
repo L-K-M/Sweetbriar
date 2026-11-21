@@ -15,8 +15,9 @@
 //! the thresholds, whatever the mailbox (spec/04-sync-proton "Running
 //! an intent": Explained).
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 
+use rusqlite::types::ValueRef;
 use rusqlite::{OptionalExtension, Transaction, params};
 use sb_types::time::Timestamp;
 
@@ -233,10 +234,17 @@ pub(super) fn classify_deletes(
     // one of the message's withheld occurrences applies it, and it never
     // counts toward `breach` (spec/04-sync-proton "Running an intent":
     // Explained).
+    // The done intents are read once per pass, not once per delete:
+    // nothing prunes them, so their number only grows.
+    let explaining = if rows.is_empty() {
+        HashSet::new()
+    } else {
+        explaining_occurrences(tx, account_id)?
+    };
     let mut by_mailbox: BTreeMap<Option<i64>, (Option<String>, Vec<i64>)> = BTreeMap::new();
     let mut explained_per_mailbox: BTreeMap<Option<i64>, usize> = BTreeMap::new();
     for (message_id, mailbox_id, role) in rows {
-        if is_explained(tx, account_id, message_id)? {
+        if is_explained(tx, &explaining, message_id)? {
             vanish(tx, message_id)?;
             classified.explained += 1;
             classified.applied += 1;
@@ -275,25 +283,61 @@ pub(super) fn classify_deletes(
     Ok(classified)
 }
 
-/// Whether a `done` `move` or `delete_to_trash` intent of the account
-/// names one of the message's withheld (`vanish_pending`) occurrences
-/// in its `target_json` (spec/02). A disappearance holds exactly those
-/// occurrences (see `withhold`), so a match on any of them explains the
-/// whole message.
-fn is_explained(tx: &Transaction, account_id: &str, message_id: i64) -> Result<bool, StoreError> {
+/// The occurrences the account's `done` `move` and `delete_to_trash`
+/// intents name in their `target_json` (spec/02). An id that isn't a
+/// JSON integer names no occurrence.
+fn explaining_occurrences(tx: &Transaction, account_id: &str) -> Result<HashSet<i64>, StoreError> {
+    let read = |e| classify(e, "read the account's done filing intents");
+    let mut statement = tx
+        .prepare_cached(
+            "SELECT j.value FROM intents i, json_each(i.target_json, '$.occurrence_ids') j
+             WHERE i.account_id = ?1 AND i.state = 'done'
+               AND i.op IN ('move', 'delete_to_trash')",
+        )
+        .map_err(read)?;
+    let ids = statement
+        .query_map(params![account_id], |row| {
+            Ok(match row.get_ref(0)? {
+                ValueRef::Integer(id) => Some(id),
+                _ => None,
+            })
+        })
+        .map_err(read)?;
+    let mut explaining = HashSet::new();
+    for id in ids {
+        explaining.extend(id.map_err(read)?);
+    }
+    Ok(explaining)
+}
+
+/// Whether one of the message's withheld (`vanish_pending`) occurrences
+/// is in `explaining`. A disappearance holds exactly those occurrences
+/// (see `withhold`), so a match on any of them explains the whole
+/// message.
+fn is_explained(
+    tx: &Transaction,
+    explaining: &HashSet<i64>,
+    message_id: i64,
+) -> Result<bool, StoreError> {
+    if explaining.is_empty() {
+        return Ok(false);
+    }
     let read = |e| classify(e, "match a Proton delete to a done intent");
-    tx.prepare_cached(
-        "SELECT EXISTS (
-           SELECT 1 FROM occurrences o, intents i,
-                json_each(i.target_json, '$.occurrence_ids') j
-           WHERE o.message_id = ?2 AND o.state = 'vanish_pending'
-             AND i.account_id = ?1 AND i.state = 'done'
-             AND i.op IN ('move', 'delete_to_trash')
-             AND j.value = o.occurrence_id)",
-    )
-    .map_err(read)?
-    .query_row(params![account_id, message_id], |row| row.get(0))
-    .map_err(read)
+    let mut statement = tx
+        .prepare_cached(
+            "SELECT occurrence_id FROM occurrences
+             WHERE message_id = ?1 AND state = 'vanish_pending'",
+        )
+        .map_err(read)?;
+    let withheld = statement
+        .query_map(params![message_id], |row| row.get::<_, i64>(0))
+        .map_err(read)?;
+    for id in withheld {
+        if explaining.contains(&id.map_err(read)?) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /// The event kind and the mailbox's count before the pass, when
