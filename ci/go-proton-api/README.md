@@ -26,6 +26,13 @@ The driver's JSON line also names the send suite's synthetic sender
 and the send log. The send suite's records land in the summary's `send`
 section.
 
+The flag suite (M3.2d) has its own account (`flags_username`) and one
+unread message in Archive (`flags_message`). It reads and stars that
+message through `set_flags`, undoes both, and checks in the request log
+that each change made one call followed by a metadata read; its calls
+land in the summary's `flags` section. The proxy rewrites an events
+page's `null` lists to empty arrays, as it does for message lists.
+
 `build.sh` downloads the pinned module, applies `patches/srp-salt-10.patch`
 to a temporary copy, and builds the driver against that copy through a
 temporary `-modfile`; the committed `go.mod`/`go.sum` keep pinning the
