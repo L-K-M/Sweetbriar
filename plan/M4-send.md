@@ -357,6 +357,14 @@ inspectable Out Box. Unknown outcomes are never retried automatically.
   pasted image data in the composer. M4.4e4: Edit in External Editor,
   tested with an injected opener and a fake editor that replaces the
   file.
+- **Split (2026-11-21, measured):** M4.4e1 came to about 2,900 changed
+  lines (converter 1,560, its tests 890, the layers and the sheet 670),
+  so it lands as three PRs. M4.4e1a: the bounded HTML5 parse into an
+  arena keeping the attributes the conversion reads, charged by
+  html5ever's live stack and formatting list. M4.4e1b: the converter
+  over it, everything but tables, with a unit test per rule and loss.
+  M4.4e1c: tables, the property test, `markdown_from_html` through the
+  engine, service, FFI and bridge, and Paste as Markdown's sheet.
 
 ### M4.Q Qualification
 

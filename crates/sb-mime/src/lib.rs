@@ -17,6 +17,7 @@ mod import_flags;
 mod limits;
 mod mbox;
 mod outcome;
+mod paste;
 mod reader;
 mod reconstruct;
 mod render;
