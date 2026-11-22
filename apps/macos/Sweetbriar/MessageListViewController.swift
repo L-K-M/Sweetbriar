@@ -202,6 +202,11 @@ final class MessageListViewController: NSViewController {
         indexControls.stopPolling()
     }
 
+    /// The filing undo each installed list answers Edit → Undo with.
+    var filingUndoManager: UndoManager? {
+        didSet { list?.filingUndoManager = filingUndoManager }
+    }
+
     /// List `spec`: close the current model, then open a fresh one in
     /// a fresh list.
     func show(_ spec: WindowSpec) {
@@ -270,6 +275,7 @@ final class MessageListViewController: NSViewController {
         list.onSelectionChange = { [weak self] ids in
             self?.onSelectionChange?(ids)
         }
+        list.filingUndoManager = filingUndoManager
         list.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(list, positioned: .below, relativeTo: statusLabel)
         NSLayoutConstraint.activate([

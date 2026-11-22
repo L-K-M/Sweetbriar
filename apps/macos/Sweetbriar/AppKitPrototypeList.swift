@@ -61,6 +61,16 @@ final class AppKitPrototypeList: NSView {
     /// list's own clicks and a new index's changes alike.
     var onSelectionChange: (@MainActor (Set<Int64>) -> Void)?
 
+    /// Where this list's filing undo is kept, apart from the window's,
+    /// which the text editors share: ⌘Z in those never moves mail
+    /// (spec/08 "Keyboard filing").
+    var filingUndoManager: UndoManager?
+
+    /// The table finds this through the responder chain.
+    override var undoManager: UndoManager? {
+        filingUndoManager ?? super.undoManager
+    }
+
     /// True while the table's selection is set from the ids, not by the
     /// user: its callbacks then must not overwrite the model's ids — a
     /// new index may lack one the model is still following (spec/08).

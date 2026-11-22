@@ -379,6 +379,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
             canFile: { [weak listPane] in policy.canWrite && listPane?.pane == .messages })
         self.filing?.retire()
         self.filing = filing
+        messageList.filingUndoManager = filing.undoManager
         root.view.addSubview(filing.toastView)
         NSLayoutConstraint.activate([
             filing.toastView.centerXAnchor.constraint(equalTo: root.view.centerXAnchor),
