@@ -22,12 +22,15 @@ private actor FakeFilingSource: FilingSource {
     private var undoFailures: [String: CoreFailure] = [:]
     private(set) var recent: String
     private var settingFailure: CoreFailure?
+    private var writeGate: Gate?
+    private(set) var writesBegun = 0
 
     init(recent: String = "") { self.recent = recent }
 
     func refuse(_ id: Int64, with failure: CoreFailure) { refused[id] = failure }
     func refuseUndo(_ token: String, with failure: CoreFailure) { undoFailures[token] = failure }
     func failSettings(_ failure: CoreFailure) { settingFailure = failure }
+    func holdWrites(on gate: Gate) { writeGate = gate }
 
     private func ids(_ selection: MessageSelection) throws -> [Int64] {
         guard case .occurrenceIds(let ids) = selection else { return [] }
@@ -78,6 +81,8 @@ private actor FakeFilingSource: FilingSource {
 
     func setSetting(key: String, value: String) async throws -> Receipt {
         guard key == RecentMailboxes.key else { throw CoreFailure.notFound(what: key) }
+        writesBegun += 1
+        if let writeGate { await writeGate.wait() }
         recent = value
         return Receipt(command: "set_setting", resultJson: "{}", createdAtMs: 0)
     }
@@ -197,6 +202,18 @@ struct FilingModelTests {
         #expect(await source.calls.isEmpty)
     }
 
+    /// Mailboxes the sidebar hasn't read aren't a missing Archive.
+    @Test func anAccountWhoseMailboxesArentReadIsExplained() async {
+        let source = FakeFilingSource()
+        let model = filingModel(source, ToastSleep())
+
+        let failures = await model.perform(.archive, on: selection(("a", [4])), mailboxes: [:])
+
+        #expect(failures.first?.explanation
+            == "This account's mailboxes haven't loaded yet. Try again in a moment.")
+        #expect(await source.calls.isEmpty)
+    }
+
     /// A chosen mailbox never takes another account's messages.
     @Test func aChosenMailboxTakesOneAccountsMessages() async {
         let source = FakeFilingSource()
@@ -301,6 +318,30 @@ struct FilingModelTests {
 
         #expect(await source.recent == "20\n30\n7")
         #expect(model.recentMailboxIds == [20, 30, 7])
+        await sleep.release()
+    }
+
+    /// The palette opened right after a move ranks that move first.
+    @Test func loadingWaitsForTheRankingBeingRecorded() async {
+        let source = FakeFilingSource()
+        let gate = Gate()
+        await source.holdWrites(on: gate)
+        let sleep = ToastSleep()
+        let model = filingModel(source, sleep)
+        let move = Task {
+            await model.perform(.move(to: work), on: selection(("a", [1])), mailboxes: directory)
+        }
+        #expect(await eventually { await source.writesBegun == 1 })
+
+        let load = Task {
+            await model.loadRecentMailboxes()
+            return model.recentMailboxIds
+        }
+        try? await Task.sleep(for: .milliseconds(50))
+        await gate.open()
+
+        #expect(await load.value == [20])
+        _ = await move.value
         await sleep.release()
     }
 

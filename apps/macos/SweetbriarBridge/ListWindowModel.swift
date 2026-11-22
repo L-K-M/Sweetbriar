@@ -205,6 +205,13 @@ public final class ListWindowModel {
     @ObservationIgnored
     private var nextSerial: UInt64 = 0
 
+    /// Selection captures reading rows, and the one read of theirs
+    /// that runs at a time.
+    @ObservationIgnored
+    private var capturing = 0
+    @ObservationIgnored
+    private var captureRead: Task<ListWindow, any Error>?
+
     /// Pages whose read finished but whose completion still waits on
     /// a frame, with that read's serial — they count as requested
     /// until that completion is delivered or dropped. Keyed by serial
@@ -592,13 +599,20 @@ public final class ListWindowModel {
             }
         }
 
+        guard !missingPages.isEmpty else { return ranks.compactMap { found[index[$0]] } }
+        // These are reads too: they keep one of the two slots until done.
+        capturing += 1
+        defer {
+            capturing -= 1
+            pump()
+        }
         for page in missingPages.sorted() {
             let start = page * Self.pageSize
             let length = min(Self.pageSize, index.count - start)
             let read: ListWindow
             do {
-                read = try await source.readWindow(
-                    id: window, generation: generation,
+                read = try await readForCapture(
+                    window: window, generation: generation,
                     anchor: .around(index[start + length / 2]), limit: UInt32(length))
             } catch let failure as CoreFailure {
                 switch failure {
@@ -612,6 +626,37 @@ public final class ListWindowModel {
         let rows = ranks.compactMap { found[index[$0]] }
         guard rows.count == ranks.count else { throw FilingRefusal.listChanged }
         return rows
+    }
+
+    /// A capture's read, once neither another capture's read nor two
+    /// page reads run (spec/08: at most two reads in flight).
+    private func readForCapture(
+        window: UInt64, generation: UInt64, anchor: Anchor, limit: UInt32
+    ) async throws -> ListWindow {
+        while true {
+            try Task.checkCancellation()
+            guard !closed else { throw FilingRefusal.listChanged }
+            if let captureRead {
+                _ = await captureRead.result
+            } else if inFlight.count >= Self.inFlightLimit, let read = inFlight.values.first {
+                await read.task.value
+            } else {
+                break
+            }
+        }
+        let source = source
+        let read = Task {
+            // Cleared before it finishes, so a waiter never finds it done.
+            defer { captureRead = nil }
+            return try await source.readWindow(
+                id: window, generation: generation, anchor: anchor, limit: limit)
+        }
+        captureRead = read
+        return try await withTaskCancellationHandler {
+            try await read.value
+        } onCancel: {
+            read.cancel()
+        }
     }
 
     /// The index fetch once `fetching` has been claimed: holds off
@@ -956,7 +1001,8 @@ public final class ListWindowModel {
         guard !closed, !holdingReads, windowId != nil else {
             return
         }
-        for k in requestOrder where inFlight.count < Self.inFlightLimit {
+        let slots = Self.inFlightLimit - (capturing > 0 ? 1 : 0)
+        for k in requestOrder where inFlight.count < slots {
             guard wanted.contains(k),
                   inFlight[k] == nil,
                   pendingDelivery[k] == nil,

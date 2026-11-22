@@ -643,12 +643,16 @@ fn target_mailbox(
     };
     if owner != account_id {
         return Err(invalid(&format!(
-            "mailbox {mailbox_id} belongs to another account"
+            "the mailbox {} belongs to another account",
+            mailbox_name(tx, mailbox_id)?
         )));
     }
     if wants_label {
         if mailbox_kind != "label" {
-            return Err(invalid(&format!("mailbox {mailbox_id} isn't a label")));
+            return Err(invalid(&format!(
+                "the mailbox {} isn't a label",
+                mailbox_name(tx, mailbox_id)?
+            )));
         }
         return Ok(mailbox_id);
     }

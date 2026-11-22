@@ -356,7 +356,7 @@ fn a_move_refuses_destinations_outside_the_matrix() {
         ),
         (
             elsewhere,
-            format!("mailbox {elsewhere} belongs to another account"),
+            "the mailbox Inbox belongs to another account".to_owned(),
         ),
     ] {
         let refused = file(
@@ -476,7 +476,7 @@ fn labels_are_added_and_removed_once() {
     );
     assert_eq!(
         invalid_message(refused),
-        format!("mailbox {} isn't a label", seed.archive)
+        "the mailbox Archive isn't a label"
     );
 }
 

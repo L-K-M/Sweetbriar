@@ -104,6 +104,8 @@ public enum FilingRefusal: Error, Sendable, Equatable, LocalizedError {
     case severalAccounts
     case anotherAccount(mailbox: String)
     case noArchive
+    /// The sidebar hasn't read the account's mailboxes.
+    case mailboxesUnread
 
     public var errorDescription: String? {
         switch self {
@@ -123,6 +125,8 @@ public enum FilingRefusal: Error, Sendable, Equatable, LocalizedError {
             "\(mailbox) belongs to another account. Messages can't move between accounts."
         case .noArchive:
             "This account has no Archive folder. Use Move to… to choose a folder."
+        case .mailboxesUnread:
+            "This account's mailboxes haven't loaded yet. Try again in a moment."
         }
     }
 }
@@ -266,9 +270,11 @@ public final class FilingModel {
         return failures
     }
 
-    /// Read the palette's ranking. A failed or invalid read keeps the
-    /// last one, since it is only a hint.
+    /// Read the palette's ranking, after any recording still running.
+    /// A failed or invalid read keeps the last one, since it is only a
+    /// hint.
     public func loadRecentMailboxes() async {
+        await recording?.value
         guard let settings = try? await source.settings(), !retired,
             let recent = RecentMailboxes.setting(in: settings)
         else { return }
@@ -281,7 +287,8 @@ public final class FilingModel {
         let key = UUID().uuidString
         switch action {
         case .archive:
-            guard let archive = FilingDestinations.archive(in: mailboxes[part.accountId] ?? [])
+            guard let known = mailboxes[part.accountId] else { throw FilingRefusal.mailboxesUnread }
+            guard let archive = FilingDestinations.archive(in: known)
             else { throw FilingRefusal.noArchive }
             return try await source.moveMessages(
                 idempotencyKey: key, selection: part.selection, toMailboxId: archive.mailboxId)

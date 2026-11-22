@@ -80,6 +80,49 @@ struct FilingSelectionTests {
         await model.close()
     }
 
+    /// Capturing a selection reads too: with two pages being read it
+    /// waits for a slot (spec/08).
+    @Test func capturingKeepsToTwoReadsInFlight() async throws {
+        let fake = FakeListWindowSource()
+        await fake.fill(2_000)
+        let model = try await openList(fake, spec: .flagged)
+        let gate = ThrowingGate()
+        await fake.setGate(gate)
+        model.setVisible(600 ..< 650)
+        try #require(await eventually { await fake.reads.count == 2 })
+
+        let capture = Task { try await model.filingSelection(of: [1]) }
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(await fake.maxInFlight == 2)
+
+        await gate.open()
+        #expect(try await capture.value.parts.map(\.selection) == [.occurrenceIds([1])])
+        await model.close()
+    }
+
+    /// A page wanted while captures read waits for their slot, and
+    /// two captures read one after the other.
+    @Test func pagesAndCapturesShareTheTwoSlots() async throws {
+        let fake = FakeListWindowSource()
+        await fake.fill(3_000)
+        let model = try await openList(fake, spec: .flagged)
+        let gate = ThrowingGate()
+        await fake.setGate(gate)
+
+        let first = Task { try await model.filingSelection(of: [1]) }
+        try #require(await eventually { await fake.reads.count == 1 })
+        let second = Task { try await model.filingSelection(of: [300]) }
+        model.setVisible(600 ..< 650)
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(await fake.maxInFlight <= 2)
+
+        await gate.open()
+        #expect(try await first.value.parts.map(\.selection) == [.occurrenceIds([1])])
+        #expect(try await second.value.parts.map(\.selection) == [.occurrenceIds([300])])
+        #expect(await fake.maxInFlight <= 2)
+        await model.close()
+    }
+
     @Test func aListThatChangedUnderTheCommandIsRefused() async throws {
         let fake = FakeListWindowSource()
         await fake.fill(1_000)
