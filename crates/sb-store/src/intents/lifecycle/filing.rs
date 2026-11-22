@@ -654,7 +654,8 @@ fn target_mailbox(
     }
     if mailbox_kind != "folder" {
         return Err(invalid(&format!(
-            "messages can't be moved to mailbox {mailbox_id}"
+            "messages can't be moved to {}, which isn't a folder",
+            mailbox_name(tx, mailbox_id)?
         )));
     }
     if policy == Policy::Command && matches!(role.as_deref(), Some("sent" | "drafts")) {

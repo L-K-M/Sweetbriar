@@ -124,6 +124,10 @@ public final class SidebarModel {
     /// order.
     public private(set) var savedViews: [SavedView] = []
 
+    /// Each account's mailboxes as the sections show them, for filing
+    /// (spec/08 "Keyboard filing").
+    public private(set) var mailboxes: [String: [Mailbox]] = [:]
+
     /// Why the last reload failed, if it did; the sections keep what
     /// they showed before.
     public private(set) var lastError: (any Error)?
@@ -233,14 +237,17 @@ public final class SidebarModel {
             let accounts = try await source.accounts()
             var accountSections: [Section] = []
             var oldest: UInt64?
+            var byAccount: [String: [Mailbox]] = [:]
             for account in accounts {
                 let list = try await source.mailboxes(accountId: account.accountId)
                 oldest = min(oldest ?? list.generation, list.generation)
                 accountSections.append(Self.section(for: account, list.mailboxes))
+                byAccount[account.accountId] = list.mailboxes
             }
             let views = try await source.savedViews()
             updateSavedViews(views)
             sections = [Self.unifiedSection(views)] + accountSections
+            mailboxes = byAccount
             generation = oldest ?? generation
             lastError = nil
         } catch {

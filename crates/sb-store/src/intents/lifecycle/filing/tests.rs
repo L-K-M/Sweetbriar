@@ -348,11 +348,11 @@ fn a_move_refuses_destinations_outside_the_matrix() {
         ),
         (
             seed.work,
-            format!("messages can't be moved to mailbox {}", seed.work),
+            "messages can't be moved to Work, which isn't a folder".to_owned(),
         ),
         (
             starred,
-            format!("messages can't be moved to mailbox {starred}"),
+            "messages can't be moved to Starred, which isn't a folder".to_owned(),
         ),
         (
             elsewhere,
