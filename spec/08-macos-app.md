@@ -330,7 +330,7 @@ M4.4c. Choosing Out Box shows the Out Box in the list pane, as Drafts
     unselected row it acts on that row alone and leaves the selection.
 - **Keyboard:**
   - arrows, Return to open, Space to page the reader;
-  - `⌘⌫` delete to trash, `⌃⌘A` archive;
+  - `⌘⌫` delete to trash, `⌃⌘A` archive (Keyboard filing, below);
   - `⇧⌘U` mark read or unread, `⇧⌘L` star or unstar (M3.2). Each
     toggles the selection: when any selected row is unread (unstarred)
     it marks every row read (starred), otherwise unread (unstarred).
@@ -724,6 +724,46 @@ Implements [15-account-colors](../research/15-account-colors.md):
 `⇧⌘M` (Move to…) opens a filing palette: an `NSPanel` with a search field over
 mailboxes, ranked by recent use per account. Return moves the selection,
 and the undo toast offers **Undo** for 10 s.
+
+- **Commands (M5.2):** the Message menu, the list's context menu and
+  the toolbar carry Archive (`⌃⌘A`), Move to Trash (`⌘⌫`), Move to…
+  (`⇧⌘M`), Add Label… and Remove Label…. They act only in the key main
+  window, while its list pane shows messages. While text is being
+  edited, in the search field or elsewhere, they are disabled and
+  `⌘⌫` edits the text: it never files mail.
+- **The selection** is captured when the command is invoked. Archive
+  and Move to Trash run one call per account, so a refused account
+  changes nothing while the others keep their effect. Archive moves to
+  the account's Archive folder. Move to… and the label commands need
+  one account, since a message never moves between accounts. A mailbox
+  window's whole selection of more than 1,000 rows passes its
+  `SelectionToken`. Any other selection over 1,000 rows is refused
+  with an explanation, as is one the list changed under.
+- **The palette** lists the one account's filing destinations (04: its
+  folders except Sent and Drafts, and not the mailbox being shown) or,
+  for the label commands, its labels, headed by the account's monogram
+  and name. With an empty field the mailboxes in
+  `filing.recent_mailboxes` (02) come first, newest first, then the
+  core's order. Typing keeps that order and shows the names containing
+  every typed word, ignoring case and diacritics. Up and Down choose,
+  Return files and Escape changes nothing. Both return focus to the
+  list. Choosing records the mailbox once filing succeeded. A failed
+  recording leaves the previous ranking and doesn't undo the filing.
+- **Dragging** rows to a folder of their account in the sidebar moves
+  them; to one of its labels, adds the label. Any other drop changes
+  nothing and, on a mailbox, says why.
+- **The toast** names what was done and for how many rows, and is
+  announced to accessibility clients. After a move, Trash or Archive
+  its Undo, also Edit → Undo in the list, calls `undo` with every
+  token the action got. It is offered for 10 s or until the next
+  filing action replaces it. Adding or removing a label offers no
+  Undo.
+- **Refusals** the core gives, and the shell's own above, are shown as
+  an explanation in a sheet. An action is never reported done when it
+  was refused.
+- **Afterwards,** when every selected row left the list, nothing is
+  selected, so nothing is marked read. The next arrow key continues
+  from the first one's rank.
 
 ## Menus and commands
 
