@@ -1383,7 +1383,7 @@ extend:
 
 | Key | Values | Default |
 |---|---|---|
-| `appearance.compose_cue` | `standard`, `strong` (08 Strong mode) | `standard` |
+| `appearance.compose_cue` | `standard`, `strong`, `minimal` (08 Strong and Minimal modes) | `standard` |
 | `sending.undo_seconds` | `5`, `7`, `10`, `20`, `30`: the undo-send window a new attempt is held for (05, M4.3; Settings → Sending safety, M4.4) | `7` |
 | `notifications.previews` | `off`, `on`: whether new-mail notifications show sender and subject (10, M2.7) | `off` |
 | `backups.destination` | Empty for the default, or an absolute directory path without NUL (M1.8j1b) | Empty: the data root's `backups/` |
