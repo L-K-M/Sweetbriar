@@ -123,6 +123,17 @@ verified before it completes.
   - XCUITests: archive, then undo, restores the message; the palette
     moves the selection; a refused action shows its explanation;
   - **owner** (agent-run): filing works with the keyboard alone.
+- **Split (2026-11-22):** estimated from M3.2b and M3.2c at about
+  3,400 lines (tests included), so M5.2 follows its spec commit
+  (02's `filing.recent_mailboxes`, 08 Keyboard filing) and lands as
+  three stacked PRs:
+  - M5.2a (~1,100): the setting, refusals naming their mailbox, and
+    the bridge's filing model: the captured selection, one call per
+    account, the toast with its tokens, and the palette's ranking;
+  - M5.2b (~1,300): the menu and toolbar commands, the palette, the
+    toast and the explanation, with the XCUITest;
+  - M5.2c (~1,000): drag to the sidebar, the list's context menu and
+    the arrow keys after filing.
 
 ### M5.Q Qualification
 
