@@ -101,8 +101,12 @@ impl Engine {
     /// current one, so the account worker runs it on a later poll.
     /// All or nothing: a missing id is `NotFound`, one that isn't
     /// parked or quarantined is `Conflict`, and either leaves every
-    /// row unchanged. A repeated key answers its stored receipt and
-    /// releases nothing again. An empty list is `InvalidInput`.
+    /// row unchanged. A quarantined intent whose account is still
+    /// reconciling a restore is `Conflict` too (spec/03 "Restore"
+    /// step 5): while `restore_pending` is set, or its reason is
+    /// `restore` and the Proton listing hasn't finished. A repeated
+    /// key answers its stored receipt and releases nothing again. An
+    /// empty list is `InvalidInput`.
     pub async fn release_intents(
         &self,
         idempotency_key: &str,
