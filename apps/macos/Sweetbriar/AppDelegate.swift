@@ -219,7 +219,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
               mainWindow.activitySourceID == ObjectIdentifier(bridge)
         else { return }
         if activityWindow == nil {
-            activityWindow = ActivityWindowController(model: activity, bridge: bridge) {
+            activityWindow = ActivityWindowController(
+                model: activity, bridge: bridge, appearance: appearance.model(source: bridge)
+            ) {
                 [weak self] account in
                 self?.mainWindow?.beginProtonSignIn(signingInAgain: account)
             }

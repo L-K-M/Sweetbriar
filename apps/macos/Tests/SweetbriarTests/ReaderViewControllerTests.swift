@@ -59,8 +59,9 @@ func readerHeaderChipAttachmentsAndSourceToggle() async throws {
     #expect(controller.noteEditor.text == "A read-only note")
     #expect(controller.tagPicker.tagNames == ["Keep"])
     #expect(!controller.header.isEditable)
-    #expect(controller.accountChip.stringValue == "Received in Selected Archive")
-    #expect(controller.accountChip.textColor == .secondaryLabelColor)
+    #expect(controller.accountChip.rootView.label == "Received in Selected Archive")
+    // No appearance reached this reader, so its chip is neutral.
+    #expect(controller.accountChip.rootView.appearance == nil)
     #expect(!controller.remoteContent.isHidden)
     #expect(controller.remoteContent.stringValue == "3 remote content items blocked")
     let buttons = controller.attachments.arrangedSubviews.compactMap { $0 as? NSButton }
