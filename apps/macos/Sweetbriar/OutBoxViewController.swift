@@ -6,6 +6,7 @@
 // nothing while it is up.
 
 import AppKit
+import SwiftUI
 import SweetbriarBridge
 
 @MainActor
@@ -35,9 +36,27 @@ final class OutBoxViewController: NSViewController, NSTableViewDataSource, NSTab
     private static let cellID = NSUserInterfaceItemIdentifier("outBoxCell")
     private static let groupCellID = NSUserInterfaceItemIdentifier("outBoxGroupCell")
 
-    init(model: OutBoxModel) {
+    /// The identities' colors for each row's chip; nil keeps them neutral.
+    private let appearance: AppearanceModel?
+
+    init(model: OutBoxModel, appearance: AppearanceModel? = nil) {
         self.model = model
+        self.appearance = appearance
         super.init(nibName: nil, bundle: nil)
+        if appearance != nil { observeAppearance() }
+    }
+
+    /// Recolor the rows' chips when an identity's appearance changes.
+    private func observeAppearance() {
+        withObservationTracking {
+            _ = appearance?.appearance
+        } onChange: { [weak self] in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                if self.isViewLoaded { self.tableView.reloadData() }
+                self.observeAppearance()
+            }
+        }
     }
 
     required init?(coder: NSCoder) { fatalError("OutBoxViewController is built in code") }
@@ -49,7 +68,7 @@ final class OutBoxViewController: NSViewController, NSTableViewDataSource, NSTab
         column.title = "Out Box"
         tableView.addTableColumn(column)
         tableView.headerView = nil
-        tableView.rowHeight = 54
+        tableView.rowHeight = 74
         tableView.style = .inset
         tableView.dataSource = self
         tableView.delegate = self
@@ -395,7 +414,7 @@ final class OutBoxViewController: NSViewController, NSTableViewDataSource, NSTab
         let cell =
             tableView.makeView(withIdentifier: Self.cellID, owner: nil) as? OutBoxRowView
             ?? OutBoxRowView(identifier: Self.cellID)
-        cell.configure(model.rows[index])
+        cell.configure(model.rows[index], appearance: appearance?.appearance)
         return cell
     }
 
@@ -459,8 +478,10 @@ final class OutBoxViewController: NSViewController, NSTableViewDataSource, NSTab
 /// One Out Box row: the frozen subject, the To then Cc addresses, then
 /// the state and the update time.
 @MainActor
-private final class OutBoxRowView: NSTableCellView {
+final class OutBoxRowView: NSTableCellView {
     private let subject = NSTextField(labelWithString: "")
+    /// The route the attempt froze, apart from its state (spec/08 "Out Box").
+    let from = NSHostingView(rootView: AccountChip(label: "", accountId: "", appearance: nil))
     private let recipients = NSTextField(labelWithString: "")
     private let detail = NSTextField(labelWithString: "")
     private static let updated = Date.FormatStyle(date: .abbreviated, time: .shortened)
@@ -476,7 +497,8 @@ private final class OutBoxRowView: NSTableCellView {
         recipients.textColor = .secondaryLabelColor
         detail.textColor = .secondaryLabelColor
         detail.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
-        let stack = NSStackView(views: [subject, recipients, detail])
+        from.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        let stack = NSStackView(views: [subject, from, recipients, detail])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 1
@@ -491,13 +513,16 @@ private final class OutBoxRowView: NSTableCellView {
 
     required init?(coder: NSCoder) { fatalError("OutBoxRowView is built in code") }
 
-    func configure(_ row: OutBoxModel.Row) {
+    func configure(_ row: OutBoxModel.Row, appearance: Appearance?) {
         subject.stringValue = row.subject
+        from.rootView = AccountChip(
+            label: row.from, owner: .identity(id: row.row.identityId, accountId: row.row.accountId),
+            appearance: appearance, identifier: "outBoxFrom-\(row.id)")
         recipients.stringValue = row.recipients
         recipients.isHidden = row.recipients.isEmpty
         detail.stringValue = "\(row.status) · \(row.updated.formatted(Self.updated))"
         setAccessibilityLabel(
-            [row.subject, row.status, row.recipients].filter { !$0.isEmpty }
+            [row.subject, "From \(row.from)", row.status, row.recipients].filter { !$0.isEmpty }
                 .joined(separator: ", "))
     }
 }
