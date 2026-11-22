@@ -167,7 +167,8 @@ impl Store {
         &self.objects
     }
 
-    /// One bounded GC pass over the object store (spec/03 "Garbage
+    /// One bounded GC pass. It prunes expired command receipts
+    /// (spec/02), then works over the object store (spec/03 "Garbage
     /// collection"): pin first-sight orphans on the `gc_grace` clock,
     /// clear clocks a reference re-covers, and remove expired orphans
     /// through one serialized writer task each. Blocking (it awaits
