@@ -6,6 +6,7 @@ use sb_test_support::{ScratchDir, block_on};
 use crate::{BackupEnd, Engine, EngineError};
 
 const READING_VIEW_SENDERS: &str = "reader.reading_view_senders";
+const RECENT_MAILBOXES: &str = "filing.recent_mailboxes";
 
 fn configured(engine: &Engine) -> super::Setting {
     block_on(engine.settings())
@@ -21,6 +22,61 @@ fn reading_senders(engine: &Engine) -> super::Setting {
         .into_iter()
         .find(|setting| setting.key() == READING_VIEW_SENDERS)
         .unwrap()
+}
+
+#[test]
+fn recent_mailboxes_accept_only_the_canonical_list() {
+    let scratch = ScratchDir::new("engine-recent-mailboxes");
+    let engine = block_on(Engine::open(scratch.path().join("store"))).unwrap();
+    let stored = || {
+        block_on(engine.settings())
+            .unwrap()
+            .into_iter()
+            .find(|setting| setting.key() == RECENT_MAILBOXES)
+            .expect("the registry holds the recent mailboxes")
+    };
+    assert_eq!(stored().value(), "");
+    assert!(stored().is_default());
+
+    let list = |count: usize| {
+        (1..=count)
+            .rev()
+            .map(|id| id.to_string())
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let largest = i64::MAX.to_string();
+    for value in ["", "7", "9\n2\n30", &largest, &list(100)] {
+        block_on(engine.set_setting(&engine.new_idempotency_key(), RECENT_MAILBOXES, value))
+            .unwrap();
+        assert_eq!(stored().value(), value);
+    }
+
+    let last = stored().value().to_owned();
+    for value in [
+        "0",
+        "-1",
+        "+1",
+        "01",
+        " 1",
+        "x",
+        "1\n1",
+        "1\n",
+        "\n1",
+        "9223372036854775808",
+        &list(101),
+    ] {
+        assert!(
+            matches!(block_on(engine.set_setting(
+                &engine.new_idempotency_key(),
+                RECENT_MAILBOXES,
+                value
+            )), Err(EngineError::InvalidInput { field, .. }) if field == "value"),
+            "{value:?}"
+        );
+        assert_eq!(stored().value(), last);
+    }
+    block_on(engine.shutdown()).unwrap();
 }
 
 #[test]

@@ -1389,6 +1389,10 @@ extend:
 | `backups.destination` | Empty for the default, or an absolute directory path without NUL (M1.8j1b) | Empty: the data root's `backups/` |
 | `reader.mark_read` | `immediately`, `2`, `5`, `10`, `manual`: when the reader marks a shown unread message read, at once, after that many seconds, or never (08 Reader, M3.2) | `immediately` |
 | `reader.reading_view_senders` | The senders whose messages open in the Reading view (08, M6.3b2): lowercase addresses, each with one `@` and at most 254 bytes, sorted, unique, joined by newlines; at most 1,000 | Empty: every message opens in sender layout |
+| `filing.recent_mailboxes` | The mailboxes last chosen to file into (08 Keyboard filing, M5.2): mailbox ids as canonical positive decimals, most recent first, unique, joined by newlines; at most 100 | Empty: no mailbox is ranked |
+
+A recent mailbox id is only a ranking hint. Commands never act on one
+that the account's current `mailboxes()` doesn't list.
 
 The sender list must already be canonical; any other spelling is
 `InvalidInput`, so one set of senders has one stored value. Addresses
