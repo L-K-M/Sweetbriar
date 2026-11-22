@@ -13,7 +13,10 @@ use serde::{Deserialize, Deserializer};
 use serde_json::Value;
 
 use crate::auth::Session;
-use crate::client::{Client, Priority, code_of, error_message, read_response_bounded};
+use crate::client::{
+    Client, Priority, code_of, error_message, expect_success, read_response_bounded,
+    read_response_message,
+};
 use crate::error::ProtonError;
 
 /// `GET /core/v4/labels` (research `mail-sync.md` §1).
@@ -649,8 +652,21 @@ impl Client {
     pub async fn message(&self, session: &Session, id: &str) -> Result<FullMessage, ProtonError> {
         validate_path_id(id)?;
         let path = format!("{MESSAGE_PATH}/{id}");
+        // Not `get_json`: a body gets the download deadline, not 30 s.
+        let answer = self
+            .send(
+                Method::GET,
+                &path,
+                None,
+                Priority::Background,
+                Some((session.uid(), session.expose_access_token())),
+                &[],
+            )
+            .await?;
+        let (status, bytes) = read_response_message(answer).await?;
+        expect_success(status, &bytes)?;
         let response: FullMessageResponse =
-            self.get_json(&path, session, Priority::Background).await?;
+            serde_json::from_slice(&bytes).map_err(|e| ProtonError::decode(&path, e))?;
         let message = response.message;
         let metadata = MessageMetadata::from_value(message.clone(), &path)?;
         if metadata.id != id {
