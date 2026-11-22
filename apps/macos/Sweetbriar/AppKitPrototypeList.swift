@@ -371,6 +371,24 @@ extension AppKitPrototypeList: NSTableViewDataSource, NSTableViewDelegate {
     }
 }
 
+// MARK: - Edit → Undo
+
+/// A window answers `undo:` with its own undo manager, whatever its
+/// first responder's is, so the list answers it while it has the
+/// keyboard (spec/08 "Keyboard filing").
+extension AppKitPrototypeList: NSMenuItemValidation {
+    @objc func undo(_ sender: Any?) {
+        undoManager?.undo()
+    }
+
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        guard menuItem.action == #selector(undo(_:)) else { return true }
+        guard let undoManager else { return false }
+        menuItem.title = undoManager.undoMenuItemTitle
+        return undoManager.canUndo
+    }
+}
+
 // MARK: - Context menu
 
 extension AppKitPrototypeList: NSMenuDelegate {
