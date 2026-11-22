@@ -134,6 +134,10 @@ with `SB_SEARCH_TIMINGS_OUT=<file>` for the report and
   ActivityFlowTests`): over a store seeded with two breaker events,
   the Activity window's Accept and Keep leave them `accepted` and
   `kept`;
+- the filing flow XCUITest (M5.2b, `SweetbriarUITests/
+  FilingFlowTests`): over a seeded, paused Proton account, Archive
+  and Undo, the Move to… palette and Edit → Undo, ⌘⌫ left to the
+  search field, Move to Trash, and a refusal explained;
 - the account settings XCUITest (M2.7e1, `SweetbriarUITests/
   AccountSettingsFlowTests`): a seeded Proton account renamed and
   paused through Settings → Accounts keeps the new name and `paused`;

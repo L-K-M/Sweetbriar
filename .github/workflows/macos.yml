@@ -226,6 +226,20 @@ jobs:
             CODE_SIGN_IDENTITY=- \
             test
 
+      # M5.2b: file seeded messages from the keyboard, undo, and see a
+      # refusal explained; the paused account calls no server.
+      - name: XCUITest filing flow
+        timeout-minutes: 10
+        run: |
+          xcodebuild -project apps/macos/Sweetbriar.xcodeproj \
+            -scheme SweetbriarSmoke \
+            -destination 'platform=macOS,arch=arm64' \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+            -resultBundlePath "$RUNNER_TEMP/Sweetbriar-filing.xcresult" \
+            -only-testing:SweetbriarUITests/FilingFlowTests \
+            CODE_SIGN_IDENTITY=- \
+            test
+
       # M4.4d3: switch From in a compose window over two seeded Proton
       # accounts; the strip label, color and announcement change.
       - name: XCUITest From switch flow
@@ -252,6 +266,7 @@ jobs:
             ${{ runner.temp }}/Sweetbriar-compose.xcresult
             ${{ runner.temp }}/Sweetbriar-activity.xcresult
             ${{ runner.temp }}/Sweetbriar-account-settings.xcresult
+            ${{ runner.temp }}/Sweetbriar-filing.xcresult
             ${{ runner.temp }}/Sweetbriar-from-switch.xcresult
             ${{ runner.temp }}/Sweetbriar-index.xcresult
             ${{ runner.temp }}/Sweetbriar-reader.xcresult

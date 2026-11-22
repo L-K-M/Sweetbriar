@@ -242,6 +242,12 @@ final class AppKitPrototypeList: NSView {
         tableView.selectRowIndexes(indexes, byExtendingSelection: false)
     }
 
+    /// Give the table the keyboard, as the filing palette does when it
+    /// closes (spec/08 "Keyboard filing").
+    func focus() {
+        window?.makeFirstResponder(tableView)
+    }
+
     /// The context menu — rebuilt per click in `menuNeedsUpdate`,
     /// when `clickedRow` is valid.
     private func contextMenu() -> NSMenu {

@@ -24,6 +24,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     static let title = "Sweetbriar"
     private static let sidebarMinimumWidth: CGFloat = 180
     private static let listMinimumWidth: CGFloat = 320
+    private static let toastMargin: CGFloat = 20
 
     private let session: CoreSession
     private let appearance: SharedAppearance
@@ -65,6 +66,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     private var reader: ReaderViewController?
     /// Marks a shown unread Proton message read (spec/08 "Reader").
     private var markRead: MarkReadTimer?
+    private(set) var filing: FilingController?
     private var closed = false
 
 
@@ -161,6 +163,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         messageList?.onGeneration = nil
         messageList?.onSelectionChange = nil
         markRead?.cancel()
+        filing?.retire()
+        filing = nil
         retireWritersForRestore()
         let list = messageList
         let reader = self.reader
@@ -369,6 +373,20 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
             split.view.trailingAnchor.constraint(equalTo: root.view.trailingAnchor),
             split.view.bottomAnchor.constraint(equalTo: root.view.bottomAnchor),
         ])
+        let filing = FilingController(
+            source: bridge, window: window, list: messageList, sidebar: sidebarModel,
+            appearance: appearanceModel, writes: writes, canWrite: { policy.canWrite },
+            canFile: { [weak listPane] in policy.canWrite && listPane?.pane == .messages })
+        self.filing?.retire()
+        self.filing = filing
+        root.view.addSubview(filing.toastView)
+        NSLayoutConstraint.activate([
+            filing.toastView.centerXAnchor.constraint(equalTo: root.view.centerXAnchor),
+            filing.toastView.bottomAnchor.constraint(
+                equalTo: root.view.bottomAnchor, constant: -Self.toastMargin),
+            filing.toastView.widthAnchor.constraint(
+                lessThanOrEqualTo: root.view.widthAnchor, constant: -2 * Self.toastMargin),
+        ])
         let frame = window.frame
         window.contentViewController = root
         window.setFrame(frame, display: true)
@@ -551,14 +569,41 @@ extension MainWindowController: MessageFlagCommands {
     }
 }
 
+// MARK: - Filing (spec/08 "Keyboard filing", M5.2)
+
+extension MainWindowController: MessageFilingCommands {
+    private static let filingActions: Set<Selector> = [
+        #selector(archiveMessages(_:)), #selector(trashMessages(_:)), #selector(moveMessages(_:)),
+        #selector(addLabel(_:)), #selector(removeLabel(_:)),
+    ]
+
+    @objc func archiveMessages(_ sender: Any?) { filing?.file(.archive) }
+
+    @objc func trashMessages(_ sender: Any?) { filing?.file(.trash) }
+
+    @objc func moveMessages(_ sender: Any?) { filing?.choose(.move) }
+
+    @objc func addLabel(_ sender: Any?) { filing?.choose(.addLabel) }
+
+    @objc func removeLabel(_ sender: Any?) { filing?.choose(.removeLabel) }
+
+    /// Whether a filing command is live; nil for any other action.
+    func filingCommandEnabled(_ action: Selector) -> Bool? {
+        guard Self.filingActions.contains(action) else { return nil }
+        return filing?.isEnabled == true
+    }
+}
+
 extension MainWindowController: NSMenuItemValidation, NSToolbarItemValidation {
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        if let action = menuItem.action, let enabled = filingCommandEnabled(action) { return enabled }
         guard let action = menuItem.action, let state = flagCommandState(action) else { return true }
         menuItem.title = state.title
         return state.enabled
     }
 
     func validateToolbarItem(_ item: NSToolbarItem) -> Bool {
+        if let action = item.action, let enabled = filingCommandEnabled(action) { return enabled }
         guard let action = item.action, let state = flagCommandState(action) else { return true }
         item.label = state.title
         item.toolTip = state.title
@@ -569,13 +614,22 @@ extension MainWindowController: NSMenuItemValidation, NSToolbarItemValidation {
 extension MainWindowController: NSToolbarDelegate {
     private static let readItem = NSToolbarItem.Identifier(MainMenuBuilder.ItemID.toggleRead.rawValue)
     private static let starItem = NSToolbarItem.Identifier(MainMenuBuilder.ItemID.toggleStar.rawValue)
+    private static let archiveItem = NSToolbarItem.Identifier(MainMenuBuilder.ItemID.archive.rawValue)
+    private static let trashItem = NSToolbarItem.Identifier(MainMenuBuilder.ItemID.trash.rawValue)
+    private static let moveItem = NSToolbarItem.Identifier(MainMenuBuilder.ItemID.move.rawValue)
+    private static let addLabelItem = NSToolbarItem.Identifier(MainMenuBuilder.ItemID.addLabel.rawValue)
+    private static let removeLabelItem =
+        NSToolbarItem.Identifier(MainMenuBuilder.ItemID.removeLabel.rawValue)
+    private static var commandItems: [NSToolbarItem.Identifier] {
+        [readItem, starItem, archiveItem, trashItem, moveItem, addLabelItem, removeLabelItem]
+    }
 
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [.flexibleSpace, Self.readItem, Self.starItem]
+        [.flexibleSpace] + Self.commandItems
     }
 
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [.flexibleSpace, .space, Self.readItem, Self.starItem]
+        [.flexibleSpace, .space] + Self.commandItems
     }
 
     func toolbar(
@@ -586,6 +640,11 @@ extension MainWindowController: NSToolbarDelegate {
         switch itemIdentifier {
         case Self.readItem: spec = ("Mark as Read", "envelope.open", #selector(toggleRead(_:)))
         case Self.starItem: spec = ("Star", "star", #selector(toggleStar(_:)))
+        case Self.archiveItem: spec = ("Archive", "archivebox", #selector(archiveMessages(_:)))
+        case Self.trashItem: spec = ("Move to Trash", "trash", #selector(trashMessages(_:)))
+        case Self.moveItem: spec = ("Move to…", "folder", #selector(moveMessages(_:)))
+        case Self.addLabelItem: spec = ("Add Label…", "tag", #selector(addLabel(_:)))
+        case Self.removeLabelItem: spec = ("Remove Label…", "tag.slash", #selector(removeLabel(_:)))
         default: return nil
         }
         let item = NSToolbarItem(itemIdentifier: itemIdentifier)
