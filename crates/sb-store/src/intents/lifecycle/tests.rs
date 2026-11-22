@@ -639,6 +639,198 @@ fn release_resets_and_is_all_or_nothing() {
     assert_eq!(stored(&conn, &second).state, "parked");
 }
 
+/// The fields a release can change, for an unchanged-row comparison.
+fn snapshot(
+    conn: &Connection,
+    intent_id: &str,
+) -> (
+    String,
+    i64,
+    Option<i64>,
+    Option<String>,
+    Option<String>,
+    i64,
+) {
+    let row = stored(conn, intent_id);
+    (
+        row.state,
+        row.attempts,
+        row.next_attempt_at,
+        row.wait_reason,
+        row.quarantine_reason,
+        row.generation,
+    )
+}
+
+/// Plan and quarantine one intent of `reason`; `change` alternates so
+/// each plan writes a new intent on the one seeded message.
+fn quarantined(
+    conn: &Connection,
+    next: &mut i64,
+    seed: &Seed,
+    reason: QuarantineReason,
+    change: FlagChange,
+) -> String {
+    let id = plan(conn, next, &[seed.message], change).remove(0);
+    with_tx(conn, |tx| quarantine_intent(tx, &id, reason, NOW)).unwrap();
+    id
+}
+
+/// `restore_pending` on a non-active account (spec/03 "Restore" step
+/// 4); the schema CHECK forbids it beside `active`.
+fn restore_pending(conn: &Connection, account: &str) {
+    conn.execute(
+        "UPDATE accounts SET state = 'paused', restore_pending = 1 WHERE account_id = ?1",
+        params![account],
+    )
+    .unwrap();
+}
+
+/// The account's `proton_accounts` row in `listing_state`, with the
+/// CHECK's cursor and checkpoint only for `listing`.
+fn proton_listing(conn: &Connection, account: &str, listing_state: &str) {
+    let (pending_cursor, checkpoint) = if listing_state == "listing" {
+        (Some("cursor"), Some("checkpoint"))
+    } else {
+        (None, None)
+    };
+    conn.execute(
+        "INSERT INTO proton_accounts (account_id, api_base_url, username, proton_user_id,
+         credential_ref, password_mode, pending_cursor, listing_state, listing_checkpoint)
+         VALUES (?1, 'https://mail.example/api', 'u', 'pu', 'cr', 1, ?2, ?3, ?4)",
+        params![account, pending_cursor, listing_state, checkpoint],
+    )
+    .unwrap();
+}
+
+/// A restore's reconcile must finish before a release (spec/03
+/// "Restore" step 5): `restore_pending` refuses every quarantine
+/// reason, not only `restore`, and changes no row.
+#[test]
+fn release_refuses_a_restore_pending_account() {
+    let conn = store();
+    let seed = seed(&conn);
+    let mut next = 0;
+    let restore = quarantined(&conn, &mut next, &seed, QuarantineReason::Restore, star());
+    let config = quarantined(
+        &conn,
+        &mut next,
+        &seed,
+        QuarantineReason::ConfigChange,
+        unstar(),
+    );
+    let parked = plan(&conn, &mut next, &[seed.message], star()).remove(0);
+    with_tx(&conn, |tx| park_intent(tx, &parked, "no", NOW)).unwrap();
+    restore_pending(&conn, ACCOUNT);
+
+    let before = (snapshot(&conn, &restore), snapshot(&conn, &config));
+    let error = with_tx(&conn, |tx| {
+        release_intents(tx, &[restore.clone(), config.clone()], NOW)
+    })
+    .unwrap_err();
+    assert!(
+        matches!(error, StoreError::Conflict { ref detail } if detail == RESTORE_RECONCILE_FIRST),
+        "{error:?}"
+    );
+    assert_eq!(
+        before,
+        (snapshot(&conn, &restore), snapshot(&conn, &config))
+    );
+
+    // A parked intent has no restore hold and still releases.
+    with_tx(&conn, |tx| {
+        release_intents(tx, std::slice::from_ref(&parked), NOW)
+    })
+    .unwrap();
+    assert_eq!(snapshot(&conn, &parked).0, "pending");
+}
+
+/// After a resume cleared `restore_pending`, a `restore` quarantine
+/// waits for the Proton listing to finish; other reasons are ordinary
+/// and release during the same listing.
+#[test]
+fn release_refuses_a_restore_quarantine_until_the_listing_completes() {
+    let conn = store();
+    let seed = seed(&conn);
+    let mut next = 0;
+    let restore = quarantined(&conn, &mut next, &seed, QuarantineReason::Restore, star());
+    let breaker = quarantined(&conn, &mut next, &seed, QuarantineReason::Breaker, unstar());
+    proton_listing(&conn, ACCOUNT, "none");
+
+    let before = snapshot(&conn, &restore);
+    let error = with_tx(&conn, |tx| {
+        release_intents(tx, std::slice::from_ref(&restore), NOW)
+    })
+    .unwrap_err();
+    assert!(matches!(error, StoreError::Conflict { .. }), "{error:?}");
+    assert_eq!(before, snapshot(&conn, &restore));
+
+    with_tx(&conn, |tx| {
+        release_intents(tx, std::slice::from_ref(&breaker), NOW)
+    })
+    .unwrap();
+    assert_eq!(snapshot(&conn, &breaker).0, "pending");
+
+    conn.execute(
+        "UPDATE proton_accounts SET pending_cursor = 'cursor', listing_checkpoint = 'checkpoint',
+         listing_state = 'listing' WHERE account_id = ?1",
+        params![ACCOUNT],
+    )
+    .unwrap();
+    let error = with_tx(&conn, |tx| {
+        release_intents(tx, std::slice::from_ref(&restore), NOW)
+    })
+    .unwrap_err();
+    assert!(matches!(error, StoreError::Conflict { .. }), "{error:?}");
+    assert_eq!(before, snapshot(&conn, &restore));
+}
+
+/// A `restore` quarantine releases once the listing is `complete`.
+#[test]
+fn release_allows_a_restore_quarantine_once_the_listing_completes() {
+    let conn = store();
+    let seed = seed(&conn);
+    let mut next = 0;
+    let id = quarantined(&conn, &mut next, &seed, QuarantineReason::Restore, star());
+    proton_listing(&conn, ACCOUNT, "complete");
+
+    with_tx(&conn, |tx| {
+        release_intents(tx, std::slice::from_ref(&id), NOW)
+    })
+    .unwrap();
+    let row = stored(&conn, &id);
+    assert!(
+        row.state == "pending"
+            && row.attempts == 0
+            && row.generation == 1
+            && row.quarantine_reason.is_none()
+    );
+}
+
+/// A batch with one releasable and one restore-held intent changes
+/// neither row.
+#[test]
+fn release_is_all_or_nothing_across_a_restore_refusal() {
+    let conn = store();
+    let seed = seed(&conn);
+    let mut next = 0;
+    let parked = plan(&conn, &mut next, &[seed.message], star()).remove(0);
+    with_tx(&conn, |tx| park_intent(tx, &parked, "no", NOW)).unwrap();
+    let restore = quarantined(&conn, &mut next, &seed, QuarantineReason::Restore, unstar());
+    proton_listing(&conn, ACCOUNT, "none");
+
+    let before = (snapshot(&conn, &parked), snapshot(&conn, &restore));
+    let error = with_tx(&conn, |tx| {
+        release_intents(tx, &[parked.clone(), restore.clone()], NOW)
+    })
+    .unwrap_err();
+    assert!(matches!(error, StoreError::Conflict { .. }), "{error:?}");
+    assert_eq!(
+        before,
+        (snapshot(&conn, &parked), snapshot(&conn, &restore))
+    );
+}
+
 /// `cancel_intents` reverts the flag, keeps a later live intent's
 /// effect, is all or nothing and refuses an in-flight intent.
 #[test]
