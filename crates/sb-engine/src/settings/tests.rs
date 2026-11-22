@@ -7,6 +7,7 @@ use crate::{BackupEnd, Engine, EngineError};
 
 const READING_VIEW_SENDERS: &str = "reader.reading_view_senders";
 const RECENT_MAILBOXES: &str = "filing.recent_mailboxes";
+const IDENTITY_DEFAULT: &str = "identity.default";
 
 fn configured(engine: &Engine) -> super::Setting {
     block_on(engine.settings())
@@ -70,6 +71,55 @@ fn recent_mailboxes_accept_only_the_canonical_list() {
             matches!(block_on(engine.set_setting(
                 &engine.new_idempotency_key(),
                 RECENT_MAILBOXES,
+                value
+            )), Err(EngineError::InvalidInput { field, .. }) if field == "value"),
+            "{value:?}"
+        );
+        assert_eq!(stored().value(), last);
+    }
+    block_on(engine.shutdown()).unwrap();
+}
+
+#[test]
+fn identity_default_accepts_empty_or_an_id_without_controls() {
+    let scratch = ScratchDir::new("engine-identity-default");
+    let engine = block_on(Engine::open(scratch.path().join("store"))).unwrap();
+    let stored = || {
+        block_on(engine.settings())
+            .unwrap()
+            .into_iter()
+            .find(|setting| setting.key() == IDENTITY_DEFAULT)
+            .expect("the registry holds the identity default")
+    };
+    assert_eq!(stored().value(), "");
+    assert!(stored().is_default());
+
+    for value in [
+        "",
+        "7",
+        "no-such-identity",
+        &"a".repeat(128),
+        &"é".repeat(64),
+        "a b",
+    ] {
+        block_on(engine.set_setting(&engine.new_idempotency_key(), IDENTITY_DEFAULT, value))
+            .unwrap();
+        assert_eq!(stored().value(), value);
+    }
+
+    let last = stored().value().to_owned();
+    for value in [
+        &"a".repeat(129),
+        &"é".repeat(65),
+        "\n",
+        "a\0b",
+        "a\u{7f}",
+        "a\u{85}b",
+    ] {
+        assert!(
+            matches!(block_on(engine.set_setting(
+                &engine.new_idempotency_key(),
+                IDENTITY_DEFAULT,
                 value
             )), Err(EngineError::InvalidInput { field, .. }) if field == "value"),
             "{value:?}"
