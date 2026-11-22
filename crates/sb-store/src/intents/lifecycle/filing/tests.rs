@@ -348,15 +348,15 @@ fn a_move_refuses_destinations_outside_the_matrix() {
         ),
         (
             seed.work,
-            format!("messages can't be moved to mailbox {}", seed.work),
+            "messages can't be moved to Work, which isn't a folder".to_owned(),
         ),
         (
             starred,
-            format!("messages can't be moved to mailbox {starred}"),
+            "messages can't be moved to Starred, which isn't a folder".to_owned(),
         ),
         (
             elsewhere,
-            format!("mailbox {elsewhere} belongs to another account"),
+            "the mailbox Inbox belongs to another account".to_owned(),
         ),
     ] {
         let refused = file(
@@ -476,7 +476,7 @@ fn labels_are_added_and_removed_once() {
     );
     assert_eq!(
         invalid_message(refused),
-        format!("mailbox {} isn't a label", seed.archive)
+        "the mailbox Archive isn't a label"
     );
 }
 

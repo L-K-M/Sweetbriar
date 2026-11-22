@@ -643,18 +643,23 @@ fn target_mailbox(
     };
     if owner != account_id {
         return Err(invalid(&format!(
-            "mailbox {mailbox_id} belongs to another account"
+            "the mailbox {} belongs to another account",
+            mailbox_name(tx, mailbox_id)?
         )));
     }
     if wants_label {
         if mailbox_kind != "label" {
-            return Err(invalid(&format!("mailbox {mailbox_id} isn't a label")));
+            return Err(invalid(&format!(
+                "the mailbox {} isn't a label",
+                mailbox_name(tx, mailbox_id)?
+            )));
         }
         return Ok(mailbox_id);
     }
     if mailbox_kind != "folder" {
         return Err(invalid(&format!(
-            "messages can't be moved to mailbox {mailbox_id}"
+            "messages can't be moved to {}, which isn't a folder",
+            mailbox_name(tx, mailbox_id)?
         )));
     }
     if policy == Policy::Command && matches!(role.as_deref(), Some("sent" | "drafts")) {

@@ -205,6 +205,13 @@ public final class ListWindowModel {
     @ObservationIgnored
     private var nextSerial: UInt64 = 0
 
+    /// Selection captures reading rows, and the one read of theirs
+    /// that runs at a time.
+    @ObservationIgnored
+    private var capturing = 0
+    @ObservationIgnored
+    private var captureRead: Task<ListWindow, any Error>?
+
     /// Pages whose read finished but whose completion still waits on
     /// a frame, with that read's serial — they count as requested
     /// until that completion is delivered or dropped. Keyed by serial
@@ -531,6 +538,125 @@ public final class ListWindowModel {
     /// a new index makes.
     public func select(_ ids: Set<Int64>) {
         selection = ids
+    }
+
+    /// `selected` as a filing command takes it (spec/08 "Keyboard
+    /// filing"): the ids it was invoked on, a part per account. A
+    /// mailbox window has one account, so one row answers for all, and
+    /// its whole selection past the explicit limit is the window's
+    /// token. Rows the cache lacks are read at the index's generation
+    /// and aren't cached. Throws `FilingRefusal`.
+    public func filingSelection(of selected: Set<Int64>) async throws -> FilingSelection {
+        guard !closed, let windowId, !selected.isEmpty else { throw FilingRefusal.listChanged }
+        let index = ids
+        let generation = generation
+        let ranks = selected.compactMap { self.index(of: $0) }.sorted()
+        guard ranks.count == selected.count else { throw FilingRefusal.listChanged }
+
+        let withinLimit = ranks.count <= FilingSelection.explicitLimit
+        guard case .mailbox = spec else {
+            guard withinLimit else { throw FilingRefusal.tooManyRows }
+            let rows = try await rows(at: ranks, in: index, window: windowId, generation: generation)
+            var order: [String] = []
+            var selectedIds: [String: [Int64]] = [:]
+            for row in rows {
+                if selectedIds[row.accountId] == nil { order.append(row.accountId) }
+                selectedIds[row.accountId, default: []].append(row.occurrenceId)
+            }
+            return FilingSelection(parts: order.map { account in
+                let ids = selectedIds[account] ?? []
+                return FilingPart(accountId: account, selection: .occurrenceIds(ids), count: ids.count)
+            })
+        }
+
+        let selection: MessageSelection
+        if withinLimit {
+            selection = .occurrenceIds(ranks.map { index[$0] })
+        } else if hasExactIndex, ranks.count == index.count {
+            selection = .window(windowId: windowId, generation: generation)
+        } else {
+            throw FilingRefusal.tooManyRows
+        }
+        let sample = ranks.first { row(at: $0) != nil } ?? ranks[0]
+        let rows = try await rows(at: [sample], in: index, window: windowId, generation: generation)
+        return FilingSelection(parts: [
+            FilingPart(accountId: rows[0].accountId, selection: selection, count: ranks.count)
+        ])
+    }
+
+    /// The rows of `index` at `ranks`: cached ones, then a read per
+    /// missing page with spec/08's anchor.
+    private func rows(
+        at ranks: [Int], in index: [Int64], window: UInt64, generation: UInt64
+    ) async throws -> [ListRow] {
+        var found: [Int64: ListRow] = [:]
+        var missingPages: Set<Int> = []
+        for rank in ranks {
+            if let cached = row(at: rank), cached.occurrenceId == index[rank] {
+                found[cached.occurrenceId] = cached
+            } else {
+                missingPages.insert(rank / Self.pageSize)
+            }
+        }
+
+        guard !missingPages.isEmpty else { return ranks.compactMap { found[index[$0]] } }
+        // These are reads too: they keep one of the two slots until done.
+        capturing += 1
+        defer {
+            capturing -= 1
+            pump()
+        }
+        for page in missingPages.sorted() {
+            let start = page * Self.pageSize
+            let length = min(Self.pageSize, index.count - start)
+            let read: ListWindow
+            do {
+                read = try await readForCapture(
+                    window: window, generation: generation,
+                    anchor: .around(index[start + length / 2]), limit: UInt32(length))
+            } catch let failure as CoreFailure {
+                switch failure {
+                case .resetRequired, .notFound: throw FilingRefusal.listChanged
+                default: throw failure
+                }
+            }
+            for row in read.rows { found[row.occurrenceId] = row }
+        }
+
+        let rows = ranks.compactMap { found[index[$0]] }
+        guard rows.count == ranks.count else { throw FilingRefusal.listChanged }
+        return rows
+    }
+
+    /// A capture's read, once neither another capture's read nor two
+    /// page reads run (spec/08: at most two reads in flight).
+    private func readForCapture(
+        window: UInt64, generation: UInt64, anchor: Anchor, limit: UInt32
+    ) async throws -> ListWindow {
+        while true {
+            try Task.checkCancellation()
+            guard !closed else { throw FilingRefusal.listChanged }
+            if let captureRead {
+                _ = await captureRead.result
+            } else if inFlight.count >= Self.inFlightLimit, let read = inFlight.values.first {
+                await read.task.value
+            } else {
+                break
+            }
+        }
+        let source = source
+        let read = Task {
+            // Cleared before it finishes, so a waiter never finds it done.
+            defer { captureRead = nil }
+            return try await source.readWindow(
+                id: window, generation: generation, anchor: anchor, limit: limit)
+        }
+        captureRead = read
+        return try await withTaskCancellationHandler {
+            try await read.value
+        } onCancel: {
+            read.cancel()
+        }
     }
 
     /// The index fetch once `fetching` has been claimed: holds off
@@ -875,7 +1001,8 @@ public final class ListWindowModel {
         guard !closed, !holdingReads, windowId != nil else {
             return
         }
-        for k in requestOrder where inFlight.count < Self.inFlightLimit {
+        let slots = Self.inFlightLimit - (capturing > 0 ? 1 : 0)
+        for k in requestOrder where inFlight.count < slots {
             guard wanted.contains(k),
                   inFlight[k] == nil,
                   pendingDelivery[k] == nil,
