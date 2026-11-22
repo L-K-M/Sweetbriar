@@ -70,6 +70,7 @@ struct CacheInner {
     fs: Arc<dyn Fs>,
     random: Arc<dyn Random>,
     namespace: PathBuf,
+    root: PathBuf,
     reservations: Mutex<Reservations>,
     // Leases retain this ownership lock even after the cache is dropped.
     _ownership: Box<dyn Lease>,
@@ -99,6 +100,7 @@ impl RenditionCache {
                 LockError::Held => RenditionError::Locked,
                 LockError::Io(e) => RenditionError::Io(e),
             })?;
+        exclude_cache_root(fs.as_ref(), &root);
         let namespace = root.join("renditions");
         match fs.create_private_dir(&namespace) {
             Ok(()) => {}
@@ -120,6 +122,7 @@ impl RenditionCache {
             fs,
             random,
             namespace,
+            root,
             reservations: Mutex::new(Reservations::default()),
             _ownership: ownership,
         })))
@@ -280,6 +283,7 @@ impl RenditionFiles {
         drop(file);
         fs.rename(&temporary, &final_path)?;
         fs.sync_dir(&self.directory)?;
+        exclude_cache_root(fs.as_ref(), &self.cache.root);
         Ok(final_path)
     }
 
@@ -310,6 +314,12 @@ impl Drop for RenditionFiles {
         // net. Failed cleanup remains charged and is swept on next open.
         let _ = self.remove();
     }
+}
+
+/// Time Machine exclusion is a backup hint, not a cache invariant: a
+/// failure must not stop the cache opening or a rendition publishing.
+fn exclude_cache_root(fs: &dyn Fs, root: &Path) {
+    let _ = fs.exclude_from_backup(root);
 }
 
 fn ensure_directory(fs: &dyn Fs, path: &Path) -> io::Result<()> {
