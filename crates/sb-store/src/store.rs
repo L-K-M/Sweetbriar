@@ -1544,6 +1544,17 @@ pub(crate) fn open_connection(
     open_connection_with_flags(state_db, flags, pragmas)
 }
 
+/// SQLite's own open of `state.sqlite`, through the default VFS. A test
+/// that armed a power supply over the store's root opens through the
+/// power-loss VFS instead (spec/11 "Power loss").
+fn open_raw(state_db: &Path, flags: OpenFlags) -> rusqlite::Result<Connection> {
+    #[cfg(test)]
+    if let Some(vfs) = crate::power_vfs::name_for(state_db) {
+        return Connection::open_with_flags_and_vfs(state_db, flags, vfs);
+    }
+    Connection::open_with_flags(state_db, flags)
+}
+
 /// The same connection settings, with caller-selected SQLite open flags.
 /// The verifier ledger also refuses links at SQLite's own open, rather
 /// than relying on a path check before the connection is created.
@@ -1552,7 +1563,7 @@ pub(crate) fn open_connection_with_flags(
     flags: OpenFlags,
     pragmas: &[PragmaSpec],
 ) -> Result<Connection, StoreError> {
-    let conn = Connection::open_with_flags(state_db, flags).map_err(sqlite_err)?;
+    let conn = open_raw(state_db, flags).map_err(sqlite_err)?;
     conn.set_prepared_statement_cache_capacity(PREPARED_STATEMENT_CACHE_CAPACITY);
     // Closing doesn't checkpoint until the caller lifts this (`open_with`
     // on success): a failed open leaves the file as its steps left it,
@@ -1695,7 +1706,7 @@ fn examine_read_only(
 /// never writes or checkpoints, and not trusting the schema of a file
 /// that may not be ours, so no schema-defined function runs.
 fn verdict_connection(state_db: &Path) -> Result<Connection, StoreError> {
-    let conn = Connection::open_with_flags(
+    let conn = open_raw(
         state_db,
         OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )
