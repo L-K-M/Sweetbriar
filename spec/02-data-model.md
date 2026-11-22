@@ -1372,7 +1372,10 @@ CREATE TABLE settings (
 ) STRICT;
 ```
 
-Receipts are kept for 30 days.
+Receipts are kept for 30 days. The daily GC pass (03) then deletes
+them, whatever its object gates say, and a key whose receipt is gone is
+unspent. Deleting them is bookkeeping: it makes no backup generation
+due. No other row is deleted with a receipt.
 
 **Settings** are a registry: each key has its values and a default.
 `set_setting` refuses an unknown key or value with `InvalidInput`,
