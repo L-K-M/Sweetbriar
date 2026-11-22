@@ -101,7 +101,9 @@ struct ListSelectionAfterFilingTests {
     }
 
     private func withList(
-        _ body: (FiledRowsSource, ListWindowModel, AppKitPrototypeList, NSTableView) async throws -> Void
+        _ body: @MainActor (
+            FiledRowsSource, ListWindowModel, AppKitPrototypeList, NSTableView
+        ) async throws -> Void
     ) async throws {
         let source = FiledRowsSource(ids: [50, 40, 30, 20, 10])
         let model = ListWindowModel(source: source, spec: .mailbox(1), clock: ImmediateClock())
