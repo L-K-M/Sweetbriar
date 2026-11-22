@@ -2,12 +2,18 @@ import SweetbriarBridge
 import SwiftUI
 
 struct ComposeCueSettingsView: View {
+    /// What the previews draw without a resolved account.
+    static let noAccount = IdentityStripView.Content.unavailable(label: "Without a sending identity")
+
     @State private var control: ComposeCueSettingsControl
+    private let preview: IdentityStripView.Content
 
     init(
         cue: ComposeCueModel, editor: ArchiveWriteTasks, revision: UInt64,
+        preview: IdentityStripView.Content = ComposeCueSettingsView.noAccount,
         canWrite: @escaping @MainActor () -> Bool
     ) {
+        self.preview = preview
         _control = State(
             initialValue: ComposeCueSettingsControl(
                 cue: cue, editor: editor, revision: revision, canWrite: canWrite))
@@ -17,11 +23,12 @@ struct ComposeCueSettingsView: View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Compose identity cue").font(.headline)
             Text(
-                "Standard uses the identity strip. Strong also tints the upper window; the editor stays neutral."
+                "Standard colors the identity strip. Strong also tints the upper window. Minimal colors only the monogram. The editor stays neutral and the full From address shows in every mode."
             )
             .font(.footnote)
             .foregroundStyle(.secondary)
-            ComposeCuePicker(mode: control.cue.mode, enabled: control.canChoose) { mode in
+            .fixedSize(horizontal: false, vertical: true)
+            ComposeCuePicker(mode: control.cue.mode, enabled: control.canChoose, preview: preview) { mode in
                 control.choose(mode)
             }
             if control.cue.isStopped {

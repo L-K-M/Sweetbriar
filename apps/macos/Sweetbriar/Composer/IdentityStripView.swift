@@ -60,6 +60,14 @@ final class IdentityStripView: NSView {
             needsDisplay = true
         }
     }
+    /// Minimal keeps the fill and text neutral. An unread preference draws
+    /// the strip's colors; the window says that it is still loading.
+    var cueMode: ComposeCueMode? {
+        didSet {
+            guard cueMode != oldValue else { return }
+            needsDisplay = true
+        }
+    }
     var appearanceDidChange: (() -> Void)?
     var contrastOptions: () -> (increase: Bool, differentiate: Bool) = {
         (
@@ -117,14 +125,20 @@ final class IdentityStripView: NSView {
             case .identity(let label, let monogram, let tokens):
                 let dark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
                 let variant = dark ? tokens.dark : tokens.light
-                appearanceColor(variant.stripSrgb).setFill()
+                let minimal = cueMode == .minimal
+                let surface = minimal ? NSColor.windowBackgroundColor : appearanceColor(variant.stripSrgb)
+                let marker = appearanceColor(variant.markerSrgb)
+                surface.setFill()
                 bounds.fill()
                 let hasMonogram = !monogram.isEmpty
-                drawLabel(label, color: appearanceColor(variant.foregroundSrgb), hasMonogram: hasMonogram)
-                if hasMonogram { drawMonogram(monogram, color: appearanceColor(variant.markerSrgb)) }
+                let text = minimal ? NSColor.labelColor : appearanceColor(variant.foregroundSrgb)
+                drawLabel(label, color: text, hasMonogram: hasMonogram)
+                if hasMonogram { drawMonogram(monogram, color: marker) }
                 let name = appearance?.name ?? effectiveAppearance.name
                 let options = contrastOptions()
-                if options.differentiate && hasMonogram {
+                let faintMarker =
+                    minimal && ComposeCuePresentation.markerNeedsOutline(marker, on: surface)
+                if hasMonogram && (options.differentiate || faintMarker) {
                     appearanceColor(variant.outlineSrgb).setStroke()
                     let markFrame = NSRect(
                         x: padding - 3, y: 3, width: markWidth(for: bounds.width) + 6,
@@ -136,7 +150,8 @@ final class IdentityStripView: NSView {
                 if name == .accessibilityHighContrastAqua || name == .accessibilityHighContrastDarkAqua
                     || options.increase || options.differentiate
                 {
-                    appearanceColor(variant.outlineSrgb).setStroke()
+                    let edge = minimal ? NSColor.labelColor : appearanceColor(variant.outlineSrgb)
+                    edge.setStroke()
                     let outline = NSBezierPath(rect: bounds.insetBy(dx: 0.75, dy: 0.75))
                     outline.lineWidth = 1.5
                     outline.stroke()

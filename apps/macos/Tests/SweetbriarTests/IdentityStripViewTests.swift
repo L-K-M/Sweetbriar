@@ -309,6 +309,99 @@ struct IdentityStripViewTests {
         #expect(nonMarker == 0)
     }
 
+    @Test(arguments: [NSAppearance.Name.aqua, .darkAqua])
+    func minimalColorsOnlyTheMonogram(_ name: NSAppearance.Name) throws {
+        let view = makeView()
+        var tokens = sampleAccount.tokens
+        tokens.light.stripSrgb = "#00ff00"
+        tokens.dark.stripSrgb = "#00ff00"
+        tokens.light.foregroundSrgb = "#00ff00"
+        tokens.dark.foregroundSrgb = "#00ff00"
+        tokens.light.markerSrgb = "#0000a0"
+        tokens.dark.markerSrgb = "#8080ff"
+        view.content = .identity(label: label, monogram: "W", tokens: tokens)
+        view.appearance = NSAppearance(named: name)
+        let height = view.intrinsicContentSize.height
+        let spoken = view.accessibilityLabel()
+
+        view.cueMode = .minimal
+        let bitmap = try render(view)
+        let green = countPixels(bitmap) {
+            $0.greenComponent > $0.redComponent + 0.1 && $0.greenComponent > $0.blueComponent + 0.1
+        }
+        let blue = countPixels(bitmap) { $0.blueComponent > $0.redComponent + 0.1 }
+        #expect(green == 0)
+        #expect(blue > 0)
+        #expect(view.intrinsicContentSize.height == height)
+        #expect(view.accessibilityLabel() == spoken)
+
+        let background = try #require(
+            bitmap.colorAt(x: bitmap.pixelsWide - 8, y: bitmap.pixelsHigh / 2)?.usingColorSpace(.sRGB))
+        #expect(background.alphaComponent > 0.99)
+        let surface = luminance(background)
+        var best = 0.0
+        for x in 50..<min(300, bitmap.pixelsWide) {
+            for y in 0..<bitmap.pixelsHigh {
+                guard let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
+                let ink = luminance(color)
+                best = max(best, (max(surface, ink) + 0.05) / (min(surface, ink) + 0.05))
+            }
+        }
+        #expect(best >= 4.5)
+    }
+
+    @Test(arguments: [
+        (NSAppearance.Name.aqua, "#eeeeee", true), (.aqua, "#0000a0", false),
+        (.darkAqua, "#222222", true), (.darkAqua, "#b0b0ff", false),
+    ])
+    func minimalOutlinesOnlyAFaintMonogram(
+        _ name: NSAppearance.Name, _ marker: String, _ outlined: Bool
+    ) throws {
+        let view = makeView()
+        var tokens = sampleAccount.tokens
+        tokens.light.markerSrgb = marker
+        tokens.dark.markerSrgb = marker
+        tokens.light.outlineSrgb = "#ff0000"
+        tokens.dark.outlineSrgb = "#ff0000"
+        view.content = .identity(label: label, monogram: "W", tokens: tokens)
+        view.appearance = NSAppearance(named: name)
+        view.cueMode = .minimal
+        let red = countPixels(try render(view)) {
+            $0.redComponent > 0.8 && $0.greenComponent < 0.2 && $0.blueComponent < 0.2
+        }
+        let resolved = view.appearance?.name
+        #expect(resolved == name, "the fixture's appearance decides the surface")
+        #expect((red > 0) == outlined)
+    }
+
+    @Test func minimalKeepsTheHighContrastEdgeNeutral() throws {
+        let view = makeView()
+        var tokens = sampleAccount.tokens
+        tokens.light.outlineSrgb = "#ff0000"
+        tokens.light.markerSrgb = "#0000a0"
+        view.content = .identity(label: label, monogram: "W", tokens: tokens)
+        view.appearance = NSAppearance(named: .aqua)
+        view.contrastOptions = { (true, false) }
+        view.cueMode = .minimal
+        let bitmap = try render(view)
+        let red = countPixels(bitmap) {
+            $0.redComponent > 0.8 && $0.greenComponent < 0.2 && $0.blueComponent < 0.2
+        }
+        let edge = try #require(bitmap.colorAt(x: bitmap.pixelsWide / 2, y: 1)?.usingColorSpace(.sRGB))
+        #expect(red == 0)
+        #expect(luminance(edge) < 0.5)
+    }
+
+    @Test func minimalLeavesAnUnavailableRouteAsStandardDrawsIt() throws {
+        let view = makeView()
+        view.content = .unavailable(label: "Sending identity unavailable")
+        view.appearance = NSAppearance(named: .aqua)
+        view.cueMode = .standard
+        let standard = try render(view).tiffRepresentation
+        view.cueMode = .minimal
+        #expect(try render(view).tiffRepresentation == standard)
+    }
+
     private func render(_ view: NSView) throws -> NSBitmapImageRep {
         let bitmap = try #require(view.bitmapImageRepForCachingDisplay(in: view.bounds))
         view.cacheDisplay(in: view.bounds, to: bitmap)

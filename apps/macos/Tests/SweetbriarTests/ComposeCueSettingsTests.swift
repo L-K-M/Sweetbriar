@@ -360,8 +360,10 @@ struct ComposeCueSettingsTests {
                 })
             let standard = try #require(cueButton(host, identifier: "composeCueStandard"))
             let strong = try #require(cueButton(host, identifier: "composeCueStrong"))
-            #expect(!standard.isEnabled && !strong.isEnabled)
+            let minimal = try #require(cueButton(host, identifier: "composeCueMinimal"))
+            #expect(!standard.isEnabled && !strong.isEnabled && !minimal.isEnabled)
             #expect(standard.state == .off && strong.state == .off && cue.mode == nil)
+            #expect(minimal.state == .off)
             await read.release()
             try #require(
                 await cueSettingsEventually {
@@ -391,5 +393,48 @@ struct ComposeCueSettingsTests {
             try #require(await cueSettingsEventually { !standard.isEnabled && !strong.isEnabled })
             #expect(cue.mode == .strong && strong.state == .on)
         }
+    }
+
+    @Test func pickerShowsEveryModeFromTheRealStripWithoutTakingFocus() async throws {
+        let route = IdentityStripView.Content.identity(
+            label: "From: Work", monogram: "W", tokens: sampleAccount.tokens)
+        var chosen: [ComposeCueMode] = []
+        let host = NSHostingView(
+            rootView: ComposeCuePicker(mode: .standard, enabled: true, preview: route) {
+                chosen.append($0)
+            })
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 600, height: 360),
+            styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        defer { window.close() }
+        func previews(_ view: NSView) -> [ComposeCuePreview] {
+            if let preview = view as? ComposeCuePreview { return [preview] }
+            return view.subviews.flatMap(previews)
+        }
+        try #require(await cueSettingsEventually { previews(host).count == 3 })
+        host.layoutSubtreeIfNeeded()
+        let shown = previews(host)
+        #expect(Set(shown.map(\.mode)) == Set(ComposeCueMode.allCases))
+        for preview in shown {
+            #expect(preview.strip.content == route && preview.strip.cueMode == preview.mode)
+            #expect((preview.windowTint != nil) == (preview.mode == .strong))
+            #expect(!preview.acceptsFirstResponder && !preview.strip.acceptsFirstResponder)
+            #expect(preview.hitTest(.zero) == nil && !preview.strip.isAccessibilityElement())
+            #expect(preview.frame.width >= 300 && preview.strip.frame.height >= 32)
+        }
+
+        for (id, words) in [
+            ("composeCueStandard", "identity strip"), ("composeCueStrong", "upper window"),
+            ("composeCueMinimal", "only the monogram"),
+        ] {
+            let radio = try #require(cueButton(host, identifier: id))
+            #expect(radio.accessibilityLabel()?.contains(words) == true)
+        }
+        try #require(cueButton(host, identifier: "composeCueMinimal")).performClick(nil)
+        #expect(chosen == [.minimal])
+        #expect(cueButton(host, identifier: "composeCueStandard")?.state == .on)
+        #expect(cueButton(host, identifier: "composeCueMinimal")?.state == .off)
     }
 }

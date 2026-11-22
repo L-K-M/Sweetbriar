@@ -906,12 +906,10 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
 
     private func renderChrome() {
         guard let window else { return }
-        var tint: NSColor?
-        if cue?.mode == .strong, case .identity(_, _, let tokens) = identityStrip.strip.content {
-            let dark =
-                identityStrip.strip.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-            tint = appearanceColor(dark ? tokens.dark.stripSrgb : tokens.light.stripSrgb)
-        }
+        let strip = identityStrip.strip
+        strip.cueMode = cue?.mode
+        let tint = ComposeCuePresentation.windowTint(
+            mode: cue?.mode, content: strip.content, appearance: strip.effectiveAppearance)
         if let tint {
             if !window.styleMask.contains(.fullSizeContentView) {
                 window.styleMask.insert(.fullSizeContentView)

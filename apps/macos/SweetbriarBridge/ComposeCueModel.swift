@@ -2,7 +2,7 @@ import Observation
 
 /// The registered appearance.compose_cue setting, not an account color.
 public enum ComposeCueMode: String, Sendable, CaseIterable {
-    case standard, strong
+    case standard, strong, minimal
 
     static let settingKey = "appearance.compose_cue"
     static func decode(_ settings: [Setting]) throws -> Self {
@@ -12,7 +12,7 @@ public enum ComposeCueMode: String, Sendable, CaseIterable {
         }
         // Setting.value is the service's scalar, not SQLite's JSON encoding.
         guard let mode = Self(rawValue: value.value) else {
-            throw CoreFailure.unavailable(reason: "The compose cue preference is not Standard or Strong.")
+            throw CoreFailure.unavailable(reason: "The compose cue preference is not Standard, Strong or Minimal.")
         }
         return mode
     }
