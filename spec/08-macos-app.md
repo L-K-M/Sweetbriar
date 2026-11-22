@@ -839,13 +839,16 @@ An opt-in local latency log records these. Nothing leaves the machine.
   version. It holds no message, address, subject, id or search text.
   At 10,000 lines the oldest are dropped first.
 - **Spans** run on the monotonic clock, each to the first frame that
-  shows the result:
+  shows the result. A shown result whose frame hasn't come within a
+  second (a hidden window) ends at that second, so a stall counts as
+  a miss:
   - `launch`: from the process's start to the main window's list
     showing its rows. A launch is warm unless it is the first since
     the Mac started;
   - `open_message`: from a single selection in a list to the reader
-    showing that message's body, when its rendition was already
-    cached;
+    showing that message's body, when the body was already on this
+    Mac. An open that waits for Proton to fetch the body isn't
+    recorded;
   - `archive_visible` and `archive_durable`, `delete_visible` and
     `delete_durable`: from the command to the row leaving the list,
     and to the core's receipt for its intent;
