@@ -3,7 +3,8 @@ import SQLite3
 
 /// M5.2's filing flow (spec/08 "Keyboard filing") over a seeded, paused
 /// Proton account: archive and undo, the palette's move and Edit →
-/// Undo, ⌘⌫ left to the search field, Trash, and a refusal explained.
+/// Undo, ⌘⌫ left to the search field, Trash, and a refusal explained;
+/// then the list's context menu and drops on the sidebar (M5.2c).
 /// Synthetic content only; the paused account calls no server.
 final class FilingFlowTests: XCTestCase {
     private static let timeout: TimeInterval = 60
@@ -12,38 +13,16 @@ final class FilingFlowTests: XCTestCase {
     private static let moved = "Lunch plans"
     private static let trashed = "Boarding pass"
     private static let scheduled = "Monday reminder"
+    /// How long a press lasts before it drags.
+    private static let dragPress: TimeInterval = 0.5
 
     @MainActor
     func testFilingFromTheKeyboardUndoesAndExplains() throws {
         continueAfterFailure = false
-        let roots = FileManager.default.temporaryDirectory
-            .appendingPathComponent("sweetbriar-filing-flow-\(UUID().uuidString)")
-        let dataRoot = roots.appendingPathComponent("data")
-        let cacheRoot = roots.appendingPathComponent("cache")
+        let (app, store, roots) = try launchSeeded()
         defer { try? FileManager.default.removeItem(at: roots) }
-        let store = dataRoot.appendingPathComponent("state.sqlite").path
-        let arguments = [
-            "-dataRoot", dataRoot.path,
-            "-cacheRoot", cacheRoot.path,
-            "-ApplePersistenceIgnoreState", "YES",
-        ]
-
-        // The first launch creates the store; seed it with no core open.
-        let opener = XCUIApplication()
-        opener.launchArguments = arguments
-        opener.launch()
-        XCTAssertTrue(opener.windows["Sweetbriar"].outlines["sidebar"].staticTexts["Local Archive"]
-            .waitForExistence(timeout: Self.timeout))
-        opener.terminate()
-        XCTAssertTrue(opener.wait(for: .notRunning, timeout: Self.timeout))
-        try Self.seed(store)
-
-        let app = XCUIApplication()
-        app.launchArguments = arguments
-        app.launch()
         let window = app.windows["Sweetbriar"]
         let rows = window.tables["messageList"].tableRows
-        waitUntil(rows, "count == 3")
 
         // Archive, then the toast's Undo.
         select(Self.archived, in: window)
@@ -94,6 +73,84 @@ final class FilingFlowTests: XCTestCase {
             [1: ["Inbox"], 2: ["Work"], 3: ["Trash"], 4: ["Scheduled"]])
     }
 
+    /// A context click acts on its row and leaves the selection; a drop
+    /// moves, adds a label, or says why it can't.
+    @MainActor
+    func testTheContextMenuAndDropsFile() throws {
+        continueAfterFailure = false
+        let (app, store, roots) = try launchSeeded()
+        defer { try? FileManager.default.removeItem(at: roots) }
+        let window = app.windows["Sweetbriar"]
+        let rows = window.tables["messageList"].tableRows
+        let sidebar = window.outlines["sidebar"]
+
+        select(Self.archived, in: window)
+        row(Self.trashed, in: window).rightClick()
+        let archive = window.menuItems["Archive"]
+        XCTAssertTrue(archive.waitForExistence(timeout: Self.timeout))
+        archive.click()
+        waitUntil(rows, "count == 2")
+        XCTAssertTrue(row(Self.archived, in: window).exists, "the selection was filed")
+
+        drag(Self.moved, to: sidebar.staticTexts["Work"], in: window)
+        waitUntil(rows, "count == 1")
+
+        drag(Self.archived, to: sidebar.staticTexts["Travel"], in: window)
+        waitUntil(window.staticTexts["filingToastMessage"], "value CONTAINS 'Travel'")
+        XCTAssertFalse(window.buttons["filingUndo"].exists, "a label offered Undo")
+
+        drag(Self.archived, to: sidebar.staticTexts["Scheduled"], in: window)
+        let sheet = window.sheets.firstMatch
+        XCTAssertTrue(
+            sheet.staticTexts["Messages can't be moved to Scheduled, which isn't a folder."]
+                .waitForExistence(timeout: Self.timeout))
+        sheet.buttons["OK"].click()
+
+        app.terminate()
+        XCTAssertTrue(app.wait(for: .notRunning, timeout: Self.timeout))
+        XCTAssertEqual(
+            try Self.mailboxes(store),
+            [1: ["Inbox", "Travel"], 2: ["Work"], 3: ["Archive"], 4: ["Scheduled"]])
+    }
+
+    /// The app over a seeded store, its three Inbox rows showing.
+    @MainActor
+    private func launchSeeded() throws -> (app: XCUIApplication, store: String, roots: URL) {
+        let roots = FileManager.default.temporaryDirectory
+            .appendingPathComponent("sweetbriar-filing-flow-\(UUID().uuidString)")
+        let dataRoot = roots.appendingPathComponent("data")
+        let store = dataRoot.appendingPathComponent("state.sqlite").path
+        let arguments = [
+            "-dataRoot", dataRoot.path,
+            "-cacheRoot", roots.appendingPathComponent("cache").path,
+            "-ApplePersistenceIgnoreState", "YES",
+        ]
+
+        // The first launch creates the store; seed it with no core open.
+        let opener = XCUIApplication()
+        opener.launchArguments = arguments
+        opener.launch()
+        XCTAssertTrue(opener.windows["Sweetbriar"].outlines["sidebar"].staticTexts["Local Archive"]
+            .waitForExistence(timeout: Self.timeout))
+        opener.terminate()
+        XCTAssertTrue(opener.wait(for: .notRunning, timeout: Self.timeout))
+        try Self.seed(store)
+
+        let app = XCUIApplication()
+        app.launchArguments = arguments
+        app.launch()
+        waitUntil(app.windows["Sweetbriar"].tables["messageList"].tableRows, "count == 3")
+        return (app, store, roots)
+    }
+
+    @MainActor
+    private func drag(_ subject: String, to mailbox: XCUIElement, in window: XCUIElement) {
+        let row = row(subject, in: window)
+        XCTAssertTrue(row.waitForExistence(timeout: Self.timeout))
+        XCTAssertTrue(mailbox.waitForExistence(timeout: Self.timeout))
+        row.click(forDuration: Self.dragPress, thenDragTo: mailbox)
+    }
+
     @MainActor
     private func move(to typed: String, app: XCUIApplication) {
         app.typeKey("m", modifierFlags: [.command, .shift])
@@ -142,7 +199,8 @@ final class FilingFlowTests: XCTestCase {
                     (102, '\(account)', '6', 'Archive', 'archive', 'folder', 1, 'synced'),
                     (103, '\(account)', '3', 'Trash', 'trash', 'folder', 1, 'synced'),
                     (104, '\(account)', 'folder-work', 'Work', NULL, 'folder', 1, 'synced'),
-                    (105, '\(account)', '12', 'Scheduled', NULL, 'virtual', 1, 'synced');
+                    (105, '\(account)', '12', 'Scheduled', NULL, 'virtual', 1, 'synced'),
+                    (106, '\(account)', 'label-travel', 'Travel', NULL, 'label', 1, 'synced');
             INSERT INTO logical_messages (message_id, account_id, provider_key, created_at)
              VALUES (1, '\(account)', 'msg-1', 0), (2, '\(account)', 'msg-2', 0),
                     (3, '\(account)', 'msg-3', 0), (4, '\(account)', 'msg-4', 0);
