@@ -465,6 +465,10 @@ impl Fs for RealFs {
         quarantine(path)
     }
 
+    fn exclude_from_backup(&self, path: &Path) -> io::Result<()> {
+        exclude_from_backup(path)
+    }
+
     fn sync_dir(&self, path: &Path) -> io::Result<()> {
         flush_durably(&File::open(path)?)
     }
@@ -527,6 +531,47 @@ fn quarantine(path: &Path) -> io::Result<()> {
             c"com.apple.quarantine".as_ptr(),
             value.as_ptr().cast(),
             value.len(),
+            0,
+            libc::XATTR_NOFOLLOW,
+        )
+    };
+    if result == -1 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+/// Linux has no Time Machine and no backup-exclusion attribute. This is
+/// deliberately a no-op.
+#[cfg(target_os = "linux")]
+fn exclude_from_backup(_path: &Path) -> io::Result<()> {
+    Ok(())
+}
+
+/// What `URLResourceValues.isExcludedFromBackup` writes as the exclusion
+/// attribute: a binary property list of the string `com.apple.backupd`.
+#[cfg(target_os = "macos")]
+const BACKUP_EXCLUDE_RECORD: &[u8] = b"bplist00_\x10\x11com.apple.backupd\
+    \x08\0\0\0\0\0\0\x01\x01\0\0\0\0\0\0\0\x01\
+    \0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\x1c";
+
+/// Mark `path` out of Time Machine backups. `XATTR_NOFOLLOW` keeps a
+/// symlink at `path` from marking its target instead.
+#[cfg(target_os = "macos")]
+fn exclude_from_backup(path: &Path) -> io::Result<()> {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+
+    let path = CString::new(path.as_os_str().as_bytes())
+        .map_err(|_| io::Error::from(io::ErrorKind::InvalidInput))?;
+    // SAFETY: path and name are terminated; value points to `len`
+    // readable bytes.
+    let result = unsafe {
+        libc::setxattr(
+            path.as_ptr(),
+            c"com.apple.metadata:com_apple_backup_excludeItem".as_ptr(),
+            BACKUP_EXCLUDE_RECORD.as_ptr().cast(),
+            BACKUP_EXCLUDE_RECORD.len(),
             0,
             libc::XATTR_NOFOLLOW,
         )
@@ -927,6 +972,86 @@ mod tests {
             assert!(bytes[..len as usize].starts_with(b"0081;"));
             assert!(RealFs.quarantine(&scratch.0.join("missing")).is_err());
         }
+    }
+
+    /// The backup exclusion set on `path` itself, as hex.
+    #[cfg(target_os = "macos")]
+    fn backup_exclusion(path: &Path) -> Option<String> {
+        use std::os::unix::ffi::OsStrExt;
+
+        let path = CString::new(path.as_os_str().as_bytes()).unwrap();
+        let mut value = [0_u8; 128];
+        // SAFETY: both strings are terminated, value has that capacity.
+        let read = unsafe {
+            libc::getxattr(
+                path.as_ptr(),
+                c"com.apple.metadata:com_apple_backup_excludeItem".as_ptr(),
+                value.as_mut_ptr().cast(),
+                value.len(),
+                0,
+                libc::XATTR_NOFOLLOW,
+            )
+        };
+        if read < 0 {
+            let error = io::Error::last_os_error();
+            assert_eq!(error.raw_os_error(), Some(libc::ENOATTR));
+            return None;
+        }
+        let bytes = &value[..usize::try_from(read).unwrap()];
+        Some(
+            bytes
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<Vec<_>>()
+                .concat(),
+        )
+    }
+
+    /// The attribute is compared with the one macOS writes instead of
+    /// asking `tmutil isexcluded`, whose answer also depends on the
+    /// volume and parents the scratch directory happens to have.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn exclude_from_backup_marks_only_its_directory() {
+        // `xattr -px` after setting `URLResourceValues.isExcludedFromBackup`
+        // on macOS 27; `tmutil addexclusion` writes the same.
+        let written_by_macos = concat!(
+            "62706c69737430305f1011636f6d2e6170706c652e6261636b757064",
+            "08000000000000010100000000000000",
+            "010000000000000000000000000000001c",
+        );
+        let scratch = Scratch::new("exclude-from-backup");
+        let cache = scratch.0.join("cache");
+        let data = scratch.0.join("data");
+        std::fs::create_dir(&cache).unwrap();
+        std::fs::create_dir(&data).unwrap();
+
+        RealFs.exclude_from_backup(&cache).unwrap();
+        RealFs.exclude_from_backup(&cache).unwrap();
+
+        assert_eq!(backup_exclusion(&cache).as_deref(), Some(written_by_macos));
+        assert_eq!(backup_exclusion(&data), None);
+        assert_eq!(backup_exclusion(&scratch.0), None);
+        assert!(
+            RealFs
+                .exclude_from_backup(&scratch.0.join("missing"))
+                .is_err()
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn exclude_from_backup_never_marks_a_links_target() {
+        let scratch = Scratch::new("exclude-from-backup-link");
+        let data = scratch.0.join("data");
+        let link = scratch.0.join("link");
+        std::fs::create_dir(&data).unwrap();
+        std::os::unix::fs::symlink(&data, &link).unwrap();
+
+        RealFs.exclude_from_backup(&link).unwrap();
+
+        assert_eq!(backup_exclusion(&data), None);
+        assert!(backup_exclusion(&link).is_some());
     }
 
     #[test]

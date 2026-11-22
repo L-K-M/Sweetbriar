@@ -65,11 +65,11 @@ jobs:
     needs: changes
     if: needs.changes.outputs.rust == 'true'
     runs-on: macos-26
-    # The steps take 52 to 56 minutes on a hosted runner: the Rust
-    # tests about 25, the list benchmark about 16. A run whose every
-    # step passed was cancelled at 60. The steps that can hang keep
-    # their own limits.
-    timeout-minutes: 90
+    # Runs that passed on 2026-11-21 and 22 took 71 to 89 minutes on a
+    # hosted runner: the Rust tests 38 to 49, the list benchmark 11 to
+    # 15. One with no failed step was cancelled at 90, in the benchmark.
+    # Most UI test steps and both benchmarks also have their own limits.
+    timeout-minutes: 120
     env:
       RUSTC_WRAPPER: sccache
       SCCACHE_GHA_ENABLED: "true"
