@@ -144,6 +144,35 @@ struct LatencyLogTests {
         #expect(report.text.contains("misses"))
     }
 
+    /// A later start replaces the pending span; an earlier result
+    /// neither ends nor cancels it.
+    @Test func aLaterStartReplacesTheSpan() {
+        let origin = ContinuousClock.now
+        var spans = LatencySpans()
+        spans.begin(.search, key: 1, at: origin)
+        spans.begin(.search, key: 2, at: origin + .milliseconds(30))
+        #expect(spans.take(.search, key: 1) == nil)
+        spans.cancel(.search, key: 1)
+        let span = spans.take(.search, key: 2)
+        #expect(span?.start == origin + .milliseconds(30))
+        #expect(span?.milliseconds(to: origin + .milliseconds(72.5)) == 42.5)
+        #expect(spans.take(.search, key: 2) == nil)
+
+        spans.begin(.openMessage, key: 7 as Int64, at: origin)
+        spans.begin(.search, key: 3, at: origin)
+        spans.cancel(.openMessage, key: 7 as Int64)
+        #expect(spans.take(.openMessage, key: 7 as Int64) == nil)
+        spans.cancel(.search)
+        #expect(spans.take(.search, key: 3) == nil)
+    }
+
+    /// Only a launch since the same boot as the last one is warm.
+    @Test func aLaunchIsWarmOnlySinceTheSameBoot() {
+        #expect(!LaunchWarmth.isWarm(previousBoot: nil, currentBoot: 1_700_000_000))
+        #expect(LaunchWarmth.isWarm(previousBoot: 1_700_000_000.4, currentBoot: 1_700_000_000))
+        #expect(!LaunchWarmth.isWarm(previousBoot: 1_700_000_000, currentBoot: 1_700_090_000))
+    }
+
     /// spec/08's budgets, in milliseconds.
     @Test func theBudgetsAreSpec08s() {
         #expect(LatencyInteraction.launch.budgetMilliseconds == 400)

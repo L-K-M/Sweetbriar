@@ -56,6 +56,69 @@ public struct LatencyEntry: Codable, Equatable, Sendable {
     }
 }
 
+/// A measured interaction in flight: what it is and when it started on
+/// the monotonic clock.
+public struct LatencySpan: Equatable, Sendable {
+    public let interaction: LatencyInteraction
+    public let start: ContinuousClock.Instant
+
+    public init(interaction: LatencyInteraction, start: ContinuousClock.Instant) {
+        self.interaction = interaction
+        self.start = start
+    }
+
+    /// The span's length to `end`, in milliseconds.
+    public func milliseconds(to end: ContinuousClock.Instant) -> Double {
+        let elapsed = (end - start).components
+        return Double(elapsed.seconds) * 1_000 + Double(elapsed.attoseconds) / 1e15
+    }
+}
+
+/// The spans a later start replaces (spec/08): a search's last
+/// keystroke, a list's single selection. Each interaction holds at most
+/// one, under the key its result names, so an earlier query's results
+/// or an earlier selection's body never end a later span.
+public struct LatencySpans {
+    private var current: [LatencyInteraction: (key: AnyHashable, span: LatencySpan)] = [:]
+
+    public init() {}
+
+    public mutating func begin(_ interaction: LatencyInteraction, key: AnyHashable, at start: ContinuousClock.Instant) {
+        current[interaction] = (key, LatencySpan(interaction: interaction, start: start))
+    }
+
+    /// The span `key` names, which ends here; nil when none is pending or
+    /// a later start replaced it.
+    public mutating func take(_ interaction: LatencyInteraction, key: AnyHashable) -> LatencySpan? {
+        guard let pending = current[interaction], pending.key == key else { return nil }
+        current[interaction] = nil
+        return pending.span
+    }
+
+    /// Drop the span `key` names: its result won't be shown.
+    public mutating func cancel(_ interaction: LatencyInteraction, key: AnyHashable) {
+        guard current[interaction]?.key == key else { return }
+        current[interaction] = nil
+    }
+
+    /// Drop the interaction's span, whatever it names.
+    public mutating func cancel(_ interaction: LatencyInteraction) {
+        current[interaction] = nil
+    }
+}
+
+/// Whether a launch is warm (spec/08): it isn't the first since the Mac
+/// started. `previousBoot` is the boot time the last recorded launch
+/// saw, in seconds since 1970; none makes the launch cold.
+public enum LaunchWarmth {
+    public static func isWarm(previousBoot: Double?, currentBoot: Double) -> Bool {
+        guard let previousBoot else { return false }
+        // The kernel's boot time moves by fractions of a second when the
+        // wall clock is corrected; a new boot moves it by far more.
+        return abs(previousBoot - currentBoot) < 1
+    }
+}
+
 /// The log file. Appending never throws to the interaction it measures:
 /// a failed write counts as lost and the report says so (spec/08).
 @MainActor
