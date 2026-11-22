@@ -106,6 +106,10 @@ public enum FilingRefusal: Error, Sendable, Equatable, LocalizedError {
     case noArchive
     /// The sidebar hasn't read the account's mailboxes.
     case mailboxesUnread
+    /// A drop on the mailbox being shown.
+    case alreadyThere(mailbox: String)
+    /// A drop on a mailbox that takes no messages of its own.
+    case holdsNoMessages(mailbox: String)
 
     public var errorDescription: String? {
         switch self {
@@ -127,6 +131,10 @@ public enum FilingRefusal: Error, Sendable, Equatable, LocalizedError {
             "This account has no Archive folder. Use Move to… to choose a folder."
         case .mailboxesUnread:
             "This account's mailboxes haven't loaded yet. Try again in a moment."
+        case .alreadyThere(let mailbox):
+            "The messages are already in \(mailbox)."
+        case .holdsNoMessages(let mailbox):
+            "\(mailbox) holds no messages of its own."
         }
     }
 }
