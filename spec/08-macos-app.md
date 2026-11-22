@@ -227,6 +227,11 @@ M4.4c. Choosing Out Box shows the Out Box in the list pane, as Drafts
   "Sending", "Outcome unknown", "Failed",
   "Sent", "Cancelled", and for a resolved unknown "Marked as sent",
   "Sent again" or "Kept as draft") and the last update time.
+- **From:** each row shows the route the attempt froze, on its own line
+  apart from the state: an identity chip (Account chips) labelled with
+  the account and the frozen sending address, from `out_box()`, not the
+  identity's current address. Without the identity's appearance the
+  chip is neutral; the address still shows.
 - **Details:** the selected row's details show below the list: each
   recipient with its address field and state, Proton's code and message
   (`final_reply`), the Proton evidence observed since launch, the
