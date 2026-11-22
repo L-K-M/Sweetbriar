@@ -668,6 +668,13 @@ Implements [15-account-colors](../research/15-account-colors.md):
   including selected rows; a strip ratio alone does not qualify the UI.
 - **The From control** is an `NSPopUpButton`: a swatch in each item's
   image and full addresses in titles. Provisional identities are marked.
+  The swatch is the strip in small: its fill and outline, with the
+  identity's monogram in the marker color. Without a monogram it shows
+  a marker square.
+- **The window title** starts with the sending account, so the Window
+  menu, Mission Control and Stage Manager show it: "Work · Lunch on
+  Friday · alex@company.example". Without a resolved identity it is the
+  subject, or "New Message".
 - **Switching From:**
   - updates the strip, title, signature and Sent behaviour in one view
     model transition; sending/Sent effects remain M4;
@@ -712,6 +719,12 @@ Implements [15-account-colors](../research/15-account-colors.md):
   one that received the original shows an inline banner with **Use
   <account>** and **Keep <account>**. An unacknowledged mismatch is
   confirmed at Send. Validation runs in the core (05).
+  - The banner and the confirmation name the account that received the
+    original and the sending identity, with its account and full
+    address.
+  - The banner leads with a warning symbol in the label color, and the
+    confirmation is a warning alert, so neither looks like any account's
+    color.
 - **Window tabs** get an `NSWindowTab.accessoryView` swatch (P2, later).
 - **Accessibility settings honored:**
   - `accessibilityDisplayShouldDifferentiateWithoutColor`: stronger
