@@ -541,6 +541,38 @@ fn a_break_inside_emphasis_or_a_link_is_a_hard_break() {
 }
 
 #[test]
+fn a_break_at_the_edge_of_emphasis_falls_outside_its_markers() {
+    for (html, markdown, plain) in [
+        ("<p>a<strong><br>a</strong></p>", "a\\\n**a**", "a a"),
+        ("<p>a<em><br>b</em></p>", "a\\\n*b*", "a b"),
+        ("<p>a<del><br>b</del></p>", "a\\\n~~b~~", "a b"),
+        ("<p>a<b><br><br>b</b></p>", "a\\\n\\\n**b**", "a b"),
+        ("<p><b>a</b><b><br>b</b></p>", "**a**\\\n**b**", "a b"),
+        ("<p><b>a<br><i></i></b>- b</p>", "**a**\\\n\\- b", "a - b"),
+        ("<p><b>a<br><br>b</b></p>", "**a\\\n\\\nb**", "a b"),
+        ("<p>a<b><br>b</b>c</p>", "a\\\n**b**c", "a bc"),
+        ("<p>a<b><i><br>b</i></b></p>", "a\\\n***b***", "a b"),
+        ("<p><b>a<br><i></i></b>b</p>", "**a**\\\nb", "a b"),
+        ("<p>a<b><br><i></i></b>b</p>", "a\\\nb", "a b"),
+        (
+            "<blockquote>a<b><br>b</b></blockquote>",
+            "> a\\\n> **b**",
+            "> a > b",
+        ),
+        ("<ul><li>a<b><br>b</b></li></ul>", "- a\\\n  **b**", "- a b"),
+    ] {
+        let converted = convert(html);
+        assert_eq!(converted.markdown, markdown, "{html}");
+        assert!(converted.losses.is_empty(), "{html}");
+
+        let rendered =
+            crate::compose::render_markdown(&converted.markdown).expect("the Markdown is valid");
+        let words: Vec<&str> = rendered.plain.split_whitespace().collect();
+        assert_eq!(words.join(" "), plain, "{html}");
+    }
+}
+
+#[test]
 fn deep_inline_nesting_converts_quickly_or_is_refused() {
     // The parse's work budget refuses depth long before the frames'
     // rebuilding costs anything.
