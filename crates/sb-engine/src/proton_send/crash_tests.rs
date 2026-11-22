@@ -11,7 +11,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use sb_resources::{Clock, Fs, Resources, Secret, SecretStore, StoreError, Timestamp};
 use sb_test_support::{
@@ -41,7 +41,12 @@ const CUT_ROOT_ENV: &str = "SB_SEND_CUT_ROOT";
 const CHILD: &str = "proton_send::crash_tests::send_crash_child";
 /// A send reply slower than a loaded machine's, inside the client's
 /// 30 s request deadline.
-const SLOW_REPLY: Duration = Duration::from_secs(10);
+pub(crate) const SLOW_REPLY: Duration = Duration::from_secs(10);
+/// How long the crash suites wait for the worker to finish. Counted in
+/// wall time, as the client's deadlines are: a count of polls ran out
+/// during one slow request. It leaves a child time to report a hang
+/// before the harness's 120 s deadline kills it.
+pub(crate) const WORKER_DEADLINE: Duration = Duration::from_secs(90);
 
 /// A clock the test advances by hand.
 pub(crate) struct MovableClock(AtomicI64);
@@ -223,7 +228,8 @@ async fn run_until_terminal(
     attempt_id: &str,
     settled: &AtomicBool,
 ) {
-    for _ in 0..2_000 {
+    let started = Instant::now();
+    while started.elapsed() < WORKER_DEADLINE {
         if settled.load(Ordering::SeqCst)
             && let Some(state) = out_box_state(engine, attempt_id).await
             && matches!(
@@ -255,7 +261,8 @@ async fn out_box_state(engine: &Engine, attempt_id: &str) -> Option<AttemptState
 /// wakes the poll rather than using Tokio's timer.
 fn wait_for_terminal(engine: &Engine, clock: &MovableClock, attempt_id: &str) -> AttemptState {
     block_on(async {
-        for _ in 0..2_000 {
+        let started = Instant::now();
+        while started.elapsed() < WORKER_DEADLINE {
             if let Some(state) = out_box_state(engine, attempt_id).await
                 && matches!(
                     state,
@@ -326,7 +333,7 @@ fn cut_points(first: u64, last: u64, count: usize) -> Vec<u64> {
 /// The fake server on its own runtime thread: the parent's checks
 /// drive the engine with the test executor, which must not run inside
 /// a Tokio runtime context.
-fn serve_fake() -> Arc<sb_test_support::FakeProtonServer> {
+pub(crate) fn serve_fake() -> Arc<sb_test_support::FakeProtonServer> {
     let (sent, ready) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let runtime = tokio::runtime::Runtime::new().expect("the fake's runtime");
