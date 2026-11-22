@@ -20,7 +20,7 @@ encoding_rs = "=0.8.42"
 # renderer's resource and link policy — never by regex. cssparser 0.38
 # is ammonia's own.
 cssparser = "=0.38.0"
-url = "=2.5.8"
+url = "=2.5.9"
 # spec/10 "Rendering": the streaming first pass that rewrites `cid:`
 # URLs and inventories remote resources before sanitizing.
 lol_html = "=3.0.1"
