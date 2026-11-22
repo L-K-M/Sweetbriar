@@ -1536,6 +1536,35 @@ public protocol CoreProtocol: AnyObject, Sendable {
     func saveDraft(token: CancelToken, idempotencyKey: String, draftId: String, baseRevisionId: String?, content: DraftContent) async throws  -> DraftSaved
     
     /**
+     * `add_label(selection, label_mailbox)` (spec/07 "Messages"):
+     * add one of the account's user labels; the location stays. Label
+     * undo is out of the pilot, so there is no token.
+     */
+    func addLabel(token: CancelToken, idempotencyKey: String, selection: MessageSelection, labelMailboxId: Int64) async throws 
+    
+    /**
+     * `delete_to_trash(selection)` (spec/07 "Messages"): move to the
+     * account's Trash, created on first use for the local archive.
+     * Nothing is deleted. Answers the undo token.
+     */
+    func deleteToTrash(token: CancelToken, idempotencyKey: String, selection: MessageSelection) async throws  -> String?
+    
+    /**
+     * `move_messages(selection, to_mailbox)` (spec/07 "Messages"):
+     * archive or move the selection's messages to one of their
+     * account's folders. Answers the undo token; a repeated key
+     * replays the first call's answer.
+     */
+    func moveMessages(token: CancelToken, idempotencyKey: String, selection: MessageSelection, toMailboxId: Int64) async throws  -> String?
+    
+    /**
+     * `remove_label(selection, label_mailbox)` (spec/07 "Messages"):
+     * remove one of the account's user labels; nothing is deleted on
+     * Proton. There is no undo token.
+     */
+    func removeLabel(token: CancelToken, idempotencyKey: String, selection: MessageSelection, labelMailboxId: Int64) async throws 
+    
+    /**
      * `set_flags(selection, add, remove)` (spec/07 "Flags"): add or
      * remove `\Seen` and `\Flagged` on the selection's logical
      * messages, which must belong to one Proton account. Answers the
@@ -2748,6 +2777,91 @@ open func saveDraft(token: CancelToken, idempotencyKey: String, draftId: String,
             completeFunc: ffi_sb_ffi_rust_future_complete_rust_buffer,
             freeFunc: ffi_sb_ffi_rust_future_free_rust_buffer,
             liftFunc: FfiConverterTypeDraftSaved_lift,
+            errorHandler: FfiConverterTypeCoreError_lift
+        )
+}
+    
+    /**
+     * `add_label(selection, label_mailbox)` (spec/07 "Messages"):
+     * add one of the account's user labels; the location stays. Label
+     * undo is out of the pilot, so there is no token.
+     */
+open func addLabel(token: CancelToken, idempotencyKey: String, selection: MessageSelection, labelMailboxId: Int64)async throws   {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_sb_ffi_fn_method_core_add_label(
+                        self.uniffiCloneHandle(),FfiConverterTypeCancelToken_lower(token),FfiConverterString.lower(idempotencyKey),FfiConverterTypeMessageSelection_lower(selection),FfiConverterInt64.lower(labelMailboxId)
+                )
+            },
+            pollFunc: ffi_sb_ffi_rust_future_poll_void,
+            completeFunc: ffi_sb_ffi_rust_future_complete_void,
+            freeFunc: ffi_sb_ffi_rust_future_free_void,
+            liftFunc: { $0 },
+            errorHandler: FfiConverterTypeCoreError_lift
+        )
+}
+    
+    /**
+     * `delete_to_trash(selection)` (spec/07 "Messages"): move to the
+     * account's Trash, created on first use for the local archive.
+     * Nothing is deleted. Answers the undo token.
+     */
+open func deleteToTrash(token: CancelToken, idempotencyKey: String, selection: MessageSelection)async throws  -> String?  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_sb_ffi_fn_method_core_delete_to_trash(
+                        self.uniffiCloneHandle(),FfiConverterTypeCancelToken_lower(token),FfiConverterString.lower(idempotencyKey),FfiConverterTypeMessageSelection_lower(selection)
+                )
+            },
+            pollFunc: ffi_sb_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_sb_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_sb_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterOptionString.lift,
+            errorHandler: FfiConverterTypeCoreError_lift
+        )
+}
+    
+    /**
+     * `move_messages(selection, to_mailbox)` (spec/07 "Messages"):
+     * archive or move the selection's messages to one of their
+     * account's folders. Answers the undo token; a repeated key
+     * replays the first call's answer.
+     */
+open func moveMessages(token: CancelToken, idempotencyKey: String, selection: MessageSelection, toMailboxId: Int64)async throws  -> String?  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_sb_ffi_fn_method_core_move_messages(
+                        self.uniffiCloneHandle(),FfiConverterTypeCancelToken_lower(token),FfiConverterString.lower(idempotencyKey),FfiConverterTypeMessageSelection_lower(selection),FfiConverterInt64.lower(toMailboxId)
+                )
+            },
+            pollFunc: ffi_sb_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_sb_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_sb_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterOptionString.lift,
+            errorHandler: FfiConverterTypeCoreError_lift
+        )
+}
+    
+    /**
+     * `remove_label(selection, label_mailbox)` (spec/07 "Messages"):
+     * remove one of the account's user labels; nothing is deleted on
+     * Proton. There is no undo token.
+     */
+open func removeLabel(token: CancelToken, idempotencyKey: String, selection: MessageSelection, labelMailboxId: Int64)async throws   {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_sb_ffi_fn_method_core_remove_label(
+                        self.uniffiCloneHandle(),FfiConverterTypeCancelToken_lower(token),FfiConverterString.lower(idempotencyKey),FfiConverterTypeMessageSelection_lower(selection),FfiConverterInt64.lower(labelMailboxId)
+                )
+            },
+            pollFunc: ffi_sb_ffi_rust_future_poll_void,
+            completeFunc: ffi_sb_ffi_rust_future_complete_void,
+            freeFunc: ffi_sb_ffi_rust_future_free_void,
+            liftFunc: { $0 },
             errorHandler: FfiConverterTypeCoreError_lift
         )
 }
@@ -18114,6 +18228,18 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sb_ffi_checksum_method_core_save_draft() != 24235) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sb_ffi_checksum_method_core_add_label() != 28159) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sb_ffi_checksum_method_core_delete_to_trash() != 6700) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sb_ffi_checksum_method_core_move_messages() != 32222) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sb_ffi_checksum_method_core_remove_label() != 15062) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sb_ffi_checksum_method_core_set_flags() != 29670) {

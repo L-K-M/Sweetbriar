@@ -46,7 +46,7 @@ The JSON line carries the base URL, the lane certificate as PEM, the synthetic u
 - **SRP salt length**: the server hard-codes a 16-byte SRP salt; production's is 10 (`proton-srp`'s `SALT_LEN_BYTES`), and Sweetbriar's client refuses any other length. `build.sh` applies `patches/srp-salt-10.patch`, which keeps the 16-byte key salt bcrypt needs and generates a separate 10-byte SRP salt.
 - **`Code`**: the server omits `Code` from success responses; production puts `1000` on every success, which Sweetbriar's client requires. The lane proxy adds it to 2xx JSON object responses that lack one; raw bodies such as attachment packets pass through untouched.
 - **Key `Version`**: `/core/v4/users` and `/core/v4/addresses` key objects carry no `Version`; production includes it, and `proton-crypto-account`'s `LockedKey` requires the field. The lane proxy adds production's value (`"Version": 3`) to key objects that lack it.
-- **Null address lists**: the server marshals absent `ToList`/`CCList`/`BCCList`/`ReplyTos` as `null`; production sends empty arrays, and Sweetbriar's metadata deserializer expects a sequence. The lane proxy rewrites the nulls in `/mail/v4/messages`.
+- **Null address lists**: the server marshals absent `ToList`/`CCList`/`BCCList`/`ReplyTos` as `null`; production sends empty arrays, and Sweetbriar's metadata deserializer expects a sequence. The lane proxy rewrites the nulls in the listing and full-message responses. It also normalizes a null `Attachments` list on a full message.
 - **Per-label counts**: the server's `/mail/v4/messages/count` counts only system labels, so user-label totals are missing; production counts every label. The server patch counts the user labels too.
 - **`Address.Send`/`Receive`**: fixed on the Sweetbriar side (commit `2446c9eb`): `Address` now decodes Proton's `0`/`1` (`APIBool`).
 - **Modulus key**: the server signs its SRP modulus with Proton's real modulus key (`proton@srp.modulus`, fingerprint `248097092B458509C508DAC0350585C4E9518F26`), so the production `RPGPVerifier` verifies it; no lane-only verifier is needed.
@@ -88,6 +88,22 @@ read-only suite's account. The suite:
 The records are the evidence for spec/05's qualified pre-submission
 list. The development server's refusals carry no numeric `Code`, so
 none of them can qualify a code yet; the list stays empty.
+
+## The filing suite (M5.1c)
+
+After the read-only audit, send suite and flag suite, filing uses the
+synthetic read-only account's seeded messages. It checks Archive from
+Starred, a move from All Mail into a custom folder, Trash from a label
+view, undo of Trash, and adding and removing a user label. A same-folder
+move is refused. A fresh store signs in and checks the final locations,
+retained labels and unchanged message count against the server.
+
+The pinned server replaces the previous folder when it labels a message
+with a new one. The request log therefore shows only one label call per
+move and no extra unlabel. The fake-server suite covers the case where
+the previous folder remains and must be unlabelled, including retries
+and crash cuts. The filing phase allows only its expected label and
+unlabel calls. Its results appear in the summary's `filing` section.
 
 ## Lane status
 
