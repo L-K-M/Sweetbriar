@@ -13,17 +13,16 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use sb_resources::{Fs, Resources, Secret, SecretStore, StoreError};
 use sb_test_support::{
-    CutFs, FakeMessage, FakeSecrets, TestAccount, block_on, cert_der, fake_modulus_verifier,
-    real_fs,
+    CutFs, FakeMessage, FakeSecrets, Fault, block_on, cert_der, fake_modulus_verifier, real_fs,
 };
 
 use super::tests::STAR;
 use super::{IntentCut, set_cut_hook};
-use crate::proton_send::crash_tests::MovableClock;
+use crate::proton_send::crash_tests::{MovableClock, SLOW_REPLY, WORKER_DEADLINE, serve_fake};
 use crate::{BeginProtonSignIn, Engine, MessageSelection, ProtonSignInParams, ProtonSignInState};
 
 /// What a child plans.
@@ -161,7 +160,8 @@ async fn intent_crash_child() {
             .expect("the star plans")
             .expect("the fresh message wasn't starred");
     }
-    for _ in 0..2_000 {
+    let started = Instant::now();
+    while started.elapsed() < WORKER_DEADLINE {
         if settled.load(Ordering::SeqCst) {
             break;
         }
@@ -178,7 +178,8 @@ async fn intent_crash_child() {
 
 /// The local id of `key` once the listing brought it.
 async fn listed_message(engine: &Engine, key: &str) -> i64 {
-    for _ in 0..2_000 {
+    let started = Instant::now();
+    while started.elapsed() < WORKER_DEADLINE {
         let key = key.to_owned();
         let found = engine
             .resources()
@@ -243,22 +244,40 @@ fn move_crash_cuts_never_lose_or_duplicate_the_message() {
     crash_cuts(Action::Move);
 }
 
+/// A slow reply is no hang, as in the send suite.
+#[test]
+fn the_crash_child_outwaits_a_slow_reply() {
+    let scratch = sb_test_support::ScratchDir::new("engine-intent-crash-slow");
+    let server = serve_fake();
+    server.add_message(USER, FakeMessage::new("slow").with_labels(&["0", "5"]));
+    server.set_fault(Some(Fault::OnceAt {
+        path: "/mail/v4/messages/label".to_owned(),
+        fault: Box::new(Fault::Stall(SLOW_REPLY)),
+    }));
+    let dir = scratch.path();
+    fs::create_dir_all(dir.join("cache")).unwrap();
+    fs::write(dir.join("url.txt"), server.base_url()).unwrap();
+    fs::write(dir.join("verifier.txt"), server.verifier_public_key()).unwrap();
+    fs::write(dir.join("message.txt"), "slow").unwrap();
+    fs::write(dir.join("action.txt"), Action::Star.word()).unwrap();
+
+    let root = dir.join("store");
+    let report = sb_test_support::run_crash_cut_points(
+        CUT_N_ENV,
+        CUT_ROOT_ENV,
+        CHILD,
+        &[u64::MAX],
+        &mut |_| root.clone(),
+        &mut |_| {},
+    );
+
+    assert_eq!(report.survived, vec![u64::MAX]);
+    assert_eq!(server.mutation_calls(), 1);
+}
+
 fn crash_cuts(action: Action) {
     let scratch = sb_test_support::ScratchDir::new(&format!("engine-{}-crash-cuts", action.word()));
-    // The fake runs on its own runtime thread; the parent drives the
-    // reopened engine with the test executor, outside any runtime.
-    let (sent, ready) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        let runtime = tokio::runtime::Runtime::new().expect("the fake's runtime");
-        let server = runtime
-            .block_on(sb_test_support::FakeProtonServer::serve(vec![
-                TestAccount::new(USER, PASSWORD),
-            ]))
-            .expect("the fake serves");
-        sent.send(Arc::new(server)).expect("the fake handle sends");
-        runtime.block_on(std::future::pending::<()>());
-    });
-    let server = ready.recv().expect("the fake handle");
+    let server = serve_fake();
     let base_url = server.base_url().to_owned();
 
     // Each child stars its own fresh message, so a star left by an
@@ -335,7 +354,8 @@ fn crash_cuts(action: Action) {
             ))
             .expect("the cut store reopens");
             let mut end = intent_state(&engine, &intent_id);
-            for _ in 0..2_000 {
+            let started = Instant::now();
+            while started.elapsed() < WORKER_DEADLINE {
                 if end == "done" {
                     break;
                 }
