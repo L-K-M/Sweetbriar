@@ -15,7 +15,8 @@ use std::time::Duration;
 
 use sb_resources::{Clock, Fs, Resources, Secret, SecretStore, StoreError, Timestamp};
 use sb_test_support::{
-    CutFs, FakeSecrets, ScratchDir, TestAccount, block_on, cert_der, fake_modulus_verifier, real_fs,
+    CutFs, FakeSecrets, Fault, ScratchDir, TestAccount, block_on, cert_der, fake_modulus_verifier,
+    real_fs,
 };
 
 use super::{SendPhase, SendTransition};
@@ -38,6 +39,9 @@ const CUT_SEED: u64 = 0x0043_4301;
 const CUT_N_ENV: &str = "SB_SEND_CUT_N";
 const CUT_ROOT_ENV: &str = "SB_SEND_CUT_ROOT";
 const CHILD: &str = "proton_send::crash_tests::send_crash_child";
+/// A send reply slower than a loaded machine's, inside the client's
+/// 30 s request deadline.
+const SLOW_REPLY: Duration = Duration::from_secs(10);
 
 /// A clock the test advances by hand.
 pub(crate) struct MovableClock(AtomicI64);
@@ -319,12 +323,10 @@ fn cut_points(first: u64, last: u64, count: usize) -> Vec<u64> {
     points
 }
 
-#[test]
-fn send_crash_cuts_never_duplicate_a_send() {
-    let scratch = ScratchDir::new("engine-send-crash-cuts");
-    // The fake server runs on its own runtime thread: the parent's
-    // checks drive the engine with the test executor, which must not
-    // run inside a Tokio runtime context.
+/// The fake server on its own runtime thread: the parent's checks
+/// drive the engine with the test executor, which must not run inside
+/// a Tokio runtime context.
+fn serve_fake() -> Arc<sb_test_support::FakeProtonServer> {
     let (sent, ready) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let runtime = tokio::runtime::Runtime::new().expect("the fake's runtime");
@@ -336,7 +338,42 @@ fn send_crash_cuts_never_duplicate_a_send() {
         sent.send(Arc::new(server)).expect("the fake handle sends");
         runtime.block_on(std::future::pending::<()>());
     });
-    let server = ready.recv().expect("the fake handle");
+    ready.recv().expect("the fake handle")
+}
+
+/// A slow reply is no hang: the client allows a request 30 s, so a
+/// child that gives up sooner fails the suite on a loaded machine.
+#[test]
+fn the_crash_child_outwaits_a_slow_reply() {
+    let scratch = ScratchDir::new("engine-send-crash-slow");
+    let server = serve_fake();
+    server.set_fault(Some(Fault::OnceSend(Box::new(Fault::Stall(SLOW_REPLY)))));
+    fs::create_dir_all(scratch.path().join("cache")).unwrap();
+    fs::write(scratch.path().join("url.txt"), server.base_url()).unwrap();
+    fs::write(
+        scratch.path().join("verifier.txt"),
+        server.verifier_public_key(),
+    )
+    .unwrap();
+
+    let root = scratch.path().join("store");
+    let report = sb_test_support::run_crash_cut_points(
+        CUT_N_ENV,
+        CUT_ROOT_ENV,
+        CHILD,
+        &[u64::MAX],
+        &mut |_| root.clone(),
+        &mut |_| {},
+    );
+
+    assert_eq!(report.survived, vec![u64::MAX]);
+    assert_eq!(server.sends(), 1);
+}
+
+#[test]
+fn send_crash_cuts_never_duplicate_a_send() {
+    let scratch = ScratchDir::new("engine-send-crash-cuts");
+    let server = serve_fake();
     let base_url = server.base_url().to_owned();
 
     // An uncut child measures how many counted hook operations one
