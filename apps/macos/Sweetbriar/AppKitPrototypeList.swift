@@ -55,7 +55,7 @@ final class AppKitPrototypeList: NSView {
     private let observeAccountLabels: () -> Void
     private let selectionLoss: SelectionLoss
     private let scrollView = NSScrollView()
-    private let tableView = NSTableView()
+    private let tableView = MessageTableView()
 
     /// The selection, by occurrence id, whenever it changes — the
     /// list's own clicks and a new index's changes alike.
@@ -69,6 +69,12 @@ final class AppKitPrototypeList: NSView {
     /// The selection as occurrence ids — the source of truth the
     /// table's `selectedRowIndexes` is mapped through.
     private var selectedOccurrenceIDs: Set<Int64> = []
+
+    /// The first selected row's rank, while rows are selected.
+    private var selectionRank: Int?
+    /// That rank once every selected row left the list: where the next
+    /// arrow continues (spec/08 "Keyboard filing").
+    private var resumeRank: Int?
 
     init(
         model: ListWindowModel,
@@ -105,6 +111,7 @@ final class AppKitPrototypeList: NSView {
         model.onSelectionChanged = { [weak self] ids in
             guard let self else { return }
             let lost = ids.isEmpty && !selectedOccurrenceIDs.isEmpty
+            if lost { resumeRank = selectionRank }
             selectedOccurrenceIDs = ids
             restoreSelection()
             if lost, selectionLoss == .reopenAtTop {
@@ -154,6 +161,7 @@ final class AppKitPrototypeList: NSView {
         tableView.dataSource = self
         tableView.delegate = self
         tableView.menu = contextMenu()
+        tableView.resumeSelection = { [weak self] step in self?.resumeSelection(step) == true }
         tableView.setAccessibilityIdentifier(Self.accessibilityID)
 
         scrollView.documentView = tableView
@@ -239,7 +247,19 @@ final class AppKitPrototypeList: NSView {
                 indexes.insert(rank)
             }
         }
+        if let first = indexes.first { selectionRank = first }
         tableView.selectRowIndexes(indexes, byExtendingSelection: false)
+    }
+
+    /// An arrow after the whole selection left: Down takes the row now
+    /// at the first one's rank, Up the row before it.
+    private func resumeSelection(_ step: MessageTableView.Step) -> Bool {
+        guard let resumeRank, model.count > 0 else { return false }
+        let wanted = step == .next ? resumeRank : resumeRank - 1
+        let row = min(max(wanted, 0), model.count - 1)
+        tableView.selectRowIndexes([row], byExtendingSelection: false)
+        tableView.scrollRowToVisible(row)
+        return true
     }
 
     /// Give the table the keyboard, as the filing palette does when it
@@ -304,6 +324,8 @@ extension AppKitPrototypeList: NSTableViewDataSource, NSTableViewDelegate {
                 model.occurrenceID(at: $0)
             }
         )
+        selectionRank = tableView.selectedRowIndexes.first
+        resumeRank = nil
         guard ids != selectedOccurrenceIDs else { return }
         selectedOccurrenceIDs = ids
         model.select(ids)
