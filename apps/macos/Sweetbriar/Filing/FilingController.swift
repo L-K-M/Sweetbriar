@@ -10,6 +10,9 @@ import SweetbriarBridge
 final class FilingController: NSObject {
     let model: FilingModel
     let toastView = FilingToastView()
+    /// Edit → Undo in the list. Not the window's: a ⌘Z meant for the
+    /// search field or a note would move mail.
+    let undoManager = UndoManager()
     private(set) var palette: FilingPalette?
 
     private weak var window: NSWindow?
@@ -100,7 +103,7 @@ final class FilingController: NSObject {
         retired = true
         model.retire()
         toastView.show(nil)
-        window?.undoManager?.removeAllActions(withTarget: self)
+        undoManager.removeAllActions()
         palette?.cancel(nil)
     }
 
@@ -215,8 +218,7 @@ final class FilingController: NSObject {
         toastView.show(toast)
         guard toast?.id != offered else { return }
         offered = toast?.id
-        let undoManager = window?.undoManager
-        undoManager?.removeAllActions(withTarget: self)
+        undoManager.removeAllActions()
         guard let toast else { return }
 
         NSAccessibility.post(
@@ -225,7 +227,7 @@ final class FilingController: NSObject {
                 .announcement: toast.message,
                 .priority: NSAccessibilityPriorityLevel.high.rawValue,
             ])
-        guard toast.canUndo, let undoManager else { return }
+        guard toast.canUndo else { return }
         let id = toast.id
         undoManager.registerUndo(withTarget: self) { controller in
             MainActor.assumeIsolated { controller.undo(id) }

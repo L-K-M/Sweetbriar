@@ -381,6 +381,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         self.filing = filing
         sidebar.dropTarget = filing
         messageList.contextActions = { [weak self] ids in self?.contextActions(for: ids) ?? [] }
+        messageList.filingUndoManager = filing.undoManager
         root.view.addSubview(filing.toastView)
         NSLayoutConstraint.activate([
             filing.toastView.centerXAnchor.constraint(equalTo: root.view.centerXAnchor),
