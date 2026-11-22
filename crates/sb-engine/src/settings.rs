@@ -30,6 +30,7 @@ enum Values {
     Choices(&'static [&'static str]),
     BackupDirectory,
     SenderList,
+    MailboxList,
 }
 
 impl Values {
@@ -38,6 +39,7 @@ impl Values {
             Self::Choices(values) => values.contains(&value),
             Self::BackupDirectory => valid_backup_destination(value),
             Self::SenderList => valid_sender_list(value),
+            Self::MailboxList => valid_mailbox_list(value),
         }
     }
 
@@ -50,8 +52,33 @@ impl Values {
             Self::SenderList => {
                 "lowercase addresses, each with one '@' and at most 254 bytes, sorted and unique, joined by newlines; at most 1,000, or empty".into()
             }
+            Self::MailboxList => {
+                "mailbox ids as canonical positive decimals, unique, joined by newlines; at most 100, or empty".into()
+            }
         }
     }
+}
+
+/// The most mailboxes `filing.recent_mailboxes` ranks (spec/02).
+const MAX_RECENT_MAILBOXES: usize = 100;
+
+/// `filing.recent_mailboxes`'s canonical form (spec/02): empty, or
+/// mailbox ids as canonical positive decimals, unique, joined by
+/// newlines, at most [`MAX_RECENT_MAILBOXES`]. Their order is the
+/// ranking, so it isn't sorted.
+fn valid_mailbox_list(value: &str) -> bool {
+    if value.is_empty() {
+        return true;
+    }
+    let ids: Vec<&str> = value.split('\n').collect();
+    if ids.len() > MAX_RECENT_MAILBOXES {
+        return false;
+    }
+    ids.iter().enumerate().all(|(index, id)| {
+        id.parse::<i64>()
+            .is_ok_and(|parsed| parsed > 0 && parsed.to_string() == *id)
+            && !ids[..index].contains(id)
+    })
 }
 
 /// `reader.reading_view_senders`'s canonical form (spec/02): empty, or
@@ -108,6 +135,11 @@ const REGISTRY: &[RegisteredSetting] = &[
     RegisteredSetting {
         key: "reader.reading_view_senders",
         values: Values::SenderList,
+        default: "",
+    },
+    RegisteredSetting {
+        key: "filing.recent_mailboxes",
+        values: Values::MailboxList,
         default: "",
     },
 ];
