@@ -408,7 +408,12 @@ fn send_crash_cuts_never_duplicate_a_send() {
         .parse()
         .expect("an integer");
     assert!(operations > 0, "the submission made no counted operations");
-    let points = cut_points(1, operations, CUT_POINTS);
+    let count = sb_test_support::fault_points(CUT_POINTS, operations);
+    let points = if count as u64 == operations {
+        (1..=operations).collect()
+    } else {
+        cut_points(1, operations, count)
+    };
 
     // The fake's send count when each child starts: a child that
     // survives its seed is never checked, so a running total would
@@ -486,7 +491,7 @@ fn send_crash_cuts_never_duplicate_a_send() {
         },
     );
     assert!(
-        report.killed.len() == CUT_POINTS,
+        report.killed.len() == count,
         "every seed must land: killed {:?}, survived {:?}",
         report.killed,
         report.survived

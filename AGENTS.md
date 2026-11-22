@@ -160,8 +160,9 @@ push commit-pinned requests to `bench/requests` and reports to
 
 M0.12 adds `nightly.yml` (daily/manual): Swift unit tests, the
 `SweetbriarSmoke` XCUITest launch and an ad-hoc signed DMG. `xcode-27`
-is advisory; the fault-injection placeholder stays skipped until its
-suite exists. The `proptest` job runs the Proton sync model with
+is advisory. The `fault-injection` job runs the sampled crash suites
+at every cut point (`SB_FAULT_SCALE=full`) and the power-loss
+simulation on both layers (spec/11). The `proptest` job runs the Proton sync model with
 `SB_PROPTEST_SCALE=20` times the cases a pull request runs. M1.1
 enables the 60-second Linux MIME fuzz run; reproduction and its
 isolated nightly toolchain are documented in `fuzz/README.md`.
