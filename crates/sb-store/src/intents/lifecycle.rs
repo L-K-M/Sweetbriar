@@ -655,11 +655,25 @@ pub fn clear_account_intents_waiting(
     Ok(())
 }
 
+/// What a release is told when it would beat a restore's reconcile
+/// (spec/03 "Restore" step 5). No ids: the detail is shown as written.
+const RESTORE_RECONCILE_FIRST: &str =
+    "resume the account and let it finish syncing before releasing what a restore held back";
+
 /// `release_intents` (spec/07, spec/04-sync-proton "Health actions"):
 /// every named `parked` or `quarantined` intent becomes `pending` with
 /// `attempts` 0, its reasons cleared and its `config_generation` the
 /// account's current one. All or nothing: a missing id is `NotFound`,
 /// one that doesn't qualify is `Conflict`, and nothing changes.
+///
+/// A `quarantined` intent waits for its account's restore to reconcile
+/// (spec/03 "Restore" step 5): release is `Conflict` while
+/// `accounts.restore_pending` is set, or while its reason is `restore`
+/// and the account's Proton `listing_state` isn't `complete` (the
+/// resume cleared `restore_pending` and reset the listing, so the
+/// bootstrap hasn't finished). `parked` intents and other quarantine
+/// reasons release normally; an account without a `proton_accounts`
+/// row follows only the first rule.
 pub fn release_intents(
     tx: &Transaction,
     intent_ids: &[String],
@@ -673,6 +687,13 @@ pub fn release_intents(
                 "intent {intent_id} in state {} cannot be released",
                 row.state
             )));
+        }
+        // The check runs before any write, so a batch with one refused
+        // intent leaves every row unchanged.
+        if row.state == "quarantined"
+            && restore_reconcile_pending(tx, &row.account_id, row.quarantine_reason.as_deref())?
+        {
+            return Err(conflict(RESTORE_RECONCILE_FIRST.to_owned()));
         }
         targets.push(row);
     }
@@ -803,6 +824,7 @@ struct IntentRow {
     intent_id: String,
     account_id: String,
     state: String,
+    quarantine_reason: Option<String>,
     attempts: i64,
     rowid: i64,
     op: String,
@@ -817,7 +839,8 @@ fn intent_row(tx: &Transaction, intent_id: &str) -> Result<IntentRow, StoreError
 
 fn intent_row_optional(tx: &Transaction, intent_id: &str) -> Result<Option<IntentRow>, StoreError> {
     tx.query_row(
-        "SELECT intent_id, account_id, state, attempts, rowid, op, target_json, args_json
+        "SELECT intent_id, account_id, state, quarantine_reason, attempts, rowid, op,
+                target_json, args_json
          FROM intents WHERE intent_id = ?1",
         [intent_id],
         |row| {
@@ -825,16 +848,45 @@ fn intent_row_optional(tx: &Transaction, intent_id: &str) -> Result<Option<Inten
                 intent_id: row.get(0)?,
                 account_id: row.get(1)?,
                 state: row.get(2)?,
-                attempts: row.get(3)?,
-                rowid: row.get(4)?,
-                op: row.get(5)?,
-                target_json: row.get(6)?,
-                args_json: row.get(7)?,
+                quarantine_reason: row.get(3)?,
+                attempts: row.get(4)?,
+                rowid: row.get(5)?,
+                op: row.get(6)?,
+                target_json: row.get(7)?,
+                args_json: row.get(8)?,
             })
         },
     )
     .optional()
     .map_err(|e| classify(e, "read an intent"))
+}
+
+/// Whether a quarantined intent's account still owes its restore's
+/// reconcile (spec/03 "Restore" step 5). The first rule is
+/// `accounts.restore_pending`, whatever the quarantine reason; the
+/// second is a `restore` reason whose Proton `listing_state` isn't
+/// `complete`. An account with no `proton_accounts` row (the local
+/// archive) follows only the first.
+fn restore_reconcile_pending(
+    tx: &Transaction,
+    account_id: &str,
+    quarantine_reason: Option<&str>,
+) -> Result<bool, StoreError> {
+    let held: Option<(i64, Option<String>)> = tx
+        .query_row(
+            "SELECT a.restore_pending, p.listing_state
+             FROM accounts a LEFT JOIN proton_accounts p ON p.account_id = a.account_id
+             WHERE a.account_id = ?1",
+            [account_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()
+        .map_err(|e| classify(e, "read the account's restore state"))?;
+    Ok(held.is_some_and(|(restore_pending, listing_state)| {
+        restore_pending != 0
+            || (quarantine_reason == Some(QuarantineReason::Restore.as_str())
+                && listing_state.is_some_and(|state| state != "complete"))
+    }))
 }
 
 /// The account's current configuration generation, or `NotFound`.
