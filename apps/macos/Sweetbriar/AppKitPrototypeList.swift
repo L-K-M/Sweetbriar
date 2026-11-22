@@ -328,8 +328,8 @@ extension AppKitPrototypeList: NSTableViewDataSource, NSTableViewDelegate {
     }
 
     func tableView(_ tableView: NSTableView, pasteboardWriterForRow row: Int) -> (any NSPasteboardWriting)? {
-        guard contextActions != nil else { return nil }
-        return model.occurrenceID(at: row).map(MessageListDrag.item(occurrenceId:))
+        guard contextActions != nil, model.occurrenceID(at: row) != nil else { return nil }
+        return MessageListDrag.item()
     }
 
     /// The rows are captured as the drag begins: the list may change

@@ -100,6 +100,21 @@ struct ListSelectionAfterFilingTests {
         }
     }
 
+    /// Any app can read the drag pasteboard, so it says only that rows
+    /// are dragged, never which.
+    @Test func theDragPasteboardDoesntNameTheRows() async throws {
+        try await withList { _, _, list, table in
+            list.contextActions = { _ in [] }
+            let dragged = [0, 1].compactMap { row in
+                (list.tableView(table, pasteboardWriterForRow: row) as? NSPasteboardItem)?
+                    .string(forType: MessageListDrag.pasteboardType)
+            }
+
+            #expect(dragged.count == 2)
+            #expect(Set(dragged).count == 1)
+        }
+    }
+
     private func withList(
         _ body: @MainActor (
             FiledRowsSource, ListWindowModel, AppKitPrototypeList, NSTableView
