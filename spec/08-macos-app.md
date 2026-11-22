@@ -59,6 +59,9 @@ a stopped or failed copy is never presented as a usable recovery point.
 The destination defaults to the data root's `backups/`, with a choice of
 another directory. An unavailable chosen volume is an error, not a reason
 to fall back to the default.
+Below it, the pane states 10's encryption at rest: Sweetbriar doesn't
+encrypt the archive or its backups and relies on FileVault, so a backup
+on another disk needs that disk encrypted.
 
 Restoring requires explicit confirmation naming the generation and its
 date. Explain that it replaces the live archive with that recovery point,
