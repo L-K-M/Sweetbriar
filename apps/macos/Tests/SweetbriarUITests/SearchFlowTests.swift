@@ -1,3 +1,4 @@
+import AppKit
 import XCTest
 
 /// The M1.6p Search flow (spec/08 "Search"): a Search typed into an
@@ -16,6 +17,52 @@ final class SearchFlowTests: XCTestCase {
     private static let messages = bulk + 4
     /// The oversized body stays partly indexed, its tail unknown.
     private static let settled = "1 message not yet searchable · 1 message couldn't be checked"
+    /// How far a control's text stands out from its background, in
+    /// luminance; a blurred control stays far under it.
+    private static let legibleRange: CGFloat = 0.3
+
+    /// The strip is drawn below the title bar, not blurred under it.
+    @MainActor
+    func testTheSearchStripIsDrawnLegibly() throws {
+        continueAfterFailure = false
+        let roots = FileManager.default.temporaryDirectory
+            .appendingPathComponent("sweetbriar-search-strip-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: roots) }
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-dataRoot", roots.appendingPathComponent("data").path,
+            "-cacheRoot", roots.appendingPathComponent("cache").path,
+        ]
+        app.launch()
+        defer { app.terminate() }
+        app.activate()
+        let window = app.windows["Sweetbriar"]
+        XCTAssertTrue(window.staticTexts["No messages"].waitForExistence(timeout: Self.timeout))
+
+        let scope = window.popUpButtons["search.scope"]
+        XCTAssertTrue(scope.waitForExistence(timeout: Self.timeout))
+        let range = try Self.luminanceRange(scope.screenshot())
+
+        XCTAssertGreaterThan(range, Self.legibleRange, "the search strip can't be read")
+    }
+
+    /// The difference between a screenshot's lightest and darkest pixel.
+    @MainActor
+    private static func luminanceRange(_ screenshot: XCUIScreenshot) throws -> CGFloat {
+        let bitmap = try XCTUnwrap(NSBitmapImageRep(data: screenshot.pngRepresentation))
+        var darkest: CGFloat = 1
+        var lightest: CGFloat = 0
+        for y in 0 ..< bitmap.pixelsHigh {
+            for x in 0 ..< bitmap.pixelsWide {
+                guard let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
+                let luminance = 0.2126 * color.redComponent + 0.7152 * color.greenComponent
+                    + 0.0722 * color.blueComponent
+                darkest = min(darkest, luminance)
+                lightest = max(lightest, luminance)
+            }
+        }
+        return lightest - darkest
+    }
 
     @MainActor
     func testASearchFollowsAnImportThroughQueriesScopeSortAndReader() throws {

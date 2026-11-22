@@ -173,8 +173,8 @@ final class MessageListViewController: NSViewController {
             coverage.trailingAnchor.constraint(equalTo: content.trailingAnchor),
             coverage.bottomAnchor.constraint(equalTo: content.bottomAnchor),
             coverageCollapsed,
-            // The window's content runs under the title bar; the field
-            // must sit below it to take clicks.
+            // Where content runs under a title bar the field must sit
+            // below it to take clicks.
             search.view.topAnchor.constraint(equalTo: content.safeAreaLayoutGuide.topAnchor),
             search.view.leadingAnchor.constraint(equalTo: content.leadingAnchor),
             search.view.trailingAnchor.constraint(equalTo: content.trailingAnchor),
