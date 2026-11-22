@@ -461,9 +461,8 @@ M4.4c. Choosing Out Box shows the Out Box in the list pane, as Drafts
   Immediately, After 2, 5 or 10 seconds, or Manually.
 - **Header area:**
   - from, to and date;
-  - the "Received in <account>" chip in the account color with its
-    label, from the selected occurrence's account. Until M1.10's
-    appearance service the chip is neutral, with its label;
+  - the "Received in <account>" account chip (Account chips), from
+    the selected occurrence's account;
   - a tag picker and a multi-line note editor. The picker applies and
     removes the message's tags through `add_tag`/`remove_tag` on the
     selected occurrence; typing a new name creates the tag, within
@@ -718,6 +717,22 @@ Implements [15-account-colors](../research/15-account-colors.md):
     monogram, symbol and outline;
   - `…ShouldIncreaseContrast` and `…ShouldReduceTransparency`;
   - Dark Mode.
+
+## Account chips
+
+An account chip names the account a surface acts for (research 15's P1
+list): the reader's "Received in <account>", each account's row in
+Settings → Accounts and in Activity, and the move picker's
+destinations.
+
+- It shows the account's monogram in the marker color and its label in
+  the foreground color, on the strip fill: the identity strip's tokens
+  for the current appearance. Increase Contrast and Differentiate
+  Without Color add the outline.
+- The label is text, so the chip never relies on color alone. The chip
+  is one accessibility element with that label.
+- Without the account's appearance the chip is neutral: the label alone,
+  in the secondary label color.
 
 ## Keyboard filing ("type to file")
 
