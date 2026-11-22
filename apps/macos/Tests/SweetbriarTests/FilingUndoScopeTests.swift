@@ -33,6 +33,11 @@ private actor NoRowsSource: ListWindowSource {
     }
 }
 
+@MainActor
+private final class FiledMessage {
+    var undone = false
+}
+
 private struct ImmediateClock: FrameClock {
     func nextFrame() async {}
 }
@@ -41,6 +46,31 @@ private struct ImmediateClock: FrameClock {
 @Suite("filing undo scope")
 struct FilingUndoScopeTests {
     @Test func filingUndoIsTheListsNotTheTexts() throws {
+        try withList { table, filing, editor in
+            #expect(table.undoManager === filing)
+            #expect(editor.undoManager !== filing)
+        }
+    }
+
+    /// Edit → Undo sends `undo:` up from the first responder, and a
+    /// window answers it with its own undo manager.
+    @Test func editUndoFromTheListTakesFilingBack() throws {
+        try withList { table, filing, _ in
+            let filed = FiledMessage()
+            filing.registerUndo(withTarget: filed) { filed in
+                MainActor.assumeIsolated { filed.undone = true }
+            }
+            table.window?.makeFirstResponder(table)
+
+            _ = table.tryToPerform(NSSelectorFromString("undo:"), with: nil)
+
+            #expect(filed.undone)
+        }
+    }
+
+    private func withList(
+        _ body: @MainActor (NSTableView, UndoManager, NSTextView) throws -> Void
+    ) throws {
         let model = ListWindowModel(source: NoRowsSource(), spec: .mailbox(1), clock: ImmediateClock())
         let list = AppKitPrototypeList(model: model, formatter: MessageRowFormatter())
         let filing = UndoManager()
@@ -59,8 +89,7 @@ struct FilingUndoScopeTests {
 
         let table = try #require((list.listView as? NSScrollView)?.documentView as? NSTableView)
 
-        #expect(table.undoManager === filing)
-        #expect(editor.undoManager !== filing)
+        try body(table, filing, editor)
     }
 }
 #endif
