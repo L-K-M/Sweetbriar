@@ -456,6 +456,71 @@ public final class CoreBridge: Sendable {
         }
     }
 
+    /// `move_messages(selection, to_mailbox)` (spec/07 Messages) under a
+    /// shell-made key: the undo token.
+    public func moveMessages(
+        idempotencyKey: String, selection: MessageSelection, toMailboxId: Int64
+    ) async throws -> String? {
+        let token = SweetbriarCore.CancelToken()
+        return try await Self.withCancellation(token: token) {
+            try await self.core.moveMessages(
+                token: token, idempotencyKey: idempotencyKey,
+                selection: selection.generated, toMailboxId: toMailboxId
+            )
+        }
+    }
+
+    /// `delete_to_trash(selection)` (spec/07 Messages): a move to the
+    /// account's Trash. Nothing is deleted. Answers the undo token.
+    public func deleteToTrash(
+        idempotencyKey: String, selection: MessageSelection
+    ) async throws -> String? {
+        let token = SweetbriarCore.CancelToken()
+        return try await Self.withCancellation(token: token) {
+            try await self.core.deleteToTrash(
+                token: token, idempotencyKey: idempotencyKey, selection: selection.generated
+            )
+        }
+    }
+
+    /// `add_label(selection, label_mailbox)` (spec/07 Messages); label
+    /// undo is out of the pilot.
+    public func addLabel(
+        idempotencyKey: String, selection: MessageSelection, labelMailboxId: Int64
+    ) async throws {
+        let token = SweetbriarCore.CancelToken()
+        try await Self.withCancellation(token: token) {
+            try await self.core.addLabel(
+                token: token, idempotencyKey: idempotencyKey,
+                selection: selection.generated, labelMailboxId: labelMailboxId
+            )
+        }
+    }
+
+    /// `remove_label(selection, label_mailbox)` (spec/07 Messages).
+    public func removeLabel(
+        idempotencyKey: String, selection: MessageSelection, labelMailboxId: Int64
+    ) async throws {
+        let token = SweetbriarCore.CancelToken()
+        try await Self.withCancellation(token: token) {
+            try await self.core.removeLabel(
+                token: token, idempotencyKey: idempotencyKey,
+                selection: selection.generated, labelMailboxId: labelMailboxId
+            )
+        }
+    }
+
+    /// `undo(token)` (spec/07 Undo): the inverse of what the token's
+    /// command did.
+    public func undo(idempotencyKey: String, undoToken: String) async throws {
+        let token = SweetbriarCore.CancelToken()
+        try await Self.withCancellation(token: token) {
+            try await self.core.undo(
+                token: token, idempotencyKey: idempotencyKey, undoToken: undoToken
+            )
+        }
+    }
+
     /// `remove_tag(selection, tag)` (spec/07 Messages) under a shell-made key.
     @discardableResult
     public func removeTag(
