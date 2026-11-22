@@ -6,6 +6,7 @@
 // message list.
 
 import AppKit
+import SwiftUI
 import SweetbriarBridge
 
 @MainActor
@@ -22,9 +23,27 @@ final class DraftsListViewController: NSViewController, NSTableViewDataSource, N
     private static let columnID = NSUserInterfaceItemIdentifier("draft")
     private static let cellID = NSUserInterfaceItemIdentifier("draftCell")
 
-    init(model: DraftListModel) {
+    /// The identities' colors for each row's chip; nil keeps them neutral.
+    private let appearance: AppearanceModel?
+
+    init(model: DraftListModel, appearance: AppearanceModel? = nil) {
         self.model = model
+        self.appearance = appearance
         super.init(nibName: nil, bundle: nil)
+        if appearance != nil { observeAppearance() }
+    }
+
+    /// Recolor the rows' chips when an identity's appearance changes.
+    private func observeAppearance() {
+        withObservationTracking {
+            _ = appearance?.appearance
+        } onChange: { [weak self] in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                if self.isViewLoaded { self.tableView.reloadData() }
+                self.observeAppearance()
+            }
+        }
     }
 
     required init?(coder: NSCoder) { fatalError("DraftsListViewController is built in code") }
@@ -34,7 +53,7 @@ final class DraftsListViewController: NSViewController, NSTableViewDataSource, N
         column.title = "Drafts"
         tableView.addTableColumn(column)
         tableView.headerView = nil
-        tableView.rowHeight = 54
+        tableView.rowHeight = 74
         tableView.style = .inset
         tableView.dataSource = self
         tableView.delegate = self
@@ -138,7 +157,7 @@ final class DraftsListViewController: NSViewController, NSTableViewDataSource, N
         let cell =
             tableView.makeView(withIdentifier: Self.cellID, owner: nil) as? DraftRowView
             ?? DraftRowView(identifier: Self.cellID)
-        cell.configure(model.rows[row])
+        cell.configure(model.rows[row], appearance: appearance?.appearance)
         return cell
     }
 }
@@ -158,10 +177,13 @@ final class DraftsTableView: NSTableView {
     }
 }
 
-/// One draft: subject, recipients, then "Queued" and the update time.
+/// One draft: subject, its From identity, recipients, then "Queued" and
+/// the update time.
 @MainActor
-private final class DraftRowView: NSTableCellView {
+final class DraftRowView: NSTableCellView {
     private let subject = NSTextField(labelWithString: "")
+    /// The From identity's chip (spec/08 "Drafts (local)").
+    let from = NSHostingView(rootView: AccountChip(label: "", accountId: "", appearance: nil))
     private let recipients = NSTextField(labelWithString: "")
     private let detail = NSTextField(labelWithString: "")
     private static let updated = Date.FormatStyle(date: .abbreviated, time: .shortened)
@@ -177,7 +199,8 @@ private final class DraftRowView: NSTableCellView {
         recipients.textColor = .secondaryLabelColor
         detail.textColor = .secondaryLabelColor
         detail.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
-        let stack = NSStackView(views: [subject, recipients, detail])
+        from.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        let stack = NSStackView(views: [subject, from, recipients, detail])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 1
@@ -192,16 +215,36 @@ private final class DraftRowView: NSTableCellView {
 
     required init?(coder: NSCoder) { fatalError("DraftRowView is built in code") }
 
-    func configure(_ row: DraftListModel.Row) {
+    func configure(_ row: DraftListModel.Row, appearance: Appearance?) {
         subject.stringValue = row.subject
+        let (label, owner) = Self.from(row.from)
+        from.rootView = AccountChip(
+            label: label, owner: owner ?? .account(""), appearance: owner == nil ? nil : appearance,
+            identifier: "draftFrom-\(row.id)")
         recipients.stringValue = row.recipients
         recipients.isHidden = row.recipients.isEmpty
         let updated = row.updated.formatted(Self.updated)
         detail.stringValue = row.isQueued ? "Queued · \(updated)" : updated
         setAccessibilityIdentifier("draftRow-\(row.id)")
         setAccessibilityLabel(
-            [row.subject, row.recipients, detail.stringValue].filter { !$0.isEmpty }
+            [row.subject, "From \(label)", row.recipients, detail.stringValue].filter { !$0.isEmpty }
                 .joined(separator: ", "))
+    }
+
+    /// A row's From label, and the identity whose chip it is: none when
+    /// the draft has no identity or its identity is unavailable.
+    static func from(_ from: DraftListModel.From) -> (label: String, owner: AccountChip.Owner?) {
+        switch from {
+        case .none:
+            ("No sending identity", nil)
+        case .unavailable:
+            ("Sending identity unavailable", nil)
+        case .identity(let identity):
+            (
+                IdentityStripContent.label(for: identity),
+                .identity(id: identity.identityId, accountId: identity.accountId)
+            )
+        }
     }
 }
 

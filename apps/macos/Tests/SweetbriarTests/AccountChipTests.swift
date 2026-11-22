@@ -52,4 +52,45 @@ struct AccountChipTests {
         #expect(chip.monogram == nil)
         #expect(chip.colors?.strip == "#ffffff")
     }
+
+    /// An identity chip takes the identity's own tokens, matched by both
+    /// ids; another account's identity of that id is neutral.
+    @Test func anIdentityChipTakesTheIdentitysOwnTokens() {
+        let tokens = AppearanceTokens(
+            light: AppearanceVariant(
+                markerSrgb: "#d55e00", stripSrgb: "#fff4ec", foregroundSrgb: "#111111", outlineSrgb: "#222222"),
+            dark: sampleAccount.tokens.dark)
+        let appearance = Appearance(
+            generation: 1, accounts: [sampleAccount],
+            identities: [
+                IdentityAppearance(
+                    identityId: "work", accountId: "account-1", colorSrgb: "#d55e00",
+                    colorOverrideSrgb: "#d55e00", tokens: tokens, symbolOverride: "A", monogram: "A",
+                    revision: 1)
+            ])
+        let chip = AccountChipPresentation.make(
+            label: "Work · Alex <alex@example.test>", identityId: "work", accountId: "account-1",
+            appearance: appearance, dark: false)
+        #expect(chip.monogram == "A")
+        #expect(chip.colors?.marker == "#d55e00")
+        let stranger = AccountChipPresentation.make(
+            label: "Other", identityId: "work", accountId: "account-2", appearance: appearance, dark: false)
+        #expect(stranger.colors == nil)
+    }
+
+    /// spec/08 "Drafts (local)": the From label for each kind of route.
+    @Test func draftRowsLabelTheirFromIdentity() {
+        let identity = ComposeIdentity(
+            identityId: "work", accountId: "account-1", accountName: "Work", accountKind: .imap,
+            email: "alex@example.test", displayName: "Alex", replyTo: nil, signatureSource: nil,
+            isDefault: true, sendable: .validated, revision: 1)
+        let named = DraftRowView.from(.identity(identity))
+        #expect(named.label == "Work · Alex <alex@example.test>")
+        #expect(named.owner == .identity(id: "work", accountId: "account-1"))
+        #expect(DraftRowView.from(.none).label == "No sending identity")
+        #expect(DraftRowView.from(.none).owner == nil)
+        let gone = DraftRowView.from(.unavailable(identityId: "work"))
+        #expect(gone.label == "Sending identity unavailable")
+        #expect(gone.owner == nil)
+    }
 }
