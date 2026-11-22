@@ -100,7 +100,13 @@ where Proton differs.
   four requests per second per account in the background. Interactive
   requests (opening a message) go first.
 - **Timeouts:** 30 s per request; 120 s per body or attachment download,
-  scaled for large ones.
+  scaled for large ones:
+  - 120 s through 1 MiB, plus 1 s for each further 100 KiB or part of
+    it, up to 30 MiB (417 s);
+  - the size is the larger of the announced length and the bytes read
+    so far. The deadline runs from the first read and can only move
+    later, never restart;
+  - 30 s without data ends either download sooner.
 - **Backoff:** 429 and 503 wait for `Retry-After` (at least 1 s, at most
   1 h), then retry. Network errors back off exponentially from 1 s to
   5 min, and, as for IMAP, a session that hasn't completed a pass
