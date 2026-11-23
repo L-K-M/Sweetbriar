@@ -106,7 +106,11 @@ where Proton differs.
   - the size is the larger of the announced length and the bytes read
     so far. The deadline runs from the first read and can only move
     later, never restart;
-  - 30 s without data ends either download sooner.
+  - 30 s without data ends either download sooner;
+  - a message's response is read up to 100 MiB (10's per-message
+    limit) and an attachment's up to 30 MiB. A download past its bound
+    is never truncated: the body's failure is recorded as `too_large`
+    (02 `proton_body_failures`) and the queue moves on.
 - **Backoff:** 429 and 503 wait for `Retry-After` (at least 1 s, at most
   1 h), then retry. Network errors back off exponentially from 1 s to
   5 min, and, as for IMAP, a session that hasn't completed a pass
