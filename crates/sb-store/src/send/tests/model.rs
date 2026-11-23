@@ -19,8 +19,9 @@ use crate::testing::{FIXED_NOW_MS, reading};
 use crate::{Store, StoreError, Timestamp, WritePriority};
 
 fn cases(per_pr: u32) -> u32 {
-    let scale = std::env::var("SB_PROPTEST_SCALE")
-        .map_or(1, |scale| scale.parse().expect("a whole number"));
+    let scale = std::env::var("SB_PROPTEST_SCALE").map_or(1, |scale| {
+        scale.parse().expect("SB_PROPTEST_SCALE is a whole number")
+    });
     per_pr * scale
 }
 
@@ -583,12 +584,15 @@ fn stored(store: &Store) -> (String, String, String) {
 }
 
 fn expected(model: &Model) -> String {
-    let mut rows: Vec<(i64, String)> = model
+    // `stored`'s order: created_at, then attempt_id, byte by byte as
+    // SQLite's BINARY collation compares them (`a1` before `a10`).
+    let mut rows: Vec<(i64, &str, String)> = model
         .attempts
         .iter()
         .map(|attempt| {
             (
                 attempt.created_at,
+                attempt.id.as_str(),
                 format!(
                     "{}|{}|{}|{}|{}|{}|{}",
                     attempt.id,
@@ -604,9 +608,9 @@ fn expected(model: &Model) -> String {
             )
         })
         .collect();
-    rows.sort_by(|a, b| (a.0, a.1.as_str()).cmp(&(b.0, b.1.as_str())));
+    rows.sort_by(|a, b| (a.0, a.1).cmp(&(b.0, b.1)));
     rows.into_iter()
-        .map(|(_, row)| row)
+        .map(|(_, _, row)| row)
         .collect::<Vec<_>>()
         .join(";")
 }
@@ -743,6 +747,9 @@ fn the_long_roads_match_the_model() {
             Op::Resolve(first, UnknownResolution::MarkedSent),
             Send,
         ],
+        // Ten attempts in one millisecond: the store orders `a1` before
+        // `a10`, and so must the model.
+        (0..10).flat_map(|i| [Send, Op::Cancel(Pick(i))]).collect(),
     ];
     for road in roads {
         run(road);
