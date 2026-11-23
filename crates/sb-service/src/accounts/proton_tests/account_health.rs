@@ -328,3 +328,91 @@ async fn a_breaker_event_is_listed_and_its_resolution_wakes_the_subscription() {
     ));
     h.core.shutdown().await;
 }
+
+/// A Proton account's row carries its sync coverage, the local
+/// archive's none; a Refresh's listing reads as a resync until it
+/// completes (spec/04-sync-proton "Coverage").
+#[tokio::test]
+async fn proton_coverage_and_a_refresh_s_resync() {
+    let h = setup(vec![TestAccount::new(USER, PASSWORD)]).await;
+    h.server.add_message(
+        USER,
+        FakeMessage::new("m1")
+            .with_time(100)
+            .with_labels(&["0", "5"]),
+    );
+    let (id, local) = synced(&h, "coverage").await;
+    assert_eq!(fetch(&h, &local).await.proton, None);
+    // The body fetch follows the listing.
+    for _ in 0..10_000 {
+        if fetch(&h, &id)
+            .await
+            .proton
+            .is_some_and(|c| c.with_body == 1)
+        {
+            break;
+        }
+        tokio::time::sleep(TICK).await;
+    }
+    let coverage = fetch(&h, &id)
+        .await
+        .proton
+        .expect("a Proton row has coverage");
+    assert_eq!(coverage.listing, crate::ProtonListingState::Complete);
+    assert!(!coverage.resync);
+    assert_eq!(
+        (
+            coverage.messages,
+            coverage.with_body,
+            coverage.body_failures
+        ),
+        (1, 1, 0)
+    );
+    let inbox = coverage
+        .mailboxes
+        .iter()
+        .find(|mailbox| mailbox.name == "Inbox")
+        .expect("the Inbox");
+    assert_eq!((inbox.local, inbox.remote_total), (1, Some(1)));
+
+    // The refresh's listing stalls at its labels, so the resync shows.
+    h.server.set_fault(Some(Fault::OnceAt {
+        path: "/core/v4/labels".to_owned(),
+        fault: Box::new(Fault::Stall(Duration::from_secs(3))),
+    }));
+    h.server.set_refresh_mail(USER);
+    h.server.add_message(
+        USER,
+        FakeMessage::new("m2")
+            .with_time(200)
+            .with_labels(&["0", "5"]),
+    );
+    let mut seen = false;
+    for _ in 0..10_000 {
+        let coverage = fetch(&h, &id).await.proton.expect("coverage");
+        if coverage.resync {
+            assert_eq!(coverage.listing, crate::ProtonListingState::Listing);
+            assert_eq!(
+                fetch(&h, &id).await.condition,
+                crate::AccountCondition::Healthy
+            );
+            seen = true;
+            break;
+        }
+        tokio::time::sleep(TICK).await;
+    }
+    assert!(seen, "the refresh's listing read as a resync");
+    until(&h, "logical_messages WHERE provider_key = 'm2'", 1).await;
+    for _ in 0..10_000 {
+        if fetch(&h, &id).await.proton.is_some_and(|c| !c.resync) {
+            break;
+        }
+        tokio::time::sleep(TICK).await;
+    }
+    let coverage = fetch(&h, &id).await.proton.expect("coverage");
+    assert_eq!(
+        (coverage.listing, coverage.resync, coverage.messages),
+        (crate::ProtonListingState::Complete, false, 2)
+    );
+    h.core.shutdown().await;
+}

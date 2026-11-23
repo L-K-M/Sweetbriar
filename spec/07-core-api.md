@@ -736,7 +736,9 @@ a receipt or file-export command; Service/FFI exposure remains M1.7e/f.
     answering with the next retry, rate limited with the time, or
     healthy); its warnings (addresses whose keys didn't unlock); open
     breaker events (id, mailbox, count, detected time); coverage
-    (`coverage(scope)` for the account); and the last sync time. A
+    (`coverage(scope)` for the account); for a Proton account, its
+    Proton coverage (04-sync-proton "Coverage"); and the last sync
+    time. A
     `disconnected` account's condition is disconnected, offering "Sign
     in again". Retry
     times and the last sync time come from the running worker's memory:
