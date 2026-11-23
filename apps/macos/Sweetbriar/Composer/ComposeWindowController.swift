@@ -101,11 +101,18 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
     /// acknowledgements, shared with Send's confirmation.
     let crossAccount = CrossAccountBannerModel()
     private let crossAccountLabel = NSTextField(wrappingLabelWithString: "")
+    /// A warning symbol in the label color: no account's hue (spec/08).
+    private let crossAccountSymbol = NSImageView(
+        image: NSImage(systemSymbolName: "exclamationmark.triangle.fill", accessibilityDescription: "Warning")
+            ?? NSImage())
     private let crossAccountUseButton = NSButton(title: "", target: nil, action: nil)
     private let crossAccountKeepButton = NSButton(title: "", target: nil, action: nil)
     private lazy var crossAccountBannerView: NSStackView = {
         crossAccountLabel.textColor = .labelColor
         crossAccountLabel.setAccessibilityIdentifier("crossAccountBannerLabel")
+        crossAccountSymbol.contentTintColor = .labelColor
+        crossAccountSymbol.setAccessibilityIdentifier("crossAccountBannerSymbol")
+        crossAccountSymbol.setContentHuggingPriority(.required, for: .horizontal)
         crossAccountUseButton.target = self
         crossAccountUseButton.action = #selector(useCrossAccountSource)
         crossAccountUseButton.setAccessibilityIdentifier("crossAccountUse")
@@ -113,7 +120,7 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
         crossAccountKeepButton.action = #selector(keepCrossAccountRoute)
         crossAccountKeepButton.setAccessibilityIdentifier("crossAccountKeep")
         let stack = NSStackView(
-            views: [crossAccountLabel, crossAccountUseButton, crossAccountKeepButton])
+            views: [crossAccountSymbol, crossAccountLabel, crossAccountUseButton, crossAccountKeepButton])
         stack.orientation = .horizontal
         stack.spacing = 8
         stack.alignment = .centerY
@@ -242,6 +249,12 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
     }
 
     required init?(coder: NSCoder) { fatalError("ComposeWindowController is built in code") }
+
+    /// The draft's first load and render are done: its fields take
+    /// keystrokes unless the load failed.
+    func waitForLoad() async {
+        await loadTask?.value
+    }
 
     /// `-recordRouteAnnouncements YES` (UI-test hook, spec/11 "UI"): the
     /// default `announceRoute` additionally writes the last message into a
@@ -765,6 +778,14 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
             .accountName ?? accountId
     }
 
+    /// The sending identity with its account and address (spec/08).
+    private func crossAccountSender(_ notice: CrossAccountNotice) -> String {
+        CrossAccountPresentation.sender(
+            routeAccountId: notice.routeAccountId,
+            routeAccountName: accountDisplayName(notice.routeAccountId),
+            identity: identityControls.model.selectedIdentity)
+    }
+
     /// The banner's text and buttons for the current notice (spec/08).
     private func renderCrossAccountBanner() {
         guard let notice = crossAccount.notice, crossAccount.isVisible else {
@@ -772,9 +793,8 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
             return
         }
         crossAccountBannerView.isHidden = false
-        crossAccountLabel.stringValue =
-            "This reply goes out from \(accountDisplayName(notice.routeAccountId)), but "
-            + "\(accountDisplayName(notice.sourceAccountId)) received the original."
+        crossAccountLabel.stringValue = CrossAccountPresentation.banner(
+            sender: crossAccountSender(notice), sourceAccountName: accountDisplayName(notice.sourceAccountId))
         crossAccountUseButton.title = "Use \(accountDisplayName(notice.sourceAccountId))"
         crossAccountKeepButton.title = "Keep \(accountDisplayName(notice.routeAccountId))"
         // A send in flight owns the window, From and Keep included.
@@ -813,9 +833,12 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
         guard let window, !finished, crossAccountConfirmation == nil else { return false }
         return await withCheckedContinuation { continuation in
             let alert = NSAlert()
-            alert.messageText = "Send from \(accountDisplayName(notice.routeAccountId))?"
-            alert.informativeText =
-                "The original arrived at \(accountDisplayName(notice.sourceAccountId))."
+            let text = CrossAccountPresentation.confirmation(
+                routeAccountName: accountDisplayName(notice.routeAccountId),
+                sender: crossAccountSender(notice),
+                sourceAccountName: accountDisplayName(notice.sourceAccountId))
+            alert.messageText = text.message
+            alert.informativeText = text.information
             alert.alertStyle = .warning
             alert.addButton(withTitle: "Send")
             alert.addButton(withTitle: "Cancel")
@@ -1065,8 +1088,8 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
         identityStrip.setContent(stripContent, routeChanged: routeChanged)
         identityStrip.strip.colorName = stripColorName()
         renderChrome()
-        let subject = model.content.flatMap { $0.subject.isEmpty ? nil : $0.subject } ?? "New Message"
-        window?.title = identityControls.titleContext.map { "\(subject) · \($0)" } ?? subject
+        window?.title = IdentityStripContent.windowTitle(
+            subject: model.content?.subject ?? "", identity: identityControls.model.selectedIdentity)
         if closeIntent == .abandonEdits {
             statusLabel.stringValue =
                 model.isSaving ? "Waiting for an in-progress save…" : "Closing without another save…"

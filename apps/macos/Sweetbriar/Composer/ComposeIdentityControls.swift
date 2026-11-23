@@ -26,10 +26,6 @@ final class ComposeIdentityControls: NSObject {
         default: false
         }
     }
-    var titleContext: String? {
-        guard let identity = model.selectedIdentity else { return nil }
-        return "\(identity.accountName) · \(identity.email)"
-    }
     private let draft: DraftModel
     private let catalogSource: any ComposeCatalogSource
     private let preferredAccountId: String?
@@ -237,7 +233,9 @@ final class ComposeIdentityControls: NSObject {
             popup.lastItem?.representedObject = identity.identityId
             if let appearance = IdentityStripContent.matchingAppearance(for: identity, in: appearanceSnapshot)
             {
-                let key = IdentitySwatch.Key(tokens: appearance.tokens, appearance: popup.effectiveAppearance)
+                let key = IdentitySwatch.Key(
+                    tokens: appearance.tokens, monogram: appearance.monogram,
+                    appearance: popup.effectiveAppearance)
                 let image = currentSwatches[key] ?? swatches[key] ?? IdentitySwatch.image(key: key)
                 currentSwatches[key] = image
                 popup.lastItem?.image = image
