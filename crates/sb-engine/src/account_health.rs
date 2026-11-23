@@ -1,17 +1,18 @@
 //! `account_health()` and `subscribe_account_health()` (spec/07;
 //! plan M2.7b2): per account, its state, condition (spec/04's table),
-//! warnings, open breaker events, coverage and last sync time. Retry
-//! and sync times live in worker memory, cleared with the worker; the
-//! stored rows have no observer, so their writers bump the generation.
+//! warnings, open breaker events, coverage, a Proton account's sync
+//! coverage and last sync time. Retry and sync times live in worker
+//! memory, cleared with the worker; the stored rows have no observer,
+//! so their writers bump the generation.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex;
 
-use sb_resources::proton_sync::open_breaker_events;
+use sb_resources::proton_sync::{ProtonCoverage, open_breaker_events, proton_coverage};
 use sb_resources::{
     APP_IDENTITY_REFUSED_REASON, AccountKind, AccountState, HUMAN_VERIFICATION_REASON,
-    SESSION_REFUSED_REASON, StoredAccount, accounts, diagnostics_message,
+    SESSION_REFUSED_REASON, StoredAccount, accounts, diagnostics_message, proton_account,
 };
 
 use crate::windows::{AccountHealthSubscription, Windows};
@@ -154,6 +155,10 @@ pub struct AccountHealth {
     pub warnings: Vec<String>,
     pub breaker_events: Vec<AccountBreakerEvent>,
     pub coverage: Coverage,
+    /// A Proton account's sync coverage (spec/04-sync-proton
+    /// "Coverage"); none for another kind, or before the account's
+    /// Proton row exists.
+    pub proton: Option<ProtonCoverage>,
     /// The last successful sync from memory; none if never synced.
     pub last_sync_ms: Option<i64>,
 }
@@ -161,12 +166,13 @@ pub struct AccountHealth {
 impl Engine {
     /// `account_health()` (spec/07): every account, by sort order then id.
     pub async fn account_health(&self) -> Result<Vec<AccountHealth>, EngineError> {
-        let (accounts, diagnostics, events) = self
+        let (accounts, diagnostics, events, mut proton) = self
             .read_through(|resources| {
                 resources.read(|tx| {
                     let accounts = accounts(tx)?;
                     let mut diagnostics = HashMap::new();
                     let mut events = HashMap::new();
+                    let mut proton = HashMap::new();
                     for account in &accounts {
                         if account.kind != AccountKind::Proton {
                             continue;
@@ -179,8 +185,16 @@ impl Engine {
                             account.account_id.clone(),
                             open_breaker_events(tx, &account.account_id)?,
                         );
+                        // Like the refusal message, a Proton row that
+                        // isn't there yet leaves no coverage.
+                        if proton_account(tx, &account.account_id)?.is_some() {
+                            proton.insert(
+                                account.account_id.clone(),
+                                proton_coverage(tx, &account.account_id)?,
+                            );
+                        }
                     }
-                    Ok((accounts, diagnostics, events))
+                    Ok((accounts, diagnostics, events, proton))
                 })
             })
             .await?;
@@ -221,6 +235,7 @@ impl Engine {
                     })
                     .unwrap_or_default(),
                 last_sync_ms: live.and_then(|status| status.last_sync_ms),
+                proton: proton.remove(&id),
                 account_id: id,
                 state: account.state,
                 condition,

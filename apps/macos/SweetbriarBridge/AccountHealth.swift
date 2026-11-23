@@ -1,8 +1,9 @@
 // Per-account health (spec/07 `account_health`,
 // `subscribe_account_health`; spec/04 "Account states and health"):
 // an account's state and condition, its warnings, open breaker events,
-// coverage and last sync time. The bridge's own value types, mirroring
-// the core's field by field, so nothing generated crosses into the app.
+// coverage, a Proton account's sync coverage and last sync time. The
+// bridge's own value types, mirroring the core's field by field, so
+// nothing generated crosses into the app.
 
 import Foundation
 import SweetbriarCore
@@ -18,6 +19,8 @@ public struct AccountHealth: Sendable, Equatable {
     /// The account's open breaker events, oldest first.
     public var breakerEvents: [AccountBreakerEvent]
     public var coverage: SearchCoverage
+    /// A Proton account's sync coverage; absent for another kind.
+    public var proton: ProtonCoverage?
     /// The worker's last successful sync; absent when never synced.
     public var lastSync: Date?
 
@@ -25,7 +28,7 @@ public struct AccountHealth: Sendable, Equatable {
         accountId: String, state: AccountState, stateReason: String?,
         condition: AccountCondition, warnings: [String],
         breakerEvents: [AccountBreakerEvent], coverage: SearchCoverage,
-        lastSync: Date?
+        proton: ProtonCoverage? = nil, lastSync: Date?
     ) {
         self.accountId = accountId
         self.state = state
@@ -34,6 +37,7 @@ public struct AccountHealth: Sendable, Equatable {
         self.warnings = warnings
         self.breakerEvents = breakerEvents
         self.coverage = coverage
+        self.proton = proton
         self.lastSync = lastSync
     }
 
@@ -46,7 +50,82 @@ public struct AccountHealth: Sendable, Equatable {
             warnings: value.warnings,
             breakerEvents: value.breakerEvents.map(AccountBreakerEvent.init),
             coverage: SearchCoverage(value.coverage),
+            proton: value.proton.map(ProtonCoverage.init),
             lastSync: value.lastSyncMs.map(Date.epochMilliseconds)
+        )
+    }
+}
+
+/// A Proton account's listing (spec/02 `proton_accounts.listing_state`).
+public enum ProtonListing: Sendable, Equatable {
+    case none
+    case listing
+    case complete
+
+    init(_ value: SweetbriarCore.ProtonListing) {
+        switch value {
+        case .none: self = .none
+        case .listing: self = .listing
+        case .complete: self = .complete
+        }
+    }
+}
+
+/// One live mailbox's count against Proton's (spec/04-sync-proton
+/// "Coverage").
+public struct ProtonMailboxCoverage: Sendable, Equatable {
+    public var mailboxId: Int64
+    public var name: String
+    /// Present occurrences in the mailbox.
+    public var local: UInt64
+    /// Proton's total from the last finished listing; absent before one.
+    public var remoteTotal: UInt64?
+
+    public init(mailboxId: Int64, name: String, local: UInt64, remoteTotal: UInt64?) {
+        self.mailboxId = mailboxId
+        self.name = name
+        self.local = local
+        self.remoteTotal = remoteTotal
+    }
+
+    init(_ value: SweetbriarCore.ProtonMailboxCoverage) {
+        self.init(
+            mailboxId: value.mailboxId, name: value.name, local: value.local,
+            remoteTotal: value.remoteTotal
+        )
+    }
+}
+
+/// A Proton account's sync coverage (spec/04-sync-proton "Coverage"):
+/// what "Proton messages synced" shows.
+public struct ProtonCoverage: Sendable, Equatable {
+    public var listing: ProtonListing
+    /// The running listing is the resync a Proton `Refresh` asked for.
+    public var resync: Bool
+    /// Live mailboxes, by name.
+    public var mailboxes: [ProtonMailboxCoverage]
+    public var messages: UInt64
+    public var withBody: UInt64
+    public var bodyFailures: UInt64
+
+    public init(
+        listing: ProtonListing, resync: Bool, mailboxes: [ProtonMailboxCoverage],
+        messages: UInt64, withBody: UInt64, bodyFailures: UInt64
+    ) {
+        self.listing = listing
+        self.resync = resync
+        self.mailboxes = mailboxes
+        self.messages = messages
+        self.withBody = withBody
+        self.bodyFailures = bodyFailures
+    }
+
+    init(_ value: SweetbriarCore.ProtonCoverage) {
+        self.init(
+            listing: ProtonListing(value.listing), resync: value.resync,
+            mailboxes: value.mailboxes.map(ProtonMailboxCoverage.init),
+            messages: value.messages, withBody: value.withBody,
+            bodyFailures: value.bodyFailures
         )
     }
 }

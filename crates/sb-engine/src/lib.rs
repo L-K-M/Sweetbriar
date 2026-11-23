@@ -63,10 +63,8 @@ mod proton_verification;
 pub use proton::{BeginProtonSignIn, ProtonSignInState, ProtonSignInStep};
 pub use proton_verification::{ProtonVerificationAnswer, ProtonVerificationChallenge};
 pub use sb_resources::proton_sync::BreakerResolution;
-#[cfg(any(test, feature = "test-seams"))]
-#[doc(hidden)]
-pub use sb_resources::proton_sync::ProtonCoverage;
 pub use sb_resources::proton_sync::ProtonListingState;
+pub use sb_resources::proton_sync::{MailboxCoverage, ProtonCoverage};
 mod rebuild;
 mod received;
 mod recovery;

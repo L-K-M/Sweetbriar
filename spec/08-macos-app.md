@@ -29,7 +29,7 @@ Rests on research [08-macos-ui](../research/08-macos-ui.md),
 | **Message window** | A standalone reader for one message |
 | **Compose window** | One per draft |
 | **Settings** | SwiftUI: accounts (rename, pause and resume, disconnect, sign in again, notification previews; M2.7), appearance, sending safety, backups |
-| **Activity / account health** | SwiftUI: per-account state and condition with "Sign in again" where it applies, coverage, breaker events with Accept and Keep, parked and quarantined intents, the Recovery list, and the Out Box (M2.7; the Out Box with M4.4, intent actions with M3.1) |
+| **Activity / account health** | SwiftUI: per-account state and condition with "Sign in again" where it applies, coverage and, for a Proton account, "Proton messages synced" with each mailbox's count against Proton's (04-sync-proton "Coverage"), breaker events with Accept and Keep, parked and quarantined intents, the Recovery list, and the Out Box (M2.7; the Out Box with M4.4, intent actions with M3.1) |
 | **Import report** | Results of an import job (09) |
 
 State restoration uses AppKit window restoration. A compose window
@@ -204,6 +204,12 @@ is up. Choosing any other entry brings its message list back.
   `editing` and `queued` only): the subject or "No Subject", the To
   then Cc recipients by name or address (Bcc is not shown), "Queued"
   for a queued draft, and the update time.
+- **From:** each row shows its sending identity as an identity chip
+  (Account chips, with the identity's monogram and colors) labelled
+  like the identity strip: the account, the name and the full address.
+  A draft without an identity says "No sending identity". One whose
+  identity the compose catalog doesn't name, or that couldn't be read,
+  says "Sending identity unavailable", neutral, never a guessed address.
 - **Opening:** double-click or Return opens the row's draft. There is
   one compose window per draft: opening a draft whose window is open,
   or already opening, brings that window forward and opens nothing
@@ -233,6 +239,11 @@ M4.4c. Choosing Out Box shows the Out Box in the list pane, as Drafts
   "Sending", "Outcome unknown", "Failed",
   "Sent", "Cancelled", and for a resolved unknown "Marked as sent",
   "Sent again" or "Kept as draft") and the last update time.
+- **From:** each row shows the route the attempt froze, on its own line
+  apart from the state: an identity chip (Account chips) labelled with
+  the account and the frozen sending address, from `out_box()`, not the
+  identity's current address. Without the identity's appearance the
+  chip is neutral; the address still shows.
 - **Details:** the selected row's details show below the list: each
   recipient with its address field and state, Proton's code and message
   (`final_reply`), the Proton evidence observed since launch, the
@@ -709,8 +720,9 @@ Implements [15-account-colors](../research/15-account-colors.md):
 - **Strong mode** (Settings → Appearance) tints the upper window via
   `backgroundColor`, `titlebarAppearsTransparent` and
   `.fullSizeContentView`. The editor stays neutral. The existing
-  `appearance.compose_cue` setting is a typed Standard/Strong preference;
-  missing or malformed answers are explicit errors, never a guessed mode.
+  `appearance.compose_cue` setting is a typed Standard/Strong/Minimal
+  preference; missing or malformed answers are explicit errors, never a
+  guessed mode.
   Publish a user change only after its receipt, retain an explicitly stale
   last value on failure, and prevent an older read from undoing that change.
   Settings writers use current admission and their frozen editor tickets;
@@ -726,6 +738,22 @@ Implements [15-account-colors](../research/15-account-colors.md):
   leaving preferences permanently unavailable. Refusing compose quit leaves
   preference owners usable.
   Appearance changes must not edit draft source or its undo history.
+- **Minimal mode** (research 15's Minimal marker) reduces only the color:
+  - the strip keeps its size, monogram, account name, full From address,
+    accessibility label and full-screen height;
+  - its fill is the opaque neutral window background and the window
+    isn't tinted, so the monogram is the only colored part;
+  - its text uses the system label color. The monogram keeps its
+    account marker, outlined in the system label color wherever the
+    marker is under 3:1 against that background (the account's outline
+    token is solved against its strip, not this one);
+  - an unavailable route and every warning look as they do in Standard.
+- **Mode previews:** Settings → Appearance shows Standard, Strong and
+  Minimal each with a preview of a compose window's top, drawn from the
+  same presentation as the real strip with the selected account's
+  tokens, or the neutral route when there is no account. A preview
+  never takes focus. Its mode's accessibility label says in words what
+  the mode colors.
 - **Cross-account check:** replying through a different account than the
   one that received the original shows an inline banner with **Use
   <account>** and **Keep <account>**. An unacknowledged mismatch is
@@ -758,6 +786,9 @@ destinations.
   is one accessibility element with that label.
 - Without the account's appearance the chip is neutral: the label alone,
   in the secondary label color.
+- An identity chip is the same chip with the identity's own monogram and
+  colors (its overrides, else its account's), where a surface shows a
+  sending identity rather than an account.
 
 ## Keyboard filing ("type to file")
 
@@ -891,7 +922,11 @@ An opt-in local latency log records these. Nothing leaves the machine.
     recorded;
   - `archive_visible` and `archive_durable`, `delete_visible` and
     `delete_durable`: from the command to the row leaving the list,
-    and to the core's receipt for its intent;
+    and to the core's receipt for its intent. Archive and Move to
+    Trash count, from the keyboard, a menu, the toolbar or a context
+    menu, when every row they targeted was filed; a drag or Move to…
+    doesn't. A row that stays listed (a label's list, or a Search it
+    still matches) records no visible span;
   - `search`: from the last keystroke to the results for that query.
     A later keystroke replaces the span;
   - `open_compose`: from New Message, Reply, Reply All or Forward to

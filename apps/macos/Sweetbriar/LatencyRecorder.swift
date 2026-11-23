@@ -85,6 +85,12 @@ final class LatencyRecorder {
         end(spans.take(interaction, key: key), shownIn: view)
     }
 
+    /// The span ends now, with nothing to show: a receipt.
+    func finish(_ span: LatencySpan?) {
+        guard let span else { return }
+        record(span.interaction, milliseconds: span.milliseconds(to: .now))
+    }
+
     func end(_ span: LatencySpan?, shownIn view: NSView) {
         guard let span else { return }
         let frameWait = frameWait

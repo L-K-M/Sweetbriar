@@ -116,7 +116,7 @@ private func outBoxRow(
 ) -> OutBoxRow {
     OutBoxRow(
         attemptId: attemptId, draftId: "draft-\(attemptId)", accountId: "a1",
-        identityId: "i1", subject: subject, recipients: recipients, state: state,
+        identityId: "i1", envelopeFrom: "me@example.test", subject: subject, recipients: recipients, state: state,
         createdAtMs: 1_699_999_999_000, updatedAtMs: updatedAtMs,
         holdUntilMs: holdUntilMs, resolvedAtMs: nil, sendRequestedAtMs: nil,
         protonDraftId: nil, finalReply: nil, resolution: resolution,
@@ -540,4 +540,41 @@ func aFailedOutBoxReloadKeepsTheRows() async throws {
 @MainActor
 private final class WriteFlag {
     var allowed = false
+}
+
+/// A compose catalog naming the rows' account, or failing.
+private actor OutBoxCatalogFixture: ComposeCatalogSource {
+    private let failing: Bool
+
+    init(failing: Bool = false) { self.failing = failing }
+
+    func composeCatalog(preferredAccountId: String?) async throws -> ComposeCatalog {
+        if failing { throw CoreFailure.unavailable(reason: "synthetic catalog failure") }
+        return ComposeCatalog(
+            identities: [
+                ComposeIdentity(
+                    identityId: "i2", accountId: "a1", accountName: "Work", accountKind: .proton,
+                    email: "renamed@example.test", displayName: "", replyTo: nil, signatureSource: nil,
+                    isDefault: true, sendable: .validated, revision: 2)
+            ],
+            defaultIdentityId: "i2")
+    }
+}
+
+/// spec/08 "Out Box": the route a row shows is the account and the
+/// address the attempt froze, not the identity's current address, and
+/// the address alone when the account's name can't be read.
+@MainActor
+@Test(.timeLimit(.minutes(1)))
+func outBoxRowsShowTheFrozenRoute() async throws {
+    let fake = FakeOutBoxSource()
+    await fake.set(OutBox(live: [outBoxRow("held", state: .held)], history: []))
+    let named = OutBoxModel(source: fake, catalog: OutBoxCatalogFixture())
+    await named.reload()
+    #expect(named.rows.map(\.from) == ["Work · me@example.test"])
+
+    let unnamed = OutBoxModel(source: fake, catalog: OutBoxCatalogFixture(failing: true))
+    await unnamed.reload()
+    #expect(unnamed.lastError == nil)
+    #expect(unnamed.rows.map(\.from) == ["me@example.test"])
 }

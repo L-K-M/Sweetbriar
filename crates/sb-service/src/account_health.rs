@@ -3,7 +3,7 @@
 //! (spec/01 rule 3).
 
 use crate::search::Coverage;
-use crate::{AccountState, Core, CoreError};
+use crate::{AccountState, Core, CoreError, ProtonListingState};
 
 /// One account's condition (spec/04's table, spec/07).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -43,6 +43,53 @@ pub struct AccountBreakerEvent {
     pub detected_at_ms: i64,
 }
 
+/// One live mailbox's count against Proton's (spec/04-sync-proton
+/// "Coverage").
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProtonMailboxCoverage {
+    pub mailbox_id: i64,
+    pub name: String,
+    /// Present occurrences in the mailbox.
+    pub local: u64,
+    /// Proton's total from the last finished listing; none before one.
+    pub remote_total: Option<u64>,
+}
+
+/// A Proton account's sync coverage (spec/04-sync-proton "Coverage").
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProtonCoverage {
+    pub listing: ProtonListingState,
+    /// The running listing is the resync a Proton `Refresh` asked for.
+    pub resync: bool,
+    /// Live mailboxes, by name.
+    pub mailboxes: Vec<ProtonMailboxCoverage>,
+    pub messages: u64,
+    pub with_body: u64,
+    pub body_failures: u64,
+}
+
+impl ProtonCoverage {
+    fn from_engine(coverage: sb_engine::ProtonCoverage) -> Self {
+        Self {
+            listing: ProtonListingState::from_engine(coverage.listing),
+            resync: coverage.resync,
+            mailboxes: coverage
+                .mailboxes
+                .into_iter()
+                .map(|mailbox| ProtonMailboxCoverage {
+                    mailbox_id: mailbox.mailbox_id,
+                    name: mailbox.remote_name,
+                    local: mailbox.local,
+                    remote_total: mailbox.remote_total,
+                })
+                .collect(),
+            messages: coverage.messages,
+            with_body: coverage.with_body,
+            body_failures: coverage.body_failures,
+        }
+    }
+}
+
 /// One account's health (spec/07 `account_health`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccountHealth {
@@ -53,6 +100,9 @@ pub struct AccountHealth {
     pub warnings: Vec<String>,
     pub breaker_events: Vec<AccountBreakerEvent>,
     pub coverage: Coverage,
+    /// A Proton account's sync coverage; none for another kind, or
+    /// before the account's Proton row exists.
+    pub proton: Option<ProtonCoverage>,
     pub last_sync_ms: Option<i64>,
 }
 
@@ -105,6 +155,7 @@ impl AccountHealth {
                 })
                 .collect(),
             coverage: Coverage::from_engine(&health.coverage),
+            proton: health.proton.map(ProtonCoverage::from_engine),
             last_sync_ms: health.last_sync_ms,
         }
     }
