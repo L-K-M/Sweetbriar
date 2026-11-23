@@ -187,23 +187,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             isComposeEnabled: { [weak self] in self?.backups?.canCompose == true },
             onReply: { [weak self] in
                 guard let self, !terminating,
-                    let occurrence = mainWindow?.selectedOccurrenceId
+                    let occurrence = mainWindow?.replyOccurrenceId
                 else { return }
                 composeWindows?.compose(source: .reply(occurrenceId: occurrence))
             },
             onReplyAll: { [weak self] in
                 guard let self, !terminating,
-                    let occurrence = mainWindow?.selectedOccurrenceId
+                    let occurrence = mainWindow?.replyOccurrenceId
                 else { return }
                 composeWindows?.compose(source: .replyAll(occurrenceId: occurrence))
             },
             onForward: { [weak self] in
                 guard let self, !terminating,
-                    let occurrence = mainWindow?.selectedOccurrenceId
+                    let occurrence = mainWindow?.replyOccurrenceId
                 else { return }
                 composeWindows?.compose(source: .forward(occurrenceId: occurrence))
             },
-            isReplyEnabled: { [weak self] in self?.mainWindow?.selectedOccurrenceId != nil }
+            isReplyEnabled: { [weak self] in self?.mainWindow?.replyOccurrenceId != nil }
         )
         NSApplication.shared.mainMenu = builder.makeMainMenu()
         menuBuilder = builder

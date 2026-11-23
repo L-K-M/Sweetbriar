@@ -98,6 +98,9 @@ final class MainMenuBuilder: NSObject {
             "ch.lkmc.Sweetbriar.cmd.forward"
         )
         /// Message → Mark as Read or Unread (spec/08 "Message list").
+        static let openMessage = NSUserInterfaceItemIdentifier(
+            "ch.lkmc.Sweetbriar.cmd.openMessage"
+        )
         static let toggleRead = NSUserInterfaceItemIdentifier(
             "ch.lkmc.Sweetbriar.cmd.toggleRead"
         )
@@ -317,11 +320,21 @@ final class MainMenuBuilder: NSObject {
         return item
     }
 
-    /// Message: Reply, Reply All and Forward, each from the message
-    /// list's single selection (spec/08 "Cross-account check").
+    /// Message: Open in New Window, then Reply, Reply All and Forward,
+    /// each from the message list's single selection or the key message
+    /// window's message (spec/08 "Cross-account check", "Message
+    /// window").
     private func makeMessageMenu() -> NSMenuItem {
         let item = NSMenuItem()
         let menu = NSMenu(title: "Message")
+        // ⌘O, nil-target: the main window opens its list's single
+        // selection in its own window (spec/08 "Message window").
+        let open = Self.item(
+            "Open in New Window", action: #selector(MessageWindowCommands.openMessage(_:)),
+            key: "o")
+        open.identifier = ItemID.openMessage
+        menu.addItem(open)
+        menu.addItem(.separator())
         let reply = Self.item("Reply", action: #selector(reply(_:)), key: "r", target: self)
         reply.identifier = ItemID.reply
         menu.addItem(reply)
@@ -618,6 +631,14 @@ extension MainMenuBuilder: NSMenuItemValidation {
 @objc protocol EditUndoCommands {
     func undo(_ sender: Any?)
     func redo(_ sender: Any?)
+}
+
+/// The main window's Open in New Window, named here so the menu's
+/// nil-target item can reach it down the responder chain (spec/08
+/// "Message window").
+@MainActor
+@objc protocol MessageWindowCommands {
+    func openMessage(_ sender: Any?)
 }
 
 /// The main window's read and star commands, named here so the menu's
