@@ -61,7 +61,9 @@ and D24, D29.
   non-persistent `WKWebView` (08) that loads only `verify.proton.me`
   and Proton's CAPTCHA providers' hosts, shares no cookies with
   anything else and is torn down afterwards. Sweetbriar reads only the
-  returned token.
+  returned token. A challenge met during sync is held in memory only,
+  like a sign-in conversation, and its token rides one request
+  (04-sync-proton "Human verification during sync").
 - **Decryption:** bodies and attachments are decrypted with
   `proton-crypto` (01) in the core, never in the UI. Decrypted messages
   are stored like any other original (03), so the store holds

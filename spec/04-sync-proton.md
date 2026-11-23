@@ -423,3 +423,26 @@ and message in the account's diagnostics (redacted, 10): the worker
 keeps Proton's numeric code when it maps a refusal. A paused account
 (07 `pause_account`) runs no worker and makes no request; its row reads
 "Paused". `account_health` (07) answers this table.
+
+**Human verification during sync.** Proton may answer any
+authenticated request with 9001.
+
+- The worker stops and the account becomes `needs_attention` with
+  "Proton asks you to verify". The engine keeps Proton's challenge
+  (its verification URL and methods, as in sign-in) in memory for that
+  account. The URL carries Proton's token, so it is never logged,
+  stored or put in the diagnostics package (10). A relaunch, a sign-in
+  again or a disconnect forgets it.
+- **Verify…** on the account's health row (08) reads the held
+  challenge (`proton_verification`, 07) and opens the verification
+  sheet sign-in uses. The token Proton hands back goes to
+  `verify_proton_account` (07): the account becomes `active`, its
+  worker starts, and the worker's first request carries the token in
+  Proton's verification headers, once.
+- **Without a held challenge** (after a relaunch), the row offers "Try
+  Again": `verify_proton_account` without a token makes the account
+  `active` and starts its worker, which meets Proton's challenge again
+  if Proton still asks.
+- If Proton asks again, or refuses the token (12087) and then asks
+  again, the account returns to `needs_attention` with the new
+  challenge. Nothing after a 9001 is retried automatically.
