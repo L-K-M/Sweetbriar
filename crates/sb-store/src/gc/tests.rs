@@ -214,6 +214,64 @@ fn send_attempt(store: &Store, sha: &str, tag: &str) {
     sql(store, s);
 }
 
+/// spec/02 "Commands, receipts and settings": a receipt is kept
+/// through exactly this long, then the daily GC pass deletes it.
+const RECEIPT_RETENTION_MS: i64 = 30 * DAY_MS;
+
+/// One `command_receipts` row with synthetic values.
+fn receipt(store: &Store, key: &str, command: &str, created_at: i64) {
+    sql(
+        store,
+        format!(
+            "INSERT OR IGNORE INTO command_receipts
+             (idempotency_key, command, result_json, created_at)
+             VALUES ('{key}', '{command}', '{{}}', {created_at})"
+        ),
+    );
+}
+
+/// How many receipts `key` still has.
+fn receipt_count(store: &Store, key: &str) -> i64 {
+    store
+        .read(|tx| {
+            tx.query_row(
+                "SELECT count(*) FROM command_receipts WHERE idempotency_key = ?1",
+                [key],
+                |row| row.get(0),
+            )
+            .map_err(bug)
+        })
+        .unwrap()
+}
+
+/// How many receipts the store holds in all.
+fn receipt_rows(store: &Store) -> i64 {
+    store
+        .read(|tx| {
+            tx.query_row("SELECT count(*) FROM command_receipts", [], |row| {
+                row.get(0)
+            })
+            .map_err(bug)
+        })
+        .unwrap()
+}
+
+/// `n` receipts old enough to prune, under `prefix`.
+fn seed_receipts(store: &Store, prefix: &str, n: usize) {
+    let at = FIXED_NOW_MS - RECEIPT_RETENTION_MS - 1;
+    let rows = (0..n)
+        .map(|i| format!("('{prefix}-{i}', 'set_setting', '{{}}', {at})"))
+        .collect::<Vec<_>>()
+        .join(",");
+    sql(
+        store,
+        format!(
+            "INSERT INTO command_receipts
+             (idempotency_key, command, result_json, created_at) VALUES {rows}"
+        ),
+    );
+}
+
 /// A bare `acquisitions` row: the reference `commit_import_batch`
 /// leaves, without the import ceremony. `state` carries doubt.
 fn reference(store: &Store, id: &ObjectId, state: &str) {
@@ -491,6 +549,254 @@ fn the_writer_thread_cannot_run_gc_on_its_own_queue() {
     .unwrap();
     assert!(matches!(err, StoreError::Internal { .. }), "{err:?}");
     Arc::into_inner(store).unwrap().close().unwrap();
+}
+
+// --- command receipts (acceptance: "Commands, receipts and settings") ---
+
+/// A receipt survives exactly thirty days and falls one millisecond
+/// later, against the injected clock.
+#[test]
+fn a_receipt_survives_exactly_thirty_days_and_falls_one_ms_later() {
+    let (_scratch, store, _clock) = open("gc-receipts-boundary");
+    let horizon = FIXED_NOW_MS - RECEIPT_RETENTION_MS;
+    receipt(&store, "older", "set_setting", horizon - 1);
+    receipt(&store, "edge", "set_setting", horizon);
+    receipt(&store, "younger", "set_setting", horizon + 1);
+
+    let report = store.collect_garbage(GC_GRACE_PERIOD).unwrap();
+    assert_eq!(report.blocked, None, "{report:?}");
+    assert_eq!(receipt_count(&store, "older"), 0);
+    assert_eq!(
+        receipt_count(&store, "edge"),
+        1,
+        "exactly thirty days stays"
+    );
+    assert_eq!(receipt_count(&store, "younger"), 1);
+    store.close().unwrap();
+}
+
+/// Pruning crosses a batch boundary: every expired row goes.
+#[test]
+fn more_than_one_receipt_batch_is_pruned() {
+    let (_scratch, store, _clock) = open("gc-receipts-batches");
+    seed_receipts(&store, "old", 2_001);
+
+    let report = store.collect_garbage(GC_GRACE_PERIOD).unwrap();
+    assert!(!report.stopped, "{report:?}");
+    assert_eq!(receipt_rows(&store), 0);
+    store.close().unwrap();
+}
+
+/// A stop raised between batches ends the pass after the batch in
+/// flight; the rows it didn't reach wait for the next pass.
+#[test]
+fn a_stop_between_receipt_batches_leaves_the_rest_for_the_next_pass() {
+    let (_scratch, store, _clock) = open("gc-receipts-stop");
+    let store = Arc::new(store);
+    seed_receipts(&store, "old", 2_001);
+
+    // Hold the writer on an earlier Index job, so the first prune batch
+    // sits queued; raise the stop before releasing it.
+    let gate = Arc::new(Barrier::new(2));
+    let blocked = {
+        let gate = Arc::clone(&gate);
+        store.write(WritePriority::Index, move |_tx| {
+            gate.wait();
+            gate.wait();
+            Ok(())
+        })
+    };
+    gate.wait(); // the writer parks on the blocker
+    let stop = Arc::new(AtomicBool::new(false));
+    let (on_thread, flag) = (Arc::clone(&store), Arc::clone(&stop));
+    let pass = std::thread::spawn(move || on_thread.collect_garbage_with(GC_GRACE_PERIOD, &flag));
+    wait_queued(&store, 1); // the first prune batch waits behind the blocker
+    stop.store(true, Ordering::Release);
+    gate.wait(); // release the blocker; the batch commits, then the stop ends the pass
+    let report = pass.join().unwrap().unwrap();
+    block_on(blocked).unwrap();
+    assert!(report.stopped, "{report:?}");
+    assert_eq!(receipt_rows(&store), 1_001, "one batch fell, the rest wait");
+
+    let report = store
+        .collect_garbage_with(GC_GRACE_PERIOD, &AtomicBool::new(false))
+        .unwrap();
+    assert!(!report.stopped, "{report:?}");
+    assert_eq!(receipt_rows(&store), 0);
+    Arc::into_inner(store).unwrap().close().unwrap();
+}
+
+/// A pruned key is unspent; a kept key still replays, and still
+/// conflicts with another command.
+#[test]
+fn a_pruned_key_is_unspent_and_a_kept_key_still_answers() {
+    let (_scratch, store, _clock) = open("gc-receipts-keys");
+    receipt(
+        &store,
+        "gone",
+        "set_setting",
+        FIXED_NOW_MS - RECEIPT_RETENTION_MS - 1,
+    );
+    receipt(&store, "kept", "set_setting", FIXED_NOW_MS);
+    store.collect_garbage(GC_GRACE_PERIOD).unwrap();
+
+    store
+        .read(|tx| {
+            assert_eq!(
+                crate::receipts::replay(tx, "gone", "set_setting")?,
+                None,
+                "a pruned key is unspent"
+            );
+            let kept = crate::receipts::replay(tx, "kept", "set_setting")?
+                .expect("a kept key still has its receipt");
+            assert_eq!(kept.command(), "set_setting");
+            assert!(
+                matches!(
+                    crate::receipts::replay(tx, "kept", "add_tag"),
+                    Err(StoreError::Conflict { .. })
+                ),
+                "a kept key still conflicts for another command"
+            );
+            Ok(())
+        })
+        .unwrap();
+    store.close().unwrap();
+}
+
+/// Only `command_receipts` rows go: a send attempt and an intent stay.
+#[test]
+fn pruning_touches_no_other_table() {
+    let (_scratch, store, _clock) = open("gc-receipts-other-tables");
+    receipt(
+        &store,
+        "old",
+        "set_setting",
+        FIXED_NOW_MS - RECEIPT_RETENTION_MS - 1,
+    );
+    send_attempt(&store, SOURCE_HASH, "kept");
+    sql(
+        &store,
+        format!(
+            "INSERT OR IGNORE INTO intents
+             (intent_id, account_id, config_generation, op, target_json, args_json,
+              preconditions_json, state, idempotency_key, origin, created_at, updated_at)
+             VALUES ('intent-1', '{ACCOUNT}', 1, 'set_flags', '{{}}', '{{}}', '{{}}',
+                     'pending', 'intent-key', 'user', 0, 0)"
+        ),
+    );
+    store.collect_garbage(GC_GRACE_PERIOD).unwrap();
+
+    let (attempts, intents): (i64, i64) = store
+        .read(|tx| {
+            Ok((
+                tx.query_row("SELECT count(*) FROM send_attempts", [], |row| row.get(0))
+                    .map_err(bug)?,
+                tx.query_row("SELECT count(*) FROM intents", [], |row| row.get(0))
+                    .map_err(bug)?,
+            ))
+        })
+        .unwrap();
+    assert_eq!(receipt_count(&store, "old"), 0);
+    assert_eq!(attempts, 1, "a send attempt was pruned");
+    assert_eq!(intents, 1, "an intent was pruned");
+    store.close().unwrap();
+}
+
+/// The prune is the store's upkeep: it never makes a backup due.
+#[test]
+fn pruning_makes_no_backup_generation_due() {
+    let (_scratch, store, _clock) = open("gc-receipts-bookkeeping");
+    // A complete generation holds whatever counter the fixture writes
+    // leave; the sync itself is bookkeeping.
+    sql(
+        &store,
+        "INSERT OR REPLACE INTO backup_generations
+         (generation_id, started_at, completed_at, state, location)
+         VALUES ('gen-1', 0, 1, 'complete', '/backup/gen-1')"
+            .to_owned(),
+    );
+    receipt(
+        &store,
+        "old",
+        "set_setting",
+        FIXED_NOW_MS - RECEIPT_RETENTION_MS - 1,
+    );
+    let sync = "UPDATE store_meta SET value =
+                   (SELECT value FROM store_meta WHERE key = 'content_changes')
+                 WHERE key = 'backed_up_changes'"
+        .to_owned();
+    crate::store::await_write(store.writer.upkeep(WritePriority::Index, move |tx| {
+        tx.execute_batch(&sync).map_err(bug)
+    }))
+    .unwrap();
+    assert!(!store.backup_due().unwrap());
+
+    let counters = store
+        .read(|tx| {
+            Ok((
+                crate::changes::read(tx, crate::changes::CONTENT_CHANGES)?,
+                crate::changes::read(tx, crate::changes::BACKED_UP_CHANGES)?,
+            ))
+        })
+        .unwrap();
+    let report = store.collect_garbage(GC_GRACE_PERIOD).unwrap();
+    assert_eq!(report.blocked, None, "{report:?}");
+    assert_eq!(receipt_count(&store, "old"), 0);
+    let after = store
+        .read(|tx| {
+            Ok((
+                crate::changes::read(tx, crate::changes::CONTENT_CHANGES)?,
+                crate::changes::read(tx, crate::changes::BACKED_UP_CHANGES)?,
+            ))
+        })
+        .unwrap();
+    assert_eq!(after, counters, "the prune bumped the change counter");
+    assert!(!store.backup_due().unwrap(), "the prune made a backup due");
+    store.close().unwrap();
+}
+
+/// The prune runs even when an object gate freezes collection.
+#[test]
+fn pruning_runs_while_an_object_gate_blocks_collection() {
+    let (_scratch, store, _clock) = open("gc-receipts-gate");
+    receipt(
+        &store,
+        "old",
+        "set_setting",
+        FIXED_NOW_MS - RECEIPT_RETENTION_MS - 1,
+    );
+    backup(&store, true);
+
+    let report = store.collect_garbage(GC_GRACE_PERIOD).unwrap();
+    assert_eq!(report.blocked, Some(GcGate::BackupInProgress), "{report:?}");
+    assert_eq!(
+        receipt_count(&store, "old"),
+        0,
+        "the gate froze only objects"
+    );
+    store.close().unwrap();
+}
+
+/// A latched store is left alone: the pass writes no prune.
+#[test]
+fn a_latched_store_gets_no_receipt_write() {
+    let (_scratch, store, _clock) = open("gc-receipts-latched");
+    receipt(
+        &store,
+        "old",
+        "set_setting",
+        FIXED_NOW_MS - RECEIPT_RETENTION_MS - 1,
+    );
+    assert!(store.writer.latch("a test finding").unwrap());
+
+    let report = store.collect_garbage(GC_GRACE_PERIOD).unwrap();
+    assert_eq!(report.blocked, None, "{report:?}");
+    assert_eq!(
+        receipt_count(&store, "old"),
+        1,
+        "a latched store was written"
+    );
+    store.close().unwrap();
 }
 
 /// A failed unlink deletes the grace pins: the clock restarts (spec/03).

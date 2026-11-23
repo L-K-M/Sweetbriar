@@ -276,6 +276,13 @@ impl Fs for CutFs {
         self.inner.quarantine(path)
     }
 
+    /// Backup exclusion protects no bytes, so it is not a cut point: a
+    /// crash there leaves nothing to observe, and counting it would move
+    /// every later cut point.
+    fn exclude_from_backup(&self, path: &Path) -> std::io::Result<()> {
+        self.inner.exclude_from_backup(path)
+    }
+
     fn sync_dir(&self, path: &Path) -> std::io::Result<()> {
         self.trip();
         self.inner.sync_dir(path)

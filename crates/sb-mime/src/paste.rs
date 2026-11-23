@@ -82,6 +82,9 @@ struct ListCtx {
     base: String,
 }
 
+/// A backslash line end. Breaks are the only line ends in an inline run.
+const HARD_BREAK: &str = "\\\n";
+
 #[derive(Clone)]
 enum FrameKind {
     Strong,
@@ -370,15 +373,17 @@ impl Emitter {
             return;
         }
         for _ in 0..breaks {
-            let line = self.buf.trim_end_matches(is_html_ws).to_string();
+            // Only spaces go: the line end of a break before this one
+            // stays, or the two backslashes would escape each other.
+            let line = self.buf.trim_end_matches(' ').to_string();
             self.buf = line;
-            self.buf.push('\\');
             if self.inline.is_empty() {
+                self.buf.push('\\');
                 self.flush_line();
             } else {
                 // Inside emphasis or a link the break stays in the run,
                 // so its markers span it: `**a\` then `b**`.
-                self.buf.push('\n');
+                self.buf.push_str(HARD_BREAK);
                 self.buf.push_str(&self.prefix.clone());
                 self.digit_run = false;
                 self.last_close = None;
@@ -445,8 +450,11 @@ impl Emitter {
         if self.flushed != frame.flushed {
             self.losses.add(PasteLoss::Styling);
         }
-        let (lead, core, trail) = split_edges(&inner);
+        let (lead, core, trail) = split_edges(&inner, &self.prefix);
         if core.is_empty() {
+            if lead.contains(HARD_BREAK) {
+                self.buf.push_str(lead);
+            }
             return;
         }
         // Inside a code span the markers would be literal text.
@@ -465,7 +473,8 @@ impl Emitter {
         self.last_close = Some((marker, self.buf.len()));
         self.buf.push_str(trail);
         self.line_has_content = true;
-        self.inline_started = true;
+        // After a break the next text starts a line, so it escapes as such.
+        self.inline_started = !trail.contains(HARD_BREAK);
     }
 
     fn close_code(&mut self, id: usize) {
@@ -867,14 +876,31 @@ fn longest_run(text: &str, target: char) -> usize {
     best
 }
 
-fn split_edges(text: &str) -> (&str, &str, &str) {
-    let lead_len = text.len() - text.trim_start_matches(is_html_ws).len();
-    let lead = &text[..lead_len];
-    let rest = &text[lead_len..];
-    let trail_len = rest.len() - rest.trim_end_matches(is_html_ws).len();
-    let core = &rest[..rest.len() - trail_len];
-    let trail = &rest[rest.len() - trail_len..];
-    (lead, core, trail)
+/// Split a run into what precedes its markers, what they wrap and what
+/// follows them. Spaces and hard breaks at either edge fall outside: a
+/// marker beside whitespace or a backslash may not open or close, and
+/// would then show as text.
+fn split_edges<'a>(text: &'a str, prefix: &str) -> (&'a str, &'a str, &'a str) {
+    // A break's line may have lost the trailing spaces of its prefix.
+    let line_prefix = prefix.trim_end_matches(is_html_ws);
+
+    let mut rest = text.trim_start_matches(is_html_ws);
+    while let Some(line) = rest.strip_prefix(HARD_BREAK) {
+        rest = line
+            .strip_prefix(line_prefix)
+            .unwrap_or(line)
+            .trim_start_matches(is_html_ws);
+    }
+    let lead = &text[..text.len() - rest.len()];
+
+    let mut core = rest;
+    while let Some((before, line)) = core.rsplit_once(HARD_BREAK)
+        && line.trim_end_matches(is_html_ws) == line_prefix
+    {
+        core = before;
+    }
+    let core = core.trim_end_matches(is_html_ws);
+    (lead, core, &rest[core.len()..])
 }
 
 fn entity_like(chars: &[char], index: usize) -> bool {
