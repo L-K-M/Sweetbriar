@@ -100,6 +100,14 @@ async fn Core::shutdown(self);   // flush writer, release the lease
   (04-sync-proton "Running an intent"), skipping messages whose flag
   already holds; the call returns an `UndoToken` naming every planned
   intent, or none when nothing was planned.
+  `selection_flags(selection)` is the query a toggle reads (08 Message
+  list, Keyboard): the selection's occurrence count and how many of
+  them list as unread and as flagged (`ListRow.unread`, `flagged`),
+  read in one short transaction. It resolves a selection as
+  `set_flags` does: more than 1,000 explicit ids is `InvalidInput`, a
+  window token's stale generation `ResetRequired`, the debug source
+  `InvalidInput`; an unknown occurrence is `NotFound`. It plans and
+  writes nothing.
 - **Tags and notes:** `add_tag(selection, tag)` takes a tag name,
   creating the definition when it is new; `remove_tag` detaches it and
   keeps the definition (02 rule 8). Both attach to the selected

@@ -456,6 +456,16 @@ public final class CoreBridge: Sendable {
         }
     }
 
+    /// `selection_flags(selection)` (spec/07 "Flags"): how many of the
+    /// selection's occurrences list as unread and as flagged.
+    public func selectionFlags(selection: MessageSelection) async throws -> SelectionFlags {
+        let token = SweetbriarCore.CancelToken()
+        let flags = try await Self.withCancellation(token: token) {
+            try await self.core.selectionFlags(token: token, selection: selection.generated)
+        }
+        return SelectionFlags(flags)
+    }
+
     /// `move_messages(selection, to_mailbox)` (spec/07 Messages) under a
     /// shell-made key: the undo token.
     public func moveMessages(

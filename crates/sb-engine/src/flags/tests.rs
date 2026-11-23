@@ -522,3 +522,57 @@ fn set_flags_refuses_bad_flags_and_selections() {
 
     block_on(engine.shutdown()).unwrap();
 }
+
+/// `selection_flags` counts a window token's rows as the list shows
+/// them, an explicit selection's too, and refuses what `set_flags`
+/// refuses: a stale generation, too many ids, an unknown occurrence.
+#[test]
+fn selection_flags_count_a_window_and_refuse_as_set_flags_does() {
+    let (_scratch, engine) = scratch_engine("selection-flags");
+    crate::views::tests::seed_archive(&engine);
+
+    let window =
+        block_on(engine.open_window(crate::WindowSpec::Mailbox(1), crate::Anchor::Top, 10))
+            .unwrap();
+    let token = MessageSelection::Window {
+        window_id: window.window_id().get(),
+        generation: window.generation(),
+    };
+    assert_eq!(
+        block_on(engine.selection_flags(token)).unwrap(),
+        crate::SelectionFlags {
+            count: 3,
+            unread: 1,
+            flagged: 0
+        }
+    );
+    assert_eq!(
+        block_on(engine.selection_flags(MessageSelection::OccurrenceIds(vec![12]))).unwrap(),
+        crate::SelectionFlags {
+            count: 1,
+            unread: 1,
+            flagged: 0
+        }
+    );
+
+    let stale = MessageSelection::Window {
+        window_id: window.window_id().get(),
+        generation: window.generation() + 1,
+    };
+    assert!(matches!(
+        block_on(engine.selection_flags(stale)),
+        Err(EngineError::ResetRequired { .. })
+    ));
+    let too_many = MessageSelection::OccurrenceIds((1..=1_001).collect());
+    assert!(matches!(
+        block_on(engine.selection_flags(too_many)),
+        Err(EngineError::InvalidInput { ref field, .. }) if field == "selection"
+    ));
+    assert!(matches!(
+        block_on(engine.selection_flags(MessageSelection::OccurrenceIds(vec![11, 999]))),
+        Err(EngineError::NotFound { .. })
+    ));
+
+    block_on(engine.close_window(window.window_id()));
+    block_on(engine.shutdown()).unwrap();
+}

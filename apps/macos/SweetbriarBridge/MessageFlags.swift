@@ -5,6 +5,7 @@
 
 import Foundation
 import Observation
+import SweetbriarCore
 
 /// A flag `set_flags` changes, by its intent payload name (spec/02).
 public enum MessageFlag: Sendable, Equatable {
@@ -19,12 +20,35 @@ public enum MessageFlag: Sendable, Equatable {
     }
 }
 
-/// `set_flags` and the settings the reader's timer reads; `CoreBridge`
-/// adopts it.
+/// A selection's flags as its list rows show them (spec/07
+/// `selection_flags`): its distinct occurrences, and how many of them
+/// are unread and flagged.
+public struct SelectionFlags: Sendable, Equatable {
+    public var count: UInt64
+    public var unread: UInt64
+    public var flagged: UInt64
+
+    public init(count: UInt64, unread: UInt64, flagged: UInt64) {
+        self.count = count
+        self.unread = unread
+        self.flagged = flagged
+    }
+
+    /// Map the generated record field by field.
+    init(_ g: SweetbriarCore.SelectionFlags) {
+        count = g.count
+        unread = g.unread
+        flagged = g.flagged
+    }
+}
+
+/// `set_flags`, `selection_flags` and the settings the reader's timer
+/// reads; `CoreBridge` adopts it.
 public protocol MessageFlagsSource: Sendable {
     func setFlags(
         idempotencyKey: String, selection: MessageSelection, add: [String], remove: [String]
     ) async throws -> String?
+    func selectionFlags(selection: MessageSelection) async throws -> SelectionFlags
     func settings() async throws -> [Setting]
 }
 
@@ -102,6 +126,45 @@ public struct FlagToggle: Sendable, Equatable {
             }
         }
         return failures
+    }
+}
+
+/// `⇧⌘U` and `⇧⌘L` on a mailbox window's whole selection of more than
+/// 1,000 rows (spec/08 "Message list" Keyboard): one call with the
+/// window's token, whose direction `selection_flags` decides when the
+/// command runs, so rows the list never loaded count too.
+public struct WindowFlagToggle: Sendable, Equatable {
+    public let flag: MessageFlag
+    public let selection: MessageSelection
+
+    public init(flag: MessageFlag, selection: MessageSelection) {
+        self.flag = flag
+        self.selection = selection
+    }
+
+    /// Whether the toggle adds the flag: any unread row marks every row
+    /// read, any unstarred row stars every row, as `FlagToggle` decides.
+    public static func sets(_ flag: MessageFlag, _ flags: SelectionFlags) -> Bool {
+        switch flag {
+        case .seen: flags.unread > 0
+        case .flagged: flags.flagged < flags.count
+        }
+    }
+
+    /// Read the selection's flags, then send the one call. The refusal,
+    /// if either failed; nothing is sent when the read fails.
+    public func run(source: any MessageFlagsSource) async -> (any Error)? {
+        do {
+            let flags = try await source.selectionFlags(selection: selection)
+            let set = Self.sets(flag, flags)
+            let names = [flag.name]
+            _ = try await source.setFlags(
+                idempotencyKey: UUID().uuidString, selection: selection,
+                add: set ? names : [], remove: set ? [] : names)
+            return nil
+        } catch {
+            return error
+        }
     }
 }
 

@@ -73,6 +73,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     private var reader: ReaderViewController?
     /// Marks a shown unread Proton message read (spec/08 "Reader").
     private var markRead: MarkReadTimer?
+    /// The flags last read for a whole-window selection, for the flag
+    /// commands' titles.
+    private var windowFlags: (selection: MessageSelection, flags: SelectionFlags)?
     /// Messages opened in their own windows (spec/08 "Message window").
     private let messageWindows = MessageWindows()
     private(set) var filing: FilingController?
@@ -175,6 +178,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         messageList?.onGeneration = nil
         messageList?.onSelectionChange = nil
         markRead?.cancel()
+        windowFlags = nil
         messageWindows.closeAll()
         filing?.retire()
         filing = nil
@@ -354,6 +358,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
             // (spec/08 "Reader").
             let targets = self.backups.canWrite ? self.flagTargets : nil
             self.markRead?.show(targets?.count == 1 ? targets?.first : nil)
+            self.refreshWindowFlags()
         }
         messageList.onOpenMessage = { [weak self] id in
             guard let self, !closed, contentSerial == serial else { return }
@@ -555,6 +560,41 @@ extension MainWindowController: MessageFlagCommands {
         return targets
     }
 
+    /// A mailbox window's whole selection past the explicit limit, as
+    /// its `SelectionToken`, when that mailbox is a Proton account's
+    /// (spec/08 "Message list" Keyboard). Nil for anything else.
+    var flagWindowSelection: MessageSelection? {
+        messageList?.list.flatMap { flagWindowSelection(for: $0.selectedIDs) }
+    }
+
+    /// The same for `ids`, the rows a context click targets: a context
+    /// click on a selected row acts on the selection (spec/08
+    /// "Selection").
+    private func flagWindowSelection(for ids: Set<Int64>) -> MessageSelection? {
+        guard listPane?.pane == .messages, let model = messageList?.model,
+            ids.count > Self.maxFlagSelection,
+            let selection = model.wholeWindowSelection(of: ids),
+            let row = model.row(at: 0), isProton(row.accountId)
+        else { return nil }
+        return selection
+    }
+
+    /// Read the whole-window selection's flags for the commands'
+    /// titles; the command itself reads them again when it runs.
+    private func refreshWindowFlags() {
+        guard let selection = flagWindowSelection, let bridge else {
+            windowFlags = nil
+            return
+        }
+        if windowFlags?.selection == selection { return }
+        windowFlags = nil
+        contentTasks.run { [weak self] in
+            guard let flags = try? await bridge.selectionFlags(selection: selection) else { return }
+            guard let self, !closed, flagWindowSelection == selection else { return }
+            windowFlags = (selection, flags)
+        }
+    }
+
     private func isProton(_ accountId: String) -> Bool {
         sidebarModel?.sections.first { $0.id == accountId }?.account?.kind == .proton
     }
@@ -566,7 +606,13 @@ extension MainWindowController: MessageFlagCommands {
     @objc func toggleStar(_ sender: Any?) { toggle(.flagged) }
 
     private func toggle(_ flag: MessageFlag, ids: Set<Int64>? = nil) {
-        guard backups.canWrite, let bridge, let targets = ids.map(flagTargets(for:)) ?? flagTargets,
+        let targets = ids.map(flagTargets(for:)) ?? flagTargets
+        let whole = ids.map(flagWindowSelection(for:)) ?? flagWindowSelection
+        if backups.canWrite, targets == nil, let bridge, let selection = whole {
+            toggleWindow(flag, selection: selection, bridge: bridge)
+            return
+        }
+        guard backups.canWrite, let bridge, let targets,
             let toggle = FlagToggle.plan(flag, targets: targets)
         else {
             NSSound.beep()
@@ -582,18 +628,46 @@ extension MainWindowController: MessageFlagCommands {
         }
     }
 
+    /// One call with the window's token; its direction comes from the
+    /// core when it runs, so rows the list never loaded count too.
+    private func toggleWindow(_ flag: MessageFlag, selection: MessageSelection, bridge: CoreBridge) {
+        if flag == .seen { markRead?.cancel() }
+        windowFlags = nil
+        let toggle = WindowFlagToggle(flag: flag, selection: selection)
+        writes.run(revision: writes.revision) { [weak self] in
+            let failure = await toggle.run(source: bridge)
+            guard let self, !closed else { return }
+            refreshWindowFlags()
+            guard let failure, let window else { return }
+            NSAlert(error: failure).beginSheetModal(for: window) { _ in }
+        }
+    }
+
     /// The commands' titles follow what they would do to the selection.
+    /// A whole-window selection takes its title from the flags last
+    /// read for it, and reads as setting until they arrive.
     func flagCommandState(
         _ action: Selector, ids: Set<Int64>? = nil
     ) -> (enabled: Bool, title: String)? {
         let targets = backups.canWrite ? (ids.map(flagTargets(for:)) ?? flagTargets) : nil
+        let window =
+            backups.canWrite && targets == nil
+            ? (ids.map(flagWindowSelection(for:)) ?? flagWindowSelection) : nil
+        let flags = window.flatMap { selection in
+            windowFlags?.selection == selection ? windowFlags?.flags : nil
+        }
+        let enabled = targets != nil || window != nil
         switch action {
         case #selector(toggleRead(_:)):
-            let read = targets.map { FlagToggle.plan(.seen, targets: $0)?.set ?? true } ?? true
-            return (targets != nil, read ? "Mark as Read" : "Mark as Unread")
+            let read =
+                targets.map { FlagToggle.plan(.seen, targets: $0)?.set ?? true }
+                ?? flags.map { WindowFlagToggle.sets(.seen, $0) } ?? true
+            return (enabled, read ? "Mark as Read" : "Mark as Unread")
         case #selector(toggleStar(_:)):
-            let star = targets.map { FlagToggle.plan(.flagged, targets: $0)?.set ?? true } ?? true
-            return (targets != nil, star ? "Star" : "Unstar")
+            let star =
+                targets.map { FlagToggle.plan(.flagged, targets: $0)?.set ?? true }
+                ?? flags.map { WindowFlagToggle.sets(.flagged, $0) } ?? true
+            return (enabled, star ? "Star" : "Unstar")
         default:
             return nil
         }

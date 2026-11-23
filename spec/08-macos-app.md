@@ -365,7 +365,11 @@ M4.4c. Choosing Out Box shows the Out Box in the list pane, as Drafts
     and are disabled when the selection holds a local-archive row. A
     call's local effect commits with it, so its rows change at once; a
     refused or failed call shows its error and changes nothing, while
-    the other accounts' calls still run and keep their effect;
+    the other accounts' calls still run and keep their effect. A
+    mailbox window's whole selection of more than 1,000 rows passes
+    its `SelectionToken`, and `selection_flags` (07) says whether any
+    of its rows is unread (unstarred). Any other selection over 1,000
+    rows leaves both commands disabled;
   - type-to-file (below);
   - every command is also in a menu.
 - **Performance budget:** switching mailbox shows the first rows within

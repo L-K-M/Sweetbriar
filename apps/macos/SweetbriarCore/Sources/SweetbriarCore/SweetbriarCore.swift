@@ -1580,6 +1580,14 @@ public protocol CoreProtocol: AnyObject, Sendable {
     func removeLabel(token: CancelToken, idempotencyKey: String, selection: MessageSelection, labelMailboxId: Int64) async throws 
     
     /**
+     * `selection_flags(selection)` (spec/07 "Flags"): how many of the
+     * selection's occurrences list as unread and as flagged, so a
+     * toggle over a window token knows its direction. A query: it
+     * writes nothing.
+     */
+    func selectionFlags(token: CancelToken, selection: MessageSelection) async throws  -> SelectionFlags
+    
+    /**
      * `set_flags(selection, add, remove)` (spec/07 "Flags"): add or
      * remove `\Seen` and `\Flagged` on the selection's logical
      * messages, which must belong to one Proton account. Answers the
@@ -2920,6 +2928,28 @@ open func removeLabel(token: CancelToken, idempotencyKey: String, selection: Mes
             completeFunc: ffi_sb_ffi_rust_future_complete_void,
             freeFunc: ffi_sb_ffi_rust_future_free_void,
             liftFunc: { $0 },
+            errorHandler: FfiConverterTypeCoreError_lift
+        )
+}
+    
+    /**
+     * `selection_flags(selection)` (spec/07 "Flags"): how many of the
+     * selection's occurrences list as unread and as flagged, so a
+     * toggle over a window token knows its direction. A query: it
+     * writes nothing.
+     */
+open func selectionFlags(token: CancelToken, selection: MessageSelection)async throws  -> SelectionFlags  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_sb_ffi_fn_method_core_selection_flags(
+                        self.uniffiCloneHandle(),FfiConverterTypeCancelToken_lower(token),FfiConverterTypeMessageSelection_lower(selection)
+                )
+            },
+            pollFunc: ffi_sb_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_sb_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_sb_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeSelectionFlags_lift,
             errorHandler: FfiConverterTypeCoreError_lift
         )
 }
@@ -10910,6 +10940,69 @@ public func FfiConverterTypeSearchStatus_lower(_ value: SearchStatus) -> RustBuf
 
 
 /**
+ * A selection's flags as its list rows show them (spec/07
+ * `selection_flags`): its distinct occurrences, and how many of them
+ * are unread and flagged.
+ */
+public struct SelectionFlags: Equatable, Hashable {
+    public var count: UInt64
+    public var unread: UInt64
+    public var flagged: UInt64
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(count: UInt64, unread: UInt64, flagged: UInt64) {
+        self.count = count
+        self.unread = unread
+        self.flagged = flagged
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension SelectionFlags: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeSelectionFlags: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SelectionFlags {
+        return
+            try SelectionFlags(
+                count: FfiConverterUInt64.read(from: &buf), 
+                unread: FfiConverterUInt64.read(from: &buf), 
+                flagged: FfiConverterUInt64.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: SelectionFlags, into buf: inout [UInt8]) {
+        FfiConverterUInt64.write(value.count, into: &buf)
+        FfiConverterUInt64.write(value.unread, into: &buf)
+        FfiConverterUInt64.write(value.flagged, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSelectionFlags_lift(_ buf: RustBuffer) throws -> SelectionFlags {
+    return try FfiConverterTypeSelectionFlags.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSelectionFlags_lower(_ value: SelectionFlags) -> RustBuffer {
+    return FfiConverterTypeSelectionFlags.lower(value)
+}
+
+
+/**
  * What `send_draft` answers: its receipt and the attempt id the
  * receipt names, so a replayed key still names the first attempt.
  */
@@ -18888,6 +18981,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sb_ffi_checksum_method_core_remove_label() != 15062) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sb_ffi_checksum_method_core_selection_flags() != 45349) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sb_ffi_checksum_method_core_set_flags() != 29670) {

@@ -155,6 +155,59 @@ pub fn messages_for_occurrences(
         .collect()
 }
 
+/// A selection's flags as its list rows show them (spec/07
+/// `selection_flags`): how many distinct occurrences it holds, and how
+/// many of them are unread and flagged.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SelectionFlags {
+    pub count: u64,
+    pub unread: u64,
+    pub flagged: u64,
+}
+
+/// Count `occurrence_ids`' unread and flagged rows in the caller's read,
+/// chunked like [`messages_for_occurrences`]. An unknown id is
+/// `NotFound`; a repeated id counts once.
+pub fn selection_flags(
+    tx: &Transaction,
+    occurrence_ids: &[i64],
+) -> Result<SelectionFlags, StoreError> {
+    let mut found: HashMap<i64, (bool, bool)> = HashMap::with_capacity(occurrence_ids.len());
+    for chunk in occurrence_ids.chunks(OCCURRENCE_LOOKUP_CHUNK) {
+        let placeholders = vec!["?"; chunk.len()].join(", ");
+        let sql = format!(
+            "SELECT occurrence_id, f_seen, f_flagged FROM occurrences
+             WHERE occurrence_id IN ({placeholders})"
+        );
+        let mut statement = tx.prepare(&sql).map_err(sql_error)?;
+        let rows = statement
+            .query_map(params_from_iter(chunk), |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, bool>(1)?,
+                    row.get::<_, bool>(2)?,
+                ))
+            })
+            .map_err(sql_error)?;
+        for row in rows {
+            let (occurrence, seen, flagged) = row.map_err(sql_error)?;
+            found.insert(occurrence, (seen, flagged));
+        }
+    }
+    if let Some(missing) = occurrence_ids.iter().find(|id| !found.contains_key(id)) {
+        return Err(StoreError::not_found(format!("occurrence {missing}")));
+    }
+    let mut flags = SelectionFlags {
+        count: found.len() as u64,
+        ..SelectionFlags::default()
+    };
+    for (seen, flagged) in found.into_values() {
+        flags.unread += u64::from(!seen);
+        flags.flagged += u64::from(flagged);
+    }
+    Ok(flags)
+}
+
 /// Metadata only: no file I/O or long-lived reader transaction (spec/03, 07).
 pub fn get_message(tx: &Transaction, message: i64) -> Result<ReaderMessage, StoreError> {
     let (account_id, account_display_name, thread_id, note) = tx

@@ -40,6 +40,7 @@ mod error;
 mod exports;
 mod filing;
 mod flags;
+pub use flags::SelectionFlags;
 mod health;
 mod identities;
 mod imports;

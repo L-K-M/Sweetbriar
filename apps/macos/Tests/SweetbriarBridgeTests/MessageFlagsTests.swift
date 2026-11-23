@@ -10,27 +10,47 @@ private actor FakeFlagsSource: MessageFlagsSource, SendSafetySettingsSource {
         let remove: [String]
     }
 
+    struct WindowCall: Equatable {
+        let selection: MessageSelection
+        let add: [String]
+        let remove: [String]
+    }
+
     private(set) var calls: [Call] = []
+    private(set) var windowCalls: [WindowCall] = []
+    private(set) var flagReads: [MessageSelection] = []
     private(set) var writes: [String] = []
     var markRead: String?
     var refused: Set<Int64> = []
+    /// What `selectionFlags` answers; nil refuses the read.
+    var windowFlags: SelectionFlags?
 
     init(markRead: String?) { self.markRead = markRead }
 
     func setMarkRead(_ value: String?) { markRead = value }
     func refuse(_ ids: Set<Int64>) { refused = ids }
+    func setWindowFlags(_ flags: SelectionFlags?) { windowFlags = flags }
 
     func setFlags(
         idempotencyKey: String, selection: MessageSelection, add: [String], remove: [String]
     ) async throws -> String? {
         guard case .occurrenceIds(let ids) = selection else {
-            throw CoreFailure.invalidInput(field: "selection", message: "ids only")
+            windowCalls.append(WindowCall(selection: selection, add: add, remove: remove))
+            return "token"
         }
         if !refused.isDisjoint(with: ids) {
             throw CoreFailure.invalidInput(field: "selection", message: "refused")
         }
         calls.append(Call(ids: ids, add: add, remove: remove))
         return "token"
+    }
+
+    func selectionFlags(selection: MessageSelection) async throws -> SelectionFlags {
+        flagReads.append(selection)
+        guard let windowFlags else {
+            throw CoreFailure.resetRequired(generation: 9)
+        }
+        return windowFlags
     }
 
     func settings() async throws -> [Setting] {
@@ -48,6 +68,45 @@ private func target(_ id: Int64, _ account: String, unread: Bool = false, flagge
     -> FlagTarget
 {
     FlagTarget(occurrenceId: id, accountId: account, unread: unread, flagged: flagged)
+}
+
+@Suite struct WindowFlagToggleTests {
+    private let window = MessageSelection.window(windowId: 7, generation: 3)
+
+    /// A whole window marks read while any row is unread and stars while
+    /// any row is unstarred, as the explicit toggle does.
+    @Test func theDirectionFollowsTheSelectionsFlags() {
+        let mixed = SelectionFlags(count: 2_000, unread: 1, flagged: 2_000)
+        #expect(WindowFlagToggle.sets(.seen, mixed))
+        #expect(!WindowFlagToggle.sets(.flagged, mixed))
+        let plain = SelectionFlags(count: 2_000, unread: 0, flagged: 1_999)
+        #expect(!WindowFlagToggle.sets(.seen, plain))
+        #expect(WindowFlagToggle.sets(.flagged, plain))
+    }
+
+    /// One call carries the window's token, after a read of its flags
+    /// with the same token; a failed read sends nothing.
+    @Test(.timeLimit(.minutes(1)))
+    func theToggleReadsThenSendsOneTokenCall() async {
+        let source = FakeFlagsSource(markRead: nil)
+        await source.setWindowFlags(SelectionFlags(count: 2_000, unread: 0, flagged: 5))
+        let read = WindowFlagToggle(flag: .seen, selection: window)
+        #expect(await read.run(source: source) == nil)
+        #expect(await source.flagReads == [window])
+        #expect(
+            await source.windowCalls
+                == [.init(selection: window, add: [], remove: ["\\Seen"])])
+
+        let star = WindowFlagToggle(flag: .flagged, selection: window)
+        #expect(await star.run(source: source) == nil)
+        #expect(
+            await source.windowCalls.last
+                == .init(selection: window, add: ["\\Flagged"], remove: []))
+
+        await source.setWindowFlags(nil)
+        #expect(await read.run(source: source) != nil)
+        #expect(await source.windowCalls.count == 2, "a failed read sends nothing")
+    }
 }
 
 @Suite struct FlagToggleTests {

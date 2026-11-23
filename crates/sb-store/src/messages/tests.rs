@@ -157,6 +157,54 @@ fn a_selection_past_the_variable_limit_resolves_in_order() {
     ));
 }
 
+/// `selection_flags` counts each occurrence's own flags, as its list
+/// row shows them, once per id, past the variable limit too.
+#[test]
+fn selection_flags_count_unread_and_flagged_rows() {
+    const ROWS: i64 = 40_000;
+    let mut conn = database();
+    conn.execute_batch(&format!(
+        "WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i + 1 < {ROWS})
+         INSERT INTO logical_messages (message_id, account_id, created_at)
+         SELECT 100000 + i, 'home', 0 FROM n;
+         WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i + 1 < {ROWS})
+         INSERT INTO occurrences (occurrence_id, account_id, mailbox_id, message_id,
+          state, first_seen_at, last_seen_at, f_seen, f_flagged)
+         SELECT 200000 + i, 'home', 10, 100000 + i, 'present', 0, 0,
+                i % 4 != 0, i % 10 = 0 FROM n;
+         UPDATE occurrences SET f_seen = 1, f_flagged = 1 WHERE occurrence_id = 30;"
+    ))
+    .unwrap();
+    let tx = conn.transaction().unwrap();
+
+    let all: Vec<i64> = (0..ROWS).map(|i| 200_000 + i).collect();
+    assert_eq!(
+        selection_flags(&tx, &all).unwrap(),
+        SelectionFlags {
+            count: 40_000,
+            unread: 10_000,
+            flagged: 4_000
+        }
+    );
+    // 31 is the same message as 30, in another mailbox, with its own flags.
+    assert_eq!(
+        selection_flags(&tx, &[30, 31, 30]).unwrap(),
+        SelectionFlags {
+            count: 2,
+            unread: 1,
+            flagged: 1
+        }
+    );
+    assert_eq!(
+        selection_flags(&tx, &[]).unwrap(),
+        SelectionFlags::default()
+    );
+    assert!(matches!(
+        selection_flags(&tx, &[30, 999_999]),
+        Err(StoreError::NotFound { .. })
+    ));
+}
+
 #[test]
 fn unknown_ids_are_not_found() {
     let mut conn = database();
