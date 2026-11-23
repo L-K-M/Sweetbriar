@@ -8,6 +8,11 @@ import Foundation
 import SweetbriarBridge
 
 enum BackupsPresentation {
+    /// The pilot's encryption at rest (spec/10), stated below the destination.
+    static let encryptionAtRest =
+        "Sweetbriar doesn't encrypt the archive or its backups. It relies on FileVault, "
+        + "so encrypt the disk if you keep a backup on another disk."
+
     /// Epoch milliseconds as a localized date and time. A value Double
     /// cannot hold exactly stays as raw milliseconds instead of becoming
     /// a rounded date.
