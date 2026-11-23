@@ -7,6 +7,7 @@
 //! password crosses as bytes into the core's zeroizing secret; the
 //! parameters record has no `Debug`, so it never prints (spec/10).
 
+use std::fmt;
 use std::sync::Arc;
 
 use crate::api::{Core, Receipt};
@@ -246,6 +247,59 @@ impl ProtonSignInStep {
     }
 }
 
+/// The human verification `proton_verification(id)` reports for a
+/// sync account paused for human verification. The URL carries
+/// Proton's token, so `Debug` redacts it (spec/10).
+#[derive(Clone, PartialEq, Eq, uniffi::Record)]
+pub struct ProtonVerificationChallenge {
+    pub url: String,
+    pub methods: Vec<String>,
+}
+
+impl fmt::Debug for ProtonVerificationChallenge {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ProtonVerificationChallenge")
+            .field("url", &"[redacted]")
+            .field("methods", &self.methods)
+            .finish()
+    }
+}
+
+impl ProtonVerificationChallenge {
+    fn from_service(challenge: sb_service::ProtonVerificationChallenge) -> Self {
+        Self {
+            url: challenge.url,
+            methods: challenge.methods,
+        }
+    }
+}
+
+/// The answer `verify_proton_account(key, id, answer)` takes. The
+/// token is a secret, so `Debug` redacts it (spec/10).
+#[derive(Clone, PartialEq, Eq, uniffi::Record)]
+pub struct ProtonVerificationAnswer {
+    pub token: String,
+    pub token_type: String,
+}
+
+impl fmt::Debug for ProtonVerificationAnswer {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ProtonVerificationAnswer")
+            .field("token", &"[redacted]")
+            .field("token_type", &self.token_type)
+            .finish()
+    }
+}
+
+impl ProtonVerificationAnswer {
+    fn into_service(self) -> sb_service::ProtonVerificationAnswer {
+        sb_service::ProtonVerificationAnswer {
+            token: self.token,
+            token_type: self.token_type,
+        }
+    }
+}
+
 /// `begin_proton_sign_in`'s parameters (spec/07). No `Debug` or
 /// `Clone`, so this side never prints or duplicates the password; the
 /// crossing's own copies are as for [`ProtonSignInStep`].
@@ -418,6 +472,46 @@ impl Core {
         let receipt = self
             .command(&token, async |core| {
                 core.resume_account(&idempotency_key, &account_id).await
+            })
+            .await?;
+        Ok(Receipt::from_service(&receipt))
+    }
+
+    /// `proton_verification(id)` (spec/07, 04 "Human verification
+    /// during sync"): the challenge held for a Proton account that
+    /// needs human verification, or none otherwise. A query.
+    pub async fn proton_verification(
+        &self,
+        token: Arc<CancelToken>,
+        account_id: String,
+    ) -> Result<Option<ProtonVerificationChallenge>, CoreError> {
+        let challenge = self
+            .query(&token, async |core| {
+                core.proton_verification(&account_id).await
+            })
+            .await?;
+        Ok(challenge.map(ProtonVerificationChallenge::from_service))
+    }
+
+    /// `verify_proton_account(key, id, answer)` (spec/07, 04 "Human
+    /// verification during sync") under an idempotency key the shell
+    /// made: the account activates and its worker starts. A command:
+    /// the token counts only until it holds the core.
+    pub async fn verify_proton_account(
+        &self,
+        token: Arc<CancelToken>,
+        idempotency_key: String,
+        account_id: String,
+        answer: Option<ProtonVerificationAnswer>,
+    ) -> Result<Receipt, CoreError> {
+        let receipt = self
+            .command(&token, async |core| {
+                core.verify_proton_account(
+                    &idempotency_key,
+                    &account_id,
+                    answer.map(ProtonVerificationAnswer::into_service),
+                )
+                .await
             })
             .await?;
         Ok(Receipt::from_service(&receipt))

@@ -313,6 +313,11 @@ uint64_t uniffi_sb_ffi_fn_method_core_disconnect_account(uint64_t ptr, uint64_t 
 uint64_t uniffi_sb_ffi_fn_method_core_pause_account(uint64_t ptr, uint64_t token, RustBuffer idempotency_key, RustBuffer account_id
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_PROTON_VERIFICATION
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_PROTON_VERIFICATION
+uint64_t uniffi_sb_ffi_fn_method_core_proton_verification(uint64_t ptr, uint64_t token, RustBuffer account_id
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_RESOLVE_BREAKER_EVENT
 #define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_RESOLVE_BREAKER_EVENT
 uint64_t uniffi_sb_ffi_fn_method_core_resolve_breaker_event(uint64_t ptr, uint64_t token, RustBuffer idempotency_key, RustBuffer event_id, RustBuffer resolution
@@ -331,6 +336,11 @@ uint64_t uniffi_sb_ffi_fn_method_core_set_app_active(uint64_t ptr, int8_t active
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_UPDATE_ACCOUNT
 #define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_UPDATE_ACCOUNT
 uint64_t uniffi_sb_ffi_fn_method_core_update_account(uint64_t ptr, uint64_t token, RustBuffer idempotency_key, RustBuffer account_id, RustBuffer display_name
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_VERIFY_PROTON_ACCOUNT
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_VERIFY_PROTON_ACCOUNT
+uint64_t uniffi_sb_ffi_fn_method_core_verify_proton_account(uint64_t ptr, uint64_t token, RustBuffer idempotency_key, RustBuffer account_id, RustBuffer answer
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_SET_SETTING
@@ -1195,6 +1205,12 @@ uint16_t uniffi_sb_ffi_checksum_method_core_pause_account(void
     
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_PROTON_VERIFICATION
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_PROTON_VERIFICATION
+uint16_t uniffi_sb_ffi_checksum_method_core_proton_verification(void
+    
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_RESOLVE_BREAKER_EVENT
 #define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_RESOLVE_BREAKER_EVENT
 uint16_t uniffi_sb_ffi_checksum_method_core_resolve_breaker_event(void
@@ -1216,6 +1232,12 @@ uint16_t uniffi_sb_ffi_checksum_method_core_set_app_active(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_UPDATE_ACCOUNT
 #define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_UPDATE_ACCOUNT
 uint16_t uniffi_sb_ffi_checksum_method_core_update_account(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_VERIFY_PROTON_ACCOUNT
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_VERIFY_PROTON_ACCOUNT
+uint16_t uniffi_sb_ffi_checksum_method_core_verify_proton_account(void
     
 );
 #endif

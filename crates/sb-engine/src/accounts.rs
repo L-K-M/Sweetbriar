@@ -8,14 +8,17 @@
 
 use sb_resources::{
     AccountKind, AccountState, AddedAccount, BridgeAccountError, BridgeAccountParams,
-    CertificatePin, EndpointSecurity, Receipt, Secret, SecretError, WritePriority, accounts,
-    certificate_pin_from_pem, pause_account, replay, resume_account, run_once, update_account,
+    CertificatePin, EndpointSecurity, HUMAN_VERIFICATION_REASON, Receipt, Secret, SecretError,
+    WritePriority, accounts, activate_after_verification, certificate_pin_from_pem, pause_account,
+    replay, resume_account, run_once, update_account,
 };
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::EngineError;
+use crate::ProtonVerificationAnswer;
+use crate::ProtonVerificationChallenge;
 use crate::account_sync::AccountJobs;
 use crate::engine::{Engine, Worker, validate_idempotency_key};
 use crate::proton::Sessions;
@@ -26,6 +29,8 @@ use crate::threads::ThreadRebuilds;
 const UPDATE_ACCOUNT: &str = "update_account";
 const PAUSE_ACCOUNT: &str = "pause_account";
 const RESUME_ACCOUNT: &str = "resume_account";
+/// `verify_proton_account`'s name in `command_receipts` (spec/07).
+const VERIFY_PROTON_ACCOUNT: &str = "verify_proton_account";
 
 /// The stored byte bound on a display name (spec/02, 07).
 const MAX_DISPLAY_NAME_BYTES: usize = 128;
@@ -122,6 +127,7 @@ impl Engine {
         let sessions = Arc::clone(&self.proton_sessions);
         let opened = Arc::clone(self.proton_opened());
         let evidence = Arc::clone(&self.send_evidence);
+        let verifications = Arc::clone(&self.proton_verifications);
         let threads = Arc::clone(self.imports().threads());
         let statuses = Arc::clone(self.worker_statuses());
         let (key, id) = (idempotency_key.to_owned(), account_id.to_owned());
@@ -176,7 +182,15 @@ impl Engine {
                 // The account stays as it was, so its worker runs again.
                 jobs.unpause(&id);
                 start_worker(
-                    &worker, &jobs, &sessions, &opened, &evidence, &threads, kind, id,
+                    &worker,
+                    &jobs,
+                    &sessions,
+                    &opened,
+                    &evidence,
+                    &verifications,
+                    &threads,
+                    kind,
+                    id,
                 )
                 .await;
             }
@@ -208,6 +222,7 @@ impl Engine {
         let sessions = Arc::clone(&self.proton_sessions);
         let opened = Arc::clone(self.proton_opened());
         let evidence = Arc::clone(&self.send_evidence);
+        let verifications = Arc::clone(&self.proton_verifications);
         let threads = Arc::clone(self.imports().threads());
         let statuses = Arc::clone(self.worker_statuses());
         let (key, id) = (idempotency_key.to_owned(), account_id.to_owned());
@@ -259,7 +274,160 @@ impl Engine {
             }
             jobs.unpause(&id);
             start_worker(
-                &worker, &jobs, &sessions, &opened, &evidence, &threads, kind, id,
+                &worker,
+                &jobs,
+                &sessions,
+                &opened,
+                &evidence,
+                &verifications,
+                &threads,
+                kind,
+                id,
+            )
+            .await;
+            statuses.rows_changed();
+            Ok(receipt)
+        })
+        .await
+    }
+
+    /// `proton_verification(id)` (spec/07, 04 "Human verification
+    /// during sync"): the challenge the engine holds for a Proton
+    /// account that is `needs_attention` for human verification, or
+    /// none for any other state, reason or kind. An unknown account is
+    /// `NotFound`. The URL carries Proton's token, so it never reaches
+    /// a log or the diagnostics package (spec/10).
+    pub async fn proton_verification(
+        &self,
+        account_id: &str,
+    ) -> Result<Option<ProtonVerificationChallenge>, EngineError> {
+        let id = account_id.to_owned();
+        let read_id = id.clone();
+        let accounts = self
+            .read_through(move |resources| resources.read(accounts))
+            .await?;
+        let account = match accounts
+            .into_iter()
+            .find(|account| account.account_id == read_id)
+        {
+            Some(account) => account,
+            None => {
+                return Err(EngineError::NotFound {
+                    what: format!("account {id}"),
+                });
+            }
+        };
+        if account.kind != AccountKind::Proton
+            || account.state != AccountState::NeedsAttention
+            || account.state_reason.as_deref() != Some(HUMAN_VERIFICATION_REASON)
+        {
+            return Ok(None);
+        }
+        Ok(self
+            .proton_verifications
+            .challenge(&id)
+            .map(|challenge| ProtonVerificationChallenge {
+                url: challenge.url,
+                methods: challenge.methods,
+            }))
+    }
+
+    /// `verify_proton_account(key, id, answer)` (spec/07, 04 "Human
+    /// verification during sync"): a `needs_attention` Proton account
+    /// paused for human verification becomes `active` and its worker
+    /// starts, carrying the answer's token on its first request, once.
+    /// Without an answer this is "Try Again": the worker meets
+    /// Proton's challenge again if Proton still asks. Any other state
+    /// or stored reason is `Conflict`; another kind is `InvalidInput`
+    /// on `account`; an unknown account is `NotFound`. A repeated key
+    /// answers its stored receipt and changes nothing. The token is
+    /// never logged, stored or put in a receipt (spec/10).
+    pub async fn verify_proton_account(
+        &self,
+        idempotency_key: &str,
+        account_id: &str,
+        answer: Option<ProtonVerificationAnswer>,
+    ) -> Result<Receipt, EngineError> {
+        validate_idempotency_key(idempotency_key)?;
+        if let Some(answer) = answer.as_ref()
+            && (answer.token.is_empty() || answer.token_type.is_empty())
+        {
+            return Err(EngineError::invalid_input(
+                "answer",
+                "the human-verification answer needs both a token and its type",
+            ));
+        }
+        let jobs = Arc::clone(self.account_jobs());
+        let sessions = Arc::clone(&self.proton_sessions);
+        let opened = Arc::clone(self.proton_opened());
+        let evidence = Arc::clone(&self.send_evidence);
+        let verifications = Arc::clone(&self.proton_verifications);
+        let threads = Arc::clone(self.imports().threads());
+        let statuses = Arc::clone(self.worker_statuses());
+        let (key, id) = (idempotency_key.to_owned(), account_id.to_owned());
+        self.command(move |worker| async move {
+            let _lifecycle = jobs.lifecycle().await;
+            let kind = match crate::proton::account_kind(&worker, &id).await? {
+                Some(kind) => kind,
+                None => {
+                    return Err(EngineError::NotFound {
+                        what: format!("account {id}"),
+                    });
+                }
+            };
+            if kind != AccountKind::Proton {
+                return Err(EngineError::invalid_input(
+                    "account",
+                    format!("account {id} is not a Proton account"),
+                ));
+            }
+            // A repeated key answers its stored receipt and does nothing
+            // else: no activation, no answer held, no worker start.
+            let replayed = worker
+                .blocking({
+                    let key = key.clone();
+                    move |resources| resources.read(|tx| replay(tx, &key, VERIFY_PROTON_ACCOUNT))
+                })
+                .await??;
+            if let Some(receipt) = replayed {
+                return Ok(receipt);
+            }
+            let now = worker.resources().now();
+            let write_id = id.clone();
+            let receipt = worker
+                .resources()
+                .write(WritePriority::User, move |tx| {
+                    run_once(tx, &key, VERIFY_PROTON_ACCOUNT, now, |tx| {
+                        activate_after_verification(tx, &write_id)?;
+                        Ok("{}".to_owned())
+                    })
+                })
+                .await?;
+            // The challenge was answered (or "Try Again" drops it):
+            // its token must never outlive the request it rode.
+            verifications.forget(&id);
+            if let Some(answer) = answer {
+                verifications.answer(
+                    &id,
+                    sb_resources::SecretString::from(answer.token),
+                    answer.token_type,
+                );
+            }
+            jobs.unpause(&id);
+            // A worker the 9001 ended may still be releasing its claim;
+            // wait so this activation's worker is the one that rides
+            // the answer.
+            jobs.wait_for_release(&id).await;
+            start_worker(
+                &worker,
+                &jobs,
+                &sessions,
+                &opened,
+                &evidence,
+                &verifications,
+                &threads,
+                kind,
+                id,
             )
             .await;
             statuses.rows_changed();
@@ -292,6 +460,7 @@ async fn start_worker(
     sessions: &Arc<Sessions>,
     opened: &Arc<ProtonOpened>,
     evidence: &Arc<crate::proton_send::SendEvidence>,
+    verifications: &Arc<crate::proton_verification::ProtonVerifications>,
     threads: &Arc<ThreadRebuilds>,
     kind: AccountKind,
     id: String,
@@ -301,7 +470,7 @@ async fn start_worker(
             if sessions.lock().await.get(&id).is_none() {
                 crate::proton::restore_proton_account(worker, sessions, &id).await;
             }
-            crate::proton_sync::start(worker, jobs, sessions, opened, evidence, id);
+            crate::proton_sync::start(worker, jobs, sessions, opened, evidence, verifications, id);
         }
         AccountKind::Imap => crate::account_sync::start_account(worker, jobs, threads, id),
         AccountKind::Local => {}

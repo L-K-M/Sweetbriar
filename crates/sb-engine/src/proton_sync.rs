@@ -20,6 +20,7 @@ use crate::proton::{Sessions, mark_session_refused, restore_proton_account};
 use crate::proton_send::{
     DRAFTS_LABEL, Evidence, SENT_LABEL, SendBackoff, SendEvidence, submit_queued_attempts,
 };
+use crate::proton_verification::ProtonVerifications;
 use sb_resources::proton_bodies::{
     BodyFailure, MAX_PENDING_BODIES, PendingBody, acquire_proton_body, bump_key_generation,
     pending_proton_bodies, record_body_failure,
@@ -168,10 +169,20 @@ impl Engine {
         let sessions = Arc::clone(&self.proton_sessions);
         let opened = Arc::clone(&self.proton_opened);
         let evidence = Arc::clone(&self.send_evidence);
+        let verifications = Arc::clone(&self.proton_verifications);
         let _ = self.spawn_worker(move |worker| async move {
             let accounts = worker.blocking(|resources| resources.read(accounts)).await;
             if let Ok(Ok(accounts)) = accounts {
-                start_all(&worker, &jobs, &sessions, &opened, &evidence, &accounts).await;
+                start_all(
+                    &worker,
+                    &jobs,
+                    &sessions,
+                    &opened,
+                    &evidence,
+                    &verifications,
+                    &accounts,
+                )
+                .await;
             }
         });
     }
@@ -269,6 +280,7 @@ pub(crate) async fn start_all(
     sessions: &Arc<Sessions>,
     opened: &Arc<ProtonOpened>,
     evidence: &Arc<SendEvidence>,
+    verifications: &Arc<ProtonVerifications>,
     accounts: &[StoredAccount],
 ) {
     recover_proton_submitting_at_startup(worker).await;
@@ -288,7 +300,15 @@ pub(crate) async fn start_all(
         if skipping.contains(account_id.as_str()) {
             continue;
         }
-        start(worker, jobs, sessions, opened, evidence, account_id);
+        start(
+            worker,
+            jobs,
+            sessions,
+            opened,
+            evidence,
+            verifications,
+            account_id,
+        );
     }
 }
 
@@ -331,6 +351,7 @@ pub(crate) fn start(
     sessions: &Arc<Sessions>,
     opened: &Arc<ProtonOpened>,
     evidence: &Arc<SendEvidence>,
+    verifications: &Arc<ProtonVerifications>,
     account_id: String,
 ) {
     let Some(stop) = jobs.claim(&account_id) else {
@@ -340,6 +361,7 @@ pub(crate) fn start(
     let sessions = Arc::clone(sessions);
     let opened = Arc::clone(opened);
     let evidence = Arc::clone(evidence);
+    let verifications = Arc::clone(verifications);
     let id = account_id.clone();
     let signals = PollSignals {
         poll: jobs.poll_signal(),
@@ -347,7 +369,17 @@ pub(crate) fn start(
         wake: jobs.poll_wait(),
     };
     let spawned = spawner.spawn_worker(move |worker| async move {
-        run(&worker, &sessions, &opened, &evidence, &id, stop, signals).await;
+        run(
+            &worker,
+            &sessions,
+            &opened,
+            &evidence,
+            &verifications,
+            &id,
+            stop,
+            signals,
+        )
+        .await;
         owner.release(&id);
     });
     if spawned.is_err() {
@@ -364,17 +396,26 @@ struct PollSignals {
     wake: Arc<tokio::sync::Notify>,
 }
 
+#[allow(clippy::too_many_arguments)] // the shared Proton state, the account and its signals
 async fn run(
     worker: &Worker,
     sessions: &Sessions,
     opened: &ProtonOpened,
     evidence: &Arc<SendEvidence>,
+    verifications: &Arc<ProtonVerifications>,
     account_id: &str,
     stop: watch::Receiver<bool>,
     signals: PollSignals,
 ) {
     run_loop(
-        worker, sessions, opened, evidence, account_id, stop, signals,
+        worker,
+        sessions,
+        opened,
+        evidence,
+        verifications,
+        account_id,
+        stop,
+        signals,
     )
     .await;
     // The worker is done (paused, disconnected, a refusal that ended
@@ -383,11 +424,13 @@ async fn run(
     worker.statuses().clear(account_id);
 }
 
+#[allow(clippy::too_many_arguments)] // as `run`
 async fn run_loop(
     worker: &Worker,
     sessions: &Sessions,
     opened: &ProtonOpened,
     evidence: &Arc<SendEvidence>,
+    verifications: &Arc<ProtonVerifications>,
     account_id: &str,
     stop: watch::Receiver<bool>,
     signals: PollSignals,
@@ -396,6 +439,12 @@ async fn run_loop(
     let Ok(client) = worker.resources().proton_client() else {
         return;
     };
+    // The answer the Verify sheet stored rides this run's first
+    // authenticated request, once (spec/04 "Human verification during
+    // sync"); the client keeps it out of logs and receipts.
+    if let Some((token, token_type)) = verifications.take_answer(account_id) {
+        client.verify_next_request(token, token_type);
+    }
     // Show the account's condition and next attempt while the client
     // waits out a retry (spec/07); its retry behaviour is unchanged.
     let statuses = Arc::clone(worker.statuses());
@@ -444,6 +493,7 @@ async fn run_loop(
             skipped: &mut skipped,
             send_backoff: &mut send_backoff,
             send_evidence: evidence,
+            verifications,
         };
         // A stop doesn't wait for a request in flight: a write already
         // submitted commits or not as a whole, and the next attempt
@@ -486,6 +536,7 @@ struct Attempt<'a> {
     worker: &'a Worker,
     sessions: &'a Sessions,
     opened: &'a ProtonOpened,
+    verifications: &'a ProtonVerifications,
     client: &'a ProtonClient,
     account_id: &'a str,
     stop: &'a watch::Receiver<bool>,
@@ -1326,6 +1377,16 @@ impl Attempt<'_> {
             .await;
         if paused.is_err() {
             return Halt::Retry;
+        }
+        // The pause persisted: hold what the 9001 carried for the
+        // Verify sheet. A body without a challenge means none can be
+        // answered, so any older one is dropped (spec/04 "Human
+        // verification during sync").
+        if let ProtonError::HumanVerificationRequired { challenge } = error {
+            match challenge {
+                Some(challenge) => self.verifications.hold(self.account_id, challenge.clone()),
+                None => self.verifications.forget(self.account_id),
+            }
         }
         self.worker.statuses().rows_changed();
         Halt::Ended

@@ -284,6 +284,61 @@ impl SignInState {
     }
 }
 
+/// The human verification `proton_verification(id)` reports for a
+/// sync account paused for human verification (spec/04 "Human
+/// verification during sync"). The URL carries Proton's token, so
+/// `Debug` redacts it (spec/10).
+#[derive(Clone, PartialEq, Eq)]
+pub struct ProtonVerificationChallenge {
+    pub url: String,
+    pub methods: Vec<String>,
+}
+
+impl fmt::Debug for ProtonVerificationChallenge {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ProtonVerificationChallenge")
+            .field("url", &"[redacted]")
+            .field("methods", &self.methods)
+            .finish()
+    }
+}
+
+impl ProtonVerificationChallenge {
+    fn from_engine(challenge: sb_engine::ProtonVerificationChallenge) -> Self {
+        Self {
+            url: challenge.url,
+            methods: challenge.methods,
+        }
+    }
+}
+
+/// The answer `verify_proton_account(key, id, answer)` takes: the
+/// token the verification page returned and its type. The token is a
+/// secret, so `Debug` redacts it (spec/10).
+#[derive(Clone, PartialEq, Eq)]
+pub struct ProtonVerificationAnswer {
+    pub token: String,
+    pub token_type: String,
+}
+
+impl fmt::Debug for ProtonVerificationAnswer {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ProtonVerificationAnswer")
+            .field("token", &"[redacted]")
+            .field("token_type", &self.token_type)
+            .finish()
+    }
+}
+
+impl ProtonVerificationAnswer {
+    fn into_engine(self) -> sb_engine::ProtonVerificationAnswer {
+        sb_engine::ProtonVerificationAnswer {
+            token: self.token,
+            token_type: self.token_type,
+        }
+    }
+}
+
 /// One step's answer to a challenge (spec/07).
 pub enum ProtonSignInStep {
     SecondFactor {
@@ -449,6 +504,41 @@ impl Core {
         let receipt = self
             .engine()
             .resume_account(idempotency_key, account_id)
+            .await?;
+        Ok(Receipt::from_engine(&receipt))
+    }
+
+    /// `proton_verification(id)` (spec/07, 04 "Human verification
+    /// during sync"): the challenge held for a Proton account that
+    /// needs human verification, or none for any other state, reason,
+    /// kind or an unknown account (`NotFound`).
+    pub async fn proton_verification(
+        &self,
+        account_id: &str,
+    ) -> Result<Option<ProtonVerificationChallenge>, CoreError> {
+        let challenge = self.engine().proton_verification(account_id).await?;
+        Ok(challenge.map(ProtonVerificationChallenge::from_engine))
+    }
+
+    /// `verify_proton_account(key, id, answer)` (spec/07, 04 "Human
+    /// verification during sync") under an idempotency key: the
+    /// account becomes active and its worker starts, carrying the
+    /// answer's token on its first request, once. A repeated key
+    /// answers its stored receipt and changes nothing. The token is
+    /// never logged or stored (spec/10).
+    pub async fn verify_proton_account(
+        &self,
+        idempotency_key: &str,
+        account_id: &str,
+        answer: Option<ProtonVerificationAnswer>,
+    ) -> Result<Receipt, CoreError> {
+        let receipt = self
+            .engine()
+            .verify_proton_account(
+                idempotency_key,
+                account_id,
+                answer.map(ProtonVerificationAnswer::into_engine),
+            )
             .await?;
         Ok(Receipt::from_engine(&receipt))
     }

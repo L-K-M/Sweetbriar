@@ -14,7 +14,8 @@ mod bodies;
 pub use accounts::{
     AddressMode, BeginProtonSignIn, BreakerResolution, BridgeAccountAdded, BridgeAccountParams,
     BridgeIdentity, CredentialPause, EndpointSecurity, IdentitySendable, ProtonSignInParams,
-    ProtonSignInStep, SignInState, certificate_fingerprint_from_pem,
+    ProtonSignInStep, ProtonVerificationAnswer, ProtonVerificationChallenge, SignInState,
+    certificate_fingerprint_from_pem,
 };
 pub use appearance::{
     AccountAppearance, AccountAppearanceChange, AccountColor, Appearance, AppearanceAssignment,

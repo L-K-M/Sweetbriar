@@ -98,6 +98,10 @@ pub struct Engine {
     /// The provider keys the user opened, per Proton account, most
     /// recent first (spec/04 "Acquire bodies"). In memory only.
     pub(crate) proton_opened: Arc<crate::proton_sync::ProtonOpened>,
+    /// The human-verification challenge and answer held per Proton
+    /// account (spec/04 "Human verification during sync"). In memory
+    /// only (spec/10).
+    pub(crate) proton_verifications: Arc<crate::proton_verification::ProtonVerifications>,
     /// The latest Proton evidence observed per unresolved send
     /// attempt, in memory only (spec/05 step 6, spec/07 `out_box()`).
     pub(crate) send_evidence: Arc<crate::proton_send::SendEvidence>,
@@ -668,6 +672,7 @@ impl Engine {
                         proton_sessions: Arc::default(),
                         proton_restore_done: Arc::new(tokio::sync::Notify::new()),
                         proton_opened: Arc::default(),
+                        proton_verifications: Arc::default(),
                         send_evidence: Arc::default(),
                         leases: Arc::default(),
                         search_memo: Arc::default(),

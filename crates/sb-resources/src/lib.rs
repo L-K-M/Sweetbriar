@@ -35,9 +35,9 @@ pub use sb_imap::{
 pub use sb_platform::{Secret, SecretError, SecretStore};
 pub use sb_store::accounts::{
     AddressMode, ConnectionPause, CredentialPause, EndpointSecurity, IdentitySendable,
-    ImapEndpoint, ImapProvider, clear_connection_pause, clear_imap_cursors, imap_endpoint,
-    pause_account, pause_for_connection, pause_for_credential, resume_account, syncable_accounts,
-    update_account,
+    ImapEndpoint, ImapProvider, activate_after_verification, clear_connection_pause,
+    clear_imap_cursors, imap_endpoint, pause_account, pause_for_connection, pause_for_credential,
+    resume_account, syncable_accounts, update_account,
 };
 mod bodies;
 pub use bodies::{AttachmentLease, BodyKind, BodyLease, PublishedAttachment, PublishedBody};
@@ -84,13 +84,13 @@ pub use proton::{
 pub use sb_proton::{
     ApiCode, AttachmentMetadata, AttachmentUpload, BackoffKind, CertificateDer, Challenge,
     Client as ProtonClient, DecryptError, Disposition, DraftAction, DraftAddress, DraftCreate,
-    DraftTemplate, EventAction, EventBatch, EventId, FinishedSignIn, FullMessage, Identity,
-    KeyStore, Label, LabelKind, ListingAnchor, MAX_PAGE_SIZE as PROTON_MAX_PAGE_SIZE,
-    MessageMetadata, MessageMutation, ModulusSignatureVerifier, MutationError,
-    ProtonDraftAttachment, ProtonError, RECIPIENT_TYPE_EXTERNAL, RECIPIENT_TYPE_INTERNAL,
-    RecipientKeys, RefusalKind, STARRED_LABEL_ID, SecretBuffer, SecretString, SendAttachment,
-    SendBody, SendError, SendPackages, SendRecipient, SendRefusal, SendTransportError, Session,
-    SignIn, SignInStep, Trust,
+    DraftTemplate, EventAction, EventBatch, EventId, FinishedSignIn, FullMessage,
+    HumanVerification, Identity, KeyStore, Label, LabelKind, ListingAnchor,
+    MAX_PAGE_SIZE as PROTON_MAX_PAGE_SIZE, MessageMetadata, MessageMutation,
+    ModulusSignatureVerifier, MutationError, ProtonDraftAttachment, ProtonError,
+    RECIPIENT_TYPE_EXTERNAL, RECIPIENT_TYPE_INTERNAL, RecipientKeys, RefusalKind, STARRED_LABEL_ID,
+    SecretBuffer, SecretString, SendAttachment, SendBody, SendError, SendPackages, SendRecipient,
+    SendRefusal, SendTransportError, Session, SignIn, SignInStep, Trust,
 };
 // The send lane's transport items (M4.3g): the lane drives the
 // submission calls and their crypto the way sb-proton's fake-server

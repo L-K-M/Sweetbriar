@@ -237,6 +237,14 @@ impl AccountJobs {
                 None => return,
             }
         }
+        self.wait_for_release(account_id).await;
+    }
+
+    /// Wait for an ending worker to release its claim, so a start that
+    /// follows it (a verification answer, a resume) gets the slot. A
+    /// worker paused by a refusal ends without another command waiting
+    /// for it, so its claim can otherwise outlive its last request.
+    pub(crate) async fn wait_for_release(&self, account_id: &str) {
         // The worker's release is the task's last act. A `Notified`
         // receives `notify_waiters` from its creation on, so a release
         // between the check and the await still wakes it.
