@@ -209,6 +209,16 @@ its label id appended, as in "Travel (l1)" for the label with id
 complete, per-mailbox local counts against Proton's totals, and the
 counts of messages with and without bodies (and with decryption
 failures). The UI says "Proton messages synced", with these numbers.
+`account_health` (07) carries it for each Proton account:
+- the listing's state: `none`, `listing` or `complete`, and whether a
+  running listing is a resync. A listing that starts over a complete
+  one keeps the event cursor, and only a `Refresh` starts one that way
+  (a restore clears the cursor first), so a listing with the cursor
+  kept is the resync of the table below;
+- each live mailbox by name, its present occurrences against Proton's
+  total from the last finished listing (none before one finished);
+- the account's messages, those with a body, and those with a
+  recorded body failure.
 
 ## Reconstruction
 
@@ -415,7 +425,7 @@ M3 and M5 qualify each call on the fake server and the
 | App identity refused (2064, 5003) | `needs_attention` | "Proton refused this version of Sweetbriar", with Proton's message |
 | A key couldn't be unlocked | `active` with a warning | Which address is affected; its messages show "Couldn't decrypt" |
 | Secret-store error | `needs_attention` | As for every account (10) |
-| Refresh or breaker event | `active` with an open event | "Proton asked Sweetbriar to resync" or "Review N disappeared messages" |
+| Refresh or breaker event | `active` with an open event | "Proton asked Sweetbriar to resync" while the resync's listing runs (Coverage), or "Review N disappeared messages" |
 | Healthy | `active` | Last sync time and coverage |
 
 None of these deletes local data. Every refusal records Proton's code

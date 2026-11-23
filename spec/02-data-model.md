@@ -268,7 +268,7 @@ CREATE TABLE proton_accounts (                        -- one per Proton API acco
   pending_cursor     TEXT,                            -- cursor read before the running bootstrap's listing
   listing_state      TEXT NOT NULL CHECK (listing_state IN ('none','listing','complete')),
   listing_checkpoint TEXT,                            -- last committed page's position while listing
-  refresh_count      INTEGER NOT NULL DEFAULT 0,      -- Proton refreshes applied
+  refresh_count      INTEGER NOT NULL DEFAULT 0,      -- Proton refreshes applied: +1 when a listing starts over a complete one
   diagnostics_json   TEXT,                            -- last refusal: {"v":1,"code":n,"message":"…","at":ms}, redacted (10)
   revision           INTEGER NOT NULL DEFAULT 1,
   CHECK ((listing_state = 'listing') = (pending_cursor IS NOT NULL)),
