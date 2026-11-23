@@ -226,9 +226,7 @@ final class OutBoxViewController: NSViewController, NSTableViewDataSource, NSTab
         guard let id, let row = model.rows.first(where: { $0.id == id }) else { return }
         let attempt = row.row
         for recipient in attempt.recipients {
-            addDetail(
-                "\(Self.field(recipient.kind)): \(recipient.address) — "
-                    + Self.stateWords(recipient.state))
+            addDetail(Self.recipientLine(recipient))
         }
         if let reply = attempt.finalReply, !reply.isEmpty {
             addDetail("Proton's reply: \(reply)")
@@ -433,6 +431,17 @@ final class OutBoxViewController: NSViewController, NSTableViewDataSource, NSTab
         case .retryRejectedRecipients:
             return ("Retry Rejected Recipients", "retryRejectedRecipients")
         }
+    }
+
+    /// One recipient's detail line: its field, address and state, and
+    /// "Not end-to-end encrypted" for one Proton was asked to send in
+    /// clear (spec/08 "Out Box", spec/05 step 1).
+    static func recipientLine(_ recipient: OutBoxRecipient) -> String {
+        let line =
+            "\(Self.field(recipient.kind)): \(recipient.address) — "
+            + Self.stateWords(recipient.state)
+        guard recipient.scheme == .clear else { return line }
+        return line + " · Not end-to-end encrypted"
     }
 
     private static func field(_ kind: RecipientKind) -> String {

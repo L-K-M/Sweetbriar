@@ -64,17 +64,41 @@ public enum RecipientState: Sendable, Equatable {
     }
 }
 
+/// A Proton recipient's package scheme (spec/02 `send_recipients.scheme`,
+/// spec/05 step 4): `internal` is encrypted to the recipient's Proton
+/// keys, `clear` is an external address Proton sends without end-to-end
+/// encryption.
+public enum RecipientScheme: Sendable, Equatable {
+    case `internal`
+    case clear
+
+    /// Map the generated enum case by case.
+    init(_ g: SweetbriarCore.RecipientScheme) {
+        switch g {
+        case .internal: self = .internal
+        case .clear: self = .clear
+        }
+    }
+}
+
 /// One recipient on an Out Box row (spec/07): the address as first
-/// written, its field and its stored state.
+/// written, its field, its stored state and, once a Proton send request
+/// has committed, its scheme.
 public struct OutBoxRecipient: Sendable, Equatable {
     public var address: String
     public var kind: RecipientKind
     public var state: RecipientState
+    /// None before the send request commits and for generic attempts.
+    public var scheme: RecipientScheme?
 
-    public init(address: String, kind: RecipientKind, state: RecipientState) {
+    public init(
+        address: String, kind: RecipientKind, state: RecipientState,
+        scheme: RecipientScheme? = nil
+    ) {
         self.address = address
         self.kind = kind
         self.state = state
+        self.scheme = scheme
     }
 
     /// Map the generated record field by field.
@@ -82,6 +106,7 @@ public struct OutBoxRecipient: Sendable, Equatable {
         address = g.address
         kind = RecipientKind(g.kind)
         state = RecipientState(g.state)
+        scheme = g.scheme.map(RecipientScheme.init)
     }
 }
 
