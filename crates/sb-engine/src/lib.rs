@@ -39,6 +39,7 @@ mod error;
 mod filing;
 mod flags;
 pub use flags::UndoToken;
+pub use sb_resources::SelectionFlags;
 mod health;
 #[cfg(test)]
 mod idempotency_tests;

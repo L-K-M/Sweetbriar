@@ -4,7 +4,41 @@
 
 use crate::{Core, CoreError, MessageSelection};
 
+/// A selection's flags as its list rows show them (spec/07
+/// `selection_flags`): its distinct occurrences, and how many of them
+/// are unread and flagged.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SelectionFlags {
+    pub count: u64,
+    pub unread: u64,
+    pub flagged: u64,
+}
+
+impl From<sb_engine::SelectionFlags> for SelectionFlags {
+    fn from(flags: sb_engine::SelectionFlags) -> Self {
+        Self {
+            count: flags.count,
+            unread: flags.unread,
+            flagged: flags.flagged,
+        }
+    }
+}
+
 impl Core {
+    /// `selection_flags(selection)` (spec/07 "Flags"): how many of the
+    /// selection's occurrences list as unread and as flagged, the
+    /// direction a toggle over a window token takes. Writes nothing.
+    pub async fn selection_flags(
+        &self,
+        selection: MessageSelection,
+    ) -> Result<SelectionFlags, CoreError> {
+        Ok(self
+            .engine()
+            .selection_flags(selection.into_engine())
+            .await?
+            .into())
+    }
+
     /// `set_flags(selection, add, remove)` (spec/07 "Flags") under an
     /// idempotency key: add or remove `\Seen` and `\Flagged` on the
     /// selection's logical messages, which must belong to one Proton

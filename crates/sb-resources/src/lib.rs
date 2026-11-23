@@ -217,8 +217,9 @@ pub use sb_store::lists::{
 };
 pub use sb_store::messages::{
     BodyAvailability, MAX_READER_HEADER_BYTES, MAX_READER_MESSAGE_BYTES, ReaderAddress,
-    ReaderHeaders, ReaderMessage, ReaderOccurrence, ReaderTag, StoredAcquisition, best_acquisition,
-    get_message, message_for_occurrence, messages_for_occurrences,
+    ReaderHeaders, ReaderMessage, ReaderOccurrence, ReaderTag, SelectionFlags, StoredAcquisition,
+    best_acquisition, get_message, message_for_occurrence, messages_for_occurrences,
+    selection_flags,
 };
 pub use sb_store::query::{
     AddressOperand, Kept, MAX_QUERY_INPUT_BYTES, ParseCode, ParseContext, Query, QueryCounts,

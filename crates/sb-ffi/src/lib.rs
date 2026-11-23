@@ -35,6 +35,7 @@ mod drafts;
 mod error;
 mod filing;
 mod flags;
+pub use flags::SelectionFlags;
 mod health;
 mod imports;
 mod intents;

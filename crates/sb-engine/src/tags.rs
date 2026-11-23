@@ -128,7 +128,22 @@ impl Engine {
         &self,
         selection: &MessageSelection,
     ) -> Result<Vec<i64>, EngineError> {
-        let ids = match selection {
+        let ids = self.selection_occurrences(selection).await?;
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        self.read_through(move |resources| resources.read(|tx| messages_for_occurrences(tx, &ids)))
+            .await
+    }
+
+    /// A selection's occurrence ids: the explicit ones, at most
+    /// [`MAX_SELECTION_IDS`], or a store-backed window's rows at its
+    /// generation (a stale one is `ResetRequired`).
+    pub(crate) async fn selection_occurrences(
+        &self,
+        selection: &MessageSelection,
+    ) -> Result<Vec<i64>, EngineError> {
+        Ok(match selection {
             MessageSelection::OccurrenceIds(ids) => {
                 if ids.len() > MAX_SELECTION_IDS {
                     return Err(EngineError::invalid_input(
@@ -146,7 +161,7 @@ impl Engine {
                 if !self.windows().store_backed(id) {
                     return Err(EngineError::invalid_input(
                         "selection",
-                        "a tag selection needs a store-backed window",
+                        "a selection needs a store-backed window",
                     ));
                 }
                 let index = self.window_ids(id).await?;
@@ -157,12 +172,7 @@ impl Engine {
                 }
                 index.ids().to_vec()
             }
-        };
-        if ids.is_empty() {
-            return Ok(Vec::new());
-        }
-        self.read_through(move |resources| resources.read(|tx| messages_for_occurrences(tx, &ids)))
-            .await
+        })
     }
 }
 

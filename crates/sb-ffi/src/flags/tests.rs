@@ -60,5 +60,23 @@ fn flag_refusals_name_their_field() {
         "{}".to_owned(),
     ));
     assert_eq!(field(undo.unwrap_err()), "token");
+
+    // The query answers an empty selection and refuses what set_flags
+    // refuses, on the same field.
+    let flags = |ids: Vec<i64>| {
+        block_on(core.selection_flags(CancelToken::new(), MessageSelection::OccurrenceIds(ids)))
+    };
+    assert_eq!(
+        flags(vec![]).unwrap(),
+        SelectionFlags {
+            count: 0,
+            unread: 0,
+            flagged: 0
+        }
+    );
+    assert_eq!(
+        field(flags((1..=1_001).collect()).unwrap_err()),
+        "selection"
+    );
     block_on(core.shutdown());
 }

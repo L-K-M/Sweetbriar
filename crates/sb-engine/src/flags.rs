@@ -8,9 +8,9 @@
 use std::collections::VecDeque;
 
 use sb_resources::{
-    FlagChange, IntentFlag, IntentOrigin, LocalMove, StoreError, WritePriority,
+    FlagChange, IntentFlag, IntentOrigin, LocalMove, SelectionFlags, StoreError, WritePriority,
     flag_selection_account, intent_for_undo, move_for_undo, plan_flag_intents, plan_move_undo,
-    proton_account, run_once, undo_local_move,
+    proton_account, run_once, selection_flags, undo_local_move,
 };
 
 use crate::engine::validate_idempotency_key;
@@ -161,6 +161,23 @@ impl Engine {
         // ask for it now rather than after the poll interval.
         self.account_jobs().wake();
         token_from_receipt(receipt.result_json())
+    }
+
+    /// `selection_flags(selection)` (spec/07 "Flags"): how many of the
+    /// selection's occurrences there are and how many list as unread
+    /// and as flagged, so a toggle over a window token knows its
+    /// direction. It resolves the selection as `set_flags` does and
+    /// writes nothing.
+    pub async fn selection_flags(
+        &self,
+        selection: MessageSelection,
+    ) -> Result<SelectionFlags, EngineError> {
+        let ids = self.selection_occurrences(&selection).await?;
+        if ids.is_empty() {
+            return Ok(SelectionFlags::default());
+        }
+        self.read_through(move |resources| resources.read(|tx| selection_flags(tx, &ids)))
+            .await
     }
 
     /// `set_flags(selection, add, remove)` (spec/07 "Flags"): add or
