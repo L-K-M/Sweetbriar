@@ -59,10 +59,13 @@ final class ComposeFlowTests: XCTestCase {
         defer { relaunched.terminate() }
         let window = relaunched.windows["Sweetbriar"]
         window.outlines["sidebar"].staticTexts["Drafts (local)"].click()
-        // The row's accessibility label reads subject, recipients, time.
+        // The row's accessibility label reads subject, From identity
+        // (this archive has no accounts, so none), recipients, time.
         let row = window.tables["draftsList"].cells.firstMatch
         XCTAssertTrue(row.waitForExistence(timeout: Self.timeout))
-        XCTAssertTrue(row.label.hasPrefix("\(Self.subject)!, \(Self.recipient), "), row.label)
+        XCTAssertTrue(
+            row.label.hasPrefix("\(Self.subject)!, No sending identity, \(Self.recipient), "),
+            row.label)
         row.doubleClick()
 
         let reopened = relaunched.windows.matching(NSPredicate(format: "identifier BEGINSWITH 'compose-'"))
