@@ -984,7 +984,12 @@ impl Attempt<'_> {
             .await
             .map_err(|_| Halt::Stopped)?;
         match committed {
-            Ok(_) => Ok(()),
+            Ok(_) => {
+                // A body changes the account's coverage (spec/07
+                // `account_health`): wake its subscription.
+                self.worker.statuses().rows_changed();
+                Ok(())
+            }
             Err(failure) => match failure.reason() {
                 Some(_) => {
                     self.record_failure(body.message_id, failure, key_generation)

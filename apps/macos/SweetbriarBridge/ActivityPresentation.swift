@@ -5,6 +5,8 @@
 //   Offline                          Next retry in 30 seconds
 //   Proton asked Sweetbriar to slow down   Until 2:37 PM
 //   Review 12 disappeared messages
+//   Proton messages synced           1,210 messages, 1,204 with bodies
+//   Inbox                            1,204 of 1,210
 
 import Foundation
 
@@ -34,7 +36,12 @@ public struct ActivityPresentation: Sendable {
         let relativeFormatter = RelativeDateTimeFormatter()
         relativeFormatter.locale = locale
         relativeFormatter.unitsStyle = .full
-        self.formatters = Formatters(time: timeFormatter, relative: relativeFormatter)
+        let countFormatter = NumberFormatter()
+        countFormatter.locale = locale
+        countFormatter.numberStyle = .decimal
+        self.formatters = Formatters(
+            time: timeFormatter, relative: relativeFormatter, count: countFormatter
+        )
     }
 
     /// An account's condition as spec/04's table tells it. `lastSync`
@@ -86,6 +93,39 @@ public struct ActivityPresentation: Sendable {
             + (event.disappeared == 1 ? "message" : "messages")
     }
 
+    /// A Proton account's sync coverage (spec/04-sync-proton "Coverage"):
+    /// "Proton messages synced" once a listing completed, "Proton asked
+    /// Sweetbriar to resync" while a refresh's listing runs, and "Listing
+    /// Proton messages" during the first one. The detail counts the
+    /// messages, those with a body and those whose body failed.
+    public func protonCoverage(_ coverage: ProtonCoverage) -> ActivityLine {
+        let title: String
+        if coverage.resync {
+            title = "Proton asked Sweetbriar to resync"
+        } else if coverage.listing == .complete {
+            title = "Proton messages synced"
+        } else {
+            title = "Listing Proton messages"
+        }
+        var detail = "\(count(coverage.messages)) "
+            + (coverage.messages == 1 ? "message" : "messages")
+            + ", \(count(coverage.withBody)) with bodies"
+        if coverage.bodyFailures > 0 {
+            detail += ", \(count(coverage.bodyFailures)) couldn't be read"
+        }
+        return ActivityLine(title: title, detail: detail)
+    }
+
+    /// One mailbox against Proton: "1,204 of 1,210", or the local count
+    /// alone before a listing finished.
+    public func protonMailbox(_ mailbox: ProtonMailboxCoverage) -> ActivityLine {
+        let local = count(mailbox.local)
+        guard let total = mailbox.remoteTotal else {
+            return ActivityLine(title: mailbox.name, detail: local)
+        }
+        return ActivityLine(title: mailbox.name, detail: "\(local) of \(count(total))")
+    }
+
     /// Whether the row offers "Sign in again": a disconnected account
     /// and a refused refresh both sign in again (spec/07).
     public static func offersSignInAgain(_ condition: AccountCondition) -> Bool {
@@ -126,6 +166,10 @@ public struct ActivityPresentation: Sendable {
         formatters.relative.localizedString(for: date, relativeTo: now)
     }
 
+    private func count(_ value: UInt64) -> String {
+        formatters.count.string(from: NSNumber(value: value)) ?? String(value)
+    }
+
     /// What the intent does, as the list names it.
     private static func intentKind(_ kind: IntentKind) -> String {
         switch kind {
@@ -159,9 +203,10 @@ public struct ActivityPresentation: Sendable {
         }
     }
 
-    /// Two immutable formatters, built once per presentation value.
+    /// Immutable formatters, built once per presentation value.
     private struct Formatters: @unchecked Sendable {
         let time: DateFormatter
         let relative: RelativeDateTimeFormatter
+        let count: NumberFormatter
     }
 }

@@ -124,4 +124,44 @@ struct ActivityPresentationTests {
         #expect(
             p.recovery(activityRecoveryRow(state: .superseded), now: now).title == "Superseded")
     }
+
+    /// spec/04-sync-proton "Coverage": the listing names the line, the
+    /// counts follow, and a mailbox shows Proton's total once known.
+    @Test
+    func protonCoverageNamesTheListingAndCounts() {
+        let p = ActivityPresentation(locale: Locale(identifier: "en_US"), timeZone: timeZone)
+        var coverage = ProtonCoverage(
+            listing: .complete, resync: false, mailboxes: [],
+            messages: 1_210, withBody: 1_204, bodyFailures: 0
+        )
+        #expect(
+            p.protonCoverage(coverage)
+                == ActivityLine(
+                    title: "Proton messages synced", detail: "1,210 messages, 1,204 with bodies"))
+        coverage.bodyFailures = 2
+        #expect(
+            p.protonCoverage(coverage).detail
+                == "1,210 messages, 1,204 with bodies, 2 couldn't be read")
+        coverage.listing = .listing
+        #expect(p.protonCoverage(coverage).title == "Listing Proton messages")
+        coverage.resync = true
+        #expect(p.protonCoverage(coverage).title == "Proton asked Sweetbriar to resync")
+        coverage.listing = .none
+        coverage.resync = false
+        coverage.messages = 1
+        coverage.withBody = 0
+        coverage.bodyFailures = 0
+        #expect(
+            p.protonCoverage(coverage)
+                == ActivityLine(title: "Listing Proton messages", detail: "1 message, 0 with bodies"))
+
+        #expect(
+            p.protonMailbox(
+                ProtonMailboxCoverage(mailboxId: 1, name: "Inbox", local: 1_204, remoteTotal: 1_210))
+                == ActivityLine(title: "Inbox", detail: "1,204 of 1,210"))
+        #expect(
+            p.protonMailbox(
+                ProtonMailboxCoverage(mailboxId: 2, name: "Travel", local: 3, remoteTotal: nil))
+                == ActivityLine(title: "Travel", detail: "3"))
+    }
 }

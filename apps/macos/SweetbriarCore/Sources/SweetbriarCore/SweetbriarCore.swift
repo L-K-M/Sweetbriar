@@ -4883,11 +4883,18 @@ public struct AccountHealth: Equatable, Hashable {
     public var warnings: [String]
     public var breakerEvents: [AccountBreakerEvent]
     public var coverage: Coverage
+    /**
+     * A Proton account's sync coverage; none for another kind.
+     */
+    public var proton: ProtonCoverage?
     public var lastSyncMs: Int64?
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(accountId: String, state: AccountState, stateReason: String?, condition: AccountCondition, warnings: [String], breakerEvents: [AccountBreakerEvent], coverage: Coverage, lastSyncMs: Int64?) {
+    public init(accountId: String, state: AccountState, stateReason: String?, condition: AccountCondition, warnings: [String], breakerEvents: [AccountBreakerEvent], coverage: Coverage, 
+        /**
+         * A Proton account's sync coverage; none for another kind.
+         */proton: ProtonCoverage?, lastSyncMs: Int64?) {
         self.accountId = accountId
         self.state = state
         self.stateReason = stateReason
@@ -4895,6 +4902,7 @@ public struct AccountHealth: Equatable, Hashable {
         self.warnings = warnings
         self.breakerEvents = breakerEvents
         self.coverage = coverage
+        self.proton = proton
         self.lastSyncMs = lastSyncMs
     }
 
@@ -4921,6 +4929,7 @@ public struct FfiConverterTypeAccountHealth: FfiConverterRustBuffer {
                 warnings: FfiConverterSequenceString.read(from: &buf), 
                 breakerEvents: FfiConverterSequenceTypeAccountBreakerEvent.read(from: &buf), 
                 coverage: FfiConverterTypeCoverage.read(from: &buf), 
+                proton: FfiConverterOptionTypeProtonCoverage.read(from: &buf), 
                 lastSyncMs: FfiConverterOptionInt64.read(from: &buf)
         )
     }
@@ -4933,6 +4942,7 @@ public struct FfiConverterTypeAccountHealth: FfiConverterRustBuffer {
         FfiConverterSequenceString.write(value.warnings, into: &buf)
         FfiConverterSequenceTypeAccountBreakerEvent.write(value.breakerEvents, into: &buf)
         FfiConverterTypeCoverage.write(value.coverage, into: &buf)
+        FfiConverterOptionTypeProtonCoverage.write(value.proton, into: &buf)
         FfiConverterOptionInt64.write(value.lastSyncMs, into: &buf)
     }
 }
@@ -8636,6 +8646,170 @@ public func FfiConverterTypeParseContext_lift(_ buf: RustBuffer) throws -> Parse
 #endif
 public func FfiConverterTypeParseContext_lower(_ value: ParseContext) -> RustBuffer {
     return FfiConverterTypeParseContext.lower(value)
+}
+
+
+/**
+ * A Proton account's sync coverage (spec/04-sync-proton "Coverage"):
+ * what "Proton messages synced" shows.
+ */
+public struct ProtonCoverage: Equatable, Hashable {
+    public var listing: ProtonListing
+    /**
+     * The running listing is the resync a Proton `Refresh` asked for.
+     */
+    public var resync: Bool
+    /**
+     * Live mailboxes, by name.
+     */
+    public var mailboxes: [ProtonMailboxCoverage]
+    public var messages: UInt64
+    public var withBody: UInt64
+    public var bodyFailures: UInt64
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(listing: ProtonListing, 
+        /**
+         * The running listing is the resync a Proton `Refresh` asked for.
+         */resync: Bool, 
+        /**
+         * Live mailboxes, by name.
+         */mailboxes: [ProtonMailboxCoverage], messages: UInt64, withBody: UInt64, bodyFailures: UInt64) {
+        self.listing = listing
+        self.resync = resync
+        self.mailboxes = mailboxes
+        self.messages = messages
+        self.withBody = withBody
+        self.bodyFailures = bodyFailures
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension ProtonCoverage: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeProtonCoverage: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ProtonCoverage {
+        return
+            try ProtonCoverage(
+                listing: FfiConverterTypeProtonListing.read(from: &buf), 
+                resync: FfiConverterBool.read(from: &buf), 
+                mailboxes: FfiConverterSequenceTypeProtonMailboxCoverage.read(from: &buf), 
+                messages: FfiConverterUInt64.read(from: &buf), 
+                withBody: FfiConverterUInt64.read(from: &buf), 
+                bodyFailures: FfiConverterUInt64.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: ProtonCoverage, into buf: inout [UInt8]) {
+        FfiConverterTypeProtonListing.write(value.listing, into: &buf)
+        FfiConverterBool.write(value.resync, into: &buf)
+        FfiConverterSequenceTypeProtonMailboxCoverage.write(value.mailboxes, into: &buf)
+        FfiConverterUInt64.write(value.messages, into: &buf)
+        FfiConverterUInt64.write(value.withBody, into: &buf)
+        FfiConverterUInt64.write(value.bodyFailures, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeProtonCoverage_lift(_ buf: RustBuffer) throws -> ProtonCoverage {
+    return try FfiConverterTypeProtonCoverage.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeProtonCoverage_lower(_ value: ProtonCoverage) -> RustBuffer {
+    return FfiConverterTypeProtonCoverage.lower(value)
+}
+
+
+/**
+ * One live mailbox's count against Proton's (spec/04-sync-proton
+ * "Coverage").
+ */
+public struct ProtonMailboxCoverage: Equatable, Hashable {
+    public var mailboxId: Int64
+    public var name: String
+    /**
+     * Present occurrences in the mailbox.
+     */
+    public var local: UInt64
+    /**
+     * Proton's total from the last finished listing; none before one.
+     */
+    public var remoteTotal: UInt64?
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(mailboxId: Int64, name: String, 
+        /**
+         * Present occurrences in the mailbox.
+         */local: UInt64, 
+        /**
+         * Proton's total from the last finished listing; none before one.
+         */remoteTotal: UInt64?) {
+        self.mailboxId = mailboxId
+        self.name = name
+        self.local = local
+        self.remoteTotal = remoteTotal
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension ProtonMailboxCoverage: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeProtonMailboxCoverage: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ProtonMailboxCoverage {
+        return
+            try ProtonMailboxCoverage(
+                mailboxId: FfiConverterInt64.read(from: &buf), 
+                name: FfiConverterString.read(from: &buf), 
+                local: FfiConverterUInt64.read(from: &buf), 
+                remoteTotal: FfiConverterOptionUInt64.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: ProtonMailboxCoverage, into buf: inout [UInt8]) {
+        FfiConverterInt64.write(value.mailboxId, into: &buf)
+        FfiConverterString.write(value.name, into: &buf)
+        FfiConverterUInt64.write(value.local, into: &buf)
+        FfiConverterOptionUInt64.write(value.remoteTotal, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeProtonMailboxCoverage_lift(_ buf: RustBuffer) throws -> ProtonMailboxCoverage {
+    return try FfiConverterTypeProtonMailboxCoverage.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeProtonMailboxCoverage_lower(_ value: ProtonMailboxCoverage) -> RustBuffer {
+    return FfiConverterTypeProtonMailboxCoverage.lower(value)
 }
 
 
@@ -14268,6 +14442,82 @@ public func FfiConverterTypePasteLoss_lower(_ value: PasteLoss) -> RustBuffer {
 
 
 /**
+ * A Proton account's listing (spec/02 `proton_accounts.listing_state`).
+ */
+
+public enum ProtonListing: Equatable, Hashable {
+    
+    case none
+    case listing
+    case complete
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension ProtonListing: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeProtonListing: FfiConverterRustBuffer {
+    typealias SwiftType = ProtonListing
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ProtonListing {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .none
+        
+        case 2: return .listing
+        
+        case 3: return .complete
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: ProtonListing, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .none:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .listing:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .complete:
+            writeInt(&buf, Int32(3))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeProtonListing_lift(_ buf: RustBuffer) throws -> ProtonListing {
+    return try FfiConverterTypeProtonListing.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeProtonListing_lower(_ value: ProtonListing) -> RustBuffer {
+    return FfiConverterTypeProtonListing.lower(value)
+}
+
+
+
+/**
  * The next state of a Proton sign-in (spec/07).
  */
 
@@ -16870,6 +17120,30 @@ fileprivate struct FfiConverterOptionTypeLiveAttempt: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterOptionTypeProtonCoverage: FfiConverterRustBuffer {
+    typealias SwiftType = ProtonCoverage?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeProtonCoverage.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeProtonCoverage.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterOptionTypeSearchRebuildProgress: FfiConverterRustBuffer {
     typealias SwiftType = SearchRebuildProgress?
 
@@ -17603,6 +17877,31 @@ fileprivate struct FfiConverterSequenceTypePaletteColor: FfiConverterRustBuffer 
         seq.reserveCapacity(Int(len))
         for _ in 0 ..< len {
             seq.append(try FfiConverterTypePaletteColor.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeProtonMailboxCoverage: FfiConverterRustBuffer {
+    typealias SwiftType = [ProtonMailboxCoverage]
+
+    public static func write(_ value: [ProtonMailboxCoverage], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeProtonMailboxCoverage.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [ProtonMailboxCoverage] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [ProtonMailboxCoverage]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeProtonMailboxCoverage.read(from: &buf))
         }
         return seq
     }
