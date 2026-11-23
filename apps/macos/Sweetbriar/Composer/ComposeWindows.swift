@@ -32,12 +32,17 @@ final class ComposeWindows {
     var onWindowsChanged: (@MainActor () -> Void)?
     private var quitting: Task<Bool, Never>?
     private var isQuitting = false
+    /// spec/08's `open_compose` span, from the command to the editor
+    /// taking keystrokes.
+    private let latency: LatencyRecorder
 
     init(
         backups: SharedBackups, appearance: SharedAppearance, cues: SharedComposeCue,
         openCore: @escaping @MainActor () async throws -> any ComposeSource,
-        reportError: @escaping @MainActor (Action, any Error) -> Void
+        reportError: @escaping @MainActor (Action, any Error) -> Void,
+        latency: LatencyRecorder = .shared
     ) {
+        self.latency = latency
         self.backups = backups
         self.appearance = appearance
         self.cues = cues
@@ -62,6 +67,7 @@ final class ComposeWindows {
     /// for a new message and a reply or forward.
     private func create(source: DraftSource, preferredAccountId: String?) {
         guard !isQuitting, backups.beginCompose() else { return }
+        let span = latency.begin(.openCompose)
         let request = UUID()
         pending[request] = Task { [self] in
             defer { pending[request] = nil }
@@ -76,13 +82,24 @@ final class ComposeWindows {
                 }
                 let created = try await core.createDraft(
                     idempotencyKey: request.uuidString, source: source)
-                install(
+                let controller = install(
                     created.draftId, source: core, cue: cue,
                     preferredAccountId: preferredAccountId)
+                if let span { measureOpen(span, of: controller) }
             } catch {
                 backups.endCompose()
                 if !isQuitting { reportError(.create, error) }
             }
+        }
+    }
+
+    /// spec/08's `open_compose` span ends once the window's draft has
+    /// loaded and its editor takes keystrokes; quit doesn't wait for it.
+    private func measureOpen(_ span: LatencySpan, of controller: ComposeWindowController) {
+        Task { [latency] in
+            await controller.waitForLoad()
+            guard controller.textView.isEditable, let content = controller.window?.contentView else { return }
+            latency.end(span, shownIn: content)
         }
     }
 

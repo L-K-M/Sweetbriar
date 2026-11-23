@@ -100,7 +100,17 @@ where Proton differs.
   four requests per second per account in the background. Interactive
   requests (opening a message) go first.
 - **Timeouts:** 30 s per request; 120 s per body or attachment download,
-  scaled for large ones.
+  scaled for large ones:
+  - 120 s through 1 MiB, plus 1 s for each further 100 KiB or part of
+    it, up to 30 MiB (417 s);
+  - the size is the larger of the announced length and the bytes read
+    so far. The deadline runs from the first read and can only move
+    later, never restart;
+  - 30 s without data ends either download sooner;
+  - a message's response is read up to 100 MiB (10's per-message
+    limit) and an attachment's up to 30 MiB. A download past its bound
+    is never truncated: the body's failure is recorded as `too_large`
+    (02 `proton_body_failures`) and the queue moves on.
 - **Backoff:** 429 and 503 wait for `Retry-After` (at least 1 s, at most
   1 h), then retry. Network errors back off exponentially from 1 s to
   5 min, and, as for IMAP, a session that hasn't completed a pass
@@ -209,6 +219,16 @@ its label id appended, as in "Travel (l1)" for the label with id
 complete, per-mailbox local counts against Proton's totals, and the
 counts of messages with and without bodies (and with decryption
 failures). The UI says "Proton messages synced", with these numbers.
+`account_health` (07) carries it for each Proton account:
+- the listing's state: `none`, `listing` or `complete`, and whether a
+  running listing is a resync. A listing that starts over a complete
+  one keeps the event cursor, and only a `Refresh` starts one that way
+  (a restore clears the cursor first), so a listing with the cursor
+  kept is the resync of the table below;
+- each live mailbox by name, its present occurrences against Proton's
+  total from the last finished listing (none before one finished);
+- the account's messages, those with a body, and those with a
+  recorded body failure.
 
 ## Reconstruction
 
@@ -415,7 +435,7 @@ M3 and M5 qualify each call on the fake server and the
 | App identity refused (2064, 5003) | `needs_attention` | "Proton refused this version of Sweetbriar", with Proton's message |
 | A key couldn't be unlocked | `active` with a warning | Which address is affected; its messages show "Couldn't decrypt" |
 | Secret-store error | `needs_attention` | As for every account (10) |
-| Refresh or breaker event | `active` with an open event | "Proton asked Sweetbriar to resync" or "Review N disappeared messages" |
+| Refresh or breaker event | `active` with an open event | "Proton asked Sweetbriar to resync" while the resync's listing runs (Coverage), or "Review N disappeared messages" |
 | Healthy | `active` | Last sync time and coverage |
 
 None of these deletes local data. Every refusal records Proton's code
@@ -423,3 +443,26 @@ and message in the account's diagnostics (redacted, 10): the worker
 keeps Proton's numeric code when it maps a refusal. A paused account
 (07 `pause_account`) runs no worker and makes no request; its row reads
 "Paused". `account_health` (07) answers this table.
+
+**Human verification during sync.** Proton may answer any
+authenticated request with 9001.
+
+- The worker stops and the account becomes `needs_attention` with
+  "Proton asks you to verify". The engine keeps Proton's challenge
+  (its verification URL and methods, as in sign-in) in memory for that
+  account. The URL carries Proton's token, so it is never logged,
+  stored or put in the diagnostics package (10). A relaunch, a sign-in
+  again or a disconnect forgets it.
+- **Verify…** on the account's health row (08) reads the held
+  challenge (`proton_verification`, 07) and opens the verification
+  sheet sign-in uses. The token Proton hands back goes to
+  `verify_proton_account` (07): the account becomes `active`, its
+  worker starts, and the worker's first request carries the token in
+  Proton's verification headers, once.
+- **Without a held challenge** (after a relaunch), the row offers "Try
+  Again": `verify_proton_account` without a token makes the account
+  `active` and starts its worker, which meets Proton's challenge again
+  if Proton still asks.
+- If Proton asks again, or refuses the token (12087) and then asks
+  again, the account returns to `needs_attention` with the new
+  challenge. Nothing after a 9001 is retried automatically.

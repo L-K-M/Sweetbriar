@@ -89,9 +89,12 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         self.readingViewMemory = readingViewMemory
         self.openBackups = openBackups
         self.openDraft = openDraft
+        // Not full-size content: the panes start below the toolbar, and
+        // AppKit would blur a title bar's height of them as if they ran
+        // under it.
         let window = NSWindow(
             contentRect: NSRect(origin: .zero, size: Self.defaultContentSize),
-            styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
+            styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered,
             defer: false
         )
@@ -303,12 +306,15 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
                                                      writes: writes, canWrite: { policy.canWrite })
         let reader = ReaderViewController(
             model: ReaderModel(source: bridge, preferred: .sanitizedHtml),
-            memory: readingViewMemory.model(source: bridge)
+            memory: readingViewMemory.model(source: bridge),
+            appearance: appearanceModel
         )
         self.reader = reader
-        let drafts = DraftsListViewController(model: DraftListModel(source: bridge))
+        let drafts = DraftsListViewController(
+            model: DraftListModel(source: bridge, catalog: bridge), appearance: appearanceModel)
         let outBox = OutBoxViewController(
-            model: OutBoxModel(source: bridge, canWrite: { policy.canWrite }))
+            model: OutBoxModel(source: bridge, catalog: bridge, canWrite: { policy.canWrite }),
+            appearance: appearanceModel)
         let listPane = ListPaneController(messages: messageList, drafts: drafts, outBox: outBox)
         drafts.onOpen = { [weak self] id in
             guard let self, contentSerial == serial else { return }
@@ -381,8 +387,6 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         root.view.addSubview(banner)
         root.view.addSubview(split.view)
         NSLayoutConstraint.activate([
-            // Below the toolbar, which the full-size content view
-            // would otherwise draw over the panes.
             banner.topAnchor.constraint(equalTo: root.view.safeAreaLayoutGuide.topAnchor),
             banner.leadingAnchor.constraint(equalTo: root.view.leadingAnchor),
             banner.trailingAnchor.constraint(equalTo: root.view.trailingAnchor),

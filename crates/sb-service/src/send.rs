@@ -71,13 +71,34 @@ impl RecipientState {
     }
 }
 
+/// A Proton recipient's package scheme (spec/02 "Sending", spec/05
+/// step 4): `internal` encrypted to its Proton keys, `clear` an
+/// external address sent without end-to-end encryption. None before
+/// the send request commits and for generic attempts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecipientScheme {
+    Internal,
+    Clear,
+}
+
+impl RecipientScheme {
+    fn from_engine(scheme: sb_engine::RecipientScheme) -> Self {
+        match scheme {
+            sb_engine::RecipientScheme::Internal => Self::Internal,
+            sb_engine::RecipientScheme::Clear => Self::Clear,
+        }
+    }
+}
+
 /// One recipient on an Out Box row (spec/07): the address as first
-/// written, its field and its stored state.
+/// written, its field, its stored state and, once the send request
+/// committed, its Proton scheme.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OutBoxRecipient {
     pub address: String,
     pub kind: RecipientKind,
     pub state: RecipientState,
+    pub scheme: Option<RecipientScheme>,
 }
 
 impl OutBoxRecipient {
@@ -86,6 +107,7 @@ impl OutBoxRecipient {
             address: recipient.address,
             kind: RecipientKind::from_engine(recipient.kind),
             state: RecipientState::from_engine(recipient.state),
+            scheme: recipient.scheme.map(RecipientScheme::from_engine),
         }
     }
 }
@@ -98,6 +120,8 @@ pub struct OutBoxRow {
     pub draft_id: String,
     pub account_id: String,
     pub identity_id: String,
+    /// The sending address the attempt froze (`envelope_from`, spec/07).
+    pub envelope_from: String,
     pub subject: String,
     pub recipients: Vec<OutBoxRecipient>,
     pub state: AttemptState,
@@ -137,6 +161,7 @@ impl OutBoxRow {
             draft_id: row.draft_id,
             account_id: row.account_id,
             identity_id: row.identity_id,
+            envelope_from: row.envelope_from,
             subject: row.subject,
             recipients: row
                 .recipients

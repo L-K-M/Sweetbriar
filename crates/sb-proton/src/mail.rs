@@ -13,7 +13,10 @@ use serde::{Deserialize, Deserializer};
 use serde_json::Value;
 
 use crate::auth::Session;
-use crate::client::{Client, Priority, code_of, error_message, read_response_bounded};
+use crate::client::{
+    Client, Priority, code_of, details_of, error_message, expect_success, read_response_bounded,
+    read_response_message,
+};
 use crate::error::ProtonError;
 
 /// `GET /core/v4/labels` (research `mail-sync.md` §1).
@@ -33,6 +36,10 @@ pub const ATTACHMENT_PATH: &str = "/mail/v4/attachments";
 /// The bound on one attachment data packet: 30 MiB. A larger body is a
 /// typed failure, never a truncated return (spec/04 step 3).
 pub const MAX_ATTACHMENT_BYTES: u64 = 30 * 1024 * 1024;
+/// The bound on one message response, whose encrypted body it carries:
+/// 100 MiB, spec/10's per-message limit. A larger one is a typed
+/// failure, never a truncated return (spec/04 "Timeouts").
+pub const MAX_MESSAGE_BYTES: u64 = 100 * 1024 * 1024;
 /// The largest page the transport asks for (research `mail-sync.md`
 /// §3: go-proton-api's client page size).
 pub const MAX_PAGE_SIZE: u32 = 150;
@@ -649,8 +656,21 @@ impl Client {
     pub async fn message(&self, session: &Session, id: &str) -> Result<FullMessage, ProtonError> {
         validate_path_id(id)?;
         let path = format!("{MESSAGE_PATH}/{id}");
+        // Not `get_json`: a body gets the download deadline, not 30 s.
+        let answer = self
+            .send(
+                Method::GET,
+                &path,
+                None,
+                Priority::Background,
+                Some((session.uid(), session.expose_access_token())),
+                &[],
+            )
+            .await?;
+        let (status, bytes) = read_response_message(answer).await?;
+        expect_success(status, &bytes)?;
         let response: FullMessageResponse =
-            self.get_json(&path, session, Priority::Background).await?;
+            serde_json::from_slice(&bytes).map_err(|e| ProtonError::decode(&path, e))?;
         let message = response.message;
         let metadata = MessageMetadata::from_value(message.clone(), &path)?;
         if metadata.id != id {
@@ -696,6 +716,11 @@ impl Client {
             let message = error_message(&bytes);
             return Err(
                 match code_of(&bytes).and_then(crate::error::ApiCode::from_i64) {
+                    Some(crate::error::ApiCode::HumanVerificationRequired) => {
+                        ProtonError::HumanVerificationRequired {
+                            challenge: crate::auth::sync_human_verification(&details_of(&bytes)),
+                        }
+                    }
                     Some(api) => {
                         ProtonError::from_api(api, &message).unwrap_or(ProtonError::Unavailable {
                             message: message.clone(),

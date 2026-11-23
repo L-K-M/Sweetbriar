@@ -21,7 +21,7 @@ fn scratch_engine(label: &str) -> (ScratchDir, Engine) {
 fn settings_default_to_the_registry() {
     let (_scratch, engine) = scratch_engine("engine-defaults");
     let settings = sb_test_support::block_on(engine.settings()).unwrap();
-    assert_eq!(settings.len(), 7, "the registry holds seven keys");
+    assert_eq!(settings.len(), 8, "the registry holds eight keys");
     assert_eq!(settings[0].key(), "appearance.compose_cue");
     assert_eq!(settings[0].value(), "standard");
     assert!(settings[0].is_default());
@@ -43,6 +43,9 @@ fn settings_default_to_the_registry() {
     assert_eq!(settings[6].key(), "filing.recent_mailboxes");
     assert_eq!(settings[6].value(), "");
     assert!(settings[6].is_default());
+    assert_eq!(settings[7].key(), "identity.default");
+    assert_eq!(settings[7].value(), "");
+    assert!(settings[7].is_default());
 }
 
 /// An unknown key and an unknown value are `InvalidInput`, each naming
@@ -98,6 +101,22 @@ fn set_then_settings_shows_it_and_revision_increments() {
     // Set back to the default by an explicit write: the effective
     // value is the default again.
     assert!(settings[0].is_default());
+}
+
+/// Every mode spec/02 lists for the compose cue is accepted.
+#[test]
+fn the_compose_cue_takes_each_of_its_modes() {
+    let (_scratch, engine) = scratch_engine("engine-cue-modes");
+    for mode in ["strong", "minimal", "standard"] {
+        sb_test_support::block_on(engine.set_setting(
+            &engine.new_idempotency_key(),
+            "appearance.compose_cue",
+            mode,
+        ))
+        .unwrap();
+        let settings = sb_test_support::block_on(engine.settings()).unwrap();
+        assert_eq!(settings[0].value(), mode);
+    }
 }
 
 /// A repeated idempotency key returns the first receipt without

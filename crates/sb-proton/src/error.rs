@@ -4,6 +4,8 @@
 
 use std::fmt;
 
+use crate::auth::HumanVerification;
+
 /// Which sign-in field a refusal applies to (spec/07's sign-in
 /// refusals). A wrong password or code is correctable and the
 /// conversation continues; the other fields name the account itself.
@@ -138,11 +140,14 @@ pub enum ProtonError {
     /// The modulus signature did not verify with Proton's embedded key;
     /// sign-in aborted before `/auth/v4` (spec/10).
     ModulusSignatureInvalid,
-    /// 9001 outside the sign-in conversation (an authenticated endpoint
-    /// asked for human verification). Only the sign-in conversation
-    /// parses the verification details, into its `Challenge`; this
-    /// mapper sees Proton's `Error` text alone.
-    HumanVerificationRequired,
+    /// 9001: an authenticated request asked for human verification.
+    /// `challenge` carries Proton's details when the response body had
+    /// them; `ProtonError::from_api` sees only Proton's `Error` text
+    /// and answers `None`. The URL carries a token, so it is never
+    /// printed (spec/04 "Human verification during sync", spec/10).
+    HumanVerificationRequired {
+        challenge: Option<HumanVerification>,
+    },
     /// A refusal Proton answered with a numeric API code: an
     /// anti-abuse block, this app's identity/version being refused, a
     /// paid-plan gate, an invalid value, or a device-verification or
@@ -176,9 +181,10 @@ pub enum ProtonError {
     /// different message than the one requested. spec/04 step 3: the id
     /// must equal `provider_key`; anything else is refused.
     UnexpectedMessage,
-    /// An attachment data packet grew past the download bound. It is a
-    /// typed failure, never a truncated return (spec/04 step 3).
-    AttachmentTooLarge,
+    /// A message response or an attachment data packet grew past its
+    /// download bound. It is a typed failure, never a truncated return
+    /// (spec/04 "Timeouts").
+    DownloadTooLarge,
     /// The request exceeded its deadline: 30 s, or a bounded body
     /// read's whole-body deadline.
     Timeout,
@@ -207,7 +213,9 @@ impl ProtonError {
             // step re-labels it `SecondFactor`.
             ApiCode::PasswordWrong => Self::InvalidInput(InvalidField::Password),
             // `auth-session.md` §5: 9001 asks for human verification.
-            ApiCode::HumanVerificationRequired => Self::HumanVerificationRequired,
+            ApiCode::HumanVerificationRequired => {
+                Self::HumanVerificationRequired { challenge: None }
+            }
             // `auth-session.md` §5: 12087 is a rejected HV token.
             ApiCode::HumanVerificationTokenInvalid => Self::HumanVerificationInvalid {
                 message: message.to_owned(),
@@ -254,7 +262,9 @@ impl fmt::Display for ProtonError {
             Self::ModulusSignatureInvalid => {
                 f.write_str("the SRP modulus signature did not verify with Proton's key")
             }
-            Self::HumanVerificationRequired => f.write_str("Proton asked for human verification"),
+            Self::HumanVerificationRequired { .. } => {
+                f.write_str("Proton asked for human verification")
+            }
             Self::Refused { message, .. } => write!(f, "{message}"),
             Self::HumanVerificationInvalid { message } => {
                 write!(f, "Proton rejected the human-verification token: {message}")
@@ -268,9 +278,7 @@ impl fmt::Display for ProtonError {
             Self::UnexpectedMessage => {
                 f.write_str("the message response named a different message")
             }
-            Self::AttachmentTooLarge => {
-                f.write_str("the attachment data packet exceeded the download bound")
-            }
+            Self::DownloadTooLarge => f.write_str("the download exceeded its bound"),
             Self::Timeout => f.write_str("the request exceeded its deadline"),
         }
     }

@@ -59,6 +59,20 @@ pub use send::{
 type EncryptBody = Arc<dyn Fn(&[u8]) -> Vec<u8> + Send + Sync>;
 /// Encrypts an attachment, returning its key packets and data packet.
 type EncryptAttachment = Arc<dyn Fn(&[u8]) -> (Vec<u8>, Vec<u8>) + Send + Sync>;
+/// Makes a new primary address key for an email and key id, signed by
+/// the account's user key, as Proton's key rotation does.
+type MakeAddressKey = Arc<dyn Fn(&str, &str) -> RotatedKey + Send + Sync>;
+
+/// A key [`FakeProtonServer::rotate_address_key`] made: the locked key
+/// the API serves, its armored public key, the encryptors to it and
+/// its recipient key.
+struct RotatedKey {
+    locked: LockedKey,
+    public: String,
+    encrypt_body: EncryptBody,
+    encrypt_attachment: EncryptAttachment,
+    recipient: Arc<dyn send::RecipientKey>,
+}
 
 /// The synthetic plaintext body the fake encrypts for its message
 /// fixture; tests compare a decryption against it.
@@ -531,6 +545,10 @@ pub enum Fault {
     /// before the TLS handshake, so a client with a deadline sees a
     /// connect timeout. One-shot.
     StallHandshake(Duration),
+    /// Answers 200 with a body of this many bytes, past a client's
+    /// download bound (spec/04 "Timeouts"); use it through
+    /// [`Fault::OnceAt`].
+    Oversized(usize),
 }
 
 /// Takes a connection-level fault ([`Fault::RefuseConnection`] or
@@ -571,6 +589,10 @@ struct Account {
     totp: Option<String>,
     password_mode: u8,
     hv_required: bool,
+    /// Every authenticated request answers Proton's 9001 until one
+    /// carries an issued verification token (spec/04 "Human
+    /// verification during sync").
+    hv_during_sync: bool,
     fido2_only: bool,
     key_salts: Vec<Salt>,
     user_keys: UserKeys,
@@ -587,6 +609,8 @@ struct Account {
     /// Encrypts an attachment to the primary address key, returning the
     /// key packets and the data packet.
     encrypt_attachment: EncryptAttachment,
+    /// Makes a rotated address key (spec/11 "rotate a key").
+    make_address_key: MakeAddressKey,
     /// Unlocked address keys by email, for tests that decrypt as an
     /// internal recipient (spec/11 M4.3c).
     recipient_keys: HashMap<String, Arc<dyn send::RecipientKey>>,
@@ -895,6 +919,39 @@ impl FakeProtonServer {
             // Every message and attachment body is encrypted to the
             // primary address key when it is added (M2.16a).
             let (encrypt_body, encrypt_attachment) = encryptors(&provider, &primary_unlocked);
+            let make_address_key: MakeAddressKey = {
+                let provider = provider.clone();
+                let user_unlocked = user_unlocked.clone();
+                Arc::new(move |email: &str, id: &str| {
+                    let local = LocalAddressKey::generate(
+                        &provider,
+                        email,
+                        KeyGeneratorAlgorithm::default(),
+                        KeyFlag::default(),
+                        true,
+                        &user_unlocked,
+                    )
+                    .expect("a rotated address key generates");
+                    let unlocked = local
+                        .unlock_and_assign_key_id(
+                            &provider,
+                            KeyId::from(id.to_owned()),
+                            &user_unlocked,
+                        )
+                        .expect("the rotated address key unlocks");
+                    let public = public_key_armor(&provider, &unlocked.public_key);
+                    let (encrypt_body, encrypt_attachment) = encryptors(&provider, &unlocked);
+                    let recipient =
+                        send::recipient_key(&provider, public.clone(), &unlocked.private_key);
+                    RotatedKey {
+                        locked: address_locked_key(id, local),
+                        public,
+                        encrypt_body,
+                        encrypt_attachment,
+                        recipient,
+                    }
+                })
+            };
 
             // The fixtures are encrypted to the primary address key.
             let mut body = Vec::new();
@@ -936,6 +993,7 @@ impl FakeProtonServer {
                     totp: spec.totp,
                     password_mode: spec.password_mode,
                     hv_required: spec.hv_required,
+                    hv_during_sync: false,
                     fido2_only: spec.fido2_only,
                     key_salts: vec![Salt {
                         id: KeyId::from(format!("user-key-{}", spec.username)),
@@ -952,6 +1010,7 @@ impl FakeProtonServer {
                     attachment_plaintext: ATTACHMENT_PLAINTEXT.to_vec(),
                     encrypt_body,
                     encrypt_attachment,
+                    make_address_key,
                     labels: system_labels(),
                     messages: Vec::new(),
                     events: Vec::new(),
@@ -1058,6 +1117,20 @@ impl FakeProtonServer {
             .public_key
             .to_armored_string(ArmorOptions::default())
             .expect("the fake's public key armors")
+    }
+
+    /// Arms the account's sync-time human verification: every
+    /// authenticated request answers Proton's 9001 until one carries a
+    /// token the fake issued, which clears it (spec/04 "Human
+    /// verification during sync"; spec/11's fake knobs). Sign-in and
+    /// refresh keep their own handling.
+    pub fn require_human_verification(&self, username: &str) {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        state
+            .accounts
+            .get_mut(username)
+            .expect("the account exists on the fake")
+            .hv_during_sync = true;
     }
 
     /// Every request the server has seen, in order.
@@ -1244,6 +1317,37 @@ impl FakeProtonServer {
         account.addresses.push(address);
         account.addresses.sort_by_key(|address| address.order);
         account.record(FakeEvent::address(id.to_owned(), ADDRESS_CREATED));
+    }
+
+    /// Rotates an address's key as Proton does: a new key, signed by the
+    /// user key, becomes the address's primary, and the old ones stay
+    /// active so earlier messages still decrypt. When it is the
+    /// account's primary address (order 1), messages and attachments
+    /// added from now on are encrypted to the new key. Appends an
+    /// address update event (spec/11 "rotate a key").
+    pub fn rotate_address_key(&self, username: &str, id: &str) {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let account = account_mut(&mut state, username);
+        let index = account
+            .addresses
+            .iter()
+            .position(|address| address.id == id)
+            .expect("the address exists");
+        let email = account.addresses[index].email.clone();
+        let key_id = format!("{id}-key-{}", account.addresses[index].keys.len() + 1);
+        let rotated = (account.make_address_key)(&email, &key_id);
+        let address = &mut account.addresses[index];
+        for key in &mut address.keys {
+            key.primary = false;
+        }
+        address.keys.insert(0, rotated.locked);
+        address.public_keys.insert(0, rotated.public);
+        if address.order == 1 {
+            account.encrypt_body = rotated.encrypt_body;
+            account.encrypt_attachment = rotated.encrypt_attachment;
+        }
+        account.recipient_keys.insert(email, rotated.recipient);
+        account.record(FakeEvent::address(id.to_owned(), ADDRESS_UPDATED));
     }
 
     /// Marks every address key inactive and appends a user event. A
@@ -1506,6 +1610,9 @@ async fn dispatch(
                 ));
             }
             Fault::BadServerProof => {}
+            Fault::Oversized(bytes) => {
+                return Ok(Response::new(Full::new(Bytes::from(vec![b' '; bytes]))));
+            }
             // Connection-level faults are consumed by the accept loop
             // before the handshake; if one reaches here it was never
             // triggered, so let the request through.
@@ -1962,16 +2069,54 @@ fn handle_logout(
     Ok(json_response(200, json!({"Code": 1000})))
 }
 
-/// The session's username, or `None` when the headers don't match a
-/// live session (the fake's authenticated routes).
-fn authenticated(state: &mut State, headers: &hyper::HeaderMap) -> Option<String> {
-    let uid = header_str(headers, "x-pm-uid")?;
-    let bearer = headers
+/// The session's username, or the response the request must answer:
+/// unauthorized, or Proton's 9001 when the account needs sync-time
+/// human verification (spec/04 "Human verification during sync").
+fn authenticated(
+    state: &mut State,
+    headers: &hyper::HeaderMap,
+) -> Result<String, Box<Response<Full<Bytes>>>> {
+    let Some(uid) = header_str(headers, "x-pm-uid") else {
+        return Err(Box::new(unauthorized()));
+    };
+    let Some(bearer) = headers
         .get("authorization")
         .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.strip_prefix("Bearer "))?;
-    let session = state.sessions.get(&uid)?;
-    (session.access_token == bearer).then(|| session.user_id.clone())
+        .and_then(|value| value.strip_prefix("Bearer "))
+    else {
+        return Err(Box::new(unauthorized()));
+    };
+    let Some(session) = state.sessions.get(&uid) else {
+        return Err(Box::new(unauthorized()));
+    };
+    let Some(username) = (session.access_token == bearer).then(|| session.user_id.clone()) else {
+        return Err(Box::new(unauthorized()));
+    };
+    let required = state
+        .accounts
+        .get(&username)
+        .is_some_and(|account| account.hv_during_sync);
+    if !required {
+        return Ok(username);
+    }
+    let token = headers
+        .get("x-pm-human-verification-token")
+        .and_then(|value| value.to_str().ok());
+    match token {
+        Some(token) if state.hv_tokens.contains(token) => {}
+        Some(_) => {
+            return Err(Box::new(json_response(
+                422,
+                json!({"Code": 12087, "Error": "CAPTCHA validation failed"}),
+            )));
+        }
+        None => return Err(Box::new(human_verification_response(state))),
+    }
+    // A valid token proceeds and clears the requirement for the account.
+    if let Some(account) = state.accounts.get_mut(&username) {
+        account.hv_during_sync = false;
+    }
+    Ok(username)
 }
 
 fn unauthorized() -> Response<Full<Bytes>> {
@@ -1983,8 +2128,9 @@ fn handle_salts(
     headers: &hyper::HeaderMap,
 ) -> Result<Response<Full<Bytes>>, io::Error> {
     let mut state = state.lock().unwrap_or_else(|e| e.into_inner());
-    let Some(username) = authenticated(&mut state, headers) else {
-        return Ok(unauthorized());
+    let username = match authenticated(&mut state, headers) {
+        Ok(username) => username,
+        Err(response) => return Ok(*response),
     };
     let account = state
         .accounts
@@ -2008,8 +2154,9 @@ fn handle_user(
     headers: &hyper::HeaderMap,
 ) -> Result<Response<Full<Bytes>>, io::Error> {
     let mut state = state.lock().unwrap_or_else(|e| e.into_inner());
-    let Some(username) = authenticated(&mut state, headers) else {
-        return Ok(unauthorized());
+    let username = match authenticated(&mut state, headers) {
+        Ok(username) => username,
+        Err(response) => return Ok(*response),
     };
     let account = state
         .accounts
@@ -2041,8 +2188,9 @@ fn handle_addresses(
     headers: &hyper::HeaderMap,
 ) -> Result<Response<Full<Bytes>>, io::Error> {
     let mut state = state.lock().unwrap_or_else(|e| e.into_inner());
-    let Some(username) = authenticated(&mut state, headers) else {
-        return Ok(unauthorized());
+    let username = match authenticated(&mut state, headers) {
+        Ok(username) => username,
+        Err(response) => return Ok(*response),
     };
     let account = state
         .accounts
@@ -2142,8 +2290,9 @@ fn handle_labels(
     query: Option<&str>,
 ) -> Result<Response<Full<Bytes>>, io::Error> {
     let mut state = state.lock().unwrap_or_else(|e| e.into_inner());
-    let Some(username) = authenticated(&mut state, headers) else {
-        return Ok(unauthorized());
+    let username = match authenticated(&mut state, headers) {
+        Ok(username) => username,
+        Err(response) => return Ok(*response),
     };
     let account = state
         .accounts
@@ -2198,8 +2347,9 @@ fn handle_mutation(
     kind: MutationKind,
 ) -> Result<Response<Full<Bytes>>, io::Error> {
     let mut state = state.lock().unwrap_or_else(|e| e.into_inner());
-    let Some(username) = authenticated(&mut state, headers) else {
-        return Ok(unauthorized());
+    let username = match authenticated(&mut state, headers) {
+        Ok(username) => username,
+        Err(response) => return Ok(*response),
     };
     let value: Value = serde_json::from_slice(body).unwrap_or(json!({}));
     let ids: Vec<String> = value
@@ -2281,8 +2431,9 @@ fn handle_messages(
     query: Option<&str>,
 ) -> Result<Response<Full<Bytes>>, io::Error> {
     let mut state = state.lock().unwrap_or_else(|e| e.into_inner());
-    let Some(username) = authenticated(&mut state, headers) else {
-        return Ok(unauthorized());
+    let username = match authenticated(&mut state, headers) {
+        Ok(username) => username,
+        Err(response) => return Ok(*response),
     };
     let page: usize = query_value(query, "Page")
         .and_then(|v| v.parse().ok())
@@ -2375,8 +2526,9 @@ fn handle_message_counts(
     headers: &hyper::HeaderMap,
 ) -> Result<Response<Full<Bytes>>, io::Error> {
     let mut state = state.lock().unwrap_or_else(|e| e.into_inner());
-    let Some(username) = authenticated(&mut state, headers) else {
-        return Ok(unauthorized());
+    let username = match authenticated(&mut state, headers) {
+        Ok(username) => username,
+        Err(response) => return Ok(*response),
     };
     let account = state
         .accounts
@@ -2411,8 +2563,9 @@ fn handle_message(
     id: &str,
 ) -> Result<Response<Full<Bytes>>, io::Error> {
     let mut state = state.lock().unwrap_or_else(|e| e.into_inner());
-    let Some(username) = authenticated(&mut state, headers) else {
-        return Ok(unauthorized());
+    let username = match authenticated(&mut state, headers) {
+        Ok(username) => username,
+        Err(response) => return Ok(*response),
     };
     let account = state
         .accounts
@@ -2448,8 +2601,9 @@ fn handle_attachment(
     id: &str,
 ) -> Result<Response<Full<Bytes>>, io::Error> {
     let mut state = state.lock().unwrap_or_else(|e| e.into_inner());
-    let Some(username) = authenticated(&mut state, headers) else {
-        return Ok(unauthorized());
+    let username = match authenticated(&mut state, headers) {
+        Ok(username) => username,
+        Err(response) => return Ok(*response),
     };
     let account = state
         .accounts
@@ -2478,8 +2632,9 @@ fn handle_latest_event(
     headers: &hyper::HeaderMap,
 ) -> Result<Response<Full<Bytes>>, io::Error> {
     let mut state = state.lock().unwrap_or_else(|e| e.into_inner());
-    let Some(username) = authenticated(&mut state, headers) else {
-        return Ok(unauthorized());
+    let username = match authenticated(&mut state, headers) {
+        Ok(username) => username,
+        Err(response) => return Ok(*response),
     };
     let account = state
         .accounts
@@ -2499,8 +2654,9 @@ fn handle_events(
     id: &str,
 ) -> Result<Response<Full<Bytes>>, io::Error> {
     let mut state = state.lock().unwrap_or_else(|e| e.into_inner());
-    let Some(username) = authenticated(&mut state, headers) else {
-        return Ok(unauthorized());
+    let username = match authenticated(&mut state, headers) {
+        Ok(username) => username,
+        Err(response) => return Ok(*response),
     };
     let after = id
         .strip_prefix("evt-")
@@ -2795,5 +2951,140 @@ impl ModulusSignatureVerifier for TestVerifier {
             .verify(&self.0)
             .map_err(|e| ModulusVerifyError::SignatureVerification(e.to_string()))?;
         Ok(message.text().to_owned())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use rustls::pki_types::ServerName;
+    use tokio::net::TcpStream;
+    use tokio_rustls::TlsConnector;
+
+    use super::*;
+
+    const USER: &str = "owner@example.test";
+    const PASSWORD: &str = "synthetic-owner-password";
+
+    async fn serve() -> FakeProtonServer {
+        FakeProtonServer::serve(vec![TestAccount::new(USER, PASSWORD)])
+            .await
+            .expect("serve")
+    }
+
+    /// A session inserted straight into the fake's state, so the test
+    /// reaches an authenticated route without the SRP handshake.
+    fn session(server: &FakeProtonServer) -> (String, String) {
+        let (uid, access) = ("uid-test".to_owned(), "access-test".to_owned());
+        server
+            .state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .sessions
+            .insert(
+                uid.clone(),
+                Session {
+                    user_id: USER.to_owned(),
+                    access_token: access.clone(),
+                    refresh_token: "refresh-test".to_owned(),
+                    password_mode: 1,
+                },
+            );
+        (uid, access)
+    }
+
+    /// One authenticated GET against the fake over TLS.
+    struct GetClient {
+        base_url: String,
+        uid: String,
+        access: String,
+    }
+
+    impl GetClient {
+        fn new(server: &FakeProtonServer) -> Self {
+            let (uid, access) = session(server);
+            Self {
+                base_url: server.base_url().to_owned(),
+                uid,
+                access,
+            }
+        }
+
+        async fn get(&self, path: &str, extra: &[(&str, &str)]) -> (StatusCode, Value) {
+            let authority = self.base_url.strip_prefix("https://").expect("https");
+            let (host, port) = authority.split_once(':').expect("port");
+            let tcp = TcpStream::connect((host, port.parse::<u16>().expect("port")))
+                .await
+                .expect("the TCP connect");
+            let name = ServerName::try_from(host.to_owned()).expect("the server name");
+            let stream = TlsConnector::from(crate::imap_cert::client_config())
+                .connect(name, tcp)
+                .await
+                .expect("the TLS connect");
+            let (mut sender, connection) =
+                hyper::client::conn::http1::handshake(TokioIo::new(stream))
+                    .await
+                    .expect("the HTTP handshake");
+            tokio::spawn(async move {
+                let _ = connection.await;
+            });
+            let mut builder = Request::builder()
+                .method("GET")
+                .uri(format!("{}{}", self.base_url, path))
+                .header("x-pm-uid", &self.uid)
+                .header("authorization", format!("Bearer {}", self.access));
+            for (name, value) in extra {
+                builder = builder.header(*name, *value);
+            }
+            let request = builder
+                .body(Full::new(Bytes::new()))
+                .expect("the request builds");
+            let response = sender
+                .send_request(request)
+                .await
+                .expect("the request sends");
+            let status = response.status();
+            let body = response
+                .into_body()
+                .collect()
+                .await
+                .expect("the body reads")
+                .to_bytes();
+            let value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+            (status, value)
+        }
+    }
+
+    #[tokio::test]
+    async fn sync_human_verification_is_answered_by_one_valid_token() {
+        let server = serve().await;
+        let client = GetClient::new(&server);
+
+        let (status, body) = client.get("/core/v4/users", &[]).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+
+        server.require_human_verification(USER);
+
+        let (status, body) = client.get("/core/v4/users", &[]).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+        assert_eq!(body["Code"], 9001);
+        let details = &body["Details"];
+        let token = details["HumanVerificationToken"].as_str().expect("a token");
+        assert_eq!(details["HumanVerificationMethods"], json!(["captcha"]));
+        assert!(details["WebUrl"].as_str().expect("a URL").contains(token));
+
+        let refused = [("x-pm-human-verification-token", "hv-token-not-issued")];
+        let (status, body) = client.get("/core/v4/users", &refused).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+        assert_eq!(body["Code"], 12087);
+
+        let answered = [
+            ("x-pm-human-verification-token", token),
+            ("x-pm-human-verification-token-type", "captcha"),
+        ];
+        let (status, body) = client.get("/core/v4/users", &answered).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+
+        let (status, body) = client.get("/core/v4/users", &[]).await;
+        assert_eq!(status, StatusCode::OK, "the requirement cleared: {body}");
     }
 }

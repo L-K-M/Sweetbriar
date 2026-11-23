@@ -1,6 +1,7 @@
-// The Out Box pane (spec/08 "Out Box"): the selection follows the
-// attempt the user chose when a reload adds rows above it, and an
-// action in flight holds the pane's retirement.
+// The Out Box pane (spec/08 "Out Box"): a recipient sent in clear is
+// named in the details, the selection follows the attempt the user
+// chose when a reload adds rows above it, and an action in flight
+// holds the pane's retirement.
 
 import AppKit
 import Foundation
@@ -81,7 +82,7 @@ private actor FakeOutBoxSource: SendSource {
 private func heldRow(_ attemptId: String) -> OutBoxRow {
     OutBoxRow(
         attemptId: attemptId, draftId: "draft-\(attemptId)", accountId: "a1",
-        identityId: "i1", subject: "Subject \(attemptId)", recipients: [], state: .held,
+        identityId: "i1", envelopeFrom: "me@example.test", subject: "Subject \(attemptId)", recipients: [], state: .held,
         createdAtMs: 1_699_999_999_000, updatedAtMs: 1_700_000_000_000,
         holdUntilMs: 1_700_000_005_000, resolvedAtMs: nil, sendRequestedAtMs: nil,
         protonDraftId: nil, finalReply: nil, resolution: nil,
@@ -90,6 +91,25 @@ private func heldRow(_ attemptId: String) -> OutBoxRow {
 }
 
 #if canImport(Sweetbriar)
+    /// A recipient Proton was asked to send in clear says so; one sent
+    /// to its Proton keys, and one whose scheme isn't known yet, don't.
+    @MainActor
+    @Test func outBoxDetailsNameARecipientSentInClear() {
+        let clear = OutBoxRecipient(
+            address: "pat@example.net", kind: .cc, state: .sent, scheme: .clear)
+        #expect(
+            OutBoxViewController.recipientLine(clear)
+                == "Cc: pat@example.net — Sent · Not end-to-end encrypted")
+
+        let sealed = OutBoxRecipient(
+            address: "sam@proton.example", kind: .to, state: .sent, scheme: .internal)
+        #expect(OutBoxViewController.recipientLine(sealed) == "To: sam@proton.example — Sent")
+
+        let unknown = OutBoxRecipient(address: "kim@example.org", kind: .to, state: .pending)
+        #expect(
+            OutBoxViewController.recipientLine(unknown) == "To: kim@example.org — Pending")
+    }
+
     /// A new attempt above the selected one moves it down a row; the
     /// selection moves with it instead of landing on the newcomer.
     @MainActor

@@ -129,8 +129,9 @@ impl From<StoreError> for Halt {
 enum FetchError {
     /// The response named another message than the one requested.
     UnexpectedMessage,
-    /// An attachment data packet exceeded the transport's bound.
-    AttachmentTooLarge,
+    /// A message response or attachment data packet exceeded the
+    /// transport's bound.
+    TooLarge,
     /// The account has no session any more.
     Ended,
     /// Proton or the network refused; the attempt retries.
@@ -919,6 +920,14 @@ impl Attempt<'_> {
                 self.skipped.insert(body.provider_key.clone());
                 return Ok(());
             }
+            // Past its bound the body fails for good, never truncated
+            // and never fetched again this key generation (spec/04
+            // "Timeouts").
+            Err(FetchError::TooLarge) => {
+                self.record_failure(body.message_id, BodyFailure::TooLarge, key_generation)
+                    .await?;
+                return Ok(());
+            }
             Err(FetchError::Ended) => return Err(Halt::Ended),
             Err(_) => return Err(Halt::Retry),
         };
@@ -946,7 +955,7 @@ impl Attempt<'_> {
                 .await
             {
                 Ok(packet) => packet,
-                Err(FetchError::AttachmentTooLarge) => {
+                Err(FetchError::TooLarge) => {
                     self.record_failure(body.message_id, BodyFailure::TooLarge, key_generation)
                         .await?;
                     return Ok(());
@@ -984,7 +993,12 @@ impl Attempt<'_> {
             .await
             .map_err(|_| Halt::Stopped)?;
         match committed {
-            Ok(_) => Ok(()),
+            Ok(_) => {
+                // A body changes the account's coverage (spec/07
+                // `account_health`): wake its subscription.
+                self.worker.statuses().rows_changed();
+                Ok(())
+            }
             Err(failure) => match failure.reason() {
                 Some(_) => {
                     self.record_failure(body.message_id, failure, key_generation)
@@ -1263,8 +1277,8 @@ impl Attempt<'_> {
     }
 
     /// [`Attempt::call`], keeping the typed failures a body's fetch
-    /// distinguishes: a response naming another message and an
-    /// attachment past its bound (spec/04 step 3).
+    /// distinguishes: a response naming another message and a download
+    /// past its bound (spec/04 step 3, "Timeouts").
     async fn call_classified<'c, T, F, Fut>(&'c self, request: F) -> Result<T, FetchError>
     where
         F: Fn(&'c ProtonClient, Session) -> Fut,
@@ -1274,7 +1288,7 @@ impl Attempt<'_> {
         match request(self.client, session.clone()).await {
             Ok(value) => return Ok(value),
             Err(ProtonError::UnexpectedMessage) => return Err(FetchError::UnexpectedMessage),
-            Err(ProtonError::AttachmentTooLarge) => return Err(FetchError::AttachmentTooLarge),
+            Err(ProtonError::DownloadTooLarge) => return Err(FetchError::TooLarge),
             Err(ProtonError::Unauthorized) => {}
             Err(error) => return Err(self.refusal(&error).await.into()),
         }
@@ -1283,7 +1297,7 @@ impl Attempt<'_> {
         match request(self.client, session).await {
             Ok(value) => Ok(value),
             Err(ProtonError::UnexpectedMessage) => Err(FetchError::UnexpectedMessage),
-            Err(ProtonError::AttachmentTooLarge) => Err(FetchError::AttachmentTooLarge),
+            Err(ProtonError::DownloadTooLarge) => Err(FetchError::TooLarge),
             // A second 401 is the refresh's own failure, not a Proton
             // refusal with a code; retry as before, recording nothing.
             Err(ProtonError::Unauthorized) => Err(FetchError::Retry),
@@ -1429,7 +1443,7 @@ async fn wait_for_next_poll(
 /// body, an offline transport).
 fn refusal_diagnostics(error: &ProtonError) -> (Option<i64>, String) {
     match error {
-        ProtonError::HumanVerificationRequired => (
+        ProtonError::HumanVerificationRequired { .. } => (
             Some(ApiCode::HumanVerificationRequired as i64),
             error.to_string(),
         ),
@@ -1450,7 +1464,7 @@ fn refusal_diagnostics(error: &ProtonError) -> (Option<i64>, String) {
 /// 5001, 5002, 5003). `None` when the worker retries.
 fn needs_attention(error: &ProtonError) -> Option<&'static str> {
     match error {
-        ProtonError::HumanVerificationRequired => Some(HUMAN_VERIFICATION_REASON),
+        ProtonError::HumanVerificationRequired { .. } => Some(HUMAN_VERIFICATION_REASON),
         ProtonError::Refused { code, .. } => matches!(
             code,
             ApiCode::ProductInvalid

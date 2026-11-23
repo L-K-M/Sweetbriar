@@ -125,6 +125,38 @@ fn metadata_and_occurrence_mapping_are_logical_message_scoped() {
     assert_eq!(empty.body_availability, BodyAvailability::NotAcquired);
 }
 
+/// A mailbox window's token resolves every row it holds, past SQLite's
+/// 32,766-variable limit for one statement (spec/07 "Selections"), in
+/// the order given.
+#[test]
+fn a_selection_past_the_variable_limit_resolves_in_order() {
+    const ROWS: i64 = 40_000;
+    let mut conn = database();
+    conn.execute_batch(&format!(
+        "WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i + 1 < {ROWS})
+         INSERT INTO logical_messages (message_id, account_id, created_at)
+         SELECT 100000 + i, 'home', 0 FROM n;
+         WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i + 1 < {ROWS})
+         INSERT INTO occurrences (occurrence_id, account_id, mailbox_id, message_id,
+          state, first_seen_at, last_seen_at)
+         SELECT 200000 + i, 'home', 10, 100000 + i, 'present', 0, 0 FROM n;"
+    ))
+    .unwrap();
+    let tx = conn.transaction().unwrap();
+
+    let occurrences: Vec<i64> = (0..ROWS).rev().map(|i| 200_000 + i).collect();
+    let messages = messages_for_occurrences(&tx, &occurrences).unwrap();
+    let expected: Vec<i64> = (0..ROWS).rev().map(|i| 100_000 + i).collect();
+    assert_eq!(messages, expected);
+
+    let mut with_unknown = occurrences.clone();
+    with_unknown.push(999_999);
+    assert!(matches!(
+        messages_for_occurrences(&tx, &with_unknown),
+        Err(StoreError::NotFound { .. })
+    ));
+}
+
 #[test]
 fn unknown_ids_are_not_found() {
     let mut conn = database();

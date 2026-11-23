@@ -580,6 +580,20 @@ struct ComposeIdentityNativeTests {
                     first.identityControls.popup.bounds, to: nil)
                 let layout = try #require(first.window?.contentLayoutRect)
                 #expect(popupRect.maxY <= layout.maxY + 1)
+                #expect(await cue.setMode(.minimal))
+                try #require(
+                    await identityEventually {
+                        [first, second].allSatisfy {
+                            $0.identityStrip.strip.cueMode == .minimal
+                                && $0.window?.styleMask.contains(.fullSizeContentView) == false
+                        }
+                    })
+                #expect(first.window?.titlebarAppearsTransparent == false)
+                #expect(first.window?.backgroundColor == .windowBackgroundColor)
+                #expect(first.cueStatusLabel.isHidden && second.cueStatusLabel.isHidden)
+                #expect(first.identityStrip.strip.accessibilityLabel()?.contains("a@EXAMPLE.test") == true)
+                #expect(first.textView.hasMarkedText() && first.textView.markedRange() == marked)
+                #expect(first.model.content == firstContent && announcements.isEmpty)
                 #expect(await cue.setMode(.standard))
                 try #require(
                     await identityEventually {
@@ -771,7 +785,7 @@ struct ComposeIdentityNativeTests {
             #expect(b.title.contains("b@EXAMPLE.test") && b.title.contains("provisional"))
             let image = try #require(a.image)
             #expect(!image.isTemplate && b.image?.isTemplate == false)
-            #expect(try swatchPixel(image, x: 0.5, y: 0.5).redComponent < 0.1)
+            #expect(try swatchMarker(image).redComponent < 0.1)
             controller.identityControls.render()
             #expect(popup.selectedItem?.image === image)
             let content = controller.model.content
@@ -782,7 +796,7 @@ struct ComposeIdentityNativeTests {
             try #require(
                 await identityEventually {
                     guard let image = popup.selectedItem?.image,
-                        let color = try? swatchPixel(image, x: 0.5, y: 0.5)
+                        let color = try? swatchMarker(image)
                     else { return false }
                     return color.redComponent > 0.7
                 })
@@ -790,7 +804,7 @@ struct ComposeIdentityNativeTests {
             try #require(
                 await identityEventually {
                     guard let image = popup.selectedItem?.image,
-                        let color = try? swatchPixel(image, x: 0.5, y: 0.5)
+                        let color = try? swatchMarker(image)
                     else { return false }
                     return abs(color.redComponent - 0x56 / 255.0) < 0.02
                 })
@@ -835,7 +849,7 @@ struct ComposeIdentityNativeTests {
             try #require(
                 await identityEventually {
                     guard let image = popup.selectedItem?.image,
-                        let color = try? swatchPixel(image, x: 0.5, y: 0.5)
+                        let color = try? swatchMarker(image)
                     else { return false }
                     return abs(color.redComponent - 0x56 / 255.0) < 0.02
                 })

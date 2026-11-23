@@ -95,6 +95,7 @@ private struct AppearanceSettingsLoader: View {
                             AccountsSettingsView(
                                 model: accountsModel, diagnostics: diagnosticsModel,
                                 editor: editor, editorRevision: editor.revision,
+                                appearance: shared.model(source: bridge),
                                 onSignInAgain: onSignInAgain
                             )
                             .id(editor.revision)
@@ -187,7 +188,9 @@ private struct AccountAppearanceSettings: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
-                ComposeCueSettingsView(cue: cue, editor: editor, revision: editorRevision) {
+                ComposeCueSettingsView(
+                    cue: cue, editor: editor, revision: editorRevision, preview: cuePreview
+                ) {
                     backups.canWrite
                 }
                 Divider()
@@ -306,6 +309,14 @@ private struct AccountAppearanceSettings: View {
         if !editor.run(revision: editorRevision, { await model.choose(color, account: account) }) {
             admissionError = "The archive changed. Reopen this editor before saving."
         }
+    }
+
+    private var cuePreview: IdentityStripView.Content {
+        guard let current, let account = accounts.first(where: { $0.accountId == selected }) else {
+            return ComposeCueSettingsView.noAccount
+        }
+        return .identity(
+            label: "From: \(accountLabel(account))", monogram: current.monogram, tokens: current.tokens)
     }
 
     private func accountLabel(_ account: Account) -> String {

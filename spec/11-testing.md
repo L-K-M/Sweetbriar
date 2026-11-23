@@ -391,13 +391,25 @@ test, except where the spec says "manual qualification".
   - **How:** a test harness runs the operation in a child process and
     kills it (`SIGKILL`) at a numbered cut point. It then reopens the store
     and checks invariants.
+  - **Sampled and full:** a suite whose operation is too long to cut at
+    every point on each pull request (the import, bundle import, send,
+    scheduled-maintenance, export and migration suites) cuts a fixed
+    sample there.
+    `SB_FAULT_SCALE` multiplies that sample, and `SB_FAULT_SCALE=full`,
+    which the nightly `fault-injection` job sets, cuts every operation.
   - **Where** — at minimum:
     - each step of object publication (03);
     - before, inside and after each write transaction;
     - after an IMAP command is sent but before its response;
     - after SMTP `DATA` but before the final reply;
     - during backup and restore;
-    - during migrations;
+    - during migrations: a store left at version 27, with rows in
+      every table migration 28 rebuilds, opens in a child that the test
+      SQLite VFS below kills before its Nth write, truncation or sync.
+      Reopening finishes the migrations to the latest version with every
+      row and id kept and invariant 5's checks clean. At most two
+      `pre-migration-` snapshots remain, and the newest is a whole
+      database;
     - during an import job (09), at 50 seeded cut points over a fixture
       import. After each cut, reopening and finishing the job gives the
       uncut run's final counts, with no duplicate occurrence or
@@ -420,9 +432,29 @@ test, except where the spec says "manual qualification".
     It tracks writes since the last `xSync` on the database, WAL and
     journal files, and discards them on a simulated power cut. Bundled
     SQLite does its own file I/O, so the `Fs` seam alone can't cover
-    it. Real power-cut tests on the
-  owner's Mac are a manual qualification before the pilot is declared
-  done.
+    it. It uses `rusqlite`'s re-export of `libsqlite3-sys`, so it adds
+    no dependency, and it exists only in test builds: the store opens
+    through it only under a root a test armed. Its disk:
+    - holds each file's writes and truncations, seen by every handle on
+      that path, until that file's next `xSync` applies them;
+    - maps no file, and promises SQLite only power-safe overwrite, so
+      SQLite never skips a sync on the strength of atomic or ordered
+      writes;
+    - counts creating and deleting a file as durable at once, and never
+      tears a write.
+
+    A cut fails every later operation on the root's files. Restoring
+    the power drops what no sync applied, and the store reopens over
+    what remains. The tests cut after each write, truncation or sync
+    of an operation's span in turn, and check the invariants above
+    after each.
+
+    Its kill mode serves crash cuts inside SQLite's own I/O: before the
+    Nth write, truncation or sync it applies every pending write, as
+    the OS would keep a killed process's writes, and the process kills
+    itself with `SIGKILL`.
+- Real power-cut tests on the owner's Mac are a manual qualification
+  before the pilot is declared done.
 
 ## Fixtures
 

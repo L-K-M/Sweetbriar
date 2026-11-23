@@ -23,13 +23,15 @@ final class FilingController: NSObject {
     /// The archive takes writes and the list pane shows messages.
     private let canFile: @MainActor () -> Bool
     private let canWrite: @MainActor () -> Bool
+    private let latency: LatencyRecorder
     private var offered: FilingToast.ID?
     private var retired = false
 
     init(
         source: any FilingSource, window: NSWindow, list: MessageListViewController,
         sidebar: SidebarModel, appearance: AppearanceModel, writes: ArchiveWriteTasks,
-        canWrite: @escaping @MainActor () -> Bool, canFile: @escaping @MainActor () -> Bool
+        canWrite: @escaping @MainActor () -> Bool, canFile: @escaping @MainActor () -> Bool,
+        latency: LatencyRecorder = .shared
     ) {
         model = FilingModel(source: source)
         self.window = window
@@ -39,6 +41,7 @@ final class FilingController: NSObject {
         self.writes = writes
         self.canWrite = canWrite
         self.canFile = canFile
+        self.latency = latency
         super.init()
         toastView.onUndo = { [weak self] id in self?.undo(id) }
         observeToast()
@@ -63,9 +66,30 @@ final class FilingController: NSObject {
             NSSound.beep()
             return
         }
+        // spec/08 "Latency log": from the command, to the receipt and
+        // to the rows leaving the list.
+        let spans = Self.latency(of: action).map {
+            (visible: latency.begin($0.visible), durable: latency.begin($0.durable))
+        }
         writes.run(revision: writes.revision) { [weak self] in
             guard let self, let selection = await resolve(captured) else { return }
-            await perform(action, on: selection)
+            let filed = await perform(action, on: selection)
+            // A retire cancels the rest without a failure: nothing counts.
+            guard filed, !retired, !Task.isCancelled, let spans else { return }
+            latency.finish(spans.durable)
+            list.endWhenGone(spans.visible, ids: captured.ids)
+        }
+    }
+
+    /// The spans Archive and Move to Trash record; the other filing
+    /// commands record none.
+    static func latency(
+        of action: FilingAction
+    ) -> (visible: LatencyInteraction, durable: LatencyInteraction)? {
+        switch action {
+        case .archive: (.archiveVisible, .archiveDurable)
+        case .trash: (.deleteVisible, .deleteDurable)
+        case .move, .addLabel, .removeLabel: nil
         }
     }
 
@@ -170,12 +194,15 @@ final class FilingController: NSObject {
 
     fileprivate static let refusedTitle = "Couldn't file the messages"
 
-    private func perform(_ action: FilingAction, on selection: FilingSelection) async {
+    /// Whether every part was filed.
+    @discardableResult
+    private func perform(_ action: FilingAction, on selection: FilingSelection) async -> Bool {
         let failures = await model.perform(action, on: selection, mailboxes: sidebar.mailboxes)
         let partly = failures.count < selection.parts.count
         explain(
             failures, title: partly ? "Some messages weren't filed" : Self.refusedTitle,
             accountsNamed: selection.parts.count > 1)
+        return failures.isEmpty
     }
 
     private func accountName(_ id: String) -> String {

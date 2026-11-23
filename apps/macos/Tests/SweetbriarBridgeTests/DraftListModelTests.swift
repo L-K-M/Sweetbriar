@@ -33,11 +33,28 @@ actor FakeDraftListSource: DraftListSource {
 private func summary(
     _ id: String, subject: String = "Hello", state: DraftState = .editing,
     to: [DraftRecipient] = [], cc: [DraftRecipient] = [], bcc: [DraftRecipient] = [],
-    updatedAtMs: Int64 = 1_700_000_000_000
+    updatedAtMs: Int64 = 1_700_000_000_000, identityId: String? = nil
 ) -> DraftSummary {
     DraftSummary(
-        draftId: id, state: state, accountId: nil, identityId: nil, subject: subject,
-        to: to, cc: cc, bcc: bcc, updatedAtMs: updatedAtMs, attempt: nil)
+        draftId: id, state: state, accountId: identityId.map { _ in "account" }, identityId: identityId,
+        subject: subject, to: to, cc: cc, bcc: bcc, updatedAtMs: updatedAtMs, attempt: nil)
+}
+
+/// A compose catalog naming one identity, or failing.
+private actor DraftCatalogFixture: ComposeCatalogSource {
+    private let failing: Bool
+
+    init(failing: Bool = false) { self.failing = failing }
+
+    static let work = ComposeIdentity(
+        identityId: "work", accountId: "account", accountName: "Work", accountKind: .imap,
+        email: "alex@example.test", displayName: "Alex", replyTo: nil, signatureSource: nil,
+        isDefault: true, sendable: .validated, revision: 1)
+
+    func composeCatalog(preferredAccountId: String?) async throws -> ComposeCatalog {
+        if failing { throw CoreFailure.unavailable(reason: "synthetic catalog failure") }
+        return ComposeCatalog(identities: [Self.work], defaultIdentityId: "work")
+    }
 }
 
 /// Rows keep the core's order; a blank subject reads "No Subject";
@@ -142,4 +159,34 @@ func aRetiredDraftsListDropsLateResultsAndOpensNothing() async throws {
     #expect(model.draftId(forRow: "d1") == nil)
     await model.reload()
     #expect(await fake.reads == 2)
+}
+
+/// spec/08 "Drafts (local)": a row names its identity from the compose
+/// catalog, says when there is none, and never guesses one the catalog
+/// doesn't name.
+@MainActor
+@Test(.timeLimit(.minutes(1)))
+func draftRowsNameTheirSendingIdentity() async throws {
+    let fake = FakeDraftListSource()
+    await fake.set([
+        summary("named", identityId: "work"), summary("none"), summary("gone", identityId: "removed"),
+    ])
+    let model = DraftListModel(source: fake, catalog: DraftCatalogFixture())
+    await model.reload()
+    #expect(model.rows.map(\.from) == [
+        .identity(DraftCatalogFixture.work), .none, .unavailable(identityId: "removed"),
+    ])
+}
+
+/// A catalog that can't be read leaves the identities unavailable and
+/// the list itself loaded.
+@MainActor
+@Test(.timeLimit(.minutes(1)))
+func anUnreadableCatalogLeavesTheIdentitiesUnavailable() async throws {
+    let fake = FakeDraftListSource()
+    await fake.set([summary("named", identityId: "work")])
+    let model = DraftListModel(source: fake, catalog: DraftCatalogFixture(failing: true))
+    await model.reload()
+    #expect(model.lastError == nil)
+    #expect(model.rows.map(\.from) == [.unavailable(identityId: "work")])
 }

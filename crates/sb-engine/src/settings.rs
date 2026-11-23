@@ -31,6 +31,7 @@ enum Values {
     BackupDirectory,
     SenderList,
     MailboxList,
+    IdentityDefault,
 }
 
 impl Values {
@@ -40,6 +41,7 @@ impl Values {
             Self::BackupDirectory => valid_backup_destination(value),
             Self::SenderList => valid_sender_list(value),
             Self::MailboxList => valid_mailbox_list(value),
+            Self::IdentityDefault => valid_identity_default(value),
         }
     }
 
@@ -54,6 +56,9 @@ impl Values {
             }
             Self::MailboxList => {
                 "mailbox ids as canonical positive decimals, unique, joined by newlines; at most 100, or empty".into()
+            }
+            Self::IdentityDefault => {
+                "an identity id of 1 to 128 UTF-8 bytes without control characters, or empty".into()
             }
         }
     }
@@ -101,6 +106,16 @@ fn valid_sender_list(value: &str) -> bool {
     })
 }
 
+/// The longest `identity.default` id in UTF-8 bytes (spec/02).
+const MAX_IDENTITY_ID_BYTES: usize = 128;
+
+/// `identity.default` (spec/02): empty, or an id of 1 to
+/// [`MAX_IDENTITY_ID_BYTES`] UTF-8 bytes with no control characters.
+fn valid_identity_default(value: &str) -> bool {
+    value.is_empty()
+        || (value.len() <= MAX_IDENTITY_ID_BYTES && !value.chars().any(char::is_control))
+}
+
 /// `sending.undo_seconds`'s dotted key (spec/02), shared with the
 /// send command that reads its effective value.
 pub(crate) const UNDO_SECONDS_KEY: &str = "sending.undo_seconds";
@@ -109,7 +124,7 @@ pub(crate) const UNDO_SECONDS_KEY: &str = "sending.undo_seconds";
 const REGISTRY: &[RegisteredSetting] = &[
     RegisteredSetting {
         key: "appearance.compose_cue",
-        values: Values::Choices(&["standard", "strong"]),
+        values: Values::Choices(&["standard", "strong", "minimal"]),
         default: "standard",
     },
     RegisteredSetting {
@@ -140,6 +155,11 @@ const REGISTRY: &[RegisteredSetting] = &[
     RegisteredSetting {
         key: "filing.recent_mailboxes",
         values: Values::MailboxList,
+        default: "",
+    },
+    RegisteredSetting {
+        key: "identity.default",
+        values: Values::IdentityDefault,
         default: "",
     },
 ];

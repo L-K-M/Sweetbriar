@@ -31,7 +31,7 @@ use sb_types::fs::Fs;
 use sb_types::random::Random;
 use sb_types::time::{Clock, Timestamp};
 
-pub use cut::{CutFs, CutPoints, run_crash_cut_points, run_crash_cuts};
+pub use cut::{CutFs, CutPoints, fault_points, kill_now, run_crash_cut_points, run_crash_cuts};
 pub use fault::{FaultFs, FaultKind, FsOp};
 pub use imap::{Expect, FakeImapServer, ReceivedCommand, Reply, Script, Step};
 pub use imap_cert::{CERT_PEM, KEY_PEM, TlsIo, cert_der, client_stream, client_stream_with};

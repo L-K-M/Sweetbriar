@@ -96,11 +96,13 @@ fn service_recipient(
     address: &str,
     kind: sb_service::RecipientKind,
     state: sb_service::RecipientState,
+    scheme: Option<sb_service::RecipientScheme>,
 ) -> sb_service::OutBoxRecipient {
     sb_service::OutBoxRecipient {
         address: address.into(),
         kind,
         state,
+        scheme,
     }
 }
 
@@ -112,22 +114,26 @@ fn service_row() -> sb_service::OutBoxRow {
         draft_id: "draft".into(),
         account_id: "account".into(),
         identity_id: "identity".into(),
+        envelope_from: "owner@example.test".into(),
         subject: "subject".into(),
         recipients: vec![
             service_recipient(
                 "to",
                 sb_service::RecipientKind::To,
                 sb_service::RecipientState::Sent,
+                Some(sb_service::RecipientScheme::Internal),
             ),
             service_recipient(
                 "cc",
                 sb_service::RecipientKind::Cc,
                 sb_service::RecipientState::RcptAccepted,
+                Some(sb_service::RecipientScheme::Clear),
             ),
             service_recipient(
                 "bcc",
                 sb_service::RecipientKind::Bcc,
                 sb_service::RecipientState::RejectedPermanent,
+                None,
             ),
         ],
         state: sb_service::AttemptState::Failed,
@@ -156,6 +162,7 @@ fn out_box_maps_every_state_and_field() {
     assert_eq!(row.draft_id, "draft");
     assert_eq!(row.account_id, "account");
     assert_eq!(row.identity_id, "identity");
+    assert_eq!(row.envelope_from, "owner@example.test");
     assert_eq!(row.subject, "subject");
     assert_eq!(
         row.recipients,
@@ -164,16 +171,19 @@ fn out_box_maps_every_state_and_field() {
                 address: "to".into(),
                 kind: RecipientKind::To,
                 state: RecipientState::Sent,
+                scheme: Some(RecipientScheme::Internal),
             },
             OutBoxRecipient {
                 address: "cc".into(),
                 kind: RecipientKind::Cc,
                 state: RecipientState::RcptAccepted,
+                scheme: Some(RecipientScheme::Clear),
             },
             OutBoxRecipient {
                 address: "bcc".into(),
                 kind: RecipientKind::Bcc,
                 state: RecipientState::RejectedPermanent,
+                scheme: None,
             },
         ]
     );
@@ -262,6 +272,15 @@ fn out_box_maps_every_state_and_field() {
     ] {
         assert_eq!(RecipientKind::from(service), expected);
     }
+    for (service, expected) in [
+        (
+            sb_service::RecipientScheme::Internal,
+            RecipientScheme::Internal,
+        ),
+        (sb_service::RecipientScheme::Clear, RecipientScheme::Clear),
+    ] {
+        assert_eq!(RecipientScheme::from(service), expected);
+    }
 }
 
 /// The resolution maps both ways it is used: a stored row's answer
@@ -331,6 +350,8 @@ fn send_draft_out_box_and_cancel() {
     assert_eq!(row.draft_id, draft_id);
     assert_eq!(row.account_id, "acct-1");
     assert_eq!(row.identity_id, "ident-1");
+    // The route's address, frozen when the attempt was queued.
+    assert_eq!(row.envelope_from, "me@example.test");
     assert_eq!(row.subject, "hello");
     assert_eq!(row.state, crate::AttemptState::Held);
     assert_eq!(row.created_at_ms, row.updated_at_ms);

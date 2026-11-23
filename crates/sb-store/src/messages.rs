@@ -111,9 +111,14 @@ pub fn message_for_occurrence(tx: &Transaction, occurrence: i64) -> Result<i64, 
     .ok_or_else(|| StoreError::not_found(format!("occurrence {occurrence}")))
 }
 
+/// How many ids one lookup binds. A window token can name every row of
+/// a mailbox, far past SQLite's 32,766 host parameters per statement.
+const OCCURRENCE_LOOKUP_CHUNK: usize = 1_000;
+
 /// Resolve occurrence ids to logical messages in one short read,
 /// preserving order (`NotFound` names an unknown id). Tags and notes
-/// attach to the message (spec/02).
+/// attach to the message (spec/02). The lookup is chunked, so a
+/// selection of any size binds a bounded parameter count.
 pub fn messages_for_occurrences(
     tx: &Transaction,
     occurrence_ids: &[i64],
@@ -121,19 +126,24 @@ pub fn messages_for_occurrences(
     if occurrence_ids.is_empty() {
         return Ok(Vec::new());
     }
-    let placeholders = vec!["?"; occurrence_ids.len()].join(", ");
-    let sql = format!(
-        "SELECT occurrence_id, message_id FROM occurrences
-         WHERE occurrence_id IN ({placeholders})"
-    );
-    let mut statement = tx.prepare(&sql).map_err(sql_error)?;
-    let found = statement
-        .query_map(params_from_iter(occurrence_ids), |row| {
-            Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?))
-        })
-        .map_err(sql_error)?
-        .collect::<Result<HashMap<i64, i64>, _>>()
-        .map_err(sql_error)?;
+    let mut found: HashMap<i64, i64> = HashMap::with_capacity(occurrence_ids.len());
+    for chunk in occurrence_ids.chunks(OCCURRENCE_LOOKUP_CHUNK) {
+        let placeholders = vec!["?"; chunk.len()].join(", ");
+        let sql = format!(
+            "SELECT occurrence_id, message_id FROM occurrences
+             WHERE occurrence_id IN ({placeholders})"
+        );
+        let mut statement = tx.prepare(&sql).map_err(sql_error)?;
+        let rows = statement
+            .query_map(params_from_iter(chunk), |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?))
+            })
+            .map_err(sql_error)?;
+        for row in rows {
+            let (occurrence, message) = row.map_err(sql_error)?;
+            found.insert(occurrence, message);
+        }
+    }
     occurrence_ids
         .iter()
         .map(|id| {

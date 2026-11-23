@@ -41,15 +41,22 @@ const KILL_REFUSED_EXIT: i32 = 86;
 fn trip(count: &AtomicU64, nth: u64) {
     let n = count.fetch_add(1, Ordering::SeqCst) + 1;
     if n == nth {
-        // SAFETY: killing our own process takes no capability a child
-        // test does not have.
-        cut(
-            || unsafe {
-                libc::kill(libc::getpid(), libc::SIGKILL);
-            },
-            KILL_PATIENCE,
-        );
+        kill_now();
     }
+}
+
+/// Kill this process with `SIGKILL` at its cut point, as [`CutFs`]
+/// does, for a crash-cut child that counts its operations another way
+/// (the store's test SQLite VFS). Never returns or unwinds.
+pub fn kill_now() -> ! {
+    // SAFETY: killing our own process takes no capability a child
+    // test does not have.
+    cut(
+        || unsafe {
+            libc::kill(libc::getpid(), libc::SIGKILL);
+        },
+        KILL_PATIENCE,
+    )
 }
 
 /// End this process at its cut point, running nothing more on this
@@ -383,6 +390,31 @@ impl WriteFile for CutWrite {
         self.trip();
         self.inner.sync_all()
     }
+}
+
+/// How many of `span` operations a sampled crash suite cuts, given its
+/// pull request's `sample` (spec/11 "Fault injection": sampled on every
+/// pull request, full nightly). `SB_FAULT_SCALE` multiplies the sample;
+/// `full`, which the nightly job sets, takes every operation. Never
+/// more than `span`: a suite cuts every operation when this equals it.
+///
+/// # Panics
+///
+/// When `SB_FAULT_SCALE` is set but is neither `full` nor a positive
+/// whole number.
+pub fn fault_points(sample: usize, span: u64) -> usize {
+    let span = usize::try_from(span).unwrap_or(usize::MAX);
+    let wanted = match env::var("SB_FAULT_SCALE") {
+        Err(_) => sample,
+        Ok(scale) if scale == "full" => span,
+        Ok(scale) => scale
+            .parse::<usize>()
+            .ok()
+            .filter(|&scale| scale > 0)
+            .map(|scale| sample.saturating_mul(scale))
+            .expect("SB_FAULT_SCALE is `full` or a positive whole number"),
+    };
+    wanted.min(span)
 }
 
 /// Run `child` (an `#[ignore]`d test of this binary, invoked with

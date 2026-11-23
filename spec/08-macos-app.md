@@ -29,7 +29,7 @@ Rests on research [08-macos-ui](../research/08-macos-ui.md),
 | **Message window** | A standalone reader for one message (Message window, below) |
 | **Compose window** | One per draft |
 | **Settings** | SwiftUI: accounts (rename, pause and resume, disconnect, sign in again, notification previews; M2.7), appearance, sending safety, backups |
-| **Activity / account health** | SwiftUI: per-account state and condition with "Sign in again" where it applies, coverage, breaker events with Accept and Keep, parked and quarantined intents, the Recovery list, and the Out Box (M2.7; the Out Box with M4.4, intent actions with M3.1) |
+| **Activity / account health** | SwiftUI: per-account state and condition with "Sign in again" where it applies, coverage and, for a Proton account, "Proton messages synced" with each mailbox's count against Proton's (04-sync-proton "Coverage"), breaker events with Accept and Keep, parked and quarantined intents, the Recovery list, and the Out Box (M2.7; the Out Box with M4.4, intent actions with M3.1) |
 | **Import report** | Results of an import job (09) |
 
 State restoration uses AppKit window restoration. A compose window
@@ -59,6 +59,9 @@ a stopped or failed copy is never presented as a usable recovery point.
 The destination defaults to the data root's `backups/`, with a choice of
 another directory. An unavailable chosen volume is an error, not a reason
 to fall back to the default.
+Below it, the pane states 10's encryption at rest: Sweetbriar doesn't
+encrypt the archive or its backups and relies on FileVault, so a backup
+on another disk needs that disk encrypted.
 
 Restoring requires explicit confirmation naming the generation and its
 date. Explain that it replaces the live archive with that recovery point,
@@ -154,6 +157,14 @@ conversation; the Bridge account sheet is no longer offered.
 - **Signing in again** (from the account's health row, "Sign in again",
   and the account's sidebar context menu, "Sign In Again…") opens the
   same sheet for that account, with the username fixed.
+- **Verifying during sync** (04-sync-proton "Human verification during
+  sync"): while the engine holds Proton's challenge, the account's
+  health row offers "Verify…", which opens the human-verification sheet
+  on its own, as a sheet of the Activity window. The token it closes
+  with goes to `verify_proton_account`; closing it without one changes
+  nothing. Without a held challenge the row offers "Try Again", which
+  calls `verify_proton_account` without a token. A refusal shows on the
+  row.
 - Password fields are `NSSecureTextField`s; their contents go to the
   Swift bridge (`SweetbriarBridge`, not Proton Bridge) as bytes and are
   cleared when the step is sent.
@@ -192,6 +203,12 @@ is up. Choosing any other entry brings its message list back.
   `editing` and `queued` only): the subject or "No Subject", the To
   then Cc recipients by name or address (Bcc is not shown), "Queued"
   for a queued draft, and the update time.
+- **From:** each row shows its sending identity as an identity chip
+  (Account chips, with the identity's monogram and colors) labelled
+  like the identity strip: the account, the name and the full address.
+  A draft without an identity says "No sending identity". One whose
+  identity the compose catalog doesn't name, or that couldn't be read,
+  says "Sending identity unavailable", neutral, never a guessed address.
 - **Opening:** double-click or Return opens the row's draft. There is
   one compose window per draft: opening a draft whose window is open,
   or already opening, brings that window forward and opens nothing
@@ -221,8 +238,15 @@ M4.4c. Choosing Out Box shows the Out Box in the list pane, as Drafts
   "Sending", "Outcome unknown", "Failed",
   "Sent", "Cancelled", and for a resolved unknown "Marked as sent",
   "Sent again" or "Kept as draft") and the last update time.
+- **From:** each row shows the route the attempt froze, on its own line
+  apart from the state: an identity chip (Account chips) labelled with
+  the account and the frozen sending address, from `out_box()`, not the
+  identity's current address. Without the identity's appearance the
+  chip is neutral; the address still shows.
 - **Details:** the selected row's details show below the list: each
-  recipient with its address field and state, Proton's code and message
+  recipient with its address field and state, and "Not end-to-end
+  encrypted" for one Proton was asked to send in clear (05 step 1:
+  an external address without keys), Proton's code and message
   (`final_reply`), the Proton evidence observed since launch, the
   Proton draft it left in Proton's Drafts (05 "Drafts on the server"),
   and after `accepted` the soft warning when the Sent copy has not
@@ -462,9 +486,8 @@ M4.4c. Choosing Out Box shows the Out Box in the list pane, as Drafts
   Immediately, After 2, 5 or 10 seconds, or Manually.
 - **Header area:**
   - from, to and date;
-  - the "Received in <account>" chip in the account color with its
-    label, from the selected occurrence's account. Until M1.10's
-    appearance service the chip is neutral, with its label;
+  - the "Received in <account>" account chip (Account chips), from
+    the selected occurrence's account;
   - a tag picker and a multi-line note editor. The picker applies and
     removes the message's tags through `add_tag`/`remove_tag` on the
     selected occurrence; typing a new name creates the tag, within
@@ -698,6 +721,13 @@ Implements [15-account-colors](../research/15-account-colors.md):
   including selected rows; a strip ratio alone does not qualify the UI.
 - **The From control** is an `NSPopUpButton`: a swatch in each item's
   image and full addresses in titles. Provisional identities are marked.
+  The swatch is the strip in small: its fill and outline, with the
+  identity's monogram in the marker color. Without a monogram it shows
+  a marker square.
+- **The window title** starts with the sending account, so the Window
+  menu, Mission Control and Stage Manager show it: "Work · Lunch on
+  Friday · alex@company.example". Without a resolved identity it is the
+  subject, or "New Message".
 - **Switching From:**
   - updates the strip, title, signature and Sent behaviour in one view
     model transition; sending/Sent effects remain M4;
@@ -721,8 +751,9 @@ Implements [15-account-colors](../research/15-account-colors.md):
 - **Strong mode** (Settings → Appearance) tints the upper window via
   `backgroundColor`, `titlebarAppearsTransparent` and
   `.fullSizeContentView`. The editor stays neutral. The existing
-  `appearance.compose_cue` setting is a typed Standard/Strong preference;
-  missing or malformed answers are explicit errors, never a guessed mode.
+  `appearance.compose_cue` setting is a typed Standard/Strong/Minimal
+  preference; missing or malformed answers are explicit errors, never a
+  guessed mode.
   Publish a user change only after its receipt, retain an explicitly stale
   last value on failure, and prevent an older read from undoing that change.
   Settings writers use current admission and their frozen editor tickets;
@@ -738,16 +769,57 @@ Implements [15-account-colors](../research/15-account-colors.md):
   leaving preferences permanently unavailable. Refusing compose quit leaves
   preference owners usable.
   Appearance changes must not edit draft source or its undo history.
+- **Minimal mode** (research 15's Minimal marker) reduces only the color:
+  - the strip keeps its size, monogram, account name, full From address,
+    accessibility label and full-screen height;
+  - its fill is the opaque neutral window background and the window
+    isn't tinted, so the monogram is the only colored part;
+  - its text uses the system label color. The monogram keeps its
+    account marker, outlined in the system label color wherever the
+    marker is under 3:1 against that background (the account's outline
+    token is solved against its strip, not this one);
+  - an unavailable route and every warning look as they do in Standard.
+- **Mode previews:** Settings → Appearance shows Standard, Strong and
+  Minimal each with a preview of a compose window's top, drawn from the
+  same presentation as the real strip with the selected account's
+  tokens, or the neutral route when there is no account. A preview
+  never takes focus. Its mode's accessibility label says in words what
+  the mode colors.
 - **Cross-account check:** replying through a different account than the
   one that received the original shows an inline banner with **Use
   <account>** and **Keep <account>**. An unacknowledged mismatch is
   confirmed at Send. Validation runs in the core (05).
+  - The banner and the confirmation name the account that received the
+    original and the sending identity, with its account and full
+    address.
+  - The banner leads with a warning symbol in the label color, and the
+    confirmation is a warning alert, so neither looks like any account's
+    color.
 - **Window tabs** get an `NSWindowTab.accessoryView` swatch (P2, later).
 - **Accessibility settings honored:**
   - `accessibilityDisplayShouldDifferentiateWithoutColor`: stronger
     monogram, symbol and outline;
   - `…ShouldIncreaseContrast` and `…ShouldReduceTransparency`;
   - Dark Mode.
+
+## Account chips
+
+An account chip names the account a surface acts for (research 15's P1
+list): the reader's "Received in <account>", each account's row in
+Settings → Accounts and in Activity, and the move picker's
+destinations.
+
+- It shows the account's monogram in the marker color and its label in
+  the foreground color, on the strip fill: the identity strip's tokens
+  for the current appearance. Increase Contrast and Differentiate
+  Without Color add the outline.
+- The label is text, so the chip never relies on color alone. The chip
+  is one accessibility element with that label.
+- Without the account's appearance the chip is neutral: the label alone,
+  in the secondary label color.
+- An identity chip is the same chip with the identity's own monogram and
+  colors (its overrides, else its account's), where a surface shows a
+  sending identity rather than an account.
 
 ## Keyboard filing ("type to file")
 
@@ -860,3 +932,43 @@ Measured on the owner's Mac (research 03); each is a p95:
 | Open compose | 100 ms |
 
 An opt-in local latency log records these. Nothing leaves the machine.
+
+### Latency log (M6.4)
+
+- **Opt-in:** off by default. Debug → **Record Interaction Latency**
+  turns it on and off, and is stored in user defaults like List
+  Implementation.
+- **The log:** while it is on, each measured interaction appends one
+  JSON line to `diagnostics/latency.jsonl` in the cache root: the
+  interaction's name, its milliseconds, when it ended and the app
+  version. It holds no message, address, subject, id or search text.
+  At 10,000 lines the oldest are dropped first.
+- **Spans** run on the monotonic clock, each to the first frame that
+  shows the result. A shown result whose frame hasn't come within a
+  second (a hidden window) ends at that second, so a stall counts as
+  a miss:
+  - `launch`: from the process's start to the main window's list
+    showing its rows. A launch is warm unless it is the first since
+    the Mac started;
+  - `open_message`: from a single selection in a list to the reader
+    showing that message's body, when the body was already on this
+    Mac. An open that waits for Proton to fetch the body isn't
+    recorded;
+  - `archive_visible` and `archive_durable`, `delete_visible` and
+    `delete_durable`: from the command to the row leaving the list,
+    and to the core's receipt for its intent. Archive and Move to
+    Trash count, from the keyboard, a menu, the toolbar or a context
+    menu, when every row they targeted was filed; a drag or Move to…
+    doesn't. A row that stays listed (a label's list, or a Search it
+    still matches) records no visible span;
+  - `search`: from the last keystroke to the results for that query.
+    A later keystroke replaces the span;
+  - `open_compose`: from New Message, Reply, Reply All or Forward to
+    the compose window's editor taking keystrokes.
+- **The report:** Debug → **Latency Report…** shows each interaction's
+  count, p50, p95 and maximum beside its budget, and whether the p95
+  meets it, with a Copy button. Warm launches alone count toward the
+  launch budget. Debug → **Clear Latency Log** empties the log.
+- **Failures:** a log that can't be written stays on, and the report
+  says how many entries were lost and why. Nothing is retried in a
+  loop.

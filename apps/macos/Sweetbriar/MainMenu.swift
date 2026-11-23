@@ -77,6 +77,9 @@ final class MainMenuBuilder: NSObject {
     private let onSettings: @MainActor () -> Void
     private let onShowActivity: @MainActor () -> Void
     private let isWriteEnabled: @MainActor () -> Bool
+    /// The opt-in latency log the Debug items control (spec/08).
+    private let latency: LatencyRecorder
+    private var latencyReport: BenchmarkReportWindowController?
 
     /// Every command's stable identifier, in the `ch.lkmc.Sweetbriar.cmd.*`
     /// namespace (spec/08 "Menus and commands"). AppKit's own items
@@ -150,6 +153,12 @@ final class MainMenuBuilder: NSObject {
         ]
         /// Debug → Composer Probe.
         static let composerProbe = command("debug.composerProbe")
+        /// Debug → Record Interaction Latency, checked while it is on.
+        static let recordLatency = command("debug.recordLatency")
+        /// Debug → Latency Report….
+        static let latencyReport = command("debug.latencyReport")
+        /// Debug → Clear Latency Log.
+        static let clearLatencyLog = command("debug.clearLatencyLog")
     }
 
     /// - Parameters:
@@ -194,8 +203,10 @@ final class MainMenuBuilder: NSObject {
         onReply: @escaping @MainActor () -> Void = {},
         onReplyAll: @escaping @MainActor () -> Void = {},
         onForward: @escaping @MainActor () -> Void = {},
-        isReplyEnabled: @escaping @MainActor () -> Bool = { false }
+        isReplyEnabled: @escaping @MainActor () -> Bool = { false },
+        latency: LatencyRecorder = .shared
     ) {
+        self.latency = latency
         self.onFillSynthetic = onFillSynthetic
         self.onShowPrototype = onShowPrototype
         self.onImplementationChanged = onImplementationChanged
@@ -521,6 +532,26 @@ final class MainMenuBuilder: NSObject {
             target: self,
             id: ItemID.composerProbe
         ))
+        menu.addItem(.separator())
+        let record = Self.item(
+            "Record Interaction Latency",
+            action: #selector(toggleLatencyRecording(_:)),
+            target: self
+        )
+        record.identifier = ItemID.recordLatency
+        menu.addItem(record)
+        menu.addItem(Self.item(
+            "Latency Report…",
+            action: #selector(showLatencyReport(_:)),
+            target: self,
+            id: ItemID.latencyReport
+        ))
+        menu.addItem(Self.item(
+            "Clear Latency Log",
+            action: #selector(clearLatencyLog(_:)),
+            target: self,
+            id: ItemID.clearLatencyLog
+        ))
         item.submenu = menu
         return item
     }
@@ -626,6 +657,30 @@ final class MainMenuBuilder: NSObject {
     private func showComposerProbe(_ sender: NSMenuItem) {
         onShowComposerProbe()
     }
+
+    /// Debug → Record Interaction Latency (spec/08 "Latency log").
+    @objc
+    private func toggleLatencyRecording(_ sender: NSMenuItem) {
+        latency.isEnabled.toggle()
+    }
+
+    /// Debug → Latency Report…: the report as it stands, with Copy.
+    @objc
+    private func showLatencyReport(_ sender: NSMenuItem) {
+        let window = BenchmarkReportWindowController(title: "Latency Report", text: latency.reportText())
+        latencyReport = window
+        window.showWindow(nil)
+    }
+
+    /// Debug → Clear Latency Log; a failure says so.
+    @objc
+    private func clearLatencyLog(_ sender: NSMenuItem) {
+        guard let error = latency.clear() else { return }
+        let alert = NSAlert()
+        alert.messageText = "Couldn't clear the latency log"
+        alert.informativeText = error.localizedDescription
+        alert.runModal()
+    }
 }
 
 extension MainMenuBuilder: NSMenuItemValidation {
@@ -648,6 +703,9 @@ extension MainMenuBuilder: NSMenuItemValidation {
         }
         if let identifier = menuItem.identifier, ItemID.benchmarks.contains(identifier) {
             return isBenchmarkEnabled()
+        }
+        if menuItem.identifier == ItemID.recordLatency {
+            menuItem.state = latency.isEnabled ? .on : .off
         }
         if menuItem.action == #selector(pickImplementation(_:)) {
             let raw = menuItem.representedObject as? String

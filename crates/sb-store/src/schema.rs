@@ -62,7 +62,8 @@ const FOREIGN_KEYS_OFF_MIGRATIONS: &[u32] = &[28, 35];
 /// 33 adds `accounts.restore_pending` (02, 03 "Restore"); version 34
 /// adds the Proton send columns and the runnable index (02, 05);
 /// version 35 adds the `remove_label` intent op and rebuilds `intents`
-/// for its CHECK (02).
+/// for its CHECK (02); version 36 adds the Proton recipient's scheme
+/// column (02, 05 step 4).
 pub(crate) const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 1,
@@ -203,6 +204,10 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 35,
         run: migration_35,
+    },
+    Migration {
+        version: 36,
+        run: migration_36,
     },
 ];
 
@@ -1129,6 +1134,17 @@ fn migration_34(tx: &Transaction, _seams: &Seams) -> Result<(), StoreError> {
 fn migration_35(tx: &Transaction, _seams: &Seams) -> Result<(), StoreError> {
     tx.execute_batch(include_str!("schema/v35.sql"))
         .map_err(bug)
+}
+
+/// Version 36 (spec/02 "Sending", spec/05 step 4): the package
+/// scheme each Proton recipient's send request carried. Additive only;
+/// written with `send_requested_at` and cleared by a requeue (02).
+fn migration_36(tx: &Transaction, _seams: &Seams) -> Result<(), StoreError> {
+    tx.execute_batch(
+        "ALTER TABLE send_recipients ADD COLUMN scheme TEXT
+           CHECK (scheme IN ('internal','clear'));",
+    )
+    .map_err(bug)
 }
 
 /// One version-4 UUID from the randomness seam. A seam that can't

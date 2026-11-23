@@ -61,7 +61,7 @@ async fn Core::shutdown(self);   // flush writer, release the lease
 
 | Area | Commands |
 |---|---|
-| Accounts | `begin_proton_sign_in(params)`, `continue_proton_sign_in(sign_in_id, step)`, `cancel_proton_sign_in(sign_in_id)` (M2.13), `add_bridge_account(params)` (merged; the app no longer offers it), `update_account(id, params)`, `pause_account(id)`, `resume_account(id)`, `disconnect_account(id)`, `set_account_appearance(id, expected_revision, appearance)` |
+| Accounts | `begin_proton_sign_in(params)`, `continue_proton_sign_in(sign_in_id, step)`, `cancel_proton_sign_in(sign_in_id)` (M2.13), `add_bridge_account(params)` (merged; the app no longer offers it), `update_account(id, params)`, `pause_account(id)`, `resume_account(id)`, `verify_proton_account(id, answer)`, `disconnect_account(id)`, `set_account_appearance(id, expected_revision, appearance)` |
 | Identities | `upsert_identity(params)`, `set_default_identity(id)`, `set_identity_appearance(id, expected_revision, appearance)` |
 | Import/export | `start_import(paths, target)` → job id, `confirm_import(job_id, variants)` (09), `cancel_job(id)`, `start_export(scope, format, destination)` |
 | Search index | `start_search_rebuild()` → job id, `resume_search_rebuild(job_id)`, `retry_search_index()`; `cancel_job(id)` also routes to rebuild jobs |
@@ -388,6 +388,15 @@ async fn Core::shutdown(self);   // flush writer, release the lease
     (04-sync-proton "Refresh"). The resets come first; the one
     statement that makes the account active also clears
     `restore_pending`, since 02's CHECK holds after every statement.
+  - `verify_proton_account(id, answer)` (04-sync-proton "Human
+    verification during sync") sets a Proton account that is
+    `needs_attention` for human verification `active` and starts its
+    worker. `answer` is none ("Try Again") or the sheet's
+    `HumanVerification { token, token_type }`, which the worker's first
+    request carries, once. Any other state or reason is `Conflict`;
+    another kind is `InvalidInput` on `account`; an unknown account is
+    `NotFound`. A repeated key answers its stored receipt and changes
+    nothing. The token is a secret: never logged or stored (10).
   - `disconnect_account(id)` is unchanged (M2.12), apart from the key
     and receipt.
   - `set_app_active(active)` is a lifecycle signal, not a command: no
@@ -736,12 +745,20 @@ a receipt or file-export command; Service/FFI exposure remains M1.7e/f.
     answering with the next retry, rate limited with the time, or
     healthy); its warnings (addresses whose keys didn't unlock); open
     breaker events (id, mailbox, count, detected time); coverage
-    (`coverage(scope)` for the account); and the last sync time. A
+    (`coverage(scope)` for the account); for a Proton account, its
+    Proton coverage (04-sync-proton "Coverage"); and the last sync
+    time. The verify condition says whether the engine holds Proton's
+    challenge (04-sync-proton "Human verification during sync"). A
     `disconnected` account's condition is disconnected, offering "Sign
     in again". Retry
     times and the last sync time come from the running worker's memory:
     a paused account, or one not synced since launch, has none. `subscribe_account_health()` wakes when
     any of it changes.
+  - `proton_verification(id)` → the challenge the engine holds for a
+    Proton account that needs human verification (its URL and methods,
+    as sign-in's `NeedsHumanVerification`), or none: none for another
+    state, after a relaunch, and for an account that isn't Proton's.
+    An unknown account is `NotFound`.
   - `intents(filter)` (M2.7) → parked and quarantined intents, each
     with its account, kind, target message, reason and what it would
     do; oldest first, keyset paged like a window (at most 1,000 a
@@ -763,8 +780,10 @@ a receipt or file-export command; Service/FFI exposure remains M1.7e/f.
     last 30 days' history (`accepted`, `cancelled`, resolved
     `outcome_unknown`, and `failed` ones a newer attempt replaced),
     newest first within each part. Each holds the attempt and draft ids,
-    account, identity, the frozen subject and recipients with each
-    recipient's state, the attempt's state, times, Proton's code and
+    account, identity, the frozen sending address (`envelope_from`), the
+    frozen subject and recipients with each recipient's state and, once
+    the send request was committed, its Proton scheme (`internal` or
+    `clear`, 05 step 4), the attempt's state, times, Proton's code and
     message (`final_reply`), its resolution, the Proton evidence
     observed since launch (05; kept in memory, so a relaunch shows
     none until the worker's next check) and, after `accepted`, whether

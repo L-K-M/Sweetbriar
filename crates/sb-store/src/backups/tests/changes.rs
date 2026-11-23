@@ -248,6 +248,7 @@ fn a_store_migrating_in_starts_due() {
          ALTER TABLE send_attempts DROP COLUMN send_requested_at;
          ALTER TABLE send_attempts DROP COLUMN proton_uploads_json;
          ALTER TABLE send_attempts DROP COLUMN proton_draft_id;
+         ALTER TABLE send_recipients DROP COLUMN scheme;
          PRAGMA user_version = 24;",
     );
 
