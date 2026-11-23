@@ -867,7 +867,11 @@ An opt-in local latency log records these. Nothing leaves the machine.
     recorded;
   - `archive_visible` and `archive_durable`, `delete_visible` and
     `delete_durable`: from the command to the row leaving the list,
-    and to the core's receipt for its intent;
+    and to the core's receipt for its intent. Archive and Move to
+    Trash count, from the keyboard, a menu, the toolbar or a context
+    menu, when every row they targeted was filed; a drag or Move to…
+    doesn't. A row that stays listed (a label's list, or a Search it
+    still matches) records no visible span;
   - `search`: from the last keystroke to the results for that query.
     A later keystroke replaces the span;
   - `open_compose`: from New Message, Reply, Reply All or Forward to
