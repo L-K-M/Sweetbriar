@@ -9,6 +9,8 @@ struct AccountsSettingsView: View {
     let diagnostics: DiagnosticsModel
     let editor: ArchiveWriteTasks
     let editorRevision: UInt64
+    /// The accounts' colors for each row's chip; nil keeps them neutral.
+    var appearance: AppearanceModel?
     let onSignInAgain: @MainActor (Account) -> Void
 
     @State private var renaming: [String: String] = [:]
@@ -79,7 +81,11 @@ struct AccountsSettingsView: View {
 
     private func accountRow(_ account: Account) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(account.displayName).font(.headline)
+            AccountChip(
+                label: account.displayName, accountId: account.accountId,
+                appearance: appearance?.appearance, identifier: "account-chip-\(account.accountId)"
+            )
+            .font(.headline)
             Text(stateText(account))
                 .foregroundStyle(.secondary)
                 .accessibilityIdentifier("account-state-\(account.accountId)")

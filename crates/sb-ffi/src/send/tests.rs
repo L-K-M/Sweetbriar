@@ -114,6 +114,7 @@ fn service_row() -> sb_service::OutBoxRow {
         draft_id: "draft".into(),
         account_id: "account".into(),
         identity_id: "identity".into(),
+        envelope_from: "owner@example.test".into(),
         subject: "subject".into(),
         recipients: vec![
             service_recipient(
@@ -161,6 +162,7 @@ fn out_box_maps_every_state_and_field() {
     assert_eq!(row.draft_id, "draft");
     assert_eq!(row.account_id, "account");
     assert_eq!(row.identity_id, "identity");
+    assert_eq!(row.envelope_from, "owner@example.test");
     assert_eq!(row.subject, "subject");
     assert_eq!(
         row.recipients,
@@ -348,6 +350,8 @@ fn send_draft_out_box_and_cancel() {
     assert_eq!(row.draft_id, draft_id);
     assert_eq!(row.account_id, "acct-1");
     assert_eq!(row.identity_id, "ident-1");
+    // The route's address, frozen when the attempt was queued.
+    assert_eq!(row.envelope_from, "me@example.test");
     assert_eq!(row.subject, "hello");
     assert_eq!(row.state, crate::AttemptState::Held);
     assert_eq!(row.created_at_ms, row.updated_at_ms);

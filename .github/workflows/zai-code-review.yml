@@ -25,7 +25,7 @@ jobs:
     name: Review PR with GLM 5.3
     # A ZAI_REVIEW_RUNNER repository variable (e.g. truenas) moves the review
     # to self-hosted runners with that label; unset, GitHub hosts it.
-    runs-on: ${{ vars.ZAI_REVIEW_RUNNER || 'ubuntu-latest' }}
+    runs-on: ${{ vars.ZAI_REVIEW_RUNNER || 'ubuntu-24.04' }}
     # Backstop only. The review step below carries the real budget and is
     # shorter, so it always fires first. That keeps running out of time a step
     # failure, which the reporting step can act on, and leaves "cancelled" to
@@ -40,6 +40,11 @@ jobs:
     env:
       ZAI_API_KEY: ${{ secrets.ZAI_API_KEY }}
     steps:
+      # GitHub-hosted images set ImageOS and ImageVersion; a self-hosted
+      # runner is named instead.
+      - name: Log image
+        run: |
+          echo "Runner: ${RUNNER_NAME} ${RUNNER_OS}/${RUNNER_ARCH}, image ${ImageOS:-self-hosted} ${ImageVersion:-}"
       - name: Record when the review started
         if: ${{ env.ZAI_API_KEY != '' }}
         run: echo "REVIEW_STARTED_AT=$(date -u +%s)" >> "$GITHUB_ENV"

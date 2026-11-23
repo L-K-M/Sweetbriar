@@ -31,6 +31,9 @@ mod message_source;
 pub mod messages;
 mod objects;
 mod paths;
+#[cfg(test)]
+#[allow(unsafe_code)]
+mod power_vfs;
 pub mod proton;
 pub mod query;
 mod readers;

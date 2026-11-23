@@ -61,10 +61,8 @@ mod proton_send;
 mod proton_sync;
 pub use proton::{BeginProtonSignIn, ProtonSignInState, ProtonSignInStep};
 pub use sb_resources::proton_sync::BreakerResolution;
-#[cfg(any(test, feature = "test-seams"))]
-#[doc(hidden)]
-pub use sb_resources::proton_sync::ProtonCoverage;
 pub use sb_resources::proton_sync::ProtonListingState;
+pub use sb_resources::proton_sync::{MailboxCoverage, ProtonCoverage};
 mod rebuild;
 mod received;
 mod recovery;

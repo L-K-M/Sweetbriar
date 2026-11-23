@@ -76,6 +76,13 @@ final class MessageListViewController: NSViewController {
     var onIndexChangedForBenchmark: (@MainActor (UInt64) -> Void)?
     private(set) var shownSpec: WindowSpec?
     private(set) var choiceSerial = 0
+    /// spec/08's launch and `search` spans end when a choice's rows
+    /// show; a search choice keeps the field's ticket its span names.
+    private let latency: LatencyRecorder
+    /// Filing spans waiting for their rows to leave this list.
+    private var leaving: [(span: LatencySpan, ids: Set<Int64>)] = []
+    private static let leavingLimit = 16
+    private var shownSearchTicket: UInt64?
     var failureForBenchmark: (any Error)? { openError ?? model?.lastError }
     /// When the latest choice was shown, its opening page returned from
     /// the core, its first pages landed and its list's open returned, in
@@ -91,8 +98,10 @@ final class MessageListViewController: NSViewController {
 
     init(bridge: CoreBridge, sidebar: SidebarModel, appearance: AppearanceModel,
          listSource: (any ListWindowSource)? = nil, clock: (any FrameClock)? = nil,
-         writes: ArchiveWriteTasks? = nil, canWrite: @escaping @MainActor () -> Bool = { true }) {
+         writes: ArchiveWriteTasks? = nil, canWrite: @escaping @MainActor () -> Bool = { true },
+         latency: LatencyRecorder = .shared) {
         self.bridge = bridge
+        self.latency = latency
         self.listSource = listSource ?? bridge
         self.clockOverride = clock
         self.writes = writes ?? ArchiveWriteTasks()
@@ -130,7 +139,10 @@ final class MessageListViewController: NSViewController {
         observeControls()
         model.onPresent = { [weak self, weak model] spec, ticket in
             guard model?.isCurrent(ticket) == true else { return }
-            self?.show(spec)
+            self?.show(spec, searchTicket: spec.isSearch ? ticket : nil)
+        }
+        model.onQueryEdited = { [weak self] ticket in
+            self?.latency.begin(.search, replacing: ticket)
         }
         search.onSaveAsView = { [weak self] name in
             try await self?.saveView(name: name) ?? ()
@@ -173,8 +185,8 @@ final class MessageListViewController: NSViewController {
             coverage.trailingAnchor.constraint(equalTo: content.trailingAnchor),
             coverage.bottomAnchor.constraint(equalTo: content.bottomAnchor),
             coverageCollapsed,
-            // The window's content runs under the title bar; the field
-            // must sit below it to take clicks.
+            // Where content runs under a title bar the field must sit
+            // below it to take clicks.
             search.view.topAnchor.constraint(equalTo: content.safeAreaLayoutGuide.topAnchor),
             search.view.leadingAnchor.constraint(equalTo: content.leadingAnchor),
             search.view.trailingAnchor.constraint(equalTo: content.trailingAnchor),
@@ -202,10 +214,22 @@ final class MessageListViewController: NSViewController {
         indexControls.stopPolling()
     }
 
+    /// The context menu's commands for the rows it targets, given to
+    /// each list as it is installed.
+    var contextActions: (@MainActor (Set<Int64>) -> [MessageContextAction])? {
+        didSet { list?.contextActions = contextActions }
+    }
+
+    /// The filing undo each installed list answers Edit → Undo with.
+    var filingUndoManager: UndoManager? {
+        didSet { list?.filingUndoManager = filingUndoManager }
+    }
+
     /// List `spec`: close the current model, then open a fresh one in
-    /// a fresh list.
-    func show(_ spec: WindowSpec) {
+    /// a fresh list. A search the field presented names its ticket.
+    func show(_ spec: WindowSpec, searchTicket: UInt64? = nil) {
         search.navigated(to: spec)
+        shownSearchTicket = searchTicket
         standalone = false
         indexControls.stopPolling()
         let ticket = tickets.next()
@@ -248,6 +272,7 @@ final class MessageListViewController: NSViewController {
             guard let self else { return }
             if landedAtForBenchmark == nil, let model, self.model === model {
                 landedAtForBenchmark = CACurrentMediaTime()
+                rowsShown()
             }
             onPagesDeliveredForBenchmark?(pages)
         }
@@ -270,6 +295,8 @@ final class MessageListViewController: NSViewController {
         list.onSelectionChange = { [weak self] ids in
             self?.onSelectionChange?(ids)
         }
+        list.contextActions = contextActions
+        list.filingUndoManager = filingUndoManager
         list.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(list, positioned: .below, relativeTo: statusLabel)
         NSLayoutConstraint.activate([
@@ -283,6 +310,7 @@ final class MessageListViewController: NSViewController {
         onSelectionChange?([])
 
         observe(model)
+        observeGeneration(model)
         do {
             try await model.open()
         } catch {
@@ -291,12 +319,55 @@ final class MessageListViewController: NSViewController {
         }
         guard tickets.isCurrent(ticket) else { return }
         openedAtForBenchmark = CACurrentMediaTime()
+        // An empty list has no pages to land: it shows once open.
+        if openError == nil, model.count == 0 { rowsShown() }
         opening = false
         if Self.isUnavailable(openError) {
             enterStandalone()
         }
         updateStatus()
         updateCoverage()
+    }
+
+    /// An archive or delete span that ends at the first frame after
+    /// none of `ids` is listed (spec/08 "Latency log"). One whose rows
+    /// stay listed never ends, and goes with this list.
+    func endWhenGone(_ span: LatencySpan?, ids: Set<Int64>) {
+        guard let span, !ids.isEmpty, model != nil else { return }
+        leaving.append((span, ids))
+        // A long run of rows that stayed listed keeps only the newest.
+        if leaving.count > Self.leavingLimit { leaving.removeFirst() }
+        endLeftSpans()
+    }
+
+    /// Each new generation may have taken a filed row out.
+    private func observeGeneration(_ model: ListWindowModel) {
+        withObservationTracking {
+            _ = model.generation
+        } onChange: { [weak self, weak model] in
+            Task { @MainActor [weak self, weak model] in
+                guard let self, let model, self.model === model else { return }
+                self.endLeftSpans()
+                self.observeGeneration(model)
+            }
+        }
+    }
+
+    private func endLeftSpans() {
+        guard let model, let list, !leaving.isEmpty else { return }
+        leaving.removeAll { pending in
+            guard pending.ids.allSatisfy({ model.index(of: $0) == nil }) else { return false }
+            latency.end(pending.span, shownIn: list)
+            return true
+        }
+    }
+
+    /// The current choice's first rows are on screen (spec/08 "Latency
+    /// log"): the first ends the launch, a search's ends its span.
+    private func rowsShown() {
+        guard let list else { return }
+        latency.launchShown(in: list)
+        if let shownSearchTicket { latency.end(.search, key: shownSearchTicket, shownIn: list) }
     }
 
     /// Close the list's model; the window is going away.
@@ -320,6 +391,8 @@ final class MessageListViewController: NSViewController {
     private func detach() {
         let old = model
         model = nil
+        // Rows another list showed can't leave this one.
+        leaving.removeAll()
         openError = nil
         list?.removeFromSuperview()
         list = nil

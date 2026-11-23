@@ -86,11 +86,12 @@ struct ComposeCueTests {
             ]
             #expect(try ComposeCueMode.decode(settings) == mode)
         }
+        #expect(ComposeCueMode.allCases.map(\.rawValue) == ["standard", "strong", "minimal"])
         let valid = Setting(key: "appearance.compose_cue", value: "strong", isDefault: false)
         #expect(throws: CoreFailure.self) { try ComposeCueMode.decode([]) }
         #expect(throws: CoreFailure.self) { try ComposeCueMode.decode([valid, valid]) }
         for raw in [
-            "", "null", "true", "1", "Strong", "minimal", "\"strong\"", " strong", "strong ",
+            "", "null", "true", "1", "Strong", "Minimal", "\"strong\"", " strong", "strong ",
             "{\"mode\":\"strong\"}",
         ] {
             #expect(throws: CoreFailure.self) {

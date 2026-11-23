@@ -10,21 +10,29 @@ final class BenchmarkReportWindowController: NSWindowController {
     /// The report's JSON, for the Copy button.
     private let reportText: String
 
-    init(report: ListBenchmarkReport) {
-        reportText = (try? report.encoded()).map {
+    convenience init(report: ListBenchmarkReport) {
+        let text = (try? report.encoded()).map {
             String(decoding: $0, as: UTF8.self)
         } ?? "{\n  \"ok\": false\n}"
+        let title = switch report.mode {
+        case .synthetic: "List Benchmark"
+        case .store: "Store Benchmark"
+        case .search: "Search Benchmark"
+        }
+        self.init(title: title, text: text)
+    }
+
+    /// Any report's text with its Copy button: also Debug → Latency
+    /// Report (spec/08 "Latency log").
+    init(title: String, text: String) {
+        reportText = text
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 720, height: 640),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered,
             defer: false
         )
-        window.title = switch report.mode {
-        case .synthetic: "List Benchmark"
-        case .store: "Store Benchmark"
-        case .search: "Search Benchmark"
-        }
+        window.title = title
         window.minSize = NSSize(width: 480, height: 320)
         let content = NSView(
             frame: NSRect(x: 0, y: 0, width: 720, height: 640)

@@ -134,6 +134,12 @@ with `SB_SEARCH_TIMINGS_OUT=<file>` for the report and
   ActivityFlowTests`): over a store seeded with two breaker events,
   the Activity window's Accept and Keep leave them `accepted` and
   `kept`;
+- the filing flow XCUITest (M5.2b, `SweetbriarUITests/
+  FilingFlowTests`): over a seeded, paused Proton account, Archive
+  and Undo, the Move to… palette and Edit → Undo, ⌘⌫ left to the
+  search field, Move to Trash, and a refusal explained; then
+  (M5.2c) Archive from the context menu and drops on a folder, a
+  label and Scheduled;
 - the account settings XCUITest (M2.7e1, `SweetbriarUITests/
   AccountSettingsFlowTests`): a seeded Proton account renamed and
   paused through Settings → Accounts keeps the new name and `paused`;
@@ -160,8 +166,9 @@ push commit-pinned requests to `bench/requests` and reports to
 
 M0.12 adds `nightly.yml` (daily/manual): Swift unit tests, the
 `SweetbriarSmoke` XCUITest launch and an ad-hoc signed DMG. `xcode-27`
-is advisory; the fault-injection placeholder stays skipped until its
-suite exists. The `proptest` job runs the Proton sync model with
+is advisory. The `fault-injection` job runs the sampled crash suites
+at every cut point (`SB_FAULT_SCALE=full`) and the power-loss
+simulation on both layers (spec/11). The `proptest` job runs the Proton sync model with
 `SB_PROPTEST_SCALE=20` times the cases a pull request runs. M1.1
 enables the 60-second Linux MIME fuzz run; reproduction and its
 isolated nightly toolchain are documented in `fuzz/README.md`.

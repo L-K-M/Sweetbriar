@@ -55,11 +55,28 @@ final class AppKitPrototypeList: NSView {
     private let observeAccountLabels: () -> Void
     private let selectionLoss: SelectionLoss
     private let scrollView = NSScrollView()
-    private let tableView = NSTableView()
+    private let tableView = MessageTableView()
 
     /// The selection, by occurrence id, whenever it changes — the
     /// list's own clicks and a new index's changes alike.
     var onSelectionChange: (@MainActor (Set<Int64>) -> Void)?
+
+    /// The commands the context menu offers for the rows it targets;
+    /// without them, as in the prototype, its items are no-ops.
+    var contextActions: (@MainActor (Set<Int64>) -> [MessageContextAction])?
+
+    /// The rows the last drag from this list took.
+    private(set) var draggedIDs: Set<Int64> = []
+
+    /// Where this list's filing undo is kept, apart from the window's,
+    /// which the text editors share: ⌘Z in those never moves mail
+    /// (spec/08 "Keyboard filing").
+    var filingUndoManager: UndoManager?
+
+    /// The table finds this through the responder chain.
+    override var undoManager: UndoManager? {
+        filingUndoManager ?? super.undoManager
+    }
 
     /// True while the table's selection is set from the ids, not by the
     /// user: its callbacks then must not overwrite the model's ids — a
@@ -69,6 +86,12 @@ final class AppKitPrototypeList: NSView {
     /// The selection as occurrence ids — the source of truth the
     /// table's `selectedRowIndexes` is mapped through.
     private var selectedOccurrenceIDs: Set<Int64> = []
+
+    /// The first selected row's rank, while rows are selected.
+    private var selectionRank: Int?
+    /// That rank once every selected row left the list: where the next
+    /// arrow continues (spec/08 "Keyboard filing").
+    private var resumeRank: Int?
 
     init(
         model: ListWindowModel,
@@ -105,6 +128,7 @@ final class AppKitPrototypeList: NSView {
         model.onSelectionChanged = { [weak self] ids in
             guard let self else { return }
             let lost = ids.isEmpty && !selectedOccurrenceIDs.isEmpty
+            if lost { resumeRank = selectionRank }
             selectedOccurrenceIDs = ids
             restoreSelection()
             if lost, selectionLoss == .reopenAtTop {
@@ -154,6 +178,9 @@ final class AppKitPrototypeList: NSView {
         tableView.dataSource = self
         tableView.delegate = self
         tableView.menu = contextMenu()
+        tableView.setDraggingSourceOperationMask(.move, forLocal: true)
+        tableView.setDraggingSourceOperationMask([], forLocal: false)
+        tableView.resumeSelection = { [weak self] step in self?.resumeSelection(step) == true }
         tableView.setAccessibilityIdentifier(Self.accessibilityID)
 
         scrollView.documentView = tableView
@@ -239,7 +266,25 @@ final class AppKitPrototypeList: NSView {
                 indexes.insert(rank)
             }
         }
+        if let first = indexes.first { selectionRank = first }
         tableView.selectRowIndexes(indexes, byExtendingSelection: false)
+    }
+
+    /// An arrow after the whole selection left: Down takes the row now
+    /// at the first one's rank, Up the row before it.
+    private func resumeSelection(_ step: MessageTableView.Step) -> Bool {
+        guard let resumeRank, model.count > 0 else { return false }
+        let wanted = step == .next ? resumeRank : resumeRank - 1
+        let row = min(max(wanted, 0), model.count - 1)
+        tableView.selectRowIndexes([row], byExtendingSelection: false)
+        tableView.scrollRowToVisible(row)
+        return true
+    }
+
+    /// Give the table the keyboard, as the filing palette does when it
+    /// closes (spec/08 "Keyboard filing").
+    func focus() {
+        window?.makeFirstResponder(tableView)
     }
 
     /// The context menu — rebuilt per click in `menuNeedsUpdate`,
@@ -282,6 +327,25 @@ extension AppKitPrototypeList: NSTableViewDataSource, NSTableViewDelegate {
         return cell
     }
 
+    func tableView(_ tableView: NSTableView, pasteboardWriterForRow row: Int) -> (any NSPasteboardWriting)? {
+        guard contextActions != nil, model.occurrenceID(at: row) != nil else { return nil }
+        return MessageListDrag.item()
+    }
+
+    /// The rows are captured as the drag begins: the list may change
+    /// under it.
+    func tableView(
+        _ tableView: NSTableView, draggingSession session: NSDraggingSession,
+        willBeginAt screenPoint: NSPoint, forRowIndexes rowIndexes: IndexSet
+    ) {
+        draggedIDs = Set(rowIndexes.compactMap { model.occurrenceID(at: $0) })
+    }
+
+    /// Whether `source` is this list's table.
+    func isDragSource(_ source: Any?) -> Bool {
+        (source as? NSTableView) === tableView
+    }
+
     private func makeCell() -> MessageRowCellView {
         let cell = MessageRowCellView(showsAccountMarker: accountMarker == .shown)
         cell.identifier = Self.cellIdentifier
@@ -298,10 +362,30 @@ extension AppKitPrototypeList: NSTableViewDataSource, NSTableViewDelegate {
                 model.occurrenceID(at: $0)
             }
         )
+        selectionRank = tableView.selectedRowIndexes.first
+        resumeRank = nil
         guard ids != selectedOccurrenceIDs else { return }
         selectedOccurrenceIDs = ids
         model.select(ids)
         onSelectionChange?(ids)
+    }
+}
+
+// MARK: - Edit → Undo
+
+/// A window answers `undo:` with its own undo manager, whatever its
+/// first responder's is, so the list answers it while it has the
+/// keyboard (spec/08 "Keyboard filing").
+extension AppKitPrototypeList: NSMenuItemValidation {
+    @objc func undo(_ sender: Any?) {
+        undoManager?.undo()
+    }
+
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        guard menuItem.action == #selector(undo(_:)) else { return true }
+        guard let undoManager else { return false }
+        menuItem.title = undoManager.undoMenuItemTitle
+        return undoManager.canUndo
     }
 }
 
@@ -310,8 +394,9 @@ extension AppKitPrototypeList: NSTableViewDataSource, NSTableViewDelegate {
 extension AppKitPrototypeList: NSMenuDelegate {
     /// Build the menu for this click. `clickedRow` is valid only
     /// inside the context-menu event, so items are made here: a
-    /// disabled header carrying the target count, then the four
-    /// no-op commands. A click outside any row shows no menu.
+    /// disabled header carrying the target count, then the window's
+    /// commands, or the prototype's no-ops. A click outside any row
+    /// shows no menu.
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
         let row = tableView.clickedRow
@@ -334,6 +419,13 @@ extension AppKitPrototypeList: NSMenuDelegate {
         header.isEnabled = false
         menu.addItem(header)
         menu.addItem(.separator())
+        if let contextActions {
+            menu.autoenablesItems = false
+            for action in contextActions(targets) {
+                menu.addItem(MessageContextItem(action))
+            }
+            return
+        }
         for title in ContextClickTarget.actionTitles {
             let item = NSMenuItem(
                 title: title,

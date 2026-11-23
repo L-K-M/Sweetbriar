@@ -77,10 +77,17 @@ final class MainMenuBuilder: NSObject {
     private let onSettings: @MainActor () -> Void
     private let onShowActivity: @MainActor () -> Void
     private let isWriteEnabled: @MainActor () -> Bool
+    /// The opt-in latency log the Debug items control (spec/08).
+    private let latency: LatencyRecorder
+    private var latencyReport: BenchmarkReportWindowController?
 
     /// `NSMenuItem.identifier`s that `validateMenuItem` treats
     /// specially.
     enum ItemID {
+        /// Debug → Record Interaction Latency, checked while it is on.
+        static let recordLatency = NSUserInterfaceItemIdentifier(
+            "ch.lkmc.Sweetbriar.debug.recordLatency"
+        )
         /// Both "List Implementation" submenu items — the radio pair.
         static let implementation = NSUserInterfaceItemIdentifier(
             "debug.listImplementation"
@@ -104,6 +111,26 @@ final class MainMenuBuilder: NSObject {
         /// Message → Star or Unstar.
         static let toggleStar = NSUserInterfaceItemIdentifier(
             "ch.lkmc.Sweetbriar.cmd.toggleStar"
+        )
+        /// Message → Archive (spec/08 "Keyboard filing").
+        static let archive = NSUserInterfaceItemIdentifier(
+            "ch.lkmc.Sweetbriar.cmd.archive"
+        )
+        /// Message → Move to Trash.
+        static let trash = NSUserInterfaceItemIdentifier(
+            "ch.lkmc.Sweetbriar.cmd.trash"
+        )
+        /// Message → Move to….
+        static let move = NSUserInterfaceItemIdentifier(
+            "ch.lkmc.Sweetbriar.cmd.move"
+        )
+        /// Message → Add Label….
+        static let addLabel = NSUserInterfaceItemIdentifier(
+            "ch.lkmc.Sweetbriar.cmd.addLabel"
+        )
+        /// Message → Remove Label….
+        static let removeLabel = NSUserInterfaceItemIdentifier(
+            "ch.lkmc.Sweetbriar.cmd.removeLabel"
         )
         /// "Run List Benchmark" — disabled while a run is in flight.
         static let benchmark = NSUserInterfaceItemIdentifier(
@@ -153,8 +180,10 @@ final class MainMenuBuilder: NSObject {
         onReply: @escaping @MainActor () -> Void = {},
         onReplyAll: @escaping @MainActor () -> Void = {},
         onForward: @escaping @MainActor () -> Void = {},
-        isReplyEnabled: @escaping @MainActor () -> Bool = { false }
+        isReplyEnabled: @escaping @MainActor () -> Bool = { false },
+        latency: LatencyRecorder = .shared
     ) {
+        self.latency = latency
         self.onFillSynthetic = onFillSynthetic
         self.onShowPrototype = onShowPrototype
         self.onImplementationChanged = onImplementationChanged
@@ -180,7 +209,7 @@ final class MainMenuBuilder: NSObject {
     /// Build the whole menu bar and register the Window menu with the
     /// app.
     func makeMainMenu() -> NSMenu {
-        let menu = NSMenu()
+        let menu = MainMenuBar()
         menu.addItem(makeAppMenu())
         menu.addItem(makeFileMenu())
         menu.addItem(makeEditMenu())
@@ -261,10 +290,10 @@ final class MainMenuBuilder: NSObject {
     private func makeEditMenu() -> NSMenuItem {
         let item = NSMenuItem()
         let menu = NSMenu(title: "Edit")
-        menu.addItem(Self.item("Undo", action: Selector(("undo:")), key: "z"))
+        menu.addItem(Self.item("Undo", action: #selector(EditUndoCommands.undo(_:)), key: "z"))
         menu.addItem(Self.item(
             "Redo",
-            action: Selector(("redo:")),
+            action: #selector(EditUndoCommands.redo(_:)),
             key: "Z"
         ))
         menu.addItem(.separator())
@@ -325,8 +354,38 @@ final class MainMenuBuilder: NSObject {
             "Star", action: #selector(MessageFlagCommands.toggleStar(_:)), key: "L")
         star.identifier = ItemID.toggleStar
         menu.addItem(star)
+        menu.addItem(.separator())
+        addFilingItems(to: menu)
         item.submenu = menu
         return item
+    }
+
+    /// Archive (⌃⌘A), Move to Trash (⌘⌫), Move to… (⇧⌘M) and the two
+    /// label commands, nil-target like the flag commands (spec/08
+    /// "Keyboard filing").
+    private func addFilingItems(to menu: NSMenu) {
+        let archive = Self.item(
+            "Archive", action: #selector(MessageFilingCommands.archiveMessages(_:)),
+            key: "a", modifiers: [.control, .command])
+        archive.identifier = ItemID.archive
+        menu.addItem(archive)
+        let trash = Self.item(
+            "Move to Trash", action: #selector(MessageFilingCommands.trashMessages(_:)),
+            key: "\u{8}")
+        trash.identifier = ItemID.trash
+        menu.addItem(trash)
+        let move = Self.item(
+            "Move to…", action: #selector(MessageFilingCommands.moveMessages(_:)), key: "M")
+        move.identifier = ItemID.move
+        menu.addItem(move)
+        let addLabel = Self.item(
+            "Add Label…", action: #selector(MessageFilingCommands.addLabel(_:)))
+        addLabel.identifier = ItemID.addLabel
+        menu.addItem(addLabel)
+        let removeLabel = Self.item(
+            "Remove Label…", action: #selector(MessageFilingCommands.removeLabel(_:)))
+        removeLabel.identifier = ItemID.removeLabel
+        menu.addItem(removeLabel)
     }
 
     /// Format: Bold and Italic — nil-target items that walk the
@@ -424,6 +483,24 @@ final class MainMenuBuilder: NSObject {
         menu.addItem(Self.item(
             "Composer Probe",
             action: #selector(showComposerProbe(_:)),
+            target: self
+        ))
+        menu.addItem(.separator())
+        let record = Self.item(
+            "Record Interaction Latency",
+            action: #selector(toggleLatencyRecording(_:)),
+            target: self
+        )
+        record.identifier = ItemID.recordLatency
+        menu.addItem(record)
+        menu.addItem(Self.item(
+            "Latency Report…",
+            action: #selector(showLatencyReport(_:)),
+            target: self
+        ))
+        menu.addItem(Self.item(
+            "Clear Latency Log",
+            action: #selector(clearLatencyLog(_:)),
             target: self
         ))
         item.submenu = menu
@@ -529,6 +606,30 @@ final class MainMenuBuilder: NSObject {
     private func showComposerProbe(_ sender: NSMenuItem) {
         onShowComposerProbe()
     }
+
+    /// Debug → Record Interaction Latency (spec/08 "Latency log").
+    @objc
+    private func toggleLatencyRecording(_ sender: NSMenuItem) {
+        latency.isEnabled.toggle()
+    }
+
+    /// Debug → Latency Report…: the report as it stands, with Copy.
+    @objc
+    private func showLatencyReport(_ sender: NSMenuItem) {
+        let window = BenchmarkReportWindowController(title: "Latency Report", text: latency.reportText())
+        latencyReport = window
+        window.showWindow(nil)
+    }
+
+    /// Debug → Clear Latency Log; a failure says so.
+    @objc
+    private func clearLatencyLog(_ sender: NSMenuItem) {
+        guard let error = latency.clear() else { return }
+        let alert = NSAlert()
+        alert.messageText = "Couldn't clear the latency log"
+        alert.informativeText = error.localizedDescription
+        alert.runModal()
+    }
 }
 
 extension MainMenuBuilder: NSMenuItemValidation {
@@ -552,6 +653,9 @@ extension MainMenuBuilder: NSMenuItemValidation {
         if menuItem.identifier == ItemID.benchmark {
             return isBenchmarkEnabled()
         }
+        if menuItem.identifier == ItemID.recordLatency {
+            menuItem.state = latency.isEnabled ? .on : .off
+        }
         if menuItem.identifier == ItemID.implementation {
             let raw = menuItem.representedObject as? String
             menuItem.state =
@@ -561,10 +665,29 @@ extension MainMenuBuilder: NSMenuItemValidation {
     }
 }
 
+/// The responder chain's undo and redo. AppKit's text views and windows
+/// answer `undo:` and `redo:` but declare them nowhere Swift can name,
+/// and Xcode 27 refuses a `Selector` spelled out by hand.
+@MainActor
+@objc protocol EditUndoCommands {
+    func undo(_ sender: Any?)
+    func redo(_ sender: Any?)
+}
+
 /// The main window's read and star commands, named here so the menu's
 /// nil-target items can reach them down the responder chain.
 @MainActor
 @objc protocol MessageFlagCommands {
     func toggleRead(_ sender: Any?)
     func toggleStar(_ sender: Any?)
+}
+
+/// The main window's filing commands (spec/08 "Keyboard filing").
+@MainActor
+@objc protocol MessageFilingCommands {
+    func archiveMessages(_ sender: Any?)
+    func trashMessages(_ sender: Any?)
+    func moveMessages(_ sender: Any?)
+    func addLabel(_ sender: Any?)
+    func removeLabel(_ sender: Any?)
 }

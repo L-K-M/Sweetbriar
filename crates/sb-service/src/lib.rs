@@ -7,6 +7,7 @@
 mod account_health;
 pub use account_health::{
     AccountBreakerEvent, AccountCondition, AccountHealth, AccountHealthSubscription,
+    ProtonCoverage, ProtonMailboxCoverage,
 };
 mod accounts;
 mod appearance;

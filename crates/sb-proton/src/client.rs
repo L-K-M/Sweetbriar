@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use bytes::Bytes;
 use http_body_util::{BodyExt, Full};
-use hyper::body::Incoming;
+use hyper::body::{Body, Incoming};
 use hyper::header::{HeaderName, HeaderValue};
 use hyper::{Method, Request, Response, StatusCode, Uri};
 use hyper_util::client::legacy::Client as LegacyClient;
@@ -548,14 +548,52 @@ pub(crate) async fn read_response_bounded(
     limit: u64,
 ) -> Result<(StatusCode, Vec<u8>), ProtonError> {
     let status = answer.response.status();
-    let mut body = answer.response.into_body();
+    let bytes = collect_attachment(answer.response.into_body(), limit).await?;
+    Ok((status, bytes))
+}
+
+/// Reads a message's response to bytes under the download deadline,
+/// which allows for a body the 30 s request deadline would cut off,
+/// and its bound, [`crate::mail::MAX_MESSAGE_BYTES`]. The in-flight
+/// permit is released once the body is read or the bound is breached.
+pub(crate) async fn read_response_message(
+    answer: Answer,
+) -> Result<(StatusCode, Vec<u8>), ProtonError> {
+    let status = answer.response.status();
+    let bytes = collect_message(answer.response.into_body()).await?;
+    Ok((status, bytes))
+}
+
+async fn collect_attachment<B>(body: B, limit: u64) -> Result<Vec<u8>, ProtonError>
+where
+    B: Body<Data = Bytes> + Unpin,
+    B::Error: fmt::Display,
+{
+    collect_download(body, limit).await
+}
+
+async fn collect_message<B>(body: B) -> Result<Vec<u8>, ProtonError>
+where
+    B: Body<Data = Bytes> + Unpin,
+    B::Error: fmt::Display,
+{
+    collect_download(body, crate::mail::MAX_MESSAGE_BYTES).await
+}
+
+/// Reads a download frame by frame. Each frame must arrive within the
+/// request timeout and the whole within [`download_timeout`], so a
+/// server dribbling frames can't hold the in-flight permit forever.
+async fn collect_download<B>(mut body: B, limit: u64) -> Result<Vec<u8>, ProtonError>
+where
+    B: Body<Data = Bytes> + Unpin,
+    B::Error: fmt::Display,
+{
+    let start = tokio::time::Instant::now();
+    let announced = body.size_hint().lower();
     let mut total = 0u64;
     let mut bytes = Vec::new();
-    // Each frame must arrive within the request timeout, and the whole
-    // body within BOUNDED_READ_TIMEOUT, so a server dribbling frames
-    // can't hold the in-flight permit forever.
-    let deadline = tokio::time::Instant::now() + BOUNDED_READ_TIMEOUT;
     loop {
+        let deadline = start + download_timeout(announced.max(total));
         let frame_deadline = (tokio::time::Instant::now() + REQUEST_TIMEOUT).min(deadline);
         let frame = match tokio::time::timeout_at(frame_deadline, body.frame()).await {
             Ok(Some(frame)) => frame,
@@ -572,16 +610,29 @@ pub(crate) async fn read_response_bounded(
             })?;
         total = total.saturating_add(data.len() as u64);
         if total > limit {
-            return Err(ProtonError::AttachmentTooLarge);
+            return Err(ProtonError::DownloadTooLarge);
         }
         bytes.extend_from_slice(&data);
     }
-    Ok((status, bytes))
+    Ok(bytes)
 }
 
-/// The whole-body deadline of a bounded read: enough for the largest
-/// attachment over a slow link (30 MiB at 100 KiB/s takes 307 s).
-pub(crate) const BOUNDED_READ_TIMEOUT: Duration = Duration::from_secs(6 * 60);
+/// A download's base deadline (spec/04 "Timeouts").
+const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(120);
+/// The size the base deadline covers.
+const DOWNLOAD_BASE_BYTES: u64 = 1024 * 1024;
+/// One more second for each further step or part of one: 100 KiB/s.
+const DOWNLOAD_STEP_BYTES: u64 = 100 * 1024;
+/// No size past this moves the deadline, which so ends at 417 s.
+const DOWNLOAD_SCALED_BYTES: u64 = 30 * 1024 * 1024;
+
+/// How long, from its first read, a download of `bytes` may take.
+fn download_timeout(bytes: u64) -> Duration {
+    let further = bytes
+        .min(DOWNLOAD_SCALED_BYTES)
+        .saturating_sub(DOWNLOAD_BASE_BYTES);
+    DOWNLOAD_TIMEOUT + Duration::from_secs(further.div_ceil(DOWNLOAD_STEP_BYTES))
+}
 
 /// A response with its in-flight permit. The permit is held until the
 /// body has been read or the response dropped, so a body still
@@ -1035,6 +1086,135 @@ mod tests {
             elapsed >= Duration::from_millis(750),
             "four background slots took {elapsed:?}"
         );
+    }
+
+    const KIB: u64 = 1024;
+    const MIB: u64 = 1024 * KIB;
+    const ATTACHMENT_LIMIT: u64 = 30 * MIB;
+
+    /// A body that sends `frames` equal frames, one `every` apart, on
+    /// the test's clock.
+    struct Trickle {
+        frames: u32,
+        frame: Bytes,
+        every: Duration,
+        announced: Option<u64>,
+        next: Pin<Box<tokio::time::Sleep>>,
+    }
+
+    impl Trickle {
+        fn new(frames: u32, size: u64, every_secs: u64, announced: Option<u64>) -> Self {
+            let every = Duration::from_secs(every_secs);
+            Trickle {
+                frames,
+                frame: Bytes::from(vec![0; usize::try_from(size).expect("a test frame fits")]),
+                every,
+                announced,
+                next: Box::pin(tokio::time::sleep(every)),
+            }
+        }
+    }
+
+    impl Body for Trickle {
+        type Data = Bytes;
+        type Error = std::io::Error;
+
+        fn poll_frame(
+            mut self: Pin<&mut Self>,
+            context: &mut Context<'_>,
+        ) -> Poll<Option<Result<hyper::body::Frame<Bytes>, Self::Error>>> {
+            if self.frames == 0 {
+                return Poll::Ready(None);
+            }
+            std::task::ready!(self.next.as_mut().poll(context));
+
+            self.frames -= 1;
+            let due = tokio::time::Instant::now() + self.every;
+            self.next.as_mut().reset(due);
+            Poll::Ready(Some(Ok(hyper::body::Frame::data(self.frame.clone()))))
+        }
+
+        fn size_hint(&self) -> hyper::body::SizeHint {
+            self.announced
+                .map(hyper::body::SizeHint::with_exact)
+                .unwrap_or_default()
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_message_body_outlasts_the_request_deadline() {
+        let bytes = collect_message(Trickle::new(10, KIB, 10, None))
+            .await
+            .expect("100 s is within a body's 120 s");
+        assert_eq!(bytes.len() as u64, 10 * KIB);
+    }
+
+    /// A message past its bound is refused as it grows, never
+    /// truncated; one at the bound is read whole.
+    #[tokio::test(start_paused = true)]
+    async fn a_message_past_its_bound_is_too_large() {
+        let limit = crate::mail::MAX_MESSAGE_BYTES;
+        let frames = u32::try_from(limit / MIB).expect("a frame count");
+        let bytes = collect_message(Trickle::new(frames, MIB, 0, None))
+            .await
+            .expect("a message at its bound");
+        assert_eq!(bytes.len() as u64, limit);
+        drop(bytes);
+        let read = collect_message(Trickle::new(frames + 1, MIB, 0, None)).await;
+        assert!(
+            matches!(read, Err(ProtonError::DownloadTooLarge)),
+            "{:?}",
+            read.as_ref().map(Vec::len)
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_dribbled_download_ends_at_120_seconds() {
+        let start = tokio::time::Instant::now();
+        let read = collect_attachment(Trickle::new(100, 1, 25, None), ATTACHMENT_LIMIT).await;
+        assert!(matches!(read, Err(ProtonError::Timeout)));
+        assert_eq!(start.elapsed().as_secs(), 120);
+
+        let start = tokio::time::Instant::now();
+        let read = collect_message(Trickle::new(100, 1, 25, None)).await;
+        assert!(matches!(read, Err(ProtonError::Timeout)));
+        assert_eq!(start.elapsed().as_secs(), 120);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn received_bytes_move_the_deadline_later() {
+        // 5 MiB by 150 s: past the base, inside its 161 s.
+        let bytes = collect_message(Trickle::new(6, MIB, 25, None))
+            .await
+            .expect("a large body scales by what arrived");
+        assert_eq!(bytes.len() as u64, 6 * MIB);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn an_announced_size_scales_the_deadline_up_to_30_mib() {
+        for (announced, deadline) in [
+            (MIB, 120),
+            (MIB + 1, 121),
+            (MIB + 100 * KIB, 121),
+            (MIB + 100 * KIB + 1, 122),
+            (30 * MIB, 417),
+            (u64::MAX, 417),
+        ] {
+            let start = tokio::time::Instant::now();
+            let body = Trickle::new(100, 1, 20, Some(announced));
+            let read = collect_attachment(body, ATTACHMENT_LIMIT).await;
+            assert!(matches!(read, Err(ProtonError::Timeout)), "{announced}");
+            assert_eq!(start.elapsed().as_secs(), deadline, "{announced}");
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_download_without_data_ends_after_30_seconds() {
+        let start = tokio::time::Instant::now();
+        let body = Trickle::new(1, KIB, 600, Some(30 * MIB));
+        let read = collect_attachment(body, ATTACHMENT_LIMIT).await;
+        assert!(matches!(read, Err(ProtonError::Timeout)));
+        assert_eq!(start.elapsed().as_secs(), 30);
     }
 
     #[test]

@@ -119,6 +119,8 @@ public struct OutBoxRow: Sendable, Equatable {
     public var draftId: String
     public var accountId: String
     public var identityId: String
+    /// The sending address the attempt froze (spec/07 `out_box()`).
+    public var envelopeFrom: String
     public var subject: String
     public var recipients: [OutBoxRecipient]
     public var state: AttemptState
@@ -144,7 +146,7 @@ public struct OutBoxRow: Sendable, Equatable {
 
     public init(
         attemptId: String, draftId: String, accountId: String, identityId: String,
-        subject: String, recipients: [OutBoxRecipient], state: AttemptState,
+        envelopeFrom: String, subject: String, recipients: [OutBoxRecipient], state: AttemptState,
         createdAtMs: Int64, updatedAtMs: Int64, holdUntilMs: Int64?,
         resolvedAtMs: Int64?, sendRequestedAtMs: Int64?, protonDraftId: String?,
         finalReply: String?, resolution: UnknownResolution?, sentCopy: SentCopy,
@@ -155,6 +157,7 @@ public struct OutBoxRow: Sendable, Equatable {
         self.draftId = draftId
         self.accountId = accountId
         self.identityId = identityId
+        self.envelopeFrom = envelopeFrom
         self.subject = subject
         self.recipients = recipients
         self.state = state
@@ -180,6 +183,7 @@ public struct OutBoxRow: Sendable, Equatable {
             draftId: g.draftId,
             accountId: g.accountId,
             identityId: g.identityId,
+            envelopeFrom: g.envelopeFrom,
             subject: g.subject,
             recipients: g.recipients.map(OutBoxRecipient.init),
             state: AttemptState(g.state),

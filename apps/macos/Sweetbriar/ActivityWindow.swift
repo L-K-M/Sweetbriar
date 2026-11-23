@@ -18,7 +18,7 @@ final class ActivityWindowController: NSWindowController {
     private static let contentSize = NSSize(width: 720, height: 600)
 
     init(
-        model: ActivityModel, bridge: CoreBridge,
+        model: ActivityModel, bridge: CoreBridge, appearance: AppearanceModel? = nil,
         onSignInAgain: @escaping @MainActor (Account) -> Void
     ) {
         let window = NSWindow(
@@ -34,7 +34,7 @@ final class ActivityWindowController: NSWindowController {
         // The controller outlives a close, so the window must too.
         window.isReleasedWhenClosed = false
         window.contentView = NSHostingView(rootView: ActivityView(
-            model: model, bridge: bridge, onSignInAgain: onSignInAgain
+            model: model, bridge: bridge, appearance: appearance, onSignInAgain: onSignInAgain
         ))
         super.init(window: window)
         if !restored { window.center() }
@@ -49,6 +49,8 @@ final class ActivityWindowController: NSWindowController {
 private struct ActivityView: View {
     let model: ActivityModel
     let bridge: CoreBridge
+    /// The accounts' colors for each row's chip; nil keeps them neutral.
+    let appearance: AppearanceModel?
     let onSignInAgain: @MainActor (Account) -> Void
 
     @State private var accounts: [Account] = []
@@ -131,7 +133,11 @@ private struct ActivityView: View {
         let condition = Self.presentation.condition(
             health.condition, lastSync: health.lastSync, now: now)
         return VStack(alignment: .leading, spacing: 6) {
-            Text(name).font(.headline)
+            AccountChip(
+                label: name, accountId: health.accountId, appearance: appearance?.appearance,
+                identifier: "activity-account-\(health.accountId)"
+            )
+            .font(.headline)
             line(condition)
             ForEach(Array(health.warnings.enumerated()), id: \.offset) { _, warning in
                 Text("Couldn't unlock keys for \(warning)")
@@ -139,6 +145,9 @@ private struct ActivityView: View {
             }
             Text("\(health.coverage.indexed) of \(health.coverage.totalMessages) indexed")
                 .foregroundStyle(.secondary)
+            if let proton = health.proton {
+                protonCoverage(proton)
+            }
             if ActivityPresentation.offersSignInAgain(health.condition),
                let account = accounts.first(where: { $0.accountId == health.accountId }) {
                 Button("Sign in again") { onSignInAgain(account) }
@@ -147,6 +156,24 @@ private struct ActivityView: View {
                 breakerRow(event)
             }
         }
+    }
+
+    /// "Proton messages synced" with its counts, and each mailbox's
+    /// count against Proton's behind a disclosure (spec/04-sync-proton
+    /// "Coverage").
+    private func protonCoverage(_ coverage: ProtonCoverage) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            line(Self.presentation.protonCoverage(coverage))
+            if !coverage.mailboxes.isEmpty {
+                DisclosureGroup("Mailboxes") {
+                    ForEach(coverage.mailboxes, id: \.mailboxId) { mailbox in
+                        line(Self.presentation.protonMailbox(mailbox))
+                    }
+                }
+            }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("proton-coverage")
     }
 
     private func breakerRow(_ event: AccountBreakerEvent) -> some View {

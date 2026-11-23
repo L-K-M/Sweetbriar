@@ -1573,6 +1573,9 @@ pub struct OutBoxRow {
     pub draft_id: String,
     pub account_id: String,
     pub identity_id: String,
+    /// The sending address the attempt froze (`envelope_from`): the
+    /// route's address when it was queued, not the identity's current one.
+    pub envelope_from: String,
     pub subject: String,
     pub recipients: Vec<OutBoxRecipient>,
     pub state: AttemptState,
@@ -1644,6 +1647,7 @@ pub fn out_box(tx: &Transaction, now: Timestamp) -> Result<OutBox, StoreError> {
                        s.state, s.created_at, s.updated_at, s.hold_until, s.resolved_at,
                        s.send_requested_at, s.proton_draft_id, s.final_reply, s.resolution,
                        s.sent_copy, s.config_generation, a.config_generation AS account_generation,
+                       s.envelope_from,
                        (SELECT count(*) FROM logical_messages lm
                         JOIN occurrences o ON o.message_id = lm.message_id
                          AND o.account_id = lm.account_id AND o.state = 'present'
@@ -1663,7 +1667,7 @@ pub fn out_box(tx: &Transaction, now: Timestamp) -> Result<OutBox, StoreError> {
              SELECT attempt_id, draft_id, account_id, identity_id, subject, state,
                     created_at, updated_at, hold_until, resolved_at, send_requested_at,
                     proton_draft_id, final_reply, resolution, sent_copy, newer_attempts,
-                    config_generation, account_generation, sent_copy_hits
+                    config_generation, account_generation, sent_copy_hits, envelope_from
              FROM candidates
              WHERE state IN ('held','queued','submitting')
                 OR (state = 'outcome_unknown' AND resolution IS NULL)
@@ -1716,6 +1720,7 @@ pub fn out_box(tx: &Transaction, now: Timestamp) -> Result<OutBox, StoreError> {
                 draft_id: row.get(1).map_err(err)?,
                 account_id: row.get(2).map_err(err)?,
                 identity_id: row.get(3).map_err(err)?,
+                envelope_from: row.get(19).map_err(err)?,
                 subject: row.get(4).map_err(err)?,
                 state,
                 created_at: Timestamp::from_millis(row.get(6).map_err(err)?),

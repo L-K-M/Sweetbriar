@@ -268,7 +268,7 @@ CREATE TABLE proton_accounts (                        -- one per Proton API acco
   pending_cursor     TEXT,                            -- cursor read before the running bootstrap's listing
   listing_state      TEXT NOT NULL CHECK (listing_state IN ('none','listing','complete')),
   listing_checkpoint TEXT,                            -- last committed page's position while listing
-  refresh_count      INTEGER NOT NULL DEFAULT 0,      -- Proton refreshes applied
+  refresh_count      INTEGER NOT NULL DEFAULT 0,      -- Proton refreshes applied: +1 when a listing starts over a complete one
   diagnostics_json   TEXT,                            -- last refusal: {"v":1,"code":n,"message":"…","at":ms}, redacted (10)
   revision           INTEGER NOT NULL DEFAULT 1,
   CHECK ((listing_state = 'listing') = (pending_cursor IS NOT NULL)),
@@ -1396,13 +1396,14 @@ extend:
 
 | Key | Values | Default |
 |---|---|---|
-| `appearance.compose_cue` | `standard`, `strong` (08 Strong mode) | `standard` |
+| `appearance.compose_cue` | `standard`, `strong`, `minimal` (08 Strong and Minimal modes) | `standard` |
 | `sending.undo_seconds` | `5`, `7`, `10`, `20`, `30`: the undo-send window a new attempt is held for (05, M4.3; Settings → Sending safety, M4.4) | `7` |
 | `notifications.previews` | `off`, `on`: whether new-mail notifications show sender and subject (10, M2.7) | `off` |
 | `backups.destination` | Empty for the default, or an absolute directory path without NUL (M1.8j1b) | Empty: the data root's `backups/` |
 | `reader.mark_read` | `immediately`, `2`, `5`, `10`, `manual`: when the reader marks a shown unread message read, at once, after that many seconds, or never (08 Reader, M3.2) | `immediately` |
 | `reader.reading_view_senders` | The senders whose messages open in the Reading view (08, M6.3b2): lowercase addresses, each with one `@` and at most 254 bytes, sorted, unique, joined by newlines; at most 1,000 | Empty: every message opens in sender layout |
 | `filing.recent_mailboxes` | The mailboxes last chosen to file into (08 Keyboard filing, M5.2): mailbox ids as canonical positive decimals, most recent first, unique, joined by newlines; at most 100 | Empty: no mailbox is ranked |
+| `identity.default` | Empty for none, or an identity id of 1–128 UTF-8 bytes without controls: the global default sender for a new message (05). An id that names no sendable identity is stored and selects nothing (07 `compose_catalog`) | Empty: no global default |
 
 A recent mailbox id is only a ranking hint. Commands never act on one
 that the account's current `mailboxes()` doesn't list.

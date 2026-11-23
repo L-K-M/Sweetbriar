@@ -1082,6 +1082,7 @@ fn out_box_splits_live_and_history_orders_each_and_cuts_at_30_days() {
     let held = row("a_held");
     assert_eq!(held.state, AttemptState::Held);
     assert_eq!(held.subject, "s");
+    assert_eq!(held.envelope_from, "me@example.test");
     assert_eq!(held.hold_until, Some(Timestamp::from_millis(base + 2)));
     assert_eq!(held.sent_copy, SentCopy::ServerSaves);
     assert!(!held.waits_for_confirmation);
