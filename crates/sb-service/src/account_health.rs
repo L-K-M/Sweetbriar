@@ -11,12 +11,26 @@ pub enum AccountCondition {
     Paused,
     Disconnected,
     SignInAgain,
-    Verify,
-    VersionRefused { message: String },
-    SecretStore { reason: String },
-    Offline { next_retry_ms: i64 },
-    NotAnswering { next_retry_ms: i64 },
-    RateLimited { until_ms: i64 },
+    /// Proton asked for human verification; whether the engine still
+    /// holds the challenge decides "Verify…" or "Try Again".
+    Verify {
+        challenge_held: bool,
+    },
+    VersionRefused {
+        message: String,
+    },
+    SecretStore {
+        reason: String,
+    },
+    Offline {
+        next_retry_ms: i64,
+    },
+    NotAnswering {
+        next_retry_ms: i64,
+    },
+    RateLimited {
+        until_ms: i64,
+    },
     Healthy,
 }
 
@@ -98,7 +112,9 @@ impl AccountCondition {
             sb_engine::AccountCondition::Paused => Self::Paused,
             sb_engine::AccountCondition::Disconnected => Self::Disconnected,
             sb_engine::AccountCondition::SignInAgain => Self::SignInAgain,
-            sb_engine::AccountCondition::Verify => Self::Verify,
+            sb_engine::AccountCondition::Verify { challenge_held } => {
+                Self::Verify { challenge_held }
+            }
             sb_engine::AccountCondition::VersionRefused { message } => {
                 Self::VersionRefused { message }
             }

@@ -5,6 +5,8 @@
 use super::events::until;
 use super::*;
 
+use crate::{ProtonVerificationAnswer, ProtonVerificationChallenge};
+
 use sb_test_support::FakeMessage;
 use std::time::Duration;
 
@@ -217,7 +219,8 @@ async fn human_verification_and_a_refused_version_need_attention() {
         until_condition(&h, &id, |c| {
             matches!(
                 c,
-                crate::AccountCondition::Verify | crate::AccountCondition::VersionRefused { .. }
+                crate::AccountCondition::Verify { .. }
+                    | crate::AccountCondition::VersionRefused { .. }
             )
         })
         .await;
@@ -225,7 +228,15 @@ async fn human_verification_and_a_refused_version_need_attention() {
         assert_eq!(row.state, AccountState::NeedsAttention);
         assert_eq!(row.state_reason.as_deref(), Some(reason));
         if verify {
-            assert_eq!(row.condition, crate::AccountCondition::Verify);
+            // The injected body has no `Details`, so there is no
+            // challenge to hold (spec/04 "Human verification during
+            // sync").
+            assert_eq!(
+                row.condition,
+                crate::AccountCondition::Verify {
+                    challenge_held: false
+                }
+            );
         } else {
             let crate::AccountCondition::VersionRefused { message } = &row.condition else {
                 panic!("expected version refused, got {:?}", row.condition);
@@ -326,6 +337,352 @@ async fn a_breaker_event_is_listed_and_its_resolution_wakes_the_subscription() {
         fetch(&h, &id).await.condition,
         crate::AccountCondition::NotAnswering { .. }
     ));
+    h.core.shutdown().await;
+}
+
+/// The verification URL's token, the text after `token=`.
+fn challenge_token(challenge: &ProtonVerificationChallenge) -> String {
+    challenge
+        .url
+        .split("token=")
+        .nth(1)
+        .expect("the challenge URL carries the token")
+        .to_owned()
+}
+
+#[tokio::test]
+async fn sync_human_verification_is_held_for_the_verify_sheet() {
+    let h = setup(vec![TestAccount::new(USER, PASSWORD)]).await;
+    let (id, _) = synced(&h, "hv-held").await;
+
+    h.server.require_human_verification(USER);
+    h.core.engine().poll_proton_events();
+    until_condition(&h, &id, |c| {
+        matches!(
+            c,
+            crate::AccountCondition::Verify {
+                challenge_held: true
+            }
+        )
+    })
+    .await;
+
+    let row = fetch(&h, &id).await;
+    assert_eq!(row.state, AccountState::NeedsAttention);
+    assert_eq!(
+        row.state_reason.as_deref(),
+        Some("Proton asks you to verify")
+    );
+    let challenge = h
+        .core
+        .proton_verification(&id)
+        .await
+        .expect("the query")
+        .expect("the held challenge");
+    assert_eq!(challenge.methods, ["captcha"]);
+    assert!(challenge.url.contains("token="));
+    // The URL carries the token, so neither form may print it.
+    let debug = format!("{challenge:?}");
+    assert!(!debug.contains("token="), "{debug}");
+    h.core.shutdown().await;
+}
+
+#[tokio::test]
+async fn answering_the_challenge_activates_the_account_and_rides_one_request() {
+    let h = setup(vec![TestAccount::new(USER, PASSWORD)]).await;
+    let (id, _) = synced(&h, "hv-answer").await;
+
+    h.server.require_human_verification(USER);
+    h.core.engine().poll_proton_events();
+    until_condition(&h, &id, |c| {
+        matches!(
+            c,
+            crate::AccountCondition::Verify {
+                challenge_held: true
+            }
+        )
+    })
+    .await;
+    let challenge = h
+        .core
+        .proton_verification(&id)
+        .await
+        .expect("the query")
+        .expect("the held challenge");
+    let token = challenge_token(&challenge);
+    // While it is held, neither the challenge's URL nor its token is in
+    // the diagnostics package (spec/10).
+    let package = h
+        .core
+        .diagnostics_package("app-test", "os-test")
+        .await
+        .expect("the package");
+    assert!(!package.contains(&token), "the package holds the token");
+    // A message that arrives while the sync waits: only an events
+    // poll Proton accepts after the answer brings it in.
+    h.server.add_message(
+        USER,
+        FakeMessage::new("after-verify")
+            .with_time(500)
+            .with_labels(&["0", "5"]),
+    );
+    let answer = ProtonVerificationAnswer {
+        token: token.clone(),
+        token_type: "captcha".to_owned(),
+    };
+
+    let receipt = h
+        .core
+        .verify_proton_account("hv-verify", &id, Some(answer))
+        .await
+        .expect("the answer activates");
+    assert_eq!(receipt.command, "verify_proton_account");
+    assert_eq!(receipt.result_json, "{}");
+    assert!(
+        !receipt.result_json.contains(&token),
+        "the receipt leaked it"
+    );
+
+    // The row alone can't show the sync ran again: the new worker
+    // records its sync time once the finished bootstrap checks out,
+    // before its first request, so wait for the message instead.
+    until(
+        &h,
+        "logical_messages WHERE provider_key = 'after-verify'",
+        1,
+    )
+    .await;
+    let row = fetch(&h, &id).await;
+    assert_eq!(row.state, AccountState::Active);
+    assert!(row.last_sync_ms.is_some(), "the sync ran again");
+
+    let carried = h
+        .server
+        .requests()
+        .iter()
+        .filter(|request| request.hv_token_present)
+        .count();
+    assert_eq!(carried, 1, "the token rode exactly one request");
+    assert!(
+        h.core
+            .proton_verification(&id)
+            .await
+            .expect("the query")
+            .is_none(),
+        "the answered challenge is forgotten"
+    );
+    let package = h
+        .core
+        .diagnostics_package("app-test", "os-test")
+        .await
+        .expect("the package");
+    assert!(!package.contains(&token), "the package holds the answer");
+    h.core.shutdown().await;
+}
+
+#[tokio::test]
+async fn try_again_meets_the_still_required_challenge_again() {
+    let h = setup(vec![TestAccount::new(USER, PASSWORD)]).await;
+    let (id, _) = synced(&h, "hv-try-again").await;
+
+    h.server.require_human_verification(USER);
+    h.core.engine().poll_proton_events();
+    until_condition(&h, &id, |c| {
+        matches!(
+            c,
+            crate::AccountCondition::Verify {
+                challenge_held: true
+            }
+        )
+    })
+    .await;
+
+    h.core
+        .verify_proton_account("hv-try", &id, None)
+        .await
+        .expect("Try Again activates");
+    // Proton still asks, so the new worker meets the challenge and the
+    // account pauses with a fresh challenge.
+    until_condition(&h, &id, |c| {
+        matches!(
+            c,
+            crate::AccountCondition::Verify {
+                challenge_held: true
+            }
+        )
+    })
+    .await;
+    let row = fetch(&h, &id).await;
+    assert_eq!(row.state, AccountState::NeedsAttention);
+    let challenge = h
+        .core
+        .proton_verification(&id)
+        .await
+        .expect("the query")
+        .expect("the fresh challenge");
+    assert_eq!(challenge.methods, ["captcha"]);
+    h.core.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_sync_9001_without_details_has_no_held_challenge() {
+    let h = setup(vec![TestAccount::new(USER, PASSWORD)]).await;
+    let (id, _) = synced(&h, "hv-no-details").await;
+
+    h.server.set_fault(Some(Fault::Code {
+        status: 422,
+        code: 9001,
+    }));
+    h.core.engine().poll_proton_events();
+    until_condition(&h, &id, |c| {
+        matches!(
+            c,
+            crate::AccountCondition::Verify {
+                challenge_held: false
+            }
+        )
+    })
+    .await;
+    let row = fetch(&h, &id).await;
+    assert_eq!(row.state, AccountState::NeedsAttention);
+    assert_eq!(
+        row.state_reason.as_deref(),
+        Some("Proton asks you to verify")
+    );
+    assert!(
+        h.core
+            .proton_verification(&id)
+            .await
+            .expect("the query")
+            .is_none(),
+        "a body without a token holds nothing"
+    );
+    h.core.shutdown().await;
+}
+
+#[tokio::test]
+async fn verification_errors_and_a_replayed_key() {
+    let h = setup(vec![TestAccount::new(USER, PASSWORD)]).await;
+    let (id, _) = synced(&h, "hv-errors").await;
+
+    // An active account has no human-verification pause to lift.
+    let error = h
+        .core
+        .verify_proton_account(
+            "hv-active",
+            &id,
+            Some(ProtonVerificationAnswer {
+                token: "token".to_owned(),
+                token_type: "captcha".to_owned(),
+            }),
+        )
+        .await
+        .expect_err("an active account is a conflict");
+    assert!(matches!(error, CoreError::Conflict { .. }), "{error:?}");
+
+    // An unknown account is NotFound even before the kind check.
+    let error = h
+        .core
+        .verify_proton_account(
+            "hv-missing",
+            "missing",
+            Some(ProtonVerificationAnswer {
+                token: "token".to_owned(),
+                token_type: "captcha".to_owned(),
+            }),
+        )
+        .await
+        .expect_err("an unknown account is not found");
+    assert!(matches!(error, CoreError::NotFound { .. }), "{error:?}");
+
+    // An empty answer is refused on its field.
+    let error = h
+        .core
+        .verify_proton_account(
+            "hv-empty",
+            &id,
+            Some(ProtonVerificationAnswer {
+                token: String::new(),
+                token_type: "captcha".to_owned(),
+            }),
+        )
+        .await
+        .expect_err("an empty token is invalid input");
+    assert!(
+        matches!(
+            error,
+            CoreError::InvalidInput { ref field, .. } if field == "answer"
+        ),
+        "{error:?}"
+    );
+
+    // A repeated key answers its stored receipt and changes nothing:
+    // the second answer never rides and no second activation happens.
+    h.server.require_human_verification(USER);
+    h.core.engine().poll_proton_events();
+    until_condition(&h, &id, |c| {
+        matches!(
+            c,
+            crate::AccountCondition::Verify {
+                challenge_held: true
+            }
+        )
+    })
+    .await;
+    let challenge = h
+        .core
+        .proton_verification(&id)
+        .await
+        .expect("the query")
+        .expect("the held challenge");
+    h.server.add_message(
+        USER,
+        FakeMessage::new("after-answer")
+            .with_time(500)
+            .with_labels(&["0", "5"]),
+    );
+    let first = h
+        .core
+        .verify_proton_account(
+            "hv-repeat",
+            &id,
+            Some(ProtonVerificationAnswer {
+                token: challenge_token(&challenge),
+                token_type: "captcha".to_owned(),
+            }),
+        )
+        .await
+        .expect("the answer activates");
+    // The answer's request has run once its poll brings the message
+    // (see `answering_the_challenge_activates_the_account_and_rides_one_request`).
+    until(
+        &h,
+        "logical_messages WHERE provider_key = 'after-answer'",
+        1,
+    )
+    .await;
+    let second = h
+        .core
+        .verify_proton_account(
+            "hv-repeat",
+            &id,
+            Some(ProtonVerificationAnswer {
+                token: "not-the-token".to_owned(),
+                token_type: "captcha".to_owned(),
+            }),
+        )
+        .await
+        .expect("a repeated key replays");
+    assert_eq!(second.command, first.command);
+    assert_eq!(second.result_json, first.result_json);
+    assert_eq!(second.created_at_ms, first.created_at_ms);
+    let carried = h
+        .server
+        .requests()
+        .iter()
+        .filter(|request| request.hv_token_present)
+        .count();
+    assert_eq!(carried, 1, "the replay started no second request");
     h.core.shutdown().await;
 }
 

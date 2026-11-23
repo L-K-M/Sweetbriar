@@ -323,7 +323,9 @@ fn condition_json(condition: &AccountCondition) -> Value {
         AccountCondition::Paused => ("paused", None),
         AccountCondition::Disconnected => ("disconnected", None),
         AccountCondition::SignInAgain => ("sign_in_again", None),
-        AccountCondition::Verify => ("verify", None),
+        // No payload: the condition itself carries no URL or token,
+        // and neither may enter the diagnostics package (spec/10).
+        AccountCondition::Verify { .. } => ("verify", None),
         AccountCondition::Healthy => ("healthy", None),
         AccountCondition::VersionRefused { message } => (
             "version_refused",

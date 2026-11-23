@@ -95,6 +95,7 @@ impl Engine {
         let jobs = Arc::clone(self.account_jobs());
         let opened = Arc::clone(&self.proton_opened);
         let evidence = Arc::clone(&self.send_evidence);
+        let verifications = Arc::clone(&self.proton_verifications);
         self.command(move |worker| async move {
             let now = worker.resources().now().as_millis();
             let mut table = conversations.lock().await;
@@ -150,6 +151,7 @@ impl Engine {
                     let completed = complete_conversation(
                         &worker,
                         &sessions,
+                        &verifications,
                         &key,
                         &account_id,
                         &display_name,
@@ -167,6 +169,7 @@ impl Engine {
                         &sessions,
                         &opened,
                         &evidence,
+                        &verifications,
                         completed.clone(),
                     );
                     Ok(BeginProtonSignIn::Open {
@@ -213,6 +216,7 @@ impl Engine {
         let jobs = Arc::clone(self.account_jobs());
         let opened = Arc::clone(&self.proton_opened);
         let evidence = Arc::clone(&self.send_evidence);
+        let verifications = Arc::clone(&self.proton_verifications);
         self.command(move |worker| async move {
             let now = worker.resources().now().as_millis();
             let mut table = conversations.lock().await;
@@ -254,6 +258,7 @@ impl Engine {
                     let completed = complete_conversation(
                         &worker,
                         &sessions,
+                        &verifications,
                         &ended.idempotency_key,
                         &ended.account_id,
                         &ended.display_name,
@@ -268,6 +273,7 @@ impl Engine {
                         &sessions,
                         &opened,
                         &evidence,
+                        &verifications,
                         completed.clone(),
                     );
                     Ok(ProtonSignInState::Complete {
@@ -316,6 +322,7 @@ impl Engine {
         let jobs = Arc::clone(self.account_jobs());
         let opened = Arc::clone(&self.proton_opened);
         let evidence = Arc::clone(&self.send_evidence);
+        let verifications = Arc::clone(&self.proton_verifications);
         let _ = self.spawn_worker(move |worker| async move {
             let accounts = worker.blocking(|resources| resources.read(accounts)).await;
             if let Ok(Ok(accounts)) = accounts {
@@ -329,7 +336,13 @@ impl Engine {
                     restore_proton_account(&worker, &sessions, &account.account_id).await;
                 }
                 crate::proton_sync::start_all(
-                    &worker, &jobs, &sessions, &opened, &evidence, &accounts,
+                    &worker,
+                    &jobs,
+                    &sessions,
+                    &opened,
+                    &evidence,
+                    &verifications,
+                    &accounts,
                 )
                 .await;
             }
@@ -351,6 +364,7 @@ impl Engine {
         let key = idempotency_key.to_owned();
         let id = account_id.to_owned();
         let sessions = Arc::clone(&self.proton_sessions);
+        let verifications = Arc::clone(&self.proton_verifications);
         let statuses = Arc::clone(self.worker_statuses());
         self.command(move |worker| async move {
             // A repeated key answers its stored receipt before any
@@ -385,6 +399,9 @@ impl Engine {
             // secret again.
             let mut sessions = sessions.lock().await;
             let restored = sessions.remove(&id);
+            // A disconnected account's held challenge dies with the
+            // session (spec/04 "Human verification during sync").
+            verifications.forget(&id);
             let reference = worker
                 .blocking({
                     let id = id.clone();
@@ -702,9 +719,11 @@ fn to_challenge(step: ProtonSignInStep) -> Result<sb_resources::Challenge, Engin
 }
 
 /// Commits a completed conversation, then writes the secret item.
+#[allow(clippy::too_many_arguments)] // the conversation and the engine state it updates
 async fn complete_conversation(
     worker: &Worker,
     sessions: &Sessions,
+    verifications: &Arc<crate::proton_verification::ProtonVerifications>,
     idempotency_key: &str,
     account_id: &str,
     display_name: &str,
@@ -748,6 +767,8 @@ async fn complete_conversation(
             key_passphrase,
         },
     );
+    // Signing in again replaces whatever the sync pause held.
+    verifications.forget(account_id);
     worker.statuses().rows_changed();
     Ok(completed)
 }

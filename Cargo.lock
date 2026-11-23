@@ -3272,6 +3272,7 @@ dependencies = [
  "palette",
  "sb-resources",
  "sb-test-support",
+ "secrecy",
  "serde_json",
  "tokio",
 ]

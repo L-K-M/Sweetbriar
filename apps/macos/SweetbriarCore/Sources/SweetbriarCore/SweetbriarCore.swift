@@ -1307,6 +1307,13 @@ public protocol CoreProtocol: AnyObject, Sendable {
     func pauseAccount(token: CancelToken, idempotencyKey: String, accountId: String) async throws  -> Receipt
     
     /**
+     * `proton_verification(id)` (spec/07, 04 "Human verification
+     * during sync"): the challenge held for a Proton account that
+     * needs human verification, or none otherwise. A query.
+     */
+    func protonVerification(token: CancelToken, accountId: String) async throws  -> ProtonVerificationChallenge?
+    
+    /**
      * `resolve_breaker_event(key, id, resolution)` (spec/07 "Safety")
      * under an idempotency key the shell made: Accept applies the
      * event's withheld deletes, Keep leaves them withheld. A command:
@@ -1335,6 +1342,14 @@ public protocol CoreProtocol: AnyObject, Sendable {
      * A command.
      */
     func updateAccount(token: CancelToken, idempotencyKey: String, accountId: String, displayName: String) async throws  -> Receipt
+    
+    /**
+     * `verify_proton_account(key, id, answer)` (spec/07, 04 "Human
+     * verification during sync") under an idempotency key the shell
+     * made: the account activates and its worker starts. A command:
+     * the token counts only until it holds the core.
+     */
+    func verifyProtonAccount(token: CancelToken, idempotencyKey: String, accountId: String, answer: ProtonVerificationAnswer?) async throws  -> Receipt
     
     /**
      * `set_setting` (spec/07 "Commands"): one command under an
@@ -2174,6 +2189,27 @@ open func pauseAccount(token: CancelToken, idempotencyKey: String, accountId: St
 }
     
     /**
+     * `proton_verification(id)` (spec/07, 04 "Human verification
+     * during sync"): the challenge held for a Proton account that
+     * needs human verification, or none otherwise. A query.
+     */
+open func protonVerification(token: CancelToken, accountId: String)async throws  -> ProtonVerificationChallenge?  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_sb_ffi_fn_method_core_proton_verification(
+                        self.uniffiCloneHandle(),FfiConverterTypeCancelToken_lower(token),FfiConverterString.lower(accountId)
+                )
+            },
+            pollFunc: ffi_sb_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_sb_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_sb_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterOptionTypeProtonVerificationChallenge.lift,
+            errorHandler: FfiConverterTypeCoreError_lift
+        )
+}
+    
+    /**
      * `resolve_breaker_event(key, id, resolution)` (spec/07 "Safety")
      * under an idempotency key the shell made: Accept applies the
      * event's withheld deletes, Keep leaves them withheld. A command:
@@ -2249,6 +2285,28 @@ open func updateAccount(token: CancelToken, idempotencyKey: String, accountId: S
             rustFutureFunc: {
                 uniffi_sb_ffi_fn_method_core_update_account(
                         self.uniffiCloneHandle(),FfiConverterTypeCancelToken_lower(token),FfiConverterString.lower(idempotencyKey),FfiConverterString.lower(accountId),FfiConverterString.lower(displayName)
+                )
+            },
+            pollFunc: ffi_sb_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_sb_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_sb_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeReceipt_lift,
+            errorHandler: FfiConverterTypeCoreError_lift
+        )
+}
+    
+    /**
+     * `verify_proton_account(key, id, answer)` (spec/07, 04 "Human
+     * verification during sync") under an idempotency key the shell
+     * made: the account activates and its worker starts. A command:
+     * the token counts only until it holds the core.
+     */
+open func verifyProtonAccount(token: CancelToken, idempotencyKey: String, accountId: String, answer: ProtonVerificationAnswer?)async throws  -> Receipt  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_sb_ffi_fn_method_core_verify_proton_account(
+                        self.uniffiCloneHandle(),FfiConverterTypeCancelToken_lower(token),FfiConverterString.lower(idempotencyKey),FfiConverterString.lower(accountId),FfiConverterOptionTypeProtonVerificationAnswer.lower(answer)
                 )
             },
             pollFunc: ffi_sb_ffi_rust_future_poll_rust_buffer,
@@ -8913,6 +8971,123 @@ public func FfiConverterTypeProtonSignInParams_lower(_ value: ProtonSignInParams
 }
 
 
+/**
+ * The answer `verify_proton_account(key, id, answer)` takes. The
+ * token is a secret, so `Debug` redacts it (spec/10).
+ */
+public struct ProtonVerificationAnswer: Equatable, Hashable {
+    public var token: String
+    public var tokenType: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(token: String, tokenType: String) {
+        self.token = token
+        self.tokenType = tokenType
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension ProtonVerificationAnswer: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeProtonVerificationAnswer: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ProtonVerificationAnswer {
+        return
+            try ProtonVerificationAnswer(
+                token: FfiConverterString.read(from: &buf), 
+                tokenType: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: ProtonVerificationAnswer, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.token, into: &buf)
+        FfiConverterString.write(value.tokenType, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeProtonVerificationAnswer_lift(_ buf: RustBuffer) throws -> ProtonVerificationAnswer {
+    return try FfiConverterTypeProtonVerificationAnswer.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeProtonVerificationAnswer_lower(_ value: ProtonVerificationAnswer) -> RustBuffer {
+    return FfiConverterTypeProtonVerificationAnswer.lower(value)
+}
+
+
+/**
+ * The human verification `proton_verification(id)` reports for a
+ * sync account paused for human verification. The URL carries
+ * Proton's token, so `Debug` redacts it (spec/10).
+ */
+public struct ProtonVerificationChallenge: Equatable, Hashable {
+    public var url: String
+    public var methods: [String]
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(url: String, methods: [String]) {
+        self.url = url
+        self.methods = methods
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension ProtonVerificationChallenge: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeProtonVerificationChallenge: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ProtonVerificationChallenge {
+        return
+            try ProtonVerificationChallenge(
+                url: FfiConverterString.read(from: &buf), 
+                methods: FfiConverterSequenceString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: ProtonVerificationChallenge, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.url, into: &buf)
+        FfiConverterSequenceString.write(value.methods, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeProtonVerificationChallenge_lift(_ buf: RustBuffer) throws -> ProtonVerificationChallenge {
+    return try FfiConverterTypeProtonVerificationChallenge.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeProtonVerificationChallenge_lower(_ value: ProtonVerificationChallenge) -> RustBuffer {
+    return FfiConverterTypeProtonVerificationChallenge.lower(value)
+}
+
+
 public struct ReaderAddress: Equatable, Hashable {
     public var name: String?
     public var address: String?
@@ -11150,7 +11325,12 @@ public enum AccountCondition: Equatable, Hashable {
     case paused
     case disconnected
     case signInAgain
-    case verify
+    /**
+     * Proton asked for human verification; whether the engine still
+     * holds the challenge decides "Verify…" or "Try Again".
+     */
+    case verify(challengeHeld: Bool
+    )
     case versionRefused(message: String
     )
     case secretStore(reason: String
@@ -11189,7 +11369,8 @@ public struct FfiConverterTypeAccountCondition: FfiConverterRustBuffer {
         
         case 3: return .signInAgain
         
-        case 4: return .verify
+        case 4: return .verify(challengeHeld: try FfiConverterBool.read(from: &buf)
+        )
         
         case 5: return .versionRefused(message: try FfiConverterString.read(from: &buf)
         )
@@ -11228,9 +11409,10 @@ public struct FfiConverterTypeAccountCondition: FfiConverterRustBuffer {
             writeInt(&buf, Int32(3))
         
         
-        case .verify:
+        case let .verify(challengeHeld):
             writeInt(&buf, Int32(4))
-        
+            FfiConverterBool.write(challengeHeld, into: &buf)
+            
         
         case let .versionRefused(message):
             writeInt(&buf, Int32(5))
@@ -17233,6 +17415,54 @@ fileprivate struct FfiConverterOptionTypeProtonCoverage: FfiConverterRustBuffer 
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterOptionTypeProtonVerificationAnswer: FfiConverterRustBuffer {
+    typealias SwiftType = ProtonVerificationAnswer?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeProtonVerificationAnswer.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeProtonVerificationAnswer.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionTypeProtonVerificationChallenge: FfiConverterRustBuffer {
+    typealias SwiftType = ProtonVerificationChallenge?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeProtonVerificationChallenge.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeProtonVerificationChallenge.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterOptionTypeSearchRebuildProgress: FfiConverterRustBuffer {
     typealias SwiftType = SearchRebuildProgress?
 
@@ -18561,6 +18791,9 @@ private let initializationResult: InitializationResult = {
     if (uniffi_sb_ffi_checksum_method_core_pause_account() != 41086) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_sb_ffi_checksum_method_core_proton_verification() != 53635) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_sb_ffi_checksum_method_core_resolve_breaker_event() != 55999) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -18571,6 +18804,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sb_ffi_checksum_method_core_update_account() != 22644) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sb_ffi_checksum_method_core_verify_proton_account() != 12115) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sb_ffi_checksum_method_core_set_setting() != 25429) {

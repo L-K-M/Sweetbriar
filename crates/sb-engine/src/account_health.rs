@@ -107,7 +107,12 @@ pub enum AccountCondition {
     Paused,
     Disconnected,
     SignInAgain,
-    Verify,
+    /// Proton asked for human verification: whether the engine still
+    /// holds the challenge (false after a relaunch), which decides
+    /// between "Verify…" and "Try Again" (spec/08).
+    Verify {
+        challenge_held: bool,
+    },
     /// Proton refused this version of Sweetbriar (2064, 5003), with
     /// Proton's message from `diagnostics_json` (empty if none was
     /// recorded).
@@ -204,10 +209,12 @@ impl Engine {
         for account in accounts {
             let id = account.account_id.clone();
             let live = self.worker_statuses().get(&id);
+            let challenge_held = self.proton_verifications.has_challenge(&id);
             let condition = condition(
                 &account,
                 diagnostics.get(&id).and_then(|message| message.as_deref()),
                 live,
+                challenge_held,
             );
             let coverage = self.coverage(SearchScope::Account(id.clone())).await?;
             health.push(AccountHealth {
@@ -259,13 +266,14 @@ fn condition(
     account: &StoredAccount,
     refusal_message: Option<&str>,
     live: Option<LiveStatus>,
+    challenge_held: bool,
 ) -> AccountCondition {
     match account.state {
         AccountState::Paused => AccountCondition::Paused,
         AccountState::Disconnected => AccountCondition::Disconnected,
         AccountState::NeedsAttention => match account.state_reason.as_deref() {
             Some(SESSION_REFUSED_REASON) => AccountCondition::SignInAgain,
-            Some(HUMAN_VERIFICATION_REASON) => AccountCondition::Verify,
+            Some(HUMAN_VERIFICATION_REASON) => AccountCondition::Verify { challenge_held },
             Some(APP_IDENTITY_REFUSED_REASON) => AccountCondition::VersionRefused {
                 message: refusal_message.unwrap_or_default().to_owned(),
             },

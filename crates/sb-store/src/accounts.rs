@@ -15,7 +15,7 @@ pub use connection::{
 
 use crate::StoreError;
 use crate::appearance::initialize_account_appearance;
-use crate::proton::reset_proton_for_restore;
+use crate::proton::{HUMAN_VERIFICATION_REASON, reset_proton_for_restore};
 use crate::schema::classify;
 
 /// `imap_security`/`smtp_security` (spec/02).
@@ -363,6 +363,37 @@ pub fn resume_account(tx: &Transaction, account_id: &str) -> Result<bool, StoreE
     Ok(false)
 }
 
+/// `activate_after_verification(tx, account_id)` (spec/07
+/// `verify_proton_account`): a `needs_attention` account paused for
+/// human verification becomes `active`, clearing the reason and
+/// bumping the revision. Any other state or stored reason is
+/// `Conflict`; an unknown one is `NotFound`. It never touches a
+/// session or the secret store.
+pub fn activate_after_verification(tx: &Transaction, account_id: &str) -> Result<(), StoreError> {
+    let (state, reason): (String, Option<String>) = tx
+        .query_row(
+            "SELECT state, state_reason FROM accounts WHERE account_id = ?1",
+            params![account_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()
+        .map_err(|e| classify(e, "read the account state"))?
+        .ok_or_else(|| StoreError::not_found(format!("account {account_id}")))?;
+    if state != "needs_attention" || reason.as_deref() != Some(HUMAN_VERIFICATION_REASON) {
+        return Err(StoreError::conflict(format!(
+            "account {account_id} is not waiting for human verification"
+        )));
+    }
+    tx.execute(
+        "UPDATE accounts
+         SET state = 'active', state_reason = NULL, revision = revision + 1
+         WHERE account_id = ?1",
+        params![account_id],
+    )
+    .map_err(|e| classify(e, "activate the account after verification"))?;
+    Ok(())
+}
+
 /// Discard an IMAP account's sync cursors (03 "Restore" step 5), so a
 /// resumed account resyncs from the server's current state. A local
 /// mailbox keeps its NULL cursors.
@@ -674,6 +705,57 @@ mod tests {
         assert_eq!(account_row(&conn, "b").0, "active");
         assert_eq!(account_row(&conn, "c").0, "needs_attention");
         assert_eq!(account_row(&conn, "d").0, "disconnected");
+    }
+
+    #[test]
+    fn activate_after_verification_only_takes_the_human_verification_pause() {
+        let mut conn = store();
+        for (id, state, reason) in [
+            ("hv", "needs_attention", Some(HUMAN_VERIFICATION_REASON)),
+            ("other-reason", "needs_attention", Some("Sign in again")),
+            ("active", "active", None),
+            ("paused", "paused", None),
+            ("disconnected", "disconnected", None),
+        ] {
+            add_account(&conn, id, "proton", "proton_api", state);
+            if let Some(reason) = reason {
+                conn.execute(
+                    "UPDATE accounts SET state_reason = ?2 WHERE account_id = ?1",
+                    params![id, reason],
+                )
+                .unwrap();
+            }
+        }
+
+        assert!(matches!(
+            activate_after_verification(&conn.transaction().unwrap(), "missing"),
+            Err(StoreError::NotFound { .. })
+        ));
+        for id in ["other-reason", "active", "paused", "disconnected"] {
+            assert!(
+                matches!(
+                    activate_after_verification(&conn.transaction().unwrap(), id),
+                    Err(StoreError::Conflict { .. })
+                ),
+                "{id} must not activate"
+            );
+        }
+        let tx = conn.transaction().unwrap();
+        activate_after_verification(&tx, "hv").unwrap();
+        tx.commit().unwrap();
+
+        let row: (String, Option<String>, i64) = conn
+            .query_row(
+                "SELECT state, state_reason, revision FROM accounts WHERE account_id = 'hv'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        // The inserted row starts at revision 1; activating adds one.
+        assert_eq!(row, ("active".to_owned(), None, 2));
+        // The refused states were untouched.
+        assert_eq!(account_row(&conn, "active").1, 1);
+        assert_eq!(account_row(&conn, "paused").1, 1);
     }
 
     #[test]
