@@ -109,7 +109,8 @@ public struct ActivityPresentation: Sendable {
         }
         var detail = "\(count(coverage.messages)) "
             + (coverage.messages == 1 ? "message" : "messages")
-            + ", \(count(coverage.withBody)) with bodies"
+            + ", \(count(coverage.withBody)) "
+            + (coverage.withBody == 1 ? "with a body" : "with bodies")
         if coverage.bodyFailures > 0 {
             detail += ", \(count(coverage.bodyFailures)) couldn't be read"
         }

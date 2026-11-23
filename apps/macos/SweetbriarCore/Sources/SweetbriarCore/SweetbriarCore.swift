@@ -4884,7 +4884,8 @@ public struct AccountHealth: Equatable, Hashable {
     public var breakerEvents: [AccountBreakerEvent]
     public var coverage: Coverage
     /**
-     * A Proton account's sync coverage; none for another kind.
+     * A Proton account's sync coverage; none for another kind, or
+     * before the account's Proton row exists.
      */
     public var proton: ProtonCoverage?
     public var lastSyncMs: Int64?
@@ -4893,7 +4894,8 @@ public struct AccountHealth: Equatable, Hashable {
     // declare one manually.
     public init(accountId: String, state: AccountState, stateReason: String?, condition: AccountCondition, warnings: [String], breakerEvents: [AccountBreakerEvent], coverage: Coverage, 
         /**
-         * A Proton account's sync coverage; none for another kind.
+         * A Proton account's sync coverage; none for another kind, or
+         * before the account's Proton row exists.
          */proton: ProtonCoverage?, lastSyncMs: Int64?) {
         self.accountId = accountId
         self.state = state

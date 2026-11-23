@@ -151,7 +151,8 @@ pub struct AccountHealth {
     pub breaker_events: Vec<AccountBreakerEvent>,
     pub coverage: Coverage,
     /// A Proton account's sync coverage (spec/04-sync-proton
-    /// "Coverage"); none for another kind.
+    /// "Coverage"); none for another kind, or before the account's
+    /// Proton row exists.
     pub proton: Option<ProtonCoverage>,
     /// The last successful sync from memory; none if never synced.
     pub last_sync_ms: Option<i64>,

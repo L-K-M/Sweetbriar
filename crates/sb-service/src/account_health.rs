@@ -86,7 +86,8 @@ pub struct AccountHealth {
     pub warnings: Vec<String>,
     pub breaker_events: Vec<AccountBreakerEvent>,
     pub coverage: Coverage,
-    /// A Proton account's sync coverage; none for another kind.
+    /// A Proton account's sync coverage; none for another kind, or
+    /// before the account's Proton row exists.
     pub proton: Option<ProtonCoverage>,
     pub last_sync_ms: Option<i64>,
 }

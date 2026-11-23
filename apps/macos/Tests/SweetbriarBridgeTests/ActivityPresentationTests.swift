@@ -154,6 +154,8 @@ struct ActivityPresentationTests {
         #expect(
             p.protonCoverage(coverage)
                 == ActivityLine(title: "Listing Proton messages", detail: "1 message, 0 with bodies"))
+        coverage.withBody = 1
+        #expect(p.protonCoverage(coverage).detail == "1 message, 1 with a body")
 
         #expect(
             p.protonMailbox(
