@@ -15,8 +15,8 @@ use std::time::{Duration, Instant};
 
 use sb_resources::{Clock, Fs, Resources, Secret, SecretStore, StoreError, Timestamp};
 use sb_test_support::{
-    CutFs, FakeSecrets, Fault, ScratchDir, TestAccount, block_on, cert_der, fake_modulus_verifier,
-    real_fs,
+    CutFs, CutPoints, FakeSecrets, Fault, ScratchDir, TestAccount, block_on, cert_der,
+    fake_modulus_verifier, real_fs,
 };
 
 use super::{SendPhase, SendTransition};
@@ -36,6 +36,9 @@ const MODERN_MS: i64 = 1_700_000_000_000;
 /// The crash-cut suite's seeded points (plan M4.3f acceptance).
 const CUT_POINTS: usize = 200;
 const CUT_SEED: u64 = 0x0043_4301;
+/// How many seeds run at once. A cut mostly waits rather than computes,
+/// and one at a time the suite took 13 to 14 minutes on macOS CI.
+const CUT_LANES: usize = 4;
 const CUT_N_ENV: &str = "SB_SEND_CUT_N";
 const CUT_ROOT_ENV: &str = "SB_SEND_CUT_ROOT";
 const CHILD: &str = "proton_send::crash_tests::send_crash_child";
@@ -415,19 +418,51 @@ fn send_crash_cuts_never_duplicate_a_send() {
         cut_points(1, operations, count)
     };
 
+    let mut killed = Vec::new();
+    let mut survived = Vec::new();
+    std::thread::scope(|scope| {
+        let lanes: Vec<_> = points
+            .chunks(points.len().div_ceil(CUT_LANES))
+            .enumerate()
+            .map(|(lane, points)| {
+                let dir = scratch.path().join(format!("lane-{lane}"));
+                scope.spawn(move || run_lane(&dir, points))
+            })
+            .collect();
+        for lane in lanes {
+            let report = lane
+                .join()
+                .unwrap_or_else(|panic| std::panic::resume_unwind(panic));
+            killed.extend(report.killed);
+            survived.extend(report.survived);
+        }
+    });
+    assert!(
+        killed.len() == count,
+        "every seed must land: killed {killed:?}, survived {survived:?}"
+    );
+}
+
+/// Cut a child at each of `points` in turn and check what it left. The
+/// lane has its own fake, whose send count then covers one attempt at a
+/// time.
+fn run_lane(dir: &Path, points: &[u64]) -> CutPoints {
+    let server = serve_fake();
+    let base_url = server.base_url().to_owned();
+
     // The fake's send count when each child starts: a child that
     // survives its seed is never checked, so a running total would
     // charge its one send to the next cut.
     let baseline = std::cell::Cell::new(server.sends());
     let mut cuts = 0;
-    let report = sb_test_support::run_crash_cut_points(
+    sb_test_support::run_crash_cut_points(
         CUT_N_ENV,
         CUT_ROOT_ENV,
         CHILD,
-        &points,
+        points,
         &mut |_| {
             baseline.set(server.sends());
-            let root = scratch.path().join(format!("cut-{}", cuts)).join("store");
+            let root = dir.join(format!("cut-{}", cuts)).join("store");
             cuts += 1;
             let cache = root.parent().unwrap().join("cache");
             fs::create_dir_all(&cache).unwrap();
@@ -489,11 +524,5 @@ fn send_crash_cuts_never_duplicate_a_send() {
                 "the attempt cut in {state} (send_requested={send_requested}) ended {end_word}"
             );
         },
-    );
-    assert!(
-        report.killed.len() == count,
-        "every seed must land: killed {:?}, survived {:?}",
-        report.killed,
-        report.survived
-    );
+    )
 }

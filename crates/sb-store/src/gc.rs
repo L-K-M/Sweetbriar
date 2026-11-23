@@ -3,6 +3,8 @@
 //! them a reference re-covers, and removes expired orphans one writer
 //! task each; the re-check deletes the pins, so a crash before the
 //! unlink leaves no stale pin and the next pass restarts the clock.
+//! The pass also prunes expired command receipts (spec/02), which the
+//! object gates don't hold back.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -11,6 +13,7 @@ use std::time::Duration;
 use rusqlite::{Transaction, TransactionBehavior, params};
 
 use crate::objects::{ObjectId, ObjectStore};
+use crate::receipts::Pruning;
 use crate::schema::classify;
 use crate::writer::WritePriority;
 use crate::{Store, StoreError};
@@ -263,7 +266,8 @@ pub(crate) fn collect_garbage(
             "the writer thread cannot run GC on its own queue",
         ));
     }
-    let now = store.clock.now().as_millis();
+    let clock_now = store.clock.now();
+    let now = clock_now.as_millis();
     // Strictly older than grace; `checked_sub` keeps the epoch floor.
     let cutoff = now.checked_sub(i64::try_from(grace.as_millis()).unwrap_or(i64::MAX));
 
@@ -275,6 +279,10 @@ pub(crate) fn collect_garbage(
     };
     let stopped = || stop.load(Ordering::Acquire);
     if stopped() {
+        report.stopped = true;
+        return Ok(report);
+    }
+    if crate::receipts::prune(store, clock_now, stopped)? == Pruning::Stopped {
         report.stopped = true;
         return Ok(report);
     }
