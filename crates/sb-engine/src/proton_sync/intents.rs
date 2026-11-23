@@ -345,7 +345,7 @@ impl Attempt<'_> {
             Ok(None) => Read::Missing,
             Err(FetchError::UnexpectedMessage) => Read::Unexpected,
             Err(FetchError::Ended) => Read::Failed(Halt::Ended),
-            Err(FetchError::AttachmentTooLarge | FetchError::Retry) => Read::Failed(Halt::Retry),
+            Err(FetchError::TooLarge | FetchError::Retry) => Read::Failed(Halt::Retry),
         }
     }
 

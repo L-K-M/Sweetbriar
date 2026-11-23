@@ -152,6 +152,18 @@ public final class SidebarModel {
         return nil
     }
 
+    /// The mailbox an account section's entry lists; nil for any other.
+    public func mailbox(forEntry entryId: String) -> Mailbox? {
+        guard let account = accountId(forEntry: entryId) else { return nil }
+        return mailboxes[account]?.first {
+            Self.mailboxEntryID(account: account, mailbox: $0.mailboxId) == entryId
+        }
+    }
+
+    private static func mailboxEntryID(account: String, mailbox: Int64) -> String {
+        "\(account)/\(mailbox)"
+    }
+
     /// The saved view `id` names, if listed.
     public func savedView(id: String) -> SavedView? {
         savedViews.first { $0.viewId == id }
@@ -314,7 +326,7 @@ public final class SidebarModel {
             title: account.displayName,
             entries: mailboxes.map { mailbox in
                 Entry(
-                    id: "\(account.accountId)/\(mailbox.mailboxId)",
+                    id: mailboxEntryID(account: account.accountId, mailbox: mailbox.mailboxId),
                     title: mailbox.name,
                     unread: mailbox.unread,
                     target: mailbox.selectable

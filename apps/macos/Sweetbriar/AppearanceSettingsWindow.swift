@@ -95,6 +95,7 @@ private struct AppearanceSettingsLoader: View {
                             AccountsSettingsView(
                                 model: accountsModel, diagnostics: diagnosticsModel,
                                 editor: editor, editorRevision: editor.revision,
+                                appearance: shared.model(source: bridge),
                                 onSignInAgain: onSignInAgain
                             )
                             .id(editor.revision)
