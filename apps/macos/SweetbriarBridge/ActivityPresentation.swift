@@ -93,6 +93,24 @@ public struct ActivityPresentation: Sendable {
             + (event.disappeared == 1 ? "message" : "messages")
     }
 
+    /// What the row offers an account Proton asked to verify (spec/08
+    /// "Verifying during sync"): the sheet while the core holds the
+    /// challenge, Try Again once it doesn't; nothing for another
+    /// condition.
+    public static func verifyAction(_ condition: AccountCondition) -> SyncVerifyAction? {
+        guard case .verify(let challengeHeld) = condition else { return nil }
+        return challengeHeld ? .verify : .tryAgain
+    }
+
+    /// The refusal a row shows (spec/08 "Verifying during sync"): the
+    /// last attempt's, while the account still asks to be verified;
+    /// none once it has moved on.
+    public static func verifyRefusal(
+        _ condition: AccountCondition, refusal: String?
+    ) -> String? {
+        verifyAction(condition) == nil ? nil : refusal
+    }
+
     /// A Proton account's sync coverage (spec/04-sync-proton "Coverage"):
     /// "Proton messages synced" once a listing completed, "Proton asked
     /// Sweetbriar to resync" while a refresh's listing runs, and "Listing

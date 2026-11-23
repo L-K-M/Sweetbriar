@@ -156,7 +156,9 @@ public enum AccountCondition: Sendable, Equatable {
     case paused
     case disconnected
     case signInAgain
-    case verify
+    /// Proton asked for human verification; whether the core still
+    /// holds its challenge decides Verify… or Try Again (spec/08).
+    case verify(challengeHeld: Bool)
     /// Proton refused this version of Sweetbriar, with its message.
     case versionRefused(message: String)
     /// A secret-store pause, with the stored reason.
@@ -174,8 +176,8 @@ public enum AccountCondition: Sendable, Equatable {
             self = .disconnected
         case .signInAgain:
             self = .signInAgain
-        case .verify:
-            self = .verify
+        case .verify(let challengeHeld):
+            self = .verify(challengeHeld: challengeHeld)
         case .versionRefused(let message):
             self = .versionRefused(message: message)
         case .secretStore(let reason):

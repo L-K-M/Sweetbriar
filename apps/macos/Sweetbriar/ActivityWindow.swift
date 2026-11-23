@@ -1,6 +1,7 @@
 // The Activity window (spec/08 "Activity / account health"; plan
 // M2.7d2): per-account state and condition with "Sign in again" where
-// it applies, coverage, open breaker events with Accept and Keep, the
+// it applies, Verify… or Try Again for an account Proton asked to
+// verify, coverage, open breaker events with Accept and Keep, the
 // parked and quarantined intents with Retry and Cancel, and the
 // Recovery list. It observes the app's one shared `ActivityModel`;
 // the model's life belongs to the main window's core session.
@@ -8,6 +9,15 @@
 import AppKit
 import SwiftUI
 import SweetbriarBridge
+
+/// The sheet Verify… opens: `HumanVerificationSheet`, or a test's.
+@MainActor
+protocol VerificationSheetPresenting: AnyObject {
+    func present(on parent: NSWindow)
+    func close()
+}
+
+extension HumanVerificationSheet: VerificationSheetPresenting {}
 
 /// Hosts the Activity view. One shared instance lives in `AppDelegate`;
 /// closing it does not retire the model, which the main window owns.
@@ -17,8 +27,19 @@ final class ActivityWindowController: NSWindowController {
     private static let autosaveName = "ActivityWindowFrame"
     private static let contentSize = NSSize(width: 720, height: 600)
 
+    typealias SheetFactory = @MainActor (
+        URL, @escaping @MainActor (HumanVerificationMessage) -> Void
+    ) -> any VerificationSheetPresenting
+
+    private let verification: SyncVerificationModel
+    private let makeSheet: SheetFactory
+    /// The human-verification sheet Verify… opened, while it is open.
+    private var verificationSheet: (any VerificationSheetPresenting)?
+
     init(
         model: ActivityModel, bridge: CoreBridge, appearance: AppearanceModel? = nil,
+        verification: SyncVerificationModel? = nil,
+        makeSheet: @escaping SheetFactory = { HumanVerificationSheet(url: $0, onMessage: $1) },
         onSignInAgain: @escaping @MainActor (Account) -> Void
     ) {
         let window = NSWindow(
@@ -33,11 +54,65 @@ final class ActivityWindowController: NSWindowController {
         window.setFrameAutosaveName(Self.autosaveName)
         // The controller outlives a close, so the window must too.
         window.isReleasedWhenClosed = false
-        window.contentView = NSHostingView(rootView: ActivityView(
-            model: model, bridge: bridge, appearance: appearance, onSignInAgain: onSignInAgain
-        ))
+        let verification = verification ?? SyncVerificationModel(source: bridge)
+        self.verification = verification
+        self.makeSheet = makeSheet
         super.init(window: window)
+        window.contentView = NSHostingView(rootView: ActivityView(
+            model: model, bridge: bridge, verification: verification, appearance: appearance,
+            onSignInAgain: onSignInAgain,
+            onVerify: { [weak self] accountId, action in self?.run(action, for: accountId) }
+        ))
         if !restored { window.center() }
+    }
+
+    /// A restore or a closed core drops the window: the sheet goes too.
+    override func close() {
+        closeVerificationSheet()
+        super.close()
+    }
+
+    /// spec/08 "Verifying during sync": Verify… opens the held
+    /// challenge's page as a sheet of this window; Try Again, and the
+    /// token the sheet closes with, go to the core.
+    func run(_ action: SyncVerifyAction, for accountId: String) {
+        switch action {
+        case .tryAgain:
+            Task { await verification.verify(accountId: accountId) }
+        case .verify:
+            guard verificationSheet == nil else { return }
+            Task { [weak self] in
+                guard let self, let url = await verification.challengePage(accountId: accountId),
+                      verificationSheet == nil, let window, window.isVisible
+                else { return }
+                let sheet = makeSheet(url) { [weak self] message in
+                    self?.received(message, for: accountId)
+                }
+                verificationSheet = sheet
+                sheet.present(on: window)
+            }
+        }
+    }
+
+    private func received(_ message: HumanVerificationMessage, for accountId: String) {
+        switch message {
+        case .verified(let token, let tokenType):
+            closeVerificationSheet()
+            Task {
+                await verification.verify(accountId: accountId, token: token, tokenType: tokenType)
+            }
+        case .closed:
+            // Closing without a token changes nothing.
+            closeVerificationSheet()
+        case .failed:
+            // The page shows its own error and offers another try.
+            break
+        }
+    }
+
+    private func closeVerificationSheet() {
+        verificationSheet?.close()
+        verificationSheet = nil
     }
 
     required init?(coder: NSCoder) {
@@ -49,9 +124,11 @@ final class ActivityWindowController: NSWindowController {
 private struct ActivityView: View {
     let model: ActivityModel
     let bridge: CoreBridge
+    let verification: SyncVerificationModel
     /// The accounts' colors for each row's chip; nil keeps them neutral.
     let appearance: AppearanceModel?
     let onSignInAgain: @MainActor (Account) -> Void
+    let onVerify: @MainActor (String, SyncVerifyAction) -> Void
 
     @State private var accounts: [Account] = []
     @State private var now = Date()
@@ -151,6 +228,15 @@ private struct ActivityView: View {
             if ActivityPresentation.offersSignInAgain(health.condition),
                let account = accounts.first(where: { $0.accountId == health.accountId }) {
                 Button("Sign in again") { onSignInAgain(account) }
+            }
+            if let action = ActivityPresentation.verifyAction(health.condition) {
+                Button(action.title) { onVerify(health.accountId, action) }
+                    .disabled(verification.busy.contains(health.accountId))
+                    .accessibilityIdentifier("verify-\(health.accountId)")
+            }
+            if let refusal = ActivityPresentation.verifyRefusal(
+                health.condition, refusal: verification.refusals[health.accountId]) {
+                Text(refusal).foregroundStyle(.secondary)
             }
             ForEach(health.breakerEvents, id: \.eventId) { event in
                 breakerRow(event)
