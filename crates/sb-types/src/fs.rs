@@ -77,6 +77,13 @@ pub trait Fs: Send + Sync {
     fn quarantine(&self, _path: &Path) -> io::Result<()> {
         Err(io::ErrorKind::Unsupported.into())
     }
+    /// Mark a directory out of Time Machine backups. macOS sets the
+    /// extended attribute `com.apple.metadata:com_apple_backup_excludeItem`;
+    /// elsewhere, and in test adapters, it is explicitly a no-op, because
+    /// it protects no bytes.
+    fn exclude_from_backup(&self, _path: &Path) -> io::Result<()> {
+        Ok(())
+    }
     /// Durably flush a directory's entries; returns only after they are
     /// on stable storage.
     fn sync_dir(&self, path: &Path) -> io::Result<()>;

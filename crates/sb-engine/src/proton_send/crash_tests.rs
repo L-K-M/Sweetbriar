@@ -11,11 +11,12 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use sb_resources::{Clock, Fs, Resources, Secret, SecretStore, StoreError, Timestamp};
 use sb_test_support::{
-    CutFs, FakeSecrets, ScratchDir, TestAccount, block_on, cert_der, fake_modulus_verifier, real_fs,
+    CutFs, CutPoints, FakeSecrets, Fault, ScratchDir, TestAccount, block_on, cert_der,
+    fake_modulus_verifier, real_fs,
 };
 
 use super::{SendPhase, SendTransition};
@@ -35,9 +36,20 @@ const MODERN_MS: i64 = 1_700_000_000_000;
 /// The crash-cut suite's seeded points (plan M4.3f acceptance).
 const CUT_POINTS: usize = 200;
 const CUT_SEED: u64 = 0x0043_4301;
+/// How many seeds run at once. A cut mostly waits rather than computes,
+/// and one at a time the suite took 13 to 14 minutes on macOS CI.
+const CUT_LANES: usize = 4;
 const CUT_N_ENV: &str = "SB_SEND_CUT_N";
 const CUT_ROOT_ENV: &str = "SB_SEND_CUT_ROOT";
 const CHILD: &str = "proton_send::crash_tests::send_crash_child";
+/// A send reply slower than a loaded machine's, inside the client's
+/// 30 s request deadline.
+pub(crate) const SLOW_REPLY: Duration = Duration::from_secs(10);
+/// How long the crash suites wait for the worker to finish. Counted in
+/// wall time, as the client's deadlines are: a count of polls ran out
+/// during one slow request. It leaves a child time to report a hang
+/// before the harness's 120 s deadline kills it.
+pub(crate) const WORKER_DEADLINE: Duration = Duration::from_secs(90);
 
 /// A clock the test advances by hand.
 pub(crate) struct MovableClock(AtomicI64);
@@ -219,7 +231,8 @@ async fn run_until_terminal(
     attempt_id: &str,
     settled: &AtomicBool,
 ) {
-    for _ in 0..2_000 {
+    let started = Instant::now();
+    while started.elapsed() < WORKER_DEADLINE {
         if settled.load(Ordering::SeqCst)
             && let Some(state) = out_box_state(engine, attempt_id).await
             && matches!(
@@ -251,7 +264,8 @@ async fn out_box_state(engine: &Engine, attempt_id: &str) -> Option<AttemptState
 /// wakes the poll rather than using Tokio's timer.
 fn wait_for_terminal(engine: &Engine, clock: &MovableClock, attempt_id: &str) -> AttemptState {
     block_on(async {
-        for _ in 0..2_000 {
+        let started = Instant::now();
+        while started.elapsed() < WORKER_DEADLINE {
             if let Some(state) = out_box_state(engine, attempt_id).await
                 && matches!(
                     state,
@@ -319,12 +333,10 @@ fn cut_points(first: u64, last: u64, count: usize) -> Vec<u64> {
     points
 }
 
-#[test]
-fn send_crash_cuts_never_duplicate_a_send() {
-    let scratch = ScratchDir::new("engine-send-crash-cuts");
-    // The fake server runs on its own runtime thread: the parent's
-    // checks drive the engine with the test executor, which must not
-    // run inside a Tokio runtime context.
+/// The fake server on its own runtime thread: the parent's checks
+/// drive the engine with the test executor, which must not run inside
+/// a Tokio runtime context.
+pub(crate) fn serve_fake() -> Arc<sb_test_support::FakeProtonServer> {
     let (sent, ready) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let runtime = tokio::runtime::Runtime::new().expect("the fake's runtime");
@@ -336,7 +348,42 @@ fn send_crash_cuts_never_duplicate_a_send() {
         sent.send(Arc::new(server)).expect("the fake handle sends");
         runtime.block_on(std::future::pending::<()>());
     });
-    let server = ready.recv().expect("the fake handle");
+    ready.recv().expect("the fake handle")
+}
+
+/// A slow reply is no hang: the client allows a request 30 s, so a
+/// child that gives up sooner fails the suite on a loaded machine.
+#[test]
+fn the_crash_child_outwaits_a_slow_reply() {
+    let scratch = ScratchDir::new("engine-send-crash-slow");
+    let server = serve_fake();
+    server.set_fault(Some(Fault::OnceSend(Box::new(Fault::Stall(SLOW_REPLY)))));
+    fs::create_dir_all(scratch.path().join("cache")).unwrap();
+    fs::write(scratch.path().join("url.txt"), server.base_url()).unwrap();
+    fs::write(
+        scratch.path().join("verifier.txt"),
+        server.verifier_public_key(),
+    )
+    .unwrap();
+
+    let root = scratch.path().join("store");
+    let report = sb_test_support::run_crash_cut_points(
+        CUT_N_ENV,
+        CUT_ROOT_ENV,
+        CHILD,
+        &[u64::MAX],
+        &mut |_| root.clone(),
+        &mut |_| {},
+    );
+
+    assert_eq!(report.survived, vec![u64::MAX]);
+    assert_eq!(server.sends(), 1);
+}
+
+#[test]
+fn send_crash_cuts_never_duplicate_a_send() {
+    let scratch = ScratchDir::new("engine-send-crash-cuts");
+    let server = serve_fake();
     let base_url = server.base_url().to_owned();
 
     // An uncut child measures how many counted hook operations one
@@ -366,19 +413,51 @@ fn send_crash_cuts_never_duplicate_a_send() {
     assert!(operations > 0, "the submission made no counted operations");
     let points = cut_points(1, operations, CUT_POINTS);
 
+    let mut killed = Vec::new();
+    let mut survived = Vec::new();
+    std::thread::scope(|scope| {
+        let lanes: Vec<_> = points
+            .chunks(points.len().div_ceil(CUT_LANES))
+            .enumerate()
+            .map(|(lane, points)| {
+                let dir = scratch.path().join(format!("lane-{lane}"));
+                scope.spawn(move || run_lane(&dir, points))
+            })
+            .collect();
+        for lane in lanes {
+            let report = lane
+                .join()
+                .unwrap_or_else(|panic| std::panic::resume_unwind(panic));
+            killed.extend(report.killed);
+            survived.extend(report.survived);
+        }
+    });
+    assert!(
+        killed.len() == CUT_POINTS,
+        "every seed must land: killed {killed:?}, survived {survived:?}"
+    );
+}
+
+/// Cut a child at each of `points` in turn and check what it left. The
+/// lane has its own fake, whose send count then covers one attempt at a
+/// time.
+fn run_lane(dir: &Path, points: &[u64]) -> CutPoints {
+    let server = serve_fake();
+    let base_url = server.base_url().to_owned();
+
     // The fake's send count when each child starts: a child that
     // survives its seed is never checked, so a running total would
     // charge its one send to the next cut.
     let baseline = std::cell::Cell::new(server.sends());
     let mut cuts = 0;
-    let report = sb_test_support::run_crash_cut_points(
+    sb_test_support::run_crash_cut_points(
         CUT_N_ENV,
         CUT_ROOT_ENV,
         CHILD,
-        &points,
+        points,
         &mut |_| {
             baseline.set(server.sends());
-            let root = scratch.path().join(format!("cut-{}", cuts)).join("store");
+            let root = dir.join(format!("cut-{}", cuts)).join("store");
             cuts += 1;
             let cache = root.parent().unwrap().join("cache");
             fs::create_dir_all(&cache).unwrap();
@@ -440,11 +519,5 @@ fn send_crash_cuts_never_duplicate_a_send() {
                 "the attempt cut in {state} (send_requested={send_requested}) ended {end_word}"
             );
         },
-    );
-    assert!(
-        report.killed.len() == CUT_POINTS,
-        "every seed must land: killed {:?}, survived {:?}",
-        report.killed,
-        report.survived
-    );
+    )
 }

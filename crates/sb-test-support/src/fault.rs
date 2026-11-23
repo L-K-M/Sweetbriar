@@ -422,6 +422,13 @@ impl Fs for FaultFs {
         self.inner.quarantine(path)
     }
 
+    /// Backup exclusion protects no bytes, so it is not a fault point:
+    /// the callers ignore its failure anyway, and counting it would move
+    /// every later fault plan.
+    fn exclude_from_backup(&self, path: &Path) -> io::Result<()> {
+        self.inner.exclude_from_backup(path)
+    }
+
     fn sync_dir(&self, path: &Path) -> io::Result<()> {
         if let Some(kind) = self.plan.fire(FsOp::SyncDir) {
             return Err(fault_error(kind));
