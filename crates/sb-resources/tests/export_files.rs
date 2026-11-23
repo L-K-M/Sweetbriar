@@ -2598,8 +2598,9 @@ mod crash_cuts {
         let expected = normalized(&reference_root.join("out"));
         let last = uncut.operations();
         // Evenly spaced, deterministic cut points across the whole run.
-        let step = (last / CUT_POINTS as u64).max(1) as usize;
-        let points: Vec<u64> = (1..=last).step_by(step).take(CUT_POINTS).collect();
+        let count = sb_test_support::fault_points(CUT_POINTS, last);
+        let step = (last / count as u64).max(1) as usize;
+        let points: Vec<u64> = (1..=last).step_by(step).take(count).collect();
 
         let cuts = run_crash_cut_points(
             CUT_N_ENV,
