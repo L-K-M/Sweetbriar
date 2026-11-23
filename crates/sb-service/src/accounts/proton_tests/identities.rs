@@ -223,3 +223,51 @@ async fn a_deleted_address_keeps_its_identity_unsendable_until_it_comes_back() {
     assert_eq!(count(&h.scratch, "identities"), 2);
     assert_eq!(account_column(&h, &id, "config_generation"), generation + 2);
 }
+
+/// spec/11's "rotate a key": after Proton rotates the primary address's
+/// key, the address event unlocks the new key, so a message encrypted
+/// to it decrypts, and one encrypted to the old key before the rotation
+/// still does, though both are fetched afterwards.
+#[tokio::test]
+async fn a_rotated_key_decrypts_new_mail_and_the_old_key_still_reads() {
+    let h = setup(vec![TestAccount::new(USER, PASSWORD)]).await;
+    let id = synced(&h).await;
+    until(
+        &h,
+        "acquisition_sources WHERE source_kind = 'proton_fetch'",
+        1,
+    )
+    .await;
+
+    // Paused, the worker polls nothing: m2 (old key), the rotation and
+    // m3 (new key) arrive in one events response after the resume.
+    h.core
+        .pause_account("pause-rotate", &id)
+        .await
+        .expect("pause");
+    h.server.add_message(
+        USER,
+        FakeMessage::new("m2")
+            .with_time(200)
+            .with_labels(&["0", "5"]),
+    );
+    h.server.rotate_address_key(USER, PRIMARY);
+    h.server.add_message(
+        USER,
+        FakeMessage::new("m3")
+            .with_time(300)
+            .with_labels(&["0", "5"]),
+    );
+    h.core
+        .resume_account("resume-rotate", &id)
+        .await
+        .expect("resume");
+
+    until(
+        &h,
+        "acquisition_sources WHERE source_kind = 'proton_fetch'",
+        3,
+    )
+    .await;
+    assert_eq!(count(&h.scratch, "proton_body_failures"), 0);
+}

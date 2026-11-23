@@ -374,6 +374,39 @@ async fn a_damaged_body_is_recorded_and_retried_after_a_key_change() {
     assert_eq!(coverage.body_failures, 0);
 }
 
+/// A message past its download bound is recorded `too_large` once and
+/// the queue moves on; it is never retried (spec/04 "Timeouts").
+#[tokio::test]
+async fn a_message_past_its_bound_is_recorded_too_large_once() {
+    let h = setup(vec![TestAccount::new(USER, PASSWORD)]).await;
+    h.server
+        .add_message(USER, FakeMessage::new("m-big").with_time(200));
+    h.server
+        .add_message(USER, FakeMessage::new("m-small").with_time(100));
+    // One byte past spec/04's 100 MiB message bound.
+    let oversized = 100 * 1024 * 1024 + 1;
+    h.server.set_fault(Some(Fault::OnceAt {
+        path: "/mail/v4/messages/m-big".to_owned(),
+        fault: Box::new(Fault::Oversized(oversized)),
+    }));
+    let (_id, state) = begin(&h, "too-large").await;
+    let id = account_id(&state);
+    listed(&h.core, &id).await;
+
+    until(&h, "proton_body_failures WHERE reason = 'too_large'", 1).await;
+    until_acquired(&h, "m-small").await;
+    assert_eq!(
+        body_fetches(&h),
+        vec![
+            "/mail/v4/messages/m-big".to_owned(),
+            "/mail/v4/messages/m-small".to_owned(),
+        ],
+        "the oversized body was fetched once"
+    );
+    let coverage = h.core.engine().proton_coverage(&id).await.unwrap();
+    assert_eq!((coverage.with_body, coverage.body_failures), (1, 1));
+}
+
 #[tokio::test]
 async fn an_opened_message_is_fetched_before_older_ones() {
     let h = setup(vec![TestAccount::new(USER, PASSWORD)]).await;
