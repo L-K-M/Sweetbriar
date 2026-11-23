@@ -10,6 +10,7 @@ use sb_types::time::Timestamp;
 use super::*;
 use crate::proton::{
     NewProtonAccount, ProtonPasswordMode, begin_listing, insert_proton_account, proton_account,
+    reset_proton_for_restore,
 };
 use crate::testing::{reading, scratch_paths, test_seams};
 use crate::{Store, WritePriority, open};
@@ -167,6 +168,53 @@ fn count(store: &Store, sql: &'static str) -> i64 {
     reading(store, move |tx| {
         Ok(tx.query_row(sql, [], |row| row.get(0)).unwrap())
     })
+}
+
+/// Only a listing that starts over a complete one is a resync, and it
+/// counts as one refresh; the first bootstrap and a restore's are not
+/// (spec/04-sync-proton "Coverage").
+#[test]
+fn a_listing_over_a_complete_one_is_a_counted_resync() {
+    fn state(store: &Store) -> (ProtonListingState, bool, i64) {
+        reading(store, |tx| {
+            let coverage = proton_coverage(tx, ACCOUNT)?;
+            let account = proton_account(tx, ACCOUNT)?.unwrap();
+            Ok((coverage.listing, coverage.resync, account.refresh_count))
+        })
+    }
+    let finish = |store: &Store| {
+        let revision = revision(store);
+        write(store, move |tx| {
+            finish_listing(tx, ACCOUNT, &[], revision, now()).map(drop)
+        })
+        .unwrap();
+    };
+    let begin = |store: &Store, cursor: &'static str| {
+        let revision = revision(store);
+        write(store, move |tx| {
+            begin_listing(tx, ACCOUNT, cursor, revision).map(drop)
+        })
+        .unwrap();
+    };
+
+    let (_scratch, store) = listing_store("proton-resync");
+    assert_eq!(state(&store), (ProtonListingState::Listing, false, 0));
+    finish(&store);
+    assert_eq!(state(&store), (ProtonListingState::Complete, false, 0));
+
+    // A Refresh starts the listing over the complete one.
+    begin(&store, "event-1");
+    assert_eq!(state(&store), (ProtonListingState::Listing, true, 1));
+    // Repeating the same start changes nothing.
+    begin(&store, "event-1");
+    assert_eq!(state(&store), (ProtonListingState::Listing, true, 1));
+    finish(&store);
+    assert_eq!(state(&store), (ProtonListingState::Complete, false, 1));
+
+    // A restore clears the cursor first: its listing is a bootstrap.
+    write(&store, |tx| reset_proton_for_restore(tx, ACCOUNT)).unwrap();
+    begin(&store, "event-2");
+    assert_eq!(state(&store), (ProtonListingState::Listing, false, 1));
 }
 
 #[test]

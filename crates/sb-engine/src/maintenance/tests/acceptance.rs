@@ -202,14 +202,16 @@ fn ready_for_a_pass(root: &Path, fs: Arc<dyn sb_resources::Fs>) -> (Engine, Arc<
     (engine, clock)
 }
 
-/// `CUT_POINTS` seeded points in `first..=last`, ascending.
+/// `CUT_POINTS` seeded points in `first..=last`, ascending; more, up to
+/// every operation of the span, under `SB_FAULT_SCALE`.
 fn cut_points(first: u64, last: u64) -> Vec<u64> {
     assert!(first <= last, "the pass made no filesystem operation");
     let span = last - first + 1;
     assert!(span >= CUT_POINTS as u64, "only {span} operations to cut");
+    let count = sb_test_support::fault_points(CUT_POINTS, span);
     let mut state: u64 = 0x0018_C0FF_EE00;
     let mut points = std::collections::BTreeSet::new();
-    while points.len() < CUT_POINTS {
+    while points.len() < count {
         state = state
             .wrapping_mul(6_364_136_223_846_793_005)
             .wrapping_add(1_442_695_040_888_963_407);
@@ -282,7 +284,7 @@ fn crash_cuts_through_a_scheduled_pass_never_complete_a_generation() {
     );
     // The pass makes the same operations each run, so the points land.
     assert!(
-        cuts.killed.len() >= CUT_POINTS - 2,
+        cuts.killed.len() >= points.len() - 2,
         "children outlived cut points {:?}",
         cuts.survived
     );

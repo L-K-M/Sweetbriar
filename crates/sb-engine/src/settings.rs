@@ -124,7 +124,7 @@ pub(crate) const UNDO_SECONDS_KEY: &str = "sending.undo_seconds";
 const REGISTRY: &[RegisteredSetting] = &[
     RegisteredSetting {
         key: "appearance.compose_cue",
-        values: Values::Choices(&["standard", "strong"]),
+        values: Values::Choices(&["standard", "strong", "minimal"]),
         default: "standard",
     },
     RegisteredSetting {

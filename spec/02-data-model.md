@@ -268,7 +268,7 @@ CREATE TABLE proton_accounts (                        -- one per Proton API acco
   pending_cursor     TEXT,                            -- cursor read before the running bootstrap's listing
   listing_state      TEXT NOT NULL CHECK (listing_state IN ('none','listing','complete')),
   listing_checkpoint TEXT,                            -- last committed page's position while listing
-  refresh_count      INTEGER NOT NULL DEFAULT 0,      -- Proton refreshes applied
+  refresh_count      INTEGER NOT NULL DEFAULT 0,      -- Proton refreshes applied: +1 when a listing starts over a complete one
   diagnostics_json   TEXT,                            -- last refusal: {"v":1,"code":n,"message":"…","at":ms}, redacted (10)
   revision           INTEGER NOT NULL DEFAULT 1,
   CHECK ((listing_state = 'listing') = (pending_cursor IS NOT NULL)),
@@ -1386,7 +1386,7 @@ extend:
 
 | Key | Values | Default |
 |---|---|---|
-| `appearance.compose_cue` | `standard`, `strong` (08 Strong mode) | `standard` |
+| `appearance.compose_cue` | `standard`, `strong`, `minimal` (08 Strong and Minimal modes) | `standard` |
 | `sending.undo_seconds` | `5`, `7`, `10`, `20`, `30`: the undo-send window a new attempt is held for (05, M4.3; Settings → Sending safety, M4.4) | `7` |
 | `notifications.previews` | `off`, `on`: whether new-mail notifications show sender and subject (10, M2.7) | `off` |
 | `backups.destination` | Empty for the default, or an absolute directory path without NUL (M1.8j1b) | Empty: the data root's `backups/` |

@@ -681,7 +681,9 @@ fn require_revision(current: &ProtonAccount, expected: i64) -> Result<(), StoreE
 
 /// Record the cursor read before a bootstrap listing starts: the state
 /// becomes `listing` and the pending cursor holds it, so a change made
-/// during the listing is not lost (plan M2.15).
+/// during the listing is not lost (plan M2.15). A start over a complete
+/// listing, which only a Proton `Refresh` makes, counts in
+/// `refresh_count` (spec/02).
 pub fn begin_listing(
     tx: &Transaction,
     account_id: &str,
@@ -699,6 +701,7 @@ pub fn begin_listing(
     tx.execute(
         "UPDATE proton_accounts
          SET pending_cursor = ?2, listing_state = 'listing', listing_checkpoint = NULL,
+             refresh_count = refresh_count + (listing_state = 'complete'),
              revision = revision + 1
          WHERE account_id = ?1",
         params![account_id, pending_cursor],

@@ -411,7 +411,12 @@ fn send_crash_cuts_never_duplicate_a_send() {
         .parse()
         .expect("an integer");
     assert!(operations > 0, "the submission made no counted operations");
-    let points = cut_points(1, operations, CUT_POINTS);
+    let count = sb_test_support::fault_points(CUT_POINTS, operations);
+    let points = if count as u64 == operations {
+        (1..=operations).collect()
+    } else {
+        cut_points(1, operations, count)
+    };
 
     let mut killed = Vec::new();
     let mut survived = Vec::new();
@@ -433,7 +438,7 @@ fn send_crash_cuts_never_duplicate_a_send() {
         }
     });
     assert!(
-        killed.len() == CUT_POINTS,
+        killed.len() == count,
         "every seed must land: killed {killed:?}, survived {survived:?}"
     );
 }

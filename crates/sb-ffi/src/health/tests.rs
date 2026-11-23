@@ -177,6 +177,7 @@ fn account_health_query_and_subscription_cross_the_boundary() {
     assert_eq!(row.breaker_events, vec![]);
     assert_eq!(row.last_sync_ms, None);
     assert_eq!(row.coverage.total_messages, 0);
+    assert_eq!(row.proton, None, "the local archive has no Proton coverage");
 
     let changes = block_on(core.subscribe_account_health(token())).expect("subscribe");
     let mut next = pin!(changes.next(token()));
