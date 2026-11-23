@@ -8322,6 +8322,10 @@ public struct OutBoxRow: Equatable, Hashable {
     public var draftId: String
     public var accountId: String
     public var identityId: String
+    /**
+     * The sending address the attempt froze (`envelope_from`, spec/07).
+     */
+    public var envelopeFrom: String
     public var subject: String
     public var recipients: [OutBoxRecipient]
     public var state: AttemptState
@@ -8367,7 +8371,10 @@ public struct OutBoxRow: Equatable, Hashable {
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(attemptId: String, draftId: String, accountId: String, identityId: String, subject: String, recipients: [OutBoxRecipient], state: AttemptState, createdAtMs: Int64, updatedAtMs: Int64, holdUntilMs: Int64?, resolvedAtMs: Int64?, sendRequestedAtMs: Int64?, 
+    public init(attemptId: String, draftId: String, accountId: String, identityId: String, 
+        /**
+         * The sending address the attempt froze (`envelope_from`, spec/07).
+         */envelopeFrom: String, subject: String, recipients: [OutBoxRecipient], state: AttemptState, createdAtMs: Int64, updatedAtMs: Int64, holdUntilMs: Int64?, resolvedAtMs: Int64?, sendRequestedAtMs: Int64?, 
         /**
          * The Proton draft the attempt created, which becomes the sent
          * message (spec/02, 05 "Drafts on the server").
@@ -8398,6 +8405,7 @@ public struct OutBoxRow: Equatable, Hashable {
         self.draftId = draftId
         self.accountId = accountId
         self.identityId = identityId
+        self.envelopeFrom = envelopeFrom
         self.subject = subject
         self.recipients = recipients
         self.state = state
@@ -8436,6 +8444,7 @@ public struct FfiConverterTypeOutBoxRow: FfiConverterRustBuffer {
                 draftId: FfiConverterString.read(from: &buf), 
                 accountId: FfiConverterString.read(from: &buf), 
                 identityId: FfiConverterString.read(from: &buf), 
+                envelopeFrom: FfiConverterString.read(from: &buf), 
                 subject: FfiConverterString.read(from: &buf), 
                 recipients: FfiConverterSequenceTypeOutBoxRecipient.read(from: &buf), 
                 state: FfiConverterTypeAttemptState.read(from: &buf), 
@@ -8460,6 +8469,7 @@ public struct FfiConverterTypeOutBoxRow: FfiConverterRustBuffer {
         FfiConverterString.write(value.draftId, into: &buf)
         FfiConverterString.write(value.accountId, into: &buf)
         FfiConverterString.write(value.identityId, into: &buf)
+        FfiConverterString.write(value.envelopeFrom, into: &buf)
         FfiConverterString.write(value.subject, into: &buf)
         FfiConverterSequenceTypeOutBoxRecipient.write(value.recipients, into: &buf)
         FfiConverterTypeAttemptState.write(value.state, into: &buf)
