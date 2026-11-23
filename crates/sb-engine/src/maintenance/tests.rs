@@ -173,6 +173,59 @@ fn garbage_is_collected_daily() {
     block_on(engine.shutdown()).unwrap();
 }
 
+/// The daily GC job really prunes receipts past spec/02's thirty
+/// days, by the engine's injected clock.
+#[test]
+fn the_daily_gc_job_prunes_expired_receipts() {
+    let scratch = ScratchDir::new("maintenance-receipt-prune");
+    let (engine, clock) = scheduled(scratch.path(), MONDAY);
+    advance(&engine, &clock, SETTLE);
+    assert_eq!(
+        outcome_of(&engine, MaintenanceJob::Gc),
+        Some(MaintenanceOutcome::Complete)
+    );
+
+    let old_at = MONDAY - 30 * 24 * 60 * 60 * 1000 - 1;
+    let fresh_at = MONDAY + ms(SETTLE);
+    write(&engine, move |tx| {
+        tx.execute(
+            "INSERT INTO command_receipts
+             (idempotency_key, command, result_json, created_at)
+             VALUES ('old', 'set_setting', '{}', ?1)",
+            [old_at],
+        )
+        .map_err(|error| StoreError::internal(error.to_string()))?;
+        tx.execute(
+            "INSERT INTO command_receipts
+             (idempotency_key, command, result_json, created_at)
+             VALUES ('fresh', 'set_setting', '{}', ?1)",
+            [fresh_at],
+        )
+        .map_err(|error| StoreError::internal(error.to_string()))?;
+        Ok(())
+    });
+
+    // The next daily pass is due one period after the first run; the
+    // counted write also makes a backup run first.
+    advance(&engine, &clock, GC_PERIOD - Duration::from_millis(1));
+    advance(&engine, &clock, Duration::from_millis(1));
+    assert_eq!(
+        outcome_of(&engine, MaintenanceJob::Gc),
+        Some(MaintenanceOutcome::Complete)
+    );
+    let old = count(
+        &engine,
+        "SELECT count(*) FROM command_receipts WHERE idempotency_key = 'old'",
+    );
+    let fresh = count(
+        &engine,
+        "SELECT count(*) FROM command_receipts WHERE idempotency_key = 'fresh'",
+    );
+    assert_eq!(old, 0, "the expired receipt survived the daily pass");
+    assert_eq!(fresh, 1, "the fresh receipt was pruned");
+    block_on(engine.shutdown()).unwrap();
+}
+
 #[test]
 fn a_reopen_picks_the_cadence_up_from_the_records() {
     let scratch = ScratchDir::new("maintenance-reopen");

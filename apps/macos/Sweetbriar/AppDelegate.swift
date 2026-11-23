@@ -61,8 +61,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let roots = LaunchRoots.fromArguments()
         // External edits a crash left behind go unread (spec/10).
         if let cacheRoot = (roots ?? (try? CoreBridge.platformDefaultConfig()))?.cacheRoot {
-            ExternalEditFiles.purge(
-                ExternalEditFiles.root(inCache: URL(fileURLWithPath: cacheRoot, isDirectory: true)))
+            let cache = URL(fileURLWithPath: cacheRoot, isDirectory: true)
+            ExternalEditFiles.purge(ExternalEditFiles.root(inCache: cache))
+            // The opt-in latency log lives beside them (spec/08).
+            LatencyRecorder.shared.open(cacheRoot: cache)
         }
         let session = CoreSession {
             if let roots {

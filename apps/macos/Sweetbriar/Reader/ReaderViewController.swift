@@ -32,6 +32,8 @@ final class ReaderViewController: NSViewController {
     private let memory: ReadingViewMemory
     private let opener: @MainActor (URL) -> Bool
     private let confirmer: @MainActor (URL, [String]) async -> Bool
+    /// spec/08's `open_message` span, from a single selection to its body.
+    private let latency: LatencyRecorder
     private(set) var html: HTMLReaderView!
 
     init(
@@ -43,10 +45,12 @@ final class ReaderViewController: NSViewController {
         memory: ReadingViewMemory = ReadingViewMemory(
             source: UnavailableReadingViewMemorySource()
         ),
-        appearance: AppearanceModel? = nil
+        appearance: AppearanceModel? = nil,
+        latency: LatencyRecorder = .shared
     ) {
         self.model = model
         self.appearance = appearance
+        self.latency = latency
         self.opener = opener
         self.confirmer = confirmer
         self.memory = memory
@@ -67,6 +71,10 @@ final class ReaderViewController: NSViewController {
                 await model.ruleListUnavailable(ticket: ticket)
                 await render()
             }
+        }
+        html.didShowBody = { [weak self] ticket in
+            guard let self, ticket == model.navigationTicket, let id = model.occurrenceID else { return }
+            latency.end(.openMessage, key: id, shownIn: html)
         }
         html.loadFailed = { [weak self] ticket, error in
             guard let self, ticket == model.navigationTicket else { return }
@@ -207,10 +215,12 @@ final class ReaderViewController: NSViewController {
         readingScroll.isHidden = true
         html.isHidden = true
         status.isHidden = false
-        guard selection.count == 1 else {
+        guard selection.count == 1, let id = selection.first else {
+            latency.cancel(.openMessage)
             status.stringValue = selection.isEmpty ? "No message selected" : "\(selection.count) messages selected"
             return
         }
+        latency.begin(.openMessage, replacing: id)
         status.stringValue = "Loading message…"
     }
 
@@ -355,6 +365,27 @@ final class ReaderViewController: NSViewController {
             readingScroll.isHidden = false
         } else {
             readingScroll.isHidden = true
+        }
+        noteOpen(showingReading: showReading)
+    }
+
+    /// spec/08 "Latency log": the body a selection opened is on screen,
+    /// or this open won't show one. An open that waits for Proton to
+    /// fetch the body isn't a cached open, so it isn't recorded.
+    private func noteOpen(showingReading: Bool) {
+        guard let id = model.occurrenceID else { return }
+        switch model.state {
+        case .html where !showingReading:
+            // WebKit shows it when the navigation finishes (`didShowBody`).
+            break
+        case .html:
+            latency.end(.openMessage, key: id, shownIn: readingScroll)
+        case .plainText:
+            latency.end(.openMessage, key: id, shownIn: showingReading ? readingScroll : textScroll)
+        case .loading, .empty:
+            break
+        case .source, .unavailable, .failed:
+            latency.cancel(.openMessage, key: id)
         }
     }
 
