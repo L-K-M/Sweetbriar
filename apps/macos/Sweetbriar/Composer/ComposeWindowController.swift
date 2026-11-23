@@ -250,6 +250,12 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
 
     required init?(coder: NSCoder) { fatalError("ComposeWindowController is built in code") }
 
+    /// The draft's first load and render are done: its fields take
+    /// keystrokes unless the load failed.
+    func waitForLoad() async {
+        await loadTask?.value
+    }
+
     /// `-recordRouteAnnouncements YES` (UI-test hook, spec/11 "UI"): the
     /// default `announceRoute` additionally writes the last message into a
     /// `RouteAnnouncementRecorder` in this window, so the From-switch test
