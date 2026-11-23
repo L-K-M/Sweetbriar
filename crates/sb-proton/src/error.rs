@@ -142,7 +142,7 @@ pub enum ProtonError {
     ModulusSignatureInvalid,
     /// 9001: an authenticated request asked for human verification.
     /// `challenge` carries Proton's details when the response body had
-    /// them; [`ProtonError::from_api`] sees only Proton's `Error` text
+    /// them; `ProtonError::from_api` sees only Proton's `Error` text
     /// and answers `None`. The URL carries a token, so it is never
     /// printed (spec/04 "Human verification during sync", spec/10).
     HumanVerificationRequired {
