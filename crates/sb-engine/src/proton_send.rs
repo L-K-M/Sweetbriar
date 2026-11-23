@@ -18,12 +18,12 @@ use sb_resources::{
     APP_IDENTITY_REFUSED_REASON, AttachmentUpload, ClaimedRecipient, ClaimedSend, Disposition,
     DraftAction, DraftAddress, DraftCreate, DraftTemplate, FrozenAttachment, FrozenSend, KeyStore,
     ProtonClient, ProtonDraftAttachment, ProtonUpload, RECIPIENT_TYPE_EXTERNAL,
-    RECIPIENT_TYPE_INTERNAL, RecipientKeys, RecipientKind, RefusalKind, SESSION_REFUSED_REASON,
-    SendBody, SendError, SendFailure, SendFailureRejection, SendPackages, SendParentKind,
-    SendRecipient, SendRefusal, SendTransportError, Session, StoreError, Timestamp, WritePriority,
-    claim_send_attempt, commit_send_requested, mark_outcome_unknown, mark_send_accepted,
-    mark_send_failed, pause_for_reason, pause_for_session, record_proton_draft,
-    record_proton_upload, requeue_before_request,
+    RECIPIENT_TYPE_INTERNAL, RecipientKeys, RecipientKind, RecipientScheme, RefusalKind,
+    SESSION_REFUSED_REASON, SendBody, SendError, SendFailure, SendFailureRejection, SendPackages,
+    SendParentKind, SendRecipient, SendRefusal, SendTransportError, Session, StoreError, Timestamp,
+    WritePriority, claim_send_attempt, commit_send_requested, mark_outcome_unknown,
+    mark_send_accepted, mark_send_failed, pause_for_reason, pause_for_session, record_proton_draft,
+    record_proton_upload, record_recipient_schemes, requeue_before_request,
 };
 
 /// Proton's Sent and Drafts system labels (spec/05 step 6): the
@@ -325,6 +325,7 @@ async fn submit_one(
     // Step 1: each recipient's key lookup. An external address whose
     // lookup returned keys fails the attempt before any draft exists.
     let mut recipients = Vec::with_capacity(claimed.recipients.len());
+    let mut schemes: Vec<(String, RecipientScheme)> = Vec::with_capacity(claimed.recipients.len());
     for recipient in &claimed.recipients {
         let address = recipient.canonical.clone();
         let keys = match client.recipient_keys(&session, &address).await {
@@ -339,7 +340,10 @@ async fn submit_one(
             }
         };
         match plan_recipient(recipient, keys) {
-            Ok(recipient) => recipients.push(recipient),
+            Ok((recipient, scheme)) => {
+                schemes.push((recipient.address.clone(), scheme));
+                recipients.push(recipient);
+            }
             Err(failure) => {
                 let now = worker.resources().now();
                 let id = claimed.attempt_id.clone();
@@ -605,7 +609,14 @@ async fn submit_one(
     let committed = worker
         .resources()
         .write(WritePriority::Sync, move |tx| {
-            commit_send_requested(tx, &id, now)
+            let applied = commit_send_requested(tx, &id, now)?;
+            if applied {
+                // The scheme names what this request carried; a retry
+                // commits it again after a requeue cleared it
+                // (spec/05 step 4).
+                record_recipient_schemes(tx, &id, &schemes)?;
+            }
+            Ok(applied)
         })
         .await?;
     #[cfg(test)]
@@ -754,12 +765,15 @@ async fn session_and_keys(
 fn plan_recipient(
     recipient: &ClaimedRecipient,
     keys: RecipientKeys,
-) -> Result<SendRecipient, SendFailure> {
-    let send = |keys| {
-        Ok(SendRecipient {
-            address: recipient.canonical.clone(),
-            keys,
-        })
+) -> Result<(SendRecipient, RecipientScheme), SendFailure> {
+    let send = |keys, scheme| {
+        Ok((
+            SendRecipient {
+                address: recipient.canonical.clone(),
+                keys,
+            },
+            scheme,
+        ))
     };
     let failed = |message| SendFailure {
         code: None,
@@ -767,11 +781,13 @@ fn plan_recipient(
         rejected: None,
     };
     match keys.recipient_type {
-        RECIPIENT_TYPE_INTERNAL if keys.encryption_key().is_some() => send(keys),
+        RECIPIENT_TYPE_INTERNAL if keys.encryption_key().is_some() => {
+            send(keys, RecipientScheme::Internal)
+        }
         RECIPIENT_TYPE_INTERNAL => {
             Err(failed(format!("no active key for {}", recipient.canonical)))
         }
-        RECIPIENT_TYPE_EXTERNAL if keys.keys.is_empty() => send(keys),
+        RECIPIENT_TYPE_EXTERNAL if keys.keys.is_empty() => send(keys, RecipientScheme::Clear),
         RECIPIENT_TYPE_EXTERNAL => Err(SendFailure {
             code: None,
             message: format!(

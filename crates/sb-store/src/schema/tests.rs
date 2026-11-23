@@ -1447,6 +1447,49 @@ fn store_at_34(label: &str) -> (ScratchDir, StorePaths, Seams) {
     (scratch, paths, seams)
 }
 
+/// A store at version 35 with a held attempt and one recipient, so
+/// migration 36's column lands on a real row.
+fn store_at_35(label: &str) -> (ScratchDir, StorePaths, Seams) {
+    let (scratch, paths) = scratch_paths(label);
+    let seams = test_seams(real_fs());
+    let store = crate::store::open_with(
+        &paths,
+        &seams,
+        WRITER_PRAGMAS,
+        crate::store::READER_PRAGMAS,
+        &PINNED_SQLITE,
+        &MIGRATIONS[..35],
+    )
+    .unwrap();
+    writing(&store, |tx| {
+        tx.execute_batch(
+            "INSERT INTO accounts
+             (account_id, kind, provider, display_name, state, sort_order, created_at)
+             VALUES ('acct', 'proton', 'proton_api', 'P', 'active', 1, 0);
+             INSERT INTO identities
+             (identity_id, account_id, email, display_name, is_default, sendable)
+             VALUES ('id', 'acct', 'a@example.test', 'A', 1, 'validated');
+             INSERT INTO drafts (draft_id, state, current_revision_id, created_at, updated_at)
+             VALUES ('d', 'editing', 'r', 0, 0);
+             INSERT INTO draft_revisions
+             (revision_id, draft_id, seq, account_id, identity_id, compose_format, plain_flowed,
+              subject, to_json, cc_json, bcc_json, body_source, attachments_json, created_at)
+             VALUES ('r', 'd', 1, 'acct', 'id', 'plain', 1, '', '[]', '[]', '[]', '', '[]', 0);
+             INSERT INTO send_attempts
+             (attempt_id, draft_id, revision_id, account_id, config_generation, identity_id,
+              mime_sha256, message_id_header, envelope_from, state, sent_copy, created_at, updated_at)
+             VALUES ('a', 'd', 'r', 'acct', 1, 'id', 'sha', 'm', 'a@example.test',
+                     'held', 'server_saves', 0, 0);
+             INSERT INTO send_recipients (attempt_id, canonical, address, kind, state)
+             VALUES ('a', 'a@x.net', 'a@X.NET', 'to', 'pending');",
+        )
+        .map_err(bug)?;
+        Ok(())
+    });
+    store.close().unwrap();
+    (scratch, paths, seams)
+}
+
 /// Migration 35 keeps the intent row and id, admits `remove_label` and
 /// recreates the runnable index (spec/02 "Intents").
 #[test]
@@ -1487,6 +1530,51 @@ fn migration_35_keeps_the_intent_row_and_admits_remove_label() {
             [],
         )
         .map_err(bug)?;
+        Ok(())
+    });
+    store.close().unwrap();
+}
+
+/// Migration 36 applies on a v35 store, adds `send_recipients.scheme`,
+/// leaves the existing row NULL, and its CHECK admits only `internal`
+/// and `clear` (spec/02 "Sending").
+#[test]
+fn migration_36_adds_the_recipient_scheme() {
+    let (_scratch, paths, seams) = store_at_35("schema-recipient-scheme");
+    let store = crate::open(&paths, &seams).unwrap();
+    writing(&store, |tx| {
+        assert_eq!(
+            one_int(tx, "PRAGMA user_version"),
+            i64::from(LATEST_SCHEMA_VERSION)
+        );
+        assert_eq!(
+            one_int(
+                tx,
+                "SELECT count(*) FROM pragma_table_info('send_recipients') WHERE name='scheme'"
+            ),
+            1,
+            "scheme is missing"
+        );
+        let existing: Option<String> = tx
+            .query_row(
+                "SELECT scheme FROM send_recipients WHERE attempt_id = 'a'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(existing, None, "an existing row's scheme is NULL");
+        for admitted in ["internal", "clear"] {
+            tx.execute(
+                "UPDATE send_recipients SET scheme = ?1 WHERE attempt_id = 'a'",
+                [admitted],
+            )
+            .unwrap_or_else(|e| panic!("{admitted} was refused: {e}"));
+        }
+        let refused = tx.execute(
+            "UPDATE send_recipients SET scheme = 'encrypted' WHERE attempt_id = 'a'",
+            [],
+        );
+        assert!(refused.is_err(), "an unknown scheme was admitted");
         Ok(())
     });
     store.close().unwrap();

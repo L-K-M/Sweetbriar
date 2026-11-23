@@ -236,7 +236,9 @@ M4.4c. Choosing Out Box shows the Out Box in the list pane, as Drafts
   identity's current address. Without the identity's appearance the
   chip is neutral; the address still shows.
 - **Details:** the selected row's details show below the list: each
-  recipient with its address field and state, Proton's code and message
+  recipient with its address field and state, and "Not end-to-end
+  encrypted" for one Proton was asked to send in clear (05 step 1:
+  an external address without keys), Proton's code and message
   (`final_reply`), the Proton evidence observed since launch, the
   Proton draft it left in Proton's Drafts (05 "Drafts on the server"),
   and after `accepted` the soft warning when the Sent copy has not

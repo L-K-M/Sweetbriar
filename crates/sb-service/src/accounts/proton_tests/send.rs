@@ -328,6 +328,10 @@ async fn an_internal_recipient_is_sent_and_counted() {
     let row = until_state(&h, &queued.attempt_id, AttemptState::Accepted).await;
     assert_eq!(row.recipients.len(), 1);
     assert_recipients(&row, RecipientState::Sent);
+    assert_eq!(
+        recipient(&row, INTERNAL).scheme,
+        Some(crate::RecipientScheme::Internal)
+    );
     assert_eq!(h.server.sends(), 1, "exactly one send");
 
     // The fake decrypts the body with the recipient's key.
@@ -361,7 +365,11 @@ async fn an_external_recipient_without_keys_is_sent_in_clear() {
     let queued = queue(&h, &ident, &[EXTERNAL]).await;
 
     advance(&h, UNDO_MS).await;
-    until_state(&h, &queued.attempt_id, AttemptState::Accepted).await;
+    let row = until_state(&h, &queued.attempt_id, AttemptState::Accepted).await;
+    assert_eq!(
+        recipient(&row, EXTERNAL).scheme,
+        Some(crate::RecipientScheme::Clear)
+    );
     assert_eq!(h.server.sends(), 1);
     let recorded = h.server.recorded_sends();
     let package = &recorded[0].packages[0];
@@ -396,6 +404,12 @@ async fn an_external_recipient_with_keys_fails_before_any_draft() {
         RecipientState::RejectedPermanent
     );
     assert_eq!(recipient(&row, INTERNAL).state, RecipientState::Unsent);
+    assert!(
+        row.recipients
+            .iter()
+            .all(|recipient| recipient.scheme.is_none()),
+        "nothing was requested, so no recipient has a scheme"
+    );
     let reply = row.final_reply.as_deref().expect("the failure's reply");
     assert!(reply.contains("external"), "{reply}");
     assert!(

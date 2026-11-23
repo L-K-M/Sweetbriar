@@ -203,14 +203,15 @@ Otherwise the draft keeps its state.
       An internal recipient (Proton) is encrypted to its keys. An
       external recipient for whom the endpoint returns no keys is sent
       in clear, as Proton's own clients do by default; the Out Box says
-      so. An external recipient for whom it returns keys isn't
-      supported in the pilot: the attempt becomes `failed` before
-      anything is created on Proton, that recipient `rejected_permanent`
-      with the reason and the others `unsent`, so Sweetbriar never
-      downgrades a key the endpoint knows to clear text. Keys the
-      endpoint doesn't return (a WKD it doesn't consult, keys pinned in
-      Proton contacts) aren't looked up in the pilot; that lookup is
-      *later*. Password-protected sending isn't in the pilot.
+      so (the recipient's `scheme`, 02). An external recipient for whom
+      it returns keys isn't supported in the pilot: the attempt becomes
+      `failed` before anything is created on Proton, that recipient
+      `rejected_permanent` with the reason and the others `unsent`, so
+      Sweetbriar never downgrades a key the endpoint knows to clear
+      text. Keys the endpoint doesn't return (a WKD it doesn't consult,
+      keys pinned in Proton contacts) aren't looked up in the pilot;
+      that lookup is *later*. Password-protected sending isn't in the
+      pilot.
    2. **Create the draft.** `POST /mail/v4/messages` with the sender
       address, the recipient lists, the subject, the body encrypted to
       the sender's address key, and, for a reply or forward of a
@@ -245,7 +246,8 @@ Otherwise the draft keeps its state.
       the body's data packet, and per recipient its scheme (internal:
       the session keys encrypted to its key; clear: the session keys in
       the package), signed as Proton's clients sign. Then commit
-      `send_requested_at`, then `POST /mail/v4/messages/{draft id}`.
+      `send_requested_at` with each recipient's scheme (`internal` or
+      `clear`, 02), then `POST /mail/v4/messages/{draft id}`.
    5. **Interpret the reply:**
       - **Proton's success reply** (`Code` 1000 with the `Sent`
         message) → attempt `accepted`; every recipient `sent` (accepted

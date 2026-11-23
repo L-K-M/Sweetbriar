@@ -8263,19 +8263,22 @@ public func FfiConverterTypeOutBox_lower(_ value: OutBox) -> RustBuffer {
 
 /**
  * One recipient on an Out Box row (spec/07): the address as first
- * written, its field and its stored state.
+ * written, its field, its stored state and, once the send request
+ * committed, its Proton scheme.
  */
 public struct OutBoxRecipient: Equatable, Hashable {
     public var address: String
     public var kind: RecipientKind
     public var state: RecipientState
+    public var scheme: RecipientScheme?
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(address: String, kind: RecipientKind, state: RecipientState) {
+    public init(address: String, kind: RecipientKind, state: RecipientState, scheme: RecipientScheme?) {
         self.address = address
         self.kind = kind
         self.state = state
+        self.scheme = scheme
     }
 
     
@@ -8296,7 +8299,8 @@ public struct FfiConverterTypeOutBoxRecipient: FfiConverterRustBuffer {
             try OutBoxRecipient(
                 address: FfiConverterString.read(from: &buf), 
                 kind: FfiConverterTypeRecipientKind.read(from: &buf), 
-                state: FfiConverterTypeRecipientState.read(from: &buf)
+                state: FfiConverterTypeRecipientState.read(from: &buf), 
+                scheme: FfiConverterOptionTypeRecipientScheme.read(from: &buf)
         )
     }
 
@@ -8304,6 +8308,7 @@ public struct FfiConverterTypeOutBoxRecipient: FfiConverterRustBuffer {
         FfiConverterString.write(value.address, into: &buf)
         FfiConverterTypeRecipientKind.write(value.kind, into: &buf)
         FfiConverterTypeRecipientState.write(value.state, into: &buf)
+        FfiConverterOptionTypeRecipientScheme.write(value.scheme, into: &buf)
     }
 }
 
@@ -15333,6 +15338,78 @@ public func FfiConverterTypeRecipientKind_lower(_ value: RecipientKind) -> RustB
 
 
 /**
+ * A Proton recipient's package scheme (spec/02 "Sending", spec/05
+ * step 4): `internal` encrypted to its Proton keys, `clear` an
+ * external address sent without end-to-end encryption. None before
+ * the send request commits and for generic attempts.
+ */
+
+public enum RecipientScheme: Equatable, Hashable {
+    
+    case `internal`
+    case clear
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension RecipientScheme: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeRecipientScheme: FfiConverterRustBuffer {
+    typealias SwiftType = RecipientScheme
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> RecipientScheme {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .`internal`
+        
+        case 2: return .clear
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: RecipientScheme, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .`internal`:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .clear:
+            writeInt(&buf, Int32(2))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeRecipientScheme_lift(_ buf: RustBuffer) throws -> RecipientScheme {
+    return try FfiConverterTypeRecipientScheme.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeRecipientScheme_lower(_ value: RecipientScheme) -> RustBuffer {
+    return FfiConverterTypeRecipientScheme.lower(value)
+}
+
+
+
+/**
  * A recipient's stored state (spec/02 `send_recipients.state`).
  */
 
@@ -17340,6 +17417,30 @@ fileprivate struct FfiConverterOptionTypeQuarantineReason: FfiConverterRustBuffe
         switch try readInt(&buf) as Int8 {
         case 0: return nil
         case 1: return try FfiConverterTypeQuarantineReason.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionTypeRecipientScheme: FfiConverterRustBuffer {
+    typealias SwiftType = RecipientScheme?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeRecipientScheme.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeRecipientScheme.read(from: &buf)
         default: throw UniffiInternalError.unexpectedOptionalTag
         }
     }
