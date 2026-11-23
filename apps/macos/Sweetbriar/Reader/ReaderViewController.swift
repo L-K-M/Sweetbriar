@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 import SweetbriarBridge
 import WebKit
 
@@ -6,7 +7,9 @@ import WebKit
 final class ReaderViewController: NSViewController {
     let model: ReaderModel
     let header = NSTextField(wrappingLabelWithString: "")
-    let accountChip = NSTextField(labelWithString: "")
+    /// "Received in <account>" (spec/08 "Account chips").
+    let accountChip = NSHostingView(rootView: AccountChip(label: "", accountId: "", appearance: nil))
+    private let appearance: AppearanceModel?
     let tagPicker = TagPickerView(frame: .zero)
     let noteEditor = NoteEditorView(frame: .zero)
     /// The note last sent: the shown note may lag a write in flight.
@@ -42,9 +45,11 @@ final class ReaderViewController: NSViewController {
         memory: ReadingViewMemory = ReadingViewMemory(
             source: UnavailableReadingViewMemorySource()
         ),
+        appearance: AppearanceModel? = nil,
         latency: LatencyRecorder = .shared
     ) {
         self.model = model
+        self.appearance = appearance
         self.latency = latency
         self.opener = opener
         self.confirmer = confirmer
@@ -81,9 +86,29 @@ final class ReaderViewController: NSViewController {
             let ticket = model.navigationTicket
             reads.run { await self.activateLink(url, ticket: ticket) }
         }
+        if appearance != nil { observeAppearance() }
     }
 
     required init?(coder: NSCoder) { fatalError("ReaderViewController is built in code") }
+
+    /// Recolor the chip when an account's appearance changes.
+    private func observeAppearance() {
+        withObservationTracking {
+            _ = appearance?.appearance
+        } onChange: { [weak self] in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                if let message = self.model.currentMessage { self.renderAccountChip(message) }
+                self.observeAppearance()
+            }
+        }
+    }
+
+    private func renderAccountChip(_ message: ReaderMessage) {
+        accountChip.rootView = AccountChip(
+            label: "Received in \(message.accountDisplayName)", accountId: message.accountId,
+            appearance: appearance?.appearance, identifier: "readerAccount")
+    }
 
     override func loadView() {
         view = NSView()
@@ -96,10 +121,6 @@ final class ReaderViewController: NSViewController {
         details.orientation = .vertical
         details.alignment = .leading
         details.spacing = 6
-        accountChip.textColor = .secondaryLabelColor
-        accountChip.drawsBackground = true
-        accountChip.backgroundColor = .controlBackgroundColor
-        accountChip.setAccessibilityIdentifier("readerAccount")
         header.isSelectable = true
         details.addArrangedSubview(header)
         details.addArrangedSubview(accountChip)
@@ -303,7 +324,7 @@ final class ReaderViewController: NSViewController {
         details.isHidden = model.currentMessage == nil
         if let message = model.currentMessage {
             header.stringValue = Self.headerText(message)
-            accountChip.stringValue = "Received in \(message.accountDisplayName)"
+            renderAccountChip(message)
             sourceButton.title = model.isShowingSource ? "Sender Layout" : "View Source"
             let blocked = model.currentLease?.remoteContentBlocked ?? 0
             remoteContent.stringValue = "\(blocked) remote content items blocked"

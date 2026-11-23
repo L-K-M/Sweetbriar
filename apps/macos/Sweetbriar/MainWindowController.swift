@@ -296,7 +296,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
                                                      writes: writes, canWrite: { policy.canWrite })
         let reader = ReaderViewController(
             model: ReaderModel(source: bridge, preferred: .sanitizedHtml),
-            memory: readingViewMemory.model(source: bridge)
+            memory: readingViewMemory.model(source: bridge),
+            appearance: appearanceModel
         )
         self.reader = reader
         let drafts = DraftsListViewController(model: DraftListModel(source: bridge))
