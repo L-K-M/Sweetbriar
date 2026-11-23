@@ -350,6 +350,9 @@ struct IdentityStripViewTests {
         #expect(best >= 4.5)
     }
 
+    /// A faint monogram gets an outline in the label color, which holds
+    /// 3:1 on the neutral surface; the account's outline token is solved
+    /// against its strip and never drawn there. A clear one gets none.
     @Test(arguments: [
         (NSAppearance.Name.aqua, "#eeeeee", true), (.aqua, "#0000a0", false),
         (.darkAqua, "#222222", true), (.darkAqua, "#b0b0ff", false),
@@ -366,12 +369,29 @@ struct IdentityStripViewTests {
         view.content = .identity(label: label, monogram: "W", tokens: tokens)
         view.appearance = NSAppearance(named: name)
         view.cueMode = .minimal
-        let red = countPixels(try render(view)) {
+        let bitmap = try render(view)
+        let red = countPixels(bitmap) {
             $0.redComponent > 0.8 && $0.greenComponent < 0.2 && $0.blueComponent < 0.2
         }
         let resolved = view.appearance?.name
         #expect(resolved == name, "the fixture's appearance decides the surface")
-        #expect((red > 0) == outlined)
+        #expect(red == 0, "the strip's outline token isn't drawn on the neutral surface")
+
+        // The outline's left side runs 4.25-5.75 pt in, left of the
+        // monogram (8 pt) and of the label.
+        let background = try #require(
+            bitmap.colorAt(x: bitmap.pixelsWide - 8, y: bitmap.pixelsHigh / 2)?.usingColorSpace(.sRGB))
+        let surface = luminance(background)
+        let scale = CGFloat(bitmap.pixelsWide) / view.bounds.width
+        var best = 1.0
+        for x in Int(4 * scale)..<Int(6 * scale) {
+            for y in bitmap.pixelsHigh / 4..<bitmap.pixelsHigh * 3 / 4 {
+                guard let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
+                let ink = luminance(color)
+                best = max(best, (max(surface, ink) + 0.05) / (min(surface, ink) + 0.05))
+            }
+        }
+        #expect((best >= 3) == outlined, "the outline's contrast is \(best)")
     }
 
     @Test func minimalKeepsTheHighContrastEdgeNeutral() throws {

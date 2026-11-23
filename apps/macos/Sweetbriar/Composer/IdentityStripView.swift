@@ -139,7 +139,10 @@ final class IdentityStripView: NSView {
                 let faintMarker =
                     minimal && ComposeCuePresentation.markerNeedsOutline(marker, on: surface)
                 if hasMonogram && (options.differentiate || faintMarker) {
-                    appearanceColor(variant.outlineSrgb).setStroke()
+                    // The outline token holds 3:1 against the strip; on
+                    // Minimal's neutral surface the label color does.
+                    let ring = minimal ? NSColor.labelColor : appearanceColor(variant.outlineSrgb)
+                    ring.setStroke()
                     let markFrame = NSRect(
                         x: padding - 3, y: 3, width: markWidth(for: bounds.width) + 6,
                         height: max(0, bounds.height - 6))

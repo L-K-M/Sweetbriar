@@ -715,8 +715,9 @@ Implements [15-account-colors](../research/15-account-colors.md):
   - its fill is the opaque neutral window background and the window
     isn't tinted, so the monogram is the only colored part;
   - its text uses the system label color. The monogram keeps its
-    account marker, and its outline wherever the marker is under 3:1
-    against that background;
+    account marker, outlined in the system label color wherever the
+    marker is under 3:1 against that background (the account's outline
+    token is solved against its strip, not this one);
   - an unavailable route and every warning look as they do in Standard.
 - **Mode previews:** Settings → Appearance shows Standard, Strong and
   Minimal each with a preview of a compose window's top, drawn from the
