@@ -4,9 +4,12 @@
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
-use sb_test_support::{ScratchDir, block_on};
+use sb_test_support::{ScratchDir, block_on, execute_sql};
 
-use crate::{BackupEnd, Core, CoreConfig, CoreError, RestoreFailure, Restored, open_core};
+use crate::{
+    AccountAppearance, AccountAppearanceChange, AccountColor, BackupEnd, Core, CoreConfig,
+    CoreError, IdentityAppearance, IdentityAppearanceChange, RestoreFailure, Restored, open_core,
+};
 
 fn open(scratch: &ScratchDir) -> Core {
     // Staging opens the data root's parent without following links
@@ -224,5 +227,90 @@ fn a_refused_restore_hands_the_core_and_the_preparation_back() {
     let Restored { core, receipt } = block_on(core.restore(key, *prepared, unflagged())).unwrap();
     receipt.unwrap();
     assert_eq!(cue(&core), "strong");
+    block_on(core.shutdown());
+}
+
+/// Every account's and identity's resolved colors and monograms.
+fn colors(core: &Core) -> (Vec<AccountAppearance>, Vec<IdentityAppearance>) {
+    let appearance = block_on(core.appearance()).unwrap();
+    (appearance.accounts, appearance.identities)
+}
+
+/// Color the only account `account` and the overridden identity
+/// `identity`, and mark both with `symbol`.
+fn paint(core: &Core, account: AccountColor, identity: &str, symbol: &str) {
+    let (accounts, identities) = colors(core);
+    block_on(core.set_account_appearance(
+        &core.new_idempotency_key(),
+        &accounts[0].account_id,
+        accounts[0].revision,
+        &AccountAppearanceChange {
+            color: account,
+            symbol: Some(symbol.to_owned()),
+        },
+    ))
+    .unwrap();
+    let overridden = identities
+        .iter()
+        .find(|record| record.identity_id == OVERRIDDEN)
+        .unwrap();
+    block_on(core.set_identity_appearance(
+        &core.new_idempotency_key(),
+        OVERRIDDEN,
+        overridden.revision,
+        &IdentityAppearanceChange {
+            color_override_srgb: Some(identity.to_owned()),
+            symbol_override: Some(symbol.to_owned()),
+        },
+    ))
+    .unwrap();
+}
+
+const OVERRIDDEN: &str = "overridden";
+const INHERITING: &str = "inheriting";
+
+/// Plan M1.10f: colors survive the real backup and restore.
+#[test]
+fn account_and_identity_colors_survive_backup_and_restore() {
+    let scratch = ScratchDir::new("service-restore-colors");
+    let core = open(&scratch);
+    let account = block_on(core.accounts()).unwrap()[0].account_id.clone();
+    block_on(core.shutdown());
+    for identity in [OVERRIDDEN, INHERITING] {
+        execute_sql(
+            &scratch.path().join("store/state.sqlite"),
+            &format!(
+                "INSERT INTO identities (identity_id, account_id, email, display_name, is_default, sendable)
+                 VALUES ('{identity}', '{account}', '{identity}@example.test', 'Synthetic', 0, 'validated')"
+            ),
+        );
+    }
+
+    let core = open(&scratch);
+    paint(
+        &core,
+        AccountColor::Custom("#112233".to_owned()),
+        "#445566",
+        "A",
+    );
+    let saved = colors(&core);
+    let id = back_up(&core, "00000000-0000-4000-8000-0000000000c1");
+    paint(&core, AccountColor::PaletteV1(1), "#778899", "B");
+    assert_ne!(colors(&core), saved);
+
+    let prepared = block_on(core.prepare_restore(&id, unflagged())).unwrap();
+    let Restored { core, receipt } = block_on(core.restore(
+        "00000000-0000-4000-8000-0000000000c2",
+        prepared,
+        unflagged(),
+    ))
+    .unwrap();
+    receipt.unwrap();
+    assert_eq!(colors(&core), saved);
+    block_on(core.shutdown());
+
+    // The restored file holds them, not only the handle restore returned.
+    let core = open(&scratch);
+    assert_eq!(colors(&core), saved);
     block_on(core.shutdown());
 }

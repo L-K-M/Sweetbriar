@@ -300,9 +300,11 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
             appearance: appearanceModel
         )
         self.reader = reader
-        let drafts = DraftsListViewController(model: DraftListModel(source: bridge))
+        let drafts = DraftsListViewController(
+            model: DraftListModel(source: bridge, catalog: bridge), appearance: appearanceModel)
         let outBox = OutBoxViewController(
-            model: OutBoxModel(source: bridge, canWrite: { policy.canWrite }))
+            model: OutBoxModel(source: bridge, catalog: bridge, canWrite: { policy.canWrite }),
+            appearance: appearanceModel)
         let listPane = ListPaneController(messages: messageList, drafts: drafts, outBox: outBox)
         drafts.onOpen = { [weak self] id in
             guard let self, contentSerial == serial else { return }

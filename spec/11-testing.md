@@ -391,6 +391,11 @@ test, except where the spec says "manual qualification".
   - **How:** a test harness runs the operation in a child process and
     kills it (`SIGKILL`) at a numbered cut point. It then reopens the store
     and checks invariants.
+  - **Sampled and full:** a suite whose operation is too long to cut at
+    every point on each pull request (the import, bundle import, send,
+    scheduled-maintenance and export suites) cuts a fixed sample there.
+    `SB_FAULT_SCALE` multiplies that sample, and `SB_FAULT_SCALE=full`,
+    which the nightly `fault-injection` job sets, cuts every operation.
   - **Where** — at minimum:
     - each step of object publication (03);
     - before, inside and after each write transaction;

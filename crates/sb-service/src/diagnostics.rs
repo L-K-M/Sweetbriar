@@ -15,6 +15,16 @@ pub enum ProtonListingState {
     Complete,
 }
 
+impl ProtonListingState {
+    pub(crate) fn from_engine(state: sb_engine::ProtonListingState) -> Self {
+        match state {
+            sb_engine::ProtonListingState::None => Self::None,
+            sb_engine::ProtonListingState::Listing => Self::Listing,
+            sb_engine::ProtonListingState::Complete => Self::Complete,
+        }
+    }
+}
+
 /// The diagnostics package (spec/10): the whole document's data.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DiagnosticsPackage {
@@ -262,11 +272,7 @@ impl DiagnosticsCoverage {
 impl DiagnosticsProton {
     fn from_engine(proton: sb_engine::DiagnosticsProton) -> Self {
         Self {
-            listing_state: match proton.listing_state {
-                sb_engine::ProtonListingState::None => ProtonListingState::None,
-                sb_engine::ProtonListingState::Listing => ProtonListingState::Listing,
-                sb_engine::ProtonListingState::Complete => ProtonListingState::Complete,
-            },
+            listing_state: ProtonListingState::from_engine(proton.listing_state),
             refresh_count: proton.refresh_count,
             refusal: proton.refusal.map(|refusal| DiagnosticsRefusal {
                 code: refusal.code,

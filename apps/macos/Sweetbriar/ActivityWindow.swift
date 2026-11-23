@@ -145,6 +145,9 @@ private struct ActivityView: View {
             }
             Text("\(health.coverage.indexed) of \(health.coverage.totalMessages) indexed")
                 .foregroundStyle(.secondary)
+            if let proton = health.proton {
+                protonCoverage(proton)
+            }
             if ActivityPresentation.offersSignInAgain(health.condition),
                let account = accounts.first(where: { $0.accountId == health.accountId }) {
                 Button("Sign in again") { onSignInAgain(account) }
@@ -153,6 +156,24 @@ private struct ActivityView: View {
                 breakerRow(event)
             }
         }
+    }
+
+    /// "Proton messages synced" with its counts, and each mailbox's
+    /// count against Proton's behind a disclosure (spec/04-sync-proton
+    /// "Coverage").
+    private func protonCoverage(_ coverage: ProtonCoverage) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            line(Self.presentation.protonCoverage(coverage))
+            if !coverage.mailboxes.isEmpty {
+                DisclosureGroup("Mailboxes") {
+                    ForEach(coverage.mailboxes, id: \.mailboxId) { mailbox in
+                        line(Self.presentation.protonMailbox(mailbox))
+                    }
+                }
+            }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("proton-coverage")
     }
 
     private func breakerRow(_ event: AccountBreakerEvent) -> some View {
