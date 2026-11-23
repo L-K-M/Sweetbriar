@@ -374,6 +374,12 @@ final class ReaderViewController: NSViewController {
     /// fetch the body isn't a cached open, so it isn't recorded.
     private func noteOpen(showingReading: Bool) {
         guard let id = model.occurrenceID else { return }
+        // `open_body` fetches a body that wasn't on this Mac (spec/07):
+        // this open waited for Proton.
+        if let message = shownMessage, message.bodyAvailability != .acquired {
+            latency.cancel(.openMessage, key: id)
+            return
+        }
         switch model.state {
         case .html where !showingReading:
             // WebKit shows it when the navigation finishes (`didShowBody`).
@@ -386,6 +392,15 @@ final class ReaderViewController: NSViewController {
             break
         case .source, .unavailable, .failed:
             latency.cancel(.openMessage, key: id)
+        }
+    }
+
+    /// The message whose body or source is shown, as it was before the
+    /// open.
+    private var shownMessage: ReaderMessage? {
+        switch model.state {
+        case .html(let message, _), .plainText(let message, _), .source(let message, _): message
+        case .empty, .loading, .unavailable, .failed: nil
         }
     }
 

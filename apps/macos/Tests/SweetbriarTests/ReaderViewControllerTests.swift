@@ -60,6 +60,48 @@ private struct UnfetchedSource: ReaderSource {
     func releaseLease(_ leaseID: String) {}
 }
 
+/// A body Proton fetches during the open (online): the open waited for
+/// it, so it isn't a cached open either.
+private struct FetchingSource: ReaderSource {
+    let inner: PresentationSource
+    func messageForOccurrence(occurrenceId: Int64) async throws -> Int64 { 7 }
+    func getMessage(messageId: Int64) async throws -> ReaderMessage {
+        var message = inner.message
+        message.bodyAvailability = .notAcquired
+        return message
+    }
+    func openBody(messageID: Int64, preferred: BodyKind) async throws -> BodyLease {
+        try await inner.openBody(messageID: messageID, preferred: preferred)
+    }
+    func openAttachment(messageID: Int64, partID: String) async throws -> AttachmentLease {
+        try await inner.openAttachment(messageID: messageID, partID: partID)
+    }
+    func releaseLease(_ leaseID: String) {}
+}
+
+/// spec/08 "Latency log": a body fetched for the open is shown but not
+/// recorded; the next, cached open is.
+@Test @MainActor
+func aBodyFetchedForTheOpenRecordsNoSpan() async throws {
+    let source = try PresentationSource(plainOnly: true)
+    defer { try? FileManager.default.removeItem(at: source.directory) }
+    let fixture = try LatencyFixture()
+    defer { fixture.cleanUp() }
+    let fetching = ReaderViewController(
+        model: ReaderModel(source: FetchingSource(inner: source), preferred: .sanitizedHtml),
+        latency: fixture.recorder)
+    await fetching.show(selection: [42])
+    #expect(fetching.plainText.text == "Plain fallback body")
+    fetching.close()
+    let controller = ReaderViewController(
+        model: ReaderModel(source: source, preferred: .sanitizedHtml), latency: fixture.recorder)
+    await controller.show(selection: [42])
+    #expect(try await fixture.interactions(count: 1) == [.openMessage])
+    try await Task.sleep(for: .milliseconds(50))
+    #expect(try #require(fixture.recorder.log).read().entries.count == 1)
+    controller.close()
+}
+
 /// spec/08 "Latency log": a single selection's body on screen ends its
 /// `open_message` span; a body still to fetch, or several selected
 /// messages, record nothing.
