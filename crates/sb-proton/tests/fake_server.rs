@@ -358,6 +358,108 @@ async fn human_verification_at_2fa_is_retried_on_the_2fa_route() {
     assert!(retry.hv_token_present, "the retry carried the HV header");
 }
 
+#[tokio::test]
+async fn a_sync_request_s_9001_carries_the_challenge() {
+    let server = server_with(TestAccount::new(USER, PASSWORD)).await;
+    let client = client(&server);
+    let session = sign_in(&client, USER, PASSWORD).await;
+
+    server.require_human_verification(USER);
+    let Err(error) = client.addresses(&session).await else {
+        panic!("the authenticated request should be refused");
+    };
+    let challenge = match &error {
+        ProtonError::HumanVerificationRequired {
+            challenge: Some(challenge),
+        } => challenge,
+        other => panic!("unexpected error: {other:?}"),
+    };
+    assert_eq!(challenge.methods, ["captcha"]);
+    assert!(
+        challenge.url.contains("token="),
+        "the challenge URL carries the token: {}",
+        challenge.url
+    );
+
+    // The URL carries the token, so neither form may print it.
+    let display = error.to_string();
+    let debug = format!("{error:?}");
+    assert!(
+        !display.contains("token="),
+        "the display leaked it: {display}"
+    );
+    assert!(!debug.contains("token="), "the debug leaked it: {debug}");
+    assert!(
+        !format!("{challenge:?}").contains("token="),
+        "the challenge's own debug leaked it"
+    );
+}
+
+#[tokio::test]
+async fn a_sync_request_s_9001_without_details_has_no_challenge() {
+    let server = server_with(TestAccount::new(USER, PASSWORD)).await;
+    let client = client(&server);
+    let session = sign_in(&client, USER, PASSWORD).await;
+
+    // The injected body carries no `Details`, so there is no token to
+    // answer with (spec/04 "Human verification during sync").
+    server.set_fault(Some(Fault::Code {
+        status: 422,
+        code: 9001,
+    }));
+    let Err(error) = client.addresses(&session).await else {
+        panic!("the authenticated request should be refused");
+    };
+    assert!(
+        matches!(
+            error,
+            ProtonError::HumanVerificationRequired { challenge: None }
+        ),
+        "{error:?}"
+    );
+    assert!(!error.to_string().contains("token="));
+}
+
+#[tokio::test]
+async fn a_verification_token_rides_the_next_request_once() {
+    let server = server_with(TestAccount::new(USER, PASSWORD)).await;
+    let client = client(&server);
+    let session = sign_in(&client, USER, PASSWORD).await;
+
+    server.require_human_verification(USER);
+    let Err(error) = client.addresses(&session).await else {
+        panic!("the authenticated request should be refused");
+    };
+    let token = match &error {
+        ProtonError::HumanVerificationRequired {
+            challenge: Some(challenge),
+        } => challenge
+            .url
+            .split("token=")
+            .nth(1)
+            .expect("the challenge URL carries the token")
+            .to_owned(),
+        other => panic!("unexpected error: {other:?}"),
+    };
+
+    client.verify_next_request(SecretString::from(token), "captcha".to_owned());
+    client
+        .addresses(&session)
+        .await
+        .expect("the verified request succeeds");
+    client
+        .addresses(&session)
+        .await
+        .expect("the requirement cleared");
+
+    let carried = server
+        .requests()
+        .iter()
+        .filter(|request| request.hv_token_present)
+        .count();
+    assert_eq!(carried, 1, "the token rode exactly one request");
+}
+
 /// The verification token from a `NeedsHumanVerification` step.
 fn verification_token(step: &SignInStep) -> String {
     match step {

@@ -22,7 +22,7 @@ use serde_json::{Value, json};
 
 use super::{
     FakeAttachment, FakeEvent, FakeMessage, FakeProtonServer, State, attachment_json,
-    authenticated, header_str, json_response, message_body_json, query_value, unauthorized,
+    authenticated, header_str, json_response, message_body_json, query_value,
 };
 
 /// Proton's internal scheme: session keys are encrypted to the
@@ -229,8 +229,9 @@ pub(super) fn handle_keys(
     query: Option<&str>,
 ) -> Result<Response<Full<Bytes>>, io::Error> {
     let mut state = state.lock().unwrap_or_else(|e| e.into_inner());
-    let Some(username) = authenticated(&mut state, headers) else {
-        return Ok(unauthorized());
+    let username = match authenticated(&mut state, headers) {
+        Ok(username) => username,
+        Err(response) => return Ok(*response),
     };
     // Decoded the way Proton's server reads a query (Go's
     // `url.ParseQuery`): `%XX` escapes, and `+` as a space.
@@ -356,8 +357,9 @@ pub(super) fn handle_draft_write(
     body: &[u8],
 ) -> Result<Response<Full<Bytes>>, io::Error> {
     let mut state = state.lock().unwrap_or_else(|e| e.into_inner());
-    let Some(username) = authenticated(&mut state, headers) else {
-        return Ok(unauthorized());
+    let username = match authenticated(&mut state, headers) {
+        Ok(username) => username,
+        Err(response) => return Ok(*response),
     };
     let value: Value = serde_json::from_slice(body).unwrap_or(json!({}));
     let message = value.get("Message").cloned().unwrap_or(json!({}));
@@ -423,8 +425,9 @@ pub(super) fn handle_upload_attachment(
     body: &[u8],
 ) -> Result<Response<Full<Bytes>>, io::Error> {
     let mut state = state.lock().unwrap_or_else(|e| e.into_inner());
-    let Some(username) = authenticated(&mut state, headers) else {
-        return Ok(unauthorized());
+    let username = match authenticated(&mut state, headers) {
+        Ok(username) => username,
+        Err(response) => return Ok(*response),
     };
     let content_type = header_str(headers, "content-type").unwrap_or_default();
     let Some(form) = parse_multipart(&content_type, body) else {
@@ -507,8 +510,9 @@ pub(super) fn handle_send(
     body: &[u8],
 ) -> Result<Response<Full<Bytes>>, io::Error> {
     let mut state = state.lock().unwrap_or_else(|e| e.into_inner());
-    let Some(username) = authenticated(&mut state, headers) else {
-        return Ok(unauthorized());
+    let username = match authenticated(&mut state, headers) {
+        Ok(username) => username,
+        Err(response) => return Ok(*response),
     };
     let value: Value = serde_json::from_slice(body).unwrap_or(json!({}));
     let packages = value

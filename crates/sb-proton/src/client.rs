@@ -22,6 +22,7 @@ use proton_srp::{ModulusSignatureVerifier, ModulusVerifyError, RPGPVerifier};
 use rustls::pki_types::{CertificateDer, ServerName};
 use rustls::{ClientConfig, RootCertStore};
 use rustls_platform_verifier::BuilderVerifierExt;
+use secrecy::{ExposeSecret, SecretString};
 use tokio::net::TcpStream;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio_rustls::TlsConnector;
@@ -211,6 +212,10 @@ pub struct Client {
     /// What the last send waited for; read by the worker after a
     /// failure to classify the retry.
     last_backoff: Arc<std::sync::Mutex<Option<BackoffKind>>>,
+    /// The human-verification token riding the next authenticated
+    /// request, shared with this client's clones and never logged
+    /// (spec/04 "Human verification during sync", spec/10).
+    verification: Arc<std::sync::Mutex<Option<(SecretString, String)>>>,
     /// Told before each retry sleep.
     backoff_observer: Arc<std::sync::Mutex<Option<BackoffObserver>>>,
 }
@@ -231,6 +236,7 @@ impl Clone for Client {
             semaphore: self.semaphore.clone(),
             rate: self.rate.clone(),
             last_backoff: Arc::clone(&self.last_backoff),
+            verification: Arc::clone(&self.verification),
             backoff_observer: Arc::clone(&self.backoff_observer),
         }
     }
@@ -253,6 +259,7 @@ impl Client {
             semaphore: Arc::new(Semaphore::new(MAX_IN_FLIGHT)),
             rate: Arc::new(tokio::sync::Mutex::new(RateState::default())),
             last_backoff: Arc::new(std::sync::Mutex::new(None)),
+            verification: Arc::new(std::sync::Mutex::new(None)),
             backoff_observer: Arc::new(std::sync::Mutex::new(None)),
         })
     }
@@ -270,6 +277,23 @@ impl Client {
     /// (or succeeded at once). The worker classifies its retry from it.
     pub fn last_backoff(&self) -> Option<BackoffKind> {
         *self.last_backoff.lock().expect("the backoff lock poisoned")
+    }
+
+    /// Rides the next authenticated request with Proton's human-
+    /// verification headers, once (spec/04 "Human verification during
+    /// sync"). The caller passes the token its challenge's URL named.
+    pub fn verify_next_request(&self, token: SecretString, token_type: String) {
+        *self
+            .verification
+            .lock()
+            .expect("the verification lock poisoned") = Some((token, token_type));
+    }
+
+    fn take_verification(&self) -> Option<(SecretString, String)> {
+        self.verification
+            .lock()
+            .expect("the verification lock poisoned")
+            .take()
     }
 
     /// `GET /tests/ping`: the reachability probe (research
@@ -332,8 +356,22 @@ impl Client {
                 message: "the client is closed".to_owned(),
             })?;
 
+        // A stored verification rides this authenticated request once,
+        // including the retries of the same request below; a request
+        // without auth leaves it for a later one.
+        let verification = match auth {
+            Some(_) => self.take_verification(),
+            None => None,
+        };
+        let mut headers = extra.to_vec();
+        if let Some((token, token_type)) = verification {
+            headers.extend(
+                hv_headers(Some((token.expose_secret(), token_type.as_str())))
+                    .map_err(TransportFailure::from_proton)?,
+            );
+        }
         let request = self
-            .build_request(&method, path, body, auth, extra)
+            .build_request(&method, path, body, auth, &headers)
             .map_err(TransportFailure::from_proton)?;
         // The classification describes this send only.
         *self.last_backoff.lock().expect("the backoff lock poisoned") = None;
@@ -748,6 +786,38 @@ pub(crate) fn error_message(body: &[u8]) -> String {
         .unwrap_or_else(|| "Proton refused the request".to_owned())
 }
 
+/// Proton's human-verification headers for a retry: the token and its
+/// type (research `auth-session.md` §5).
+pub(crate) fn hv_headers(
+    hv: Option<(&str, &str)>,
+) -> Result<Vec<(HeaderName, HeaderValue)>, ProtonError> {
+    let Some((token, token_type)) = hv else {
+        return Ok(Vec::new());
+    };
+    Ok(vec![
+        (
+            HeaderName::from_static("x-pm-human-verification-token"),
+            HeaderValue::from_str(token).map_err(|e| ProtonError::Malformed {
+                message: format!("the human-verification token is not a header value: {e}"),
+            })?,
+        ),
+        (
+            HeaderName::from_static("x-pm-human-verification-token-type"),
+            HeaderValue::from_str(token_type).map_err(|e| ProtonError::Malformed {
+                message: format!("the human-verification token type is not a header value: {e}"),
+            })?,
+        ),
+    ])
+}
+
+/// A JSON body's `Details` object, or an empty object.
+pub(crate) fn details_of(body: &[u8]) -> serde_json::Value {
+    serde_json::from_slice::<serde_json::Value>(body)
+        .ok()
+        .and_then(|value| value.get("Details").cloned())
+        .unwrap_or_else(|| serde_json::json!({}))
+}
+
 /// The numeric `Code` from a JSON body.
 pub(crate) fn code_of(body: &[u8]) -> Option<i64> {
     serde_json::from_slice::<serde_json::Value>(body)
@@ -767,6 +837,13 @@ pub(crate) fn expect_success(status: StatusCode, body: &[u8]) -> Result<(), Prot
         return Ok(());
     }
     match crate::error::ApiCode::from_i64(code) {
+        // 9001 keeps Proton's challenge, so the caller can answer it
+        // (spec/04 "Human verification during sync").
+        Some(crate::error::ApiCode::HumanVerificationRequired) => {
+            Err(ProtonError::HumanVerificationRequired {
+                challenge: crate::auth::sync_human_verification(&details_of(body)),
+            })
+        }
         Some(api) => {
             Err(ProtonError::from_api(api, &message)
                 .unwrap_or(ProtonError::Unavailable { message }))

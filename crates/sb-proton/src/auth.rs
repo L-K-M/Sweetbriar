@@ -8,13 +8,12 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use hyper::Method;
-use hyper::header::{HeaderName, HeaderValue};
 use proton_srp::{SRPAuth, SRPError, SRPProof, SRPProofB64, SrpHashVersion};
 use secrecy::{ExposeSecret, SecretString};
 use serde::Deserialize;
 
 use crate::client::{
-    Client, Priority, SharedVerifier, error_message, expect_success, read_response,
+    Client, Priority, SharedVerifier, error_message, expect_success, hv_headers, read_response,
 };
 use crate::error::{InvalidField, ProtonError};
 use crate::keys::KeyStore;
@@ -70,6 +69,7 @@ impl fmt::Debug for SignInStep {
 
 /// The human-verification challenge (9001). The URL carries Proton's
 /// verification token, so `Debug` redacts it (spec/10).
+#[derive(Clone)]
 pub struct HumanVerification {
     /// Proton's verification page, built from the methods and token.
     pub url: String,
@@ -731,6 +731,48 @@ impl Client {
     }
 }
 
+/// Parses Proton's 9001 `Details` into a challenge: its methods, token
+/// and `WebUrl`, or the built verify.proton.me URL when Proton omitted
+/// one (research `auth-session.md` §5).
+pub(crate) fn human_verification(details: &serde_json::Value) -> HumanVerification {
+    let methods = details
+        .get("HumanVerificationMethods")
+        .and_then(serde_json::Value::as_array)
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let token = details
+        .get("HumanVerificationToken")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+    let method_list = methods.join(",");
+    let url = details
+        .get("WebUrl")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned)
+        .unwrap_or_else(|| {
+            format!("https://verify.proton.me/?methods={method_list}&token={token}")
+        });
+    HumanVerification { url, methods }
+}
+
+/// A sync-time 9001's challenge, when Proton's body carries a token:
+/// one without a non-empty `HumanVerificationToken` cannot be
+/// answered, so the caller sees none (spec/04 "Human verification
+/// during sync").
+pub(crate) fn sync_human_verification(details: &serde_json::Value) -> Option<HumanVerification> {
+    let has_token = details
+        .get("HumanVerificationToken")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|token| !token.is_empty());
+    has_token.then(|| human_verification(details))
+}
+
 /// Parses an auth response: success, 9001 (human verification) or a
 /// typed refusal.
 fn parse_auth_response(
@@ -753,33 +795,9 @@ fn parse_auth_response(
             .get("Details")
             .cloned()
             .unwrap_or(serde_json::json!({}));
-        let methods = details
-            .get("HumanVerificationMethods")
-            .and_then(serde_json::Value::as_array)
-            .map(|values| {
-                values
-                    .iter()
-                    .filter_map(serde_json::Value::as_str)
-                    .map(str::to_owned)
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
-        let token = details
-            .get("HumanVerificationToken")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or_default();
-        let method_list = methods.join(",");
-        let url = details
-            .get("WebUrl")
-            .and_then(serde_json::Value::as_str)
-            .map(str::to_owned)
-            .unwrap_or_else(|| {
-                format!("https://verify.proton.me/?methods={method_list}&token={token}")
-            });
-        return Ok(AuthResponse::HumanVerification(HumanVerification {
-            url,
-            methods,
-        }));
+        return Ok(AuthResponse::HumanVerification(human_verification(
+            &details,
+        )));
     }
     if !(status.is_success() && matches!(code, 1000 | 1001)) {
         let message = error_message(body);
@@ -794,26 +812,6 @@ fn parse_auth_response(
         message: format!("the auth response didn't decode: {e}"),
     })?;
     Ok(AuthResponse::Auth(auth))
-}
-
-fn hv_headers(hv: Option<(&str, &str)>) -> Result<Vec<(HeaderName, HeaderValue)>, ProtonError> {
-    let Some((token, token_type)) = hv else {
-        return Ok(Vec::new());
-    };
-    Ok(vec![
-        (
-            HeaderName::from_static("x-pm-human-verification-token"),
-            HeaderValue::from_str(token).map_err(|e| ProtonError::Malformed {
-                message: format!("the human-verification token is not a header value: {e}"),
-            })?,
-        ),
-        (
-            HeaderName::from_static("x-pm-human-verification-token-type"),
-            HeaderValue::from_str(token_type).map_err(|e| ProtonError::Malformed {
-                message: format!("the human-verification token type is not a header value: {e}"),
-            })?,
-        ),
-    ])
 }
 
 fn map_srp_error(error: SRPError) -> ProtonError {

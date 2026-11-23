@@ -157,6 +157,14 @@ conversation; the Bridge account sheet is no longer offered.
 - **Signing in again** (from the account's health row, "Sign in again",
   and the account's sidebar context menu, "Sign In Again…") opens the
   same sheet for that account, with the username fixed.
+- **Verifying during sync** (04-sync-proton "Human verification during
+  sync"): while the engine holds Proton's challenge, the account's
+  health row offers "Verify…", which opens the human-verification sheet
+  on its own, as a sheet of the Activity window. The token it closes
+  with goes to `verify_proton_account`; closing it without one changes
+  nothing. Without a held challenge the row offers "Try Again", which
+  calls `verify_proton_account` without a token. A refusal shows on the
+  row.
 - Password fields are `NSSecureTextField`s; their contents go to the
   Swift bridge (`SweetbriarBridge`, not Proton Bridge) as bytes and are
   cleared when the step is sent.

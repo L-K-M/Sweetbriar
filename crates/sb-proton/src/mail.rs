@@ -14,7 +14,7 @@ use serde_json::Value;
 
 use crate::auth::Session;
 use crate::client::{
-    Client, Priority, code_of, error_message, expect_success, read_response_bounded,
+    Client, Priority, code_of, details_of, error_message, expect_success, read_response_bounded,
     read_response_message,
 };
 use crate::error::ProtonError;
@@ -716,6 +716,11 @@ impl Client {
             let message = error_message(&bytes);
             return Err(
                 match code_of(&bytes).and_then(crate::error::ApiCode::from_i64) {
+                    Some(crate::error::ApiCode::HumanVerificationRequired) => {
+                        ProtonError::HumanVerificationRequired {
+                            challenge: crate::auth::sync_human_verification(&details_of(&bytes)),
+                        }
+                    }
                     Some(api) => {
                         ProtonError::from_api(api, &message).unwrap_or(ProtonError::Unavailable {
                             message: message.clone(),
