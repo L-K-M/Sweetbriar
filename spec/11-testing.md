@@ -450,9 +450,9 @@ test, except where the spec says "manual qualification".
     after each.
 
     Its kill mode serves crash cuts inside SQLite's own I/O: before the
-    Nth write, truncation or sync it applies every pending write, as
-    the OS would keep a killed process's writes, and the process kills
-    itself with `SIGKILL`.
+    Nth write, truncation or sync it applies every pending write and
+    truncation in order, as the OS would keep a killed process's
+    writes, and the process kills itself with `SIGKILL`.
 - Real power-cut tests on the owner's Mac are a manual qualification
   before the pilot is declared done.
 
