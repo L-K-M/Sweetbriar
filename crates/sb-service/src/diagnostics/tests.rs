@@ -6,8 +6,9 @@ use serde_json::Value;
 
 use std::sync::Arc;
 
+use sb_engine::{Secret, SecretStore};
 use sb_test_support::{
-    FakeProtonServer, FakeSecrets, ScratchDir, block_on, cert_der, execute_sql, system_clock,
+    FakeProtonServer, FakeSecrets, Fault, ScratchDir, block_on, cert_der, execute_sql, system_clock,
 };
 
 use super::*;
@@ -27,6 +28,10 @@ const SECRET_CREDENTIAL: &str = "tok-session-SECRET-abcdef123456";
 const ACCOUNT: &str = "11111111-1111-1111-1111-111111111111";
 /// The refusal once both quoted addresses are masked.
 const MASKED_REFUSAL: &str = "Proton refused this version for <address> and <address>";
+/// A well-formed session item (spec/10) for the seeded account, so its
+/// open-time restore goes on to Proton rather than stopping at "no
+/// session": "uid-1", "refresh-1" and "pass", each in hex.
+const SESSION_ITEM: &str = r#"{"v":1,"uid_hex":"7569642d31","refresh_token_hex":"726566726573682d31","key_passphrase_hex":"70617373"}"#;
 
 fn config(scratch: &ScratchDir) -> CoreConfig {
     CoreConfig {
@@ -39,16 +44,32 @@ fn open(scratch: &ScratchDir) -> Core {
     block_on(open_core(config(scratch))).unwrap()
 }
 
-/// The core over an in-memory secret store, so the seeded Proton
-/// account's restore sees "no session" on every host. The system store
-/// answers `Unavailable` on Linux CI, and that pause would replace the
-/// seeded refusal reason. The fake server is never called.
-async fn open_with_fake_secrets(scratch: &ScratchDir) -> Core {
+/// The core after its open-time restore of the seeded Proton account,
+/// which keeps the seeded refusal reason on every host. The restore
+/// runs in the background and rewrites the reason when its session item
+/// is missing ("Sign in again") or the store fails (the system store
+/// answers `Unavailable` on Linux CI), so an in-memory store holds a
+/// well-formed item and the fake server answers a server error. The
+/// refresh, a POST, isn't sent again, and a failure other than a
+/// refused session leaves the account as it is (spec/04). The server is
+/// returned so it keeps answering until the test ends.
+async fn open_with_fake_secrets(scratch: &ScratchDir) -> (Core, FakeProtonServer) {
     let server = FakeProtonServer::serve(Vec::new()).await.unwrap();
+    server.set_fault(Some(Fault::Code {
+        status: 500,
+        code: 0,
+    }));
+    let secrets = FakeSecrets::new();
+    secrets
+        .set(
+            SECRET_CREDENTIAL,
+            &Secret::new(SESSION_ITEM.as_bytes().to_vec()),
+        )
+        .unwrap();
     let engine = sb_engine::Engine::open_with_proton_and_cache(
         &scratch.path().join("store"),
         &scratch.path().join("cache"),
-        Arc::new(FakeSecrets::new()),
+        Arc::new(secrets),
         server.base_url().to_owned(),
         vec![cert_der()],
         server.verifier(),
@@ -56,7 +77,9 @@ async fn open_with_fake_secrets(scratch: &ScratchDir) -> Core {
     )
     .await
     .unwrap();
-    Core::around(engine)
+    let core = Core::around(engine);
+    core.engine().proton_restore_settled().await;
+    (core, server)
 }
 
 #[test]
@@ -166,7 +189,7 @@ async fn the_log_scan_finds_no_seeded_secret_address_name_or_subject() {
         ),
     );
 
-    let core = open_with_fake_secrets(&scratch).await;
+    let (core, _server) = open_with_fake_secrets(&scratch).await;
     let text = core
         .diagnostics_package("app-test", "os-test")
         .await

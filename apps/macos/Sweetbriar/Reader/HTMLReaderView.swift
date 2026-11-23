@@ -133,6 +133,8 @@ final class HTMLReaderView: NSView, WKNavigationDelegate, WKUIDelegate {
     var linkActivated: ((URL) -> Void)?
     var ruleListUnavailable: ((UInt64) -> Void)?
     var loadFailed: ((UInt64, any Error) -> Void)?
+    /// The body for `ticket` is on screen: its navigation finished.
+    var didShowBody: ((UInt64) -> Void)?
 
     init(
         currentTicket: @escaping () -> UInt64,
@@ -260,6 +262,7 @@ final class HTMLReaderView: NSView, WKNavigationDelegate, WKUIDelegate {
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         guard isCurrent(navigation) else { return }
         webView.isHidden = false
+        didShowBody?(ticket)
     }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: any Error) {

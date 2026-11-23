@@ -85,4 +85,45 @@ struct IdentityStripContentTests {
                 route: "work", identity: person, appearance: snapshot(account: decomposed))
                 == .unavailable(label: "Appearance unavailable: Work · Alex Example <alex@EXAMPLE.test>"))
     }
+
+    /// spec/08 "The window title": the account leads, so the Window menu
+    /// and Mission Control name it first.
+    @Test func theWindowTitleStartsWithTheSendingAccount() {
+        #expect(
+            IdentityStripContent.windowTitle(subject: "Lunch", identity: identity())
+                == "Work · Lunch · alex@EXAMPLE.test")
+        #expect(
+            IdentityStripContent.windowTitle(subject: "", identity: identity())
+                == "Work · New Message · alex@EXAMPLE.test")
+        #expect(IdentityStripContent.windowTitle(subject: "Lunch", identity: nil) == "Lunch")
+        #expect(IdentityStripContent.windowTitle(subject: "", identity: nil) == "New Message")
+    }
+
+    /// spec/08 "Cross-account check": both texts name the receiving
+    /// account and the sending identity with its full address.
+    @Test func theCrossAccountWarningNamesTheSendingIdentity() {
+        let sender = CrossAccountPresentation.sender(
+            routeAccountId: "account", routeAccountName: "Work", identity: identity())
+        #expect(sender == "Work · Alex Example <alex@EXAMPLE.test>")
+        #expect(
+            CrossAccountPresentation.banner(sender: sender, sourceAccountName: "Personal")
+                == "This reply goes out from Work · Alex Example <alex@EXAMPLE.test>, but Personal received the original.")
+        let confirmation = CrossAccountPresentation.confirmation(
+            routeAccountName: "Work", sender: sender, sourceAccountName: "Personal")
+        #expect(confirmation.message == "Send from Work?")
+        #expect(
+            confirmation.information
+                == "You're sending as Work · Alex Example <alex@EXAMPLE.test>. The original arrived at Personal.")
+    }
+
+    /// An identity of another account than the route's never stands in
+    /// for the sender: the account's name is all that's known.
+    @Test func anIdentityOfAnotherAccountIsNotNamedAsTheSender() {
+        #expect(
+            CrossAccountPresentation.sender(
+                routeAccountId: "other", routeAccountName: "Other", identity: identity()) == "Other")
+        #expect(
+            CrossAccountPresentation.sender(routeAccountId: "account", routeAccountName: "Work", identity: nil)
+                == "Work")
+    }
 }
