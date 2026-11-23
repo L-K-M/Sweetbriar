@@ -60,6 +60,8 @@ jobs:
         run: cargo test --locked -p sb-store --lib power
       - name: Power loss in resources (SimFs)
         run: cargo test --locked -p sb-resources --features test-seams power
+      - name: Migration crash cuts
+        run: cargo test --locked -p sb-store --lib migrations_survive_a_kill_at_any_write
       - name: Import crash cuts
         run: cargo test --locked -p sb-engine --lib imports_reach_the_uncut_counts_after_crash_cuts
       - name: Bundle import crash cuts

@@ -21,6 +21,11 @@
 //! so the next opener truncates the WAL index and rebuilds it from the
 //! WAL that survived.
 //!
+//! Its kill mode cuts a crash-cut child inside SQLite's own I/O
+//! instead: before the chosen operation it applies every pending write,
+//! as the OS keeps a killed process's writes, and the process kills
+//! itself.
+//!
 //! The store's connection constructor opens through this VFS only for
 //! paths under an armed root, and only in test builds.
 
@@ -57,6 +62,8 @@ struct MachineState {
     operations_left: Option<u64>,
     /// Writes, truncations and syncs seen while the power was on.
     operations: u64,
+    /// The operation the process dies before, in kill mode.
+    kill_before: Option<u64>,
 }
 
 impl Machine {
@@ -76,6 +83,10 @@ impl MachineState {
         if self.off {
             return false;
         }
+        if self.kill_before == Some(self.operations + 1) {
+            self.apply_pending();
+            sb_test_support::kill_now();
+        }
         if let Some(left) = self.operations_left.as_mut() {
             if *left == 0 {
                 self.off = true;
@@ -85,6 +96,26 @@ impl MachineState {
         }
         self.operations += 1;
         true
+    }
+
+    /// Write every pending operation to its real file, as the OS holds
+    /// a killed process's writes. A failure aborts the process, which
+    /// its crash-cut parent reports as an abnormal exit.
+    fn apply_pending(&mut self) {
+        use std::os::unix::fs::FileExt;
+        for (path, ops) in self.pending.drain() {
+            let file = std::fs::OpenOptions::new()
+                .write(true)
+                .open(&path)
+                .unwrap_or_else(|e| panic!("open {path} to apply its writes: {e}"));
+            for op in ops {
+                match op {
+                    Op::Write { offset, data } => file.write_all_at(&data, offset),
+                    Op::Truncate(size) => file.set_len(size),
+                }
+                .unwrap_or_else(|e| panic!("apply a write to {path}: {e}"));
+            }
+        }
     }
 }
 
@@ -152,6 +183,13 @@ impl PowerSupply {
     /// syncs have happened: the next one fails, and every one after it.
     pub(crate) fn cut_after(&self, operations: u64) {
         self.machine.state().operations_left = Some(operations);
+    }
+
+    /// Kill mode: the process dies of `SIGKILL` immediately before the
+    /// `nth` write, truncation or sync (from 1), with every earlier one
+    /// written to its file.
+    pub(crate) fn kill_before(&self, nth: u64) {
+        self.machine.state().kill_before = Some(nth);
     }
 
     /// Cut the power now.
