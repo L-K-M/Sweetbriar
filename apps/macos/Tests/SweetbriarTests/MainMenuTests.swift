@@ -72,6 +72,20 @@ struct MainMenuTests {
         }
     }
 
+    /// A disabled menu item still consumes its key, so the menu bar
+    /// itself must pass ⌘⌫ on to text being edited (spec/08 "Keyboard
+    /// filing"): it never files mail.
+    @Test("⌘⌫ stays the text's while it is edited")
+    func commandDeleteStaysTheTexts() async throws {
+        try await withFocusedEditor { textView in
+            textView.string = "say word"
+
+            let handled = try press("\u{8}", keyCode: kVK_Delete)
+            #expect(!handled)
+            #expect(textView.string == "say word")
+        }
+    }
+
     private func withFocusedEditor(
         _ body: (ComposerTextView) throws -> Void
     ) async throws {
@@ -166,6 +180,28 @@ struct BenchmarkMenuTests {
         #expect(probe.syntheticRuns == 1)
         #expect(probe.storeRuns == 1)
         #expect(probe.searchRuns == 1)
+    }
+}
+
+@Suite("edit commands")
+@MainActor
+struct EditMenuTests {
+    /// Undo and Redo go down the responder chain as AppKit's own
+    /// `undo:` and `redo:`, with ⌘Z and ⇧⌘Z.
+    @Test func undoAndRedoSendAppKitsSelectorsToTheFirstResponder() throws {
+        let builder = MainMenuBuilder(
+            onFillSynthetic: {}, onShowPrototype: {}, onImplementationChanged: { _ in },
+            onRunBenchmark: {}, onRunStoreBenchmark: {}, onRunSearchBenchmark: {},
+            isBenchmarkEnabled: { false }, onShowComposerProbe: {}, onImport: {}
+        )
+        let menu = builder.makeMainMenu()
+        let edit = try #require(menu.items.compactMap(\.submenu).first { $0.title == "Edit" })
+        let undo = try #require(edit.items.first { $0.title == "Undo" })
+        let redo = try #require(edit.items.first { $0.title == "Redo" })
+        #expect(undo.action.map(NSStringFromSelector) == "undo:")
+        #expect(redo.action.map(NSStringFromSelector) == "redo:")
+        #expect(undo.target == nil && redo.target == nil)
+        #expect(undo.keyEquivalent == "z" && redo.keyEquivalent == "Z")
     }
 }
 
