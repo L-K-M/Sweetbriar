@@ -790,7 +790,7 @@ pub(crate) fn expect_success(status: StatusCode, body: &[u8]) -> Result<(), Prot
         // (spec/04 "Human verification during sync").
         Some(crate::error::ApiCode::HumanVerificationRequired) => {
             Err(ProtonError::HumanVerificationRequired {
-                challenge: Some(crate::auth::human_verification(&details_of(body))),
+                challenge: crate::auth::sync_human_verification(&details_of(body)),
             })
         }
         Some(api) => {

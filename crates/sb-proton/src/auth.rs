@@ -761,6 +761,18 @@ pub(crate) fn human_verification(details: &serde_json::Value) -> HumanVerificati
     HumanVerification { url, methods }
 }
 
+/// A sync-time 9001's challenge, when Proton's body carries a token:
+/// one without a non-empty `HumanVerificationToken` cannot be
+/// answered, so the caller sees none (spec/04 "Human verification
+/// during sync").
+pub(crate) fn sync_human_verification(details: &serde_json::Value) -> Option<HumanVerification> {
+    let has_token = details
+        .get("HumanVerificationToken")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|token| !token.is_empty());
+    has_token.then(|| human_verification(details))
+}
+
 /// Parses an auth response: success, 9001 (human verification) or a
 /// typed refusal.
 fn parse_auth_response(

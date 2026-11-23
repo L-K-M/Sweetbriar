@@ -698,7 +698,7 @@ impl Client {
                 match code_of(&bytes).and_then(crate::error::ApiCode::from_i64) {
                     Some(crate::error::ApiCode::HumanVerificationRequired) => {
                         ProtonError::HumanVerificationRequired {
-                            challenge: Some(crate::auth::human_verification(&details_of(&bytes))),
+                            challenge: crate::auth::sync_human_verification(&details_of(&bytes)),
                         }
                     }
                     Some(api) => {

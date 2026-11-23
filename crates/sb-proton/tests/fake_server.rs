@@ -396,6 +396,31 @@ async fn a_sync_request_s_9001_carries_the_challenge() {
 }
 
 #[tokio::test]
+async fn a_sync_request_s_9001_without_details_has_no_challenge() {
+    let server = server_with(TestAccount::new(USER, PASSWORD)).await;
+    let client = client(&server);
+    let session = sign_in(&client, USER, PASSWORD).await;
+
+    // The injected body carries no `Details`, so there is no token to
+    // answer with (spec/04 "Human verification during sync").
+    server.set_fault(Some(Fault::Code {
+        status: 422,
+        code: 9001,
+    }));
+    let Err(error) = client.addresses(&session).await else {
+        panic!("the authenticated request should be refused");
+    };
+    assert!(
+        matches!(
+            error,
+            ProtonError::HumanVerificationRequired { challenge: None }
+        ),
+        "{error:?}"
+    );
+    assert!(!error.to_string().contains("token="));
+}
+
+#[tokio::test]
 async fn a_verification_token_rides_the_next_request_once() {
     let server = server_with(TestAccount::new(USER, PASSWORD)).await;
     let client = client(&server);
