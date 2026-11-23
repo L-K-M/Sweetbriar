@@ -153,7 +153,7 @@ pub use windows::{
 pub use sb_resources::{
     AttachmentRef, AttemptState, ComposeFormat, DraftAttachment, DraftRecipient, DraftSource,
     DraftState, DraftSummary, LiveAttempt, OutBoxRecipient, PublishedObject, RecipientKind,
-    RecipientState, SavedView, SentCopy, StoredDraft, StoredRevision, ViewSort,
+    RecipientScheme, RecipientState, SavedView, SentCopy, StoredDraft, StoredRevision, ViewSort,
 };
 pub use sb_resources::{
     Block, BodyAvailability, DOCUMENT_VERSION, DocumentSupport, HeadingLevel, ImageReference,

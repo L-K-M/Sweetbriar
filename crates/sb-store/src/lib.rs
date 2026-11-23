@@ -111,11 +111,12 @@ pub use restore_artifacts::{RestoreArtifact, RestoreArtifactKind};
 pub use schema::schema_version;
 pub use send::{
     ClaimedRecipient, ClaimedSend, OutBox, OutBoxRecipient, OutBoxRow, ProtonUpload, RecipientKind,
-    RecipientState, SendAttempt, SendFailure, SendFailureRejection, SendParent, SendParentKind,
-    SentCopy, UnknownResolution, cancel_send, claim_send_attempt, commit_send_requested,
-    confirm_send_route, mark_outcome_unknown, mark_send_accepted, mark_send_failed, out_box,
-    queue_due_held, record_proton_draft, record_proton_upload, reply_headers, reply_source_account,
-    requeue_before_request, resolve_unknown_send, retry_rejected_recipients, send_draft,
+    RecipientScheme, RecipientState, SendAttempt, SendFailure, SendFailureRejection, SendParent,
+    SendParentKind, SentCopy, UnknownResolution, cancel_send, claim_send_attempt,
+    commit_send_requested, confirm_send_route, mark_outcome_unknown, mark_send_accepted,
+    mark_send_failed, out_box, queue_due_held, record_proton_draft, record_proton_upload,
+    record_recipient_schemes, reply_headers, reply_source_account, requeue_before_request,
+    resolve_unknown_send, retry_rejected_recipients, send_draft,
 };
 pub use settings::{StoredSetting, read_all, upsert};
 pub use source_snapshots::{ImportSourceCapture, ImportSourceSnapshot};

@@ -1330,6 +1330,7 @@ CREATE TABLE send_recipients (
   kind         TEXT NOT NULL CHECK (kind IN ('to','cc','bcc')),
   rcpt_reply   TEXT,                               -- RCPT reply code + text
   state        TEXT NOT NULL CHECK (state IN ('pending','rcpt_accepted','rejected_permanent','rejected_transient','sent','unsent','unknown')),
+  scheme       TEXT CHECK (scheme IN ('internal','clear')), -- the package scheme 05 step 4 chose (migration 36, 02)
   PRIMARY KEY (attempt_id, canonical)
 ) STRICT;
 ```

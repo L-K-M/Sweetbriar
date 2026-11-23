@@ -886,6 +886,7 @@ pub fn requeue_before_request(
     attempt_id: &str,
     now: Timestamp,
 ) -> Result<bool, StoreError> {
+    let err = |e| classify(e, "requeue a send attempt");
     let applied = tx
         .execute(
             "UPDATE send_attempts
@@ -893,8 +894,44 @@ pub fn requeue_before_request(
              WHERE attempt_id = ?1 AND state = 'submitting'",
             params![attempt_id, now.as_millis()],
         )
-        .map_err(|e| classify(e, "requeue a send attempt"))?;
+        .map_err(err)?;
+    if applied == 1 {
+        // The retry's commit writes the scheme again, so a requeued
+        // attempt shows no stale scheme (spec/02, 05 step 5).
+        tx.execute(
+            "UPDATE send_recipients SET scheme = NULL WHERE attempt_id = ?1",
+            params![attempt_id],
+        )
+        .map_err(err)?;
+    }
     Ok(applied == 1)
+}
+
+/// `record_recipient_schemes(attempt_id, schemes)` (spec/05 step 4):
+/// write each Proton recipient's package scheme, in the transaction
+/// that commits `send_requested_at`, so the Out Box says what the
+/// request carried (spec/02). A canonical with no row is a programming
+/// bug: the engine passes the attempt's own recipients.
+pub fn record_recipient_schemes(
+    tx: &Transaction,
+    attempt_id: &str,
+    schemes: &[(String, RecipientScheme)],
+) -> Result<(), StoreError> {
+    for (canonical, scheme) in schemes {
+        let applied = tx
+            .execute(
+                "UPDATE send_recipients SET scheme = ?3
+                 WHERE attempt_id = ?1 AND canonical = ?2",
+                params![attempt_id, canonical, scheme.as_str()],
+            )
+            .map_err(|e| classify(e, "record the recipient schemes"))?;
+        if applied != 1 {
+            return Err(StoreError::internal(format!(
+                "send attempt {attempt_id} has no recipient {canonical}"
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// The attempt's draft, revision and account, or `NotFound`.
@@ -1484,13 +1521,46 @@ impl RecipientState {
     }
 }
 
+/// A Proton recipient's package scheme (spec/02 "Sending", spec/05
+/// step 4): `internal` encrypted to its Proton keys, `clear` an
+/// external address sent without end-to-end encryption. NULL before
+/// the send request commits and for generic attempts; a requeue that
+/// clears `send_requested_at` clears it too (02).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RecipientScheme {
+    Internal,
+    Clear,
+}
+
+impl RecipientScheme {
+    fn from_stored(name: &str) -> Result<Self, StoreError> {
+        match name {
+            "internal" => Ok(Self::Internal),
+            "clear" => Ok(Self::Clear),
+            _ => Err(StoreError::corrupt(format!(
+                "a send recipient's scheme is '{name}'"
+            ))),
+        }
+    }
+
+    /// The stored word.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Internal => "internal",
+            Self::Clear => "clear",
+        }
+    }
+}
+
 /// One recipient on an Out Box row (spec/07): the address as first
-/// written, its field and its stored state.
+/// written, its field, its stored state and, once the send request
+/// committed, its Proton scheme.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OutBoxRecipient {
     pub address: String,
     pub kind: RecipientKind,
     pub state: RecipientState,
+    pub scheme: Option<RecipientScheme>,
 }
 
 /// One Out Box row (spec/07 `out_box()`): the attempt's frozen
@@ -1713,7 +1783,7 @@ fn out_box_recipients(
     for chunk in attempt_ids.chunks(OUT_BOX_RECIPIENT_CHUNK) {
         let placeholders = vec!["?"; chunk.len()].join(",");
         let sql = format!(
-            "SELECT attempt_id, address, kind, state FROM send_recipients
+            "SELECT attempt_id, address, kind, state, scheme FROM send_recipients
              WHERE attempt_id IN ({placeholders}) ORDER BY attempt_id, canonical"
         );
         let mut statement = tx.prepare(&sql).map_err(err)?;
@@ -1724,15 +1794,21 @@ fn out_box_recipients(
                     row.get::<_, String>(1)?,
                     row.get::<_, String>(2)?,
                     row.get::<_, String>(3)?,
+                    row.get::<_, Option<String>>(4)?,
                 ))
             })
             .map_err(err)?;
         for row in rows {
-            let (attempt_id, address, kind, state) = row.map_err(err)?;
+            let (attempt_id, address, kind, state, scheme) = row.map_err(err)?;
+            let scheme = match scheme {
+                Some(word) => Some(RecipientScheme::from_stored(&word)?),
+                None => None,
+            };
             let recipient = OutBoxRecipient {
                 address,
                 kind: RecipientKind::from_stored(&kind)?,
                 state: RecipientState::from_stored(&state)?,
+                scheme,
             };
             by_attempt.entry(attempt_id).or_default().push(recipient);
         }

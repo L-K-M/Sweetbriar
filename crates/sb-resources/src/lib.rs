@@ -233,13 +233,13 @@ pub use sb_store::recovery::{
 };
 pub use sb_store::send::{
     ClaimedRecipient, ClaimedSend, OutBox, OutBoxRecipient, OutBoxRow, ProtonUpload, RecipientKind,
-    RecipientState, SendAttempt, SendFailure, SendFailureRejection, SendParent, SendParentKind,
-    SentCopy, UnknownResolution, UnknownSend, cancel_send, claim_send_attempt,
+    RecipientScheme, RecipientState, SendAttempt, SendFailure, SendFailureRejection, SendParent,
+    SendParentKind, SentCopy, UnknownResolution, UnknownSend, cancel_send, claim_send_attempt,
     commit_send_requested, confirm_send_route, earliest_hold_until, mark_outcome_unknown,
     mark_send_accepted, mark_send_failed, out_box, queue_due_held, record_proton_draft,
-    record_proton_upload, recover_proton_submitting, reply_headers, reply_source_account,
-    requeue_before_request, resolve_unknown_send, retry_rejected_recipients, send_draft,
-    unknown_proton_attempts,
+    record_proton_upload, record_recipient_schemes, recover_proton_submitting, reply_headers,
+    reply_source_account, requeue_before_request, resolve_unknown_send, retry_rejected_recipients,
+    send_draft, unknown_proton_attempts,
 };
 pub use sb_store::settings::{StoredSetting, read_all, upsert};
 pub use sb_store::sidebar::{
