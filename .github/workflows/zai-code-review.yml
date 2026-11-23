@@ -40,9 +40,11 @@ jobs:
     env:
       ZAI_API_KEY: ${{ secrets.ZAI_API_KEY }}
     steps:
+      # GitHub-hosted images set ImageOS and ImageVersion; a self-hosted
+      # runner is named instead.
       - name: Log image
         run: |
-          echo "Runner image: ${ImageOS:-unknown} ${ImageVersion:-unknown}"
+          echo "Runner: ${RUNNER_NAME} ${RUNNER_OS}/${RUNNER_ARCH}, image ${ImageOS:-self-hosted} ${ImageVersion:-}"
       - name: Record when the review started
         if: ${{ env.ZAI_API_KEY != '' }}
         run: echo "REVIEW_STARTED_AT=$(date -u +%s)" >> "$GITHUB_ENV"
