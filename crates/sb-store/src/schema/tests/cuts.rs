@@ -102,6 +102,32 @@ fn check(root: &Path, expected: &Rebuilt) {
     }
 }
 
+/// `count` points spread evenly over `1..=span`, both ends included:
+/// the upgrade's last operations (its final commit and sync) are cut on
+/// every run, not only when nightly cuts them all.
+fn spread(span: u64, count: usize) -> Vec<u64> {
+    let count = count as u64;
+    if count >= span {
+        return (1..=span).collect();
+    }
+    if count <= 1 {
+        return vec![span];
+    }
+    (0..count)
+        .map(|i| 1 + i * (span - 1) / (count - 1))
+        .collect()
+}
+
+#[test]
+fn spread_points_include_both_ends() {
+    assert_eq!(spread(1000, 40).first(), Some(&1));
+    assert_eq!(spread(1000, 40).last(), Some(&1000));
+    assert_eq!(spread(1000, 40).len(), 40);
+    assert!(spread(1000, 40).windows(2).all(|w| w[0] < w[1]));
+    assert_eq!(spread(5, 40), vec![1, 2, 3, 4, 5]);
+    assert_eq!(spread(9, 1), vec![9]);
+}
+
 /// A kill at any write, truncation or sync of the upgrade from version
 /// 27 leaves a store that reopens to the latest version intact.
 #[test]
@@ -120,9 +146,8 @@ fn migrations_survive_a_kill_at_any_write() {
     };
     assert!(span > 0, "the upgrade wrote through the test VFS");
 
-    let count = fault_points(CUT_POINTS, span);
-    let step = (span / count as u64).max(1) as usize;
-    let points: Vec<u64> = (1..=span).step_by(step).take(count).collect();
+    let points = spread(span, fault_points(CUT_POINTS, span));
+    assert_eq!(points.last(), Some(&span), "the final commit is cut");
     let mut roots = Vec::new();
     let cuts = run_crash_cut_points(
         CUT_ENV,
