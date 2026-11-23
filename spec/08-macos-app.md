@@ -29,7 +29,7 @@ Rests on research [08-macos-ui](../research/08-macos-ui.md),
 | **Message window** | A standalone reader for one message |
 | **Compose window** | One per draft |
 | **Settings** | SwiftUI: accounts (rename, pause and resume, disconnect, sign in again, notification previews; M2.7), appearance, sending safety, backups |
-| **Activity / account health** | SwiftUI: per-account state and condition with "Sign in again" where it applies, coverage, breaker events with Accept and Keep, parked and quarantined intents, the Recovery list, and the Out Box (M2.7; the Out Box with M4.4, intent actions with M3.1) |
+| **Activity / account health** | SwiftUI: per-account state and condition with "Sign in again" where it applies, coverage and, for a Proton account, "Proton messages synced" with each mailbox's count against Proton's (04-sync-proton "Coverage"), breaker events with Accept and Keep, parked and quarantined intents, the Recovery list, and the Out Box (M2.7; the Out Box with M4.4, intent actions with M3.1) |
 | **Import report** | Results of an import job (09) |
 
 State restoration uses AppKit window restoration. A compose window
