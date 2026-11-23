@@ -581,8 +581,9 @@ where
 }
 
 /// Reads a download frame by frame. Each frame must arrive within the
-/// request timeout and the whole within [`download_timeout`], so a
-/// server dribbling frames can't hold the in-flight permit forever.
+/// request timeout and the whole within [`download_timeout`] of its
+/// size, counted up to `limit`, so a server dribbling frames can't hold
+/// the in-flight permit forever.
 async fn collect_download<B>(mut body: B, limit: u64) -> Result<Vec<u8>, ProtonError>
 where
     B: Body<Data = Bytes> + Unpin,
@@ -593,7 +594,7 @@ where
     let mut total = 0u64;
     let mut bytes = Vec::new();
     loop {
-        let deadline = start + download_timeout(announced.max(total));
+        let deadline = start + download_timeout(announced.max(total).min(limit));
         let frame_deadline = (tokio::time::Instant::now() + REQUEST_TIMEOUT).min(deadline);
         let frame = match tokio::time::timeout_at(frame_deadline, body.frame()).await {
             Ok(Some(frame)) => frame,
@@ -622,15 +623,13 @@ const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(120);
 /// The size the base deadline covers.
 const DOWNLOAD_BASE_BYTES: u64 = 1024 * 1024;
 /// One more second for each further step or part of one: 100 KiB/s.
+/// The download's bound caps the size, so an attachment's deadline
+/// ends at 417 s and a message's at 1,134 s.
 const DOWNLOAD_STEP_BYTES: u64 = 100 * 1024;
-/// No size past this moves the deadline, which so ends at 417 s.
-const DOWNLOAD_SCALED_BYTES: u64 = 30 * 1024 * 1024;
 
 /// How long, from its first read, a download of `bytes` may take.
 fn download_timeout(bytes: u64) -> Duration {
-    let further = bytes
-        .min(DOWNLOAD_SCALED_BYTES)
-        .saturating_sub(DOWNLOAD_BASE_BYTES);
+    let further = bytes.saturating_sub(DOWNLOAD_BASE_BYTES);
     DOWNLOAD_TIMEOUT + Duration::from_secs(further.div_ceil(DOWNLOAD_STEP_BYTES))
 }
 
@@ -1203,6 +1202,24 @@ mod tests {
             let start = tokio::time::Instant::now();
             let body = Trickle::new(100, 1, 20, Some(announced));
             let read = collect_attachment(body, ATTACHMENT_LIMIT).await;
+            assert!(matches!(read, Err(ProtonError::Timeout)), "{announced}");
+            assert_eq!(start.elapsed().as_secs(), deadline, "{announced}");
+        }
+    }
+
+    /// A message scales up to its own bound, not an attachment's, so
+    /// 100 MiB fits at 100 KiB/s.
+    #[tokio::test(start_paused = true)]
+    async fn an_announced_message_scales_its_deadline_up_to_100_mib() {
+        for (announced, deadline) in [
+            (30 * MIB, 417),
+            (31 * MIB, 428),
+            (100 * MIB, 1_134),
+            (u64::MAX, 1_134),
+        ] {
+            let start = tokio::time::Instant::now();
+            let body = Trickle::new(100, 1, 20, Some(announced));
+            let read = collect_message(body).await;
             assert!(matches!(read, Err(ProtonError::Timeout)), "{announced}");
             assert_eq!(start.elapsed().as_secs(), deadline, "{announced}");
         }
