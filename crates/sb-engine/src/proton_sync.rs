@@ -1443,7 +1443,7 @@ async fn wait_for_next_poll(
 /// body, an offline transport).
 fn refusal_diagnostics(error: &ProtonError) -> (Option<i64>, String) {
     match error {
-        ProtonError::HumanVerificationRequired => (
+        ProtonError::HumanVerificationRequired { .. } => (
             Some(ApiCode::HumanVerificationRequired as i64),
             error.to_string(),
         ),
@@ -1464,7 +1464,7 @@ fn refusal_diagnostics(error: &ProtonError) -> (Option<i64>, String) {
 /// 5001, 5002, 5003). `None` when the worker retries.
 fn needs_attention(error: &ProtonError) -> Option<&'static str> {
     match error {
-        ProtonError::HumanVerificationRequired => Some(HUMAN_VERIFICATION_REASON),
+        ProtonError::HumanVerificationRequired { .. } => Some(HUMAN_VERIFICATION_REASON),
         ProtonError::Refused { code, .. } => matches!(
             code,
             ApiCode::ProductInvalid

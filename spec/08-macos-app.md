@@ -26,7 +26,7 @@ Rests on research [08-macos-ui](../research/08-macos-ui.md),
 | Window | Contents |
 |---|---|
 | **Main window** (one or more) | Sidebar \| message list \| reader, as an `NSSplitViewController` |
-| **Message window** | A standalone reader for one message |
+| **Message window** | A standalone reader for one message (Message window, below) |
 | **Compose window** | One per draft |
 | **Settings** | SwiftUI: accounts (rename, pause and resume, disconnect, sign in again, notification previews; M2.7), appearance, sending safety, backups |
 | **Activity / account health** | SwiftUI: per-account state and condition with "Sign in again" where it applies, coverage and, for a Proton account, "Proton messages synced" with each mailbox's count against Proton's (04-sync-proton "Coverage"), breaker events with Accept and Keep, parked and quarantined intents, the Recovery list, and the Out Box (M2.7; the Out Box with M4.4, intent actions with M3.1) |
@@ -157,6 +157,14 @@ conversation; the Bridge account sheet is no longer offered.
 - **Signing in again** (from the account's health row, "Sign in again",
   and the account's sidebar context menu, "Sign In Again…") opens the
   same sheet for that account, with the username fixed.
+- **Verifying during sync** (04-sync-proton "Human verification during
+  sync"): while the engine holds Proton's challenge, the account's
+  health row offers "Verify…", which opens the human-verification sheet
+  on its own, as a sheet of the Activity window. The token it closes
+  with goes to `verify_proton_account`; closing it without one changes
+  nothing. Without a held challenge the row offers "Try Again", which
+  calls `verify_proton_account` without a token. A refusal shows on the
+  row.
 - Password fields are `NSSecureTextField`s; their contents go to the
   Swift bridge (`SweetbriarBridge`, not Proton Bridge) as bytes and are
   cleared when the step is sent.
@@ -345,7 +353,8 @@ M4.4c. Choosing Out Box shows the Out Box in the list pane, as Drafts
   - a context click on a selected row acts on the selection; on an
     unselected row it acts on that row alone and leaves the selection.
 - **Keyboard:**
-  - arrows, Return to open, Space to page the reader;
+  - arrows, Return to open the message in its own window, Space to
+    page the reader (Message window, below);
   - `⌘⌫` delete to trash, `⌃⌘A` archive (Keyboard filing, below);
   - `⇧⌘U` mark read or unread, `⇧⌘L` star or unstar (M3.2). Each
     toggles the selection: when any selected row is unread (unstarred)
@@ -495,6 +504,35 @@ M4.4c. Choosing Out Box shows the Out Box in the list pane, as Drafts
   - the target is a raw IP address;
   - the target URL contains user info (`user@host`).
   - IDN confusable checks come later.
+
+## Message window
+
+A message window is the reader for one message on its own, with its own
+`WKWebView` (Reader above).
+
+- **Opening:** Return, ⌘O (Message → Open in New Window,
+  `ch.lkmc.Sweetbriar.cmd.openMessage`) or a double-click on a row
+  opens the row's message. Return and ⌘O need exactly one selected
+  message row and do nothing otherwise; a double-click opens the row it
+  hit. Drafts and the Out Box keep their own Return (above).
+- **One window per occurrence:** opening an occurrence that already
+  has a window brings that window to the front. A new window cascades
+  from the last one opened, so it doesn't hide it.
+- **Contents:** the main window's reader over that occurrence: the
+  header area with its chip, tags and note, the reading-view controls
+  and the link warnings. The title is the subject, or "No Subject".
+  It marks the message read as the main reader does (Reader, "Marking
+  read"), and closing it cancels a pending mark.
+- **Commands:** while a message window is key, Reply, Reply All and
+  Forward act on its message. The list's commands (mark read or
+  unread, star, filing) belong to the main window and are unavailable
+  there.
+- **Paging:** in the main window, Space in the message list scrolls the
+  reader down a page and ⇧Space up a page; in a message window, Space
+  pages its reader.
+- **Old archive:** message windows close when the main window's
+  content retires (a restore, or a closed core); a result that arrives
+  afterwards is dropped. Window restoration doesn't reopen them.
 
 ## Composer
 

@@ -2122,3 +2122,5 @@ fn frozen_bytes_read_by_sha_returns_the_published_bytes() {
     );
     store.close().unwrap();
 }
+
+mod model;

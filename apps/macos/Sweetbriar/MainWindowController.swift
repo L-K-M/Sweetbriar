@@ -46,6 +46,13 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         return ids.first
     }
 
+    /// What Reply, Reply All and Forward answer: the key message
+    /// window's message, else the list's single selection (spec/08
+    /// "Message window").
+    var replyOccurrenceId: Int64? {
+        messageWindows.occurrence(of: NSApp.keyWindow) ?? selectedOccurrenceId
+    }
+
     /// The app's one Activity model, started with the core and
     /// restarted after a restore; the sidebar and the Activity window
     /// share it.
@@ -69,6 +76,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     /// The flags last read for a whole-window selection, for the flag
     /// commands' titles.
     private var windowFlags: (selection: MessageSelection, flags: SelectionFlags)?
+    /// Messages opened in their own windows (spec/08 "Message window").
+    private let messageWindows = MessageWindows()
     private(set) var filing: FilingController?
     private var closed = false
 
@@ -170,6 +179,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         messageList?.onSelectionChange = nil
         markRead?.cancel()
         windowFlags = nil
+        messageWindows.closeAll()
         filing?.retire()
         filing = nil
         retireWritersForRestore()
@@ -349,6 +359,14 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
             let targets = self.backups.canWrite ? self.flagTargets : nil
             self.markRead?.show(targets?.count == 1 ? targets?.first : nil)
             self.refreshWindowFlags()
+        }
+        messageList.onOpenMessage = { [weak self] id in
+            guard let self, !closed, contentSerial == serial else { return }
+            openMessageWindow(id)
+        }
+        messageList.onPageReader = { [weak self] page in
+            guard let self, !closed, contentSerial == serial else { return }
+            self.reader?.page(page)
         }
         messageList.onViewSaved = { [weak self] view in
             guard let self, contentSerial == serial else { return }
@@ -719,8 +737,40 @@ extension MainWindowController: MessageFilingCommands {
     }
 }
 
+// MARK: - Message windows (spec/08 "Message window")
+
+extension MainWindowController: MessageWindowCommands {
+    /// Message → Open in New Window (⌘O): the list's single selection.
+    @objc func openMessage(_ sender: Any?) {
+        guard let id = selectedOccurrenceId else {
+            NSSound.beep()
+            return
+        }
+        openMessageWindow(id)
+    }
+
+    /// Open `id` in its own window, or bring its window to the front.
+    /// The row the list showed decides whether it is marked read.
+    func openMessageWindow(_ id: Int64) {
+        guard let bridge else { return }
+        // Built only for a new window; an open one just comes forward.
+        messageWindows.open(id) {
+            let memory = readingViewMemory.model(source: bridge)
+            return MessageWindowController(
+                occurrenceId: id,
+                reader: ReaderViewController(
+                    model: ReaderModel(source: bridge, preferred: .sanitizedHtml), memory: memory),
+                markRead: backups.canWrite ? MarkReadTimer(source: bridge) : nil,
+                target: flagTargets(for: [id])?.first)
+        }
+    }
+}
+
 extension MainWindowController: NSMenuItemValidation, NSToolbarItemValidation {
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        if menuItem.action == #selector(MessageWindowCommands.openMessage(_:)) {
+            return selectedOccurrenceId != nil
+        }
         if let action = menuItem.action, let enabled = filingCommandEnabled(action) { return enabled }
         guard let action = menuItem.action, let state = flagCommandState(action) else { return true }
         menuItem.title = state.title

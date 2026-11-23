@@ -220,6 +220,17 @@ final class MessageListViewController: NSViewController {
         didSet { list?.contextActions = contextActions }
     }
 
+    /// Opens a row's message in its own window, given to each list as
+    /// it is installed (spec/08 "Message window").
+    var onOpenMessage: (@MainActor (Int64) -> Void)? {
+        didSet { list?.onOpen = onOpenMessage }
+    }
+
+    /// Space and ⇧Space in the list page the reader.
+    var onPageReader: (@MainActor (ReaderPage) -> Void)? {
+        didSet { list?.onPage = onPageReader }
+    }
+
     /// The filing undo each installed list answers Edit → Undo with.
     var filingUndoManager: UndoManager? {
         didSet { list?.filingUndoManager = filingUndoManager }
@@ -296,6 +307,8 @@ final class MessageListViewController: NSViewController {
             self?.onSelectionChange?(ids)
         }
         list.contextActions = contextActions
+        list.onOpen = onOpenMessage
+        list.onPage = onPageReader
         list.filingUndoManager = filingUndoManager
         list.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(list, positioned: .below, relativeTo: statusLabel)
