@@ -34,7 +34,7 @@ struct ActivityPresentationTests {
             p.condition(.signInAgain, lastSync: nil, now: now)
                 == ActivityLine(title: "Sign in again"))
         #expect(
-            p.condition(.verify, lastSync: nil, now: now)
+            p.condition(.verify(challengeHeld: true), lastSync: nil, now: now)
                 == ActivityLine(title: "Proton asks you to verify"))
         #expect(
             p.condition(.versionRefused(message: "2064"), lastSync: nil, now: now)
@@ -81,7 +81,7 @@ struct ActivityPresentationTests {
         #expect(ActivityPresentation.offersSignInAgain(.signInAgain))
         #expect(ActivityPresentation.offersSignInAgain(.disconnected))
         let others: [AccountCondition] = [
-            .paused, .verify, .versionRefused(message: "2064"),
+            .paused, .verify(challengeHeld: true), .versionRefused(message: "2064"),
             .secretStore(reason: "locked"), .offline(nextRetry: now),
             .notAnswering(nextRetry: now), .rateLimited(until: now), .healthy,
         ]

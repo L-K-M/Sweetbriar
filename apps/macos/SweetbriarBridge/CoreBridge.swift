@@ -1166,6 +1166,33 @@ extension CoreBridge: ProtonSignInSource {
     }
 }
 
+/// Human verification during sync (spec/04, spec/07); the types live
+/// in `SyncVerification.swift`.
+extension CoreBridge {
+    public func protonVerification(accountId: String) async throws -> SyncVerificationChallenge? {
+        let token = SweetbriarCore.CancelToken()
+        let challenge = try await Self.withCancellation(token: token) {
+            try await self.core.protonVerification(token: token, accountId: accountId)
+        }
+        return challenge.map { SyncVerificationChallenge(url: $0.url, methods: $0.methods) }
+    }
+
+    public func verifyProtonAccount(
+        accountId: String, token answerToken: String?, tokenType: String?
+    ) async throws {
+        let answer = answerToken.map {
+            SweetbriarCore.ProtonVerificationAnswer(token: $0, tokenType: tokenType ?? "")
+        }
+        let token = SweetbriarCore.CancelToken()
+        _ = try await Self.withCancellation(token: token) {
+            try await self.core.verifyProtonAccount(
+                token: token, idempotencyKey: UUID().uuidString, accountId: accountId,
+                answer: answer
+            )
+        }
+    }
+}
+
 /// Account settings (spec/07 "Account management", spec/10
 /// "Notifications"); the types and their mapping live in
 /// `AccountSettings.swift`.
