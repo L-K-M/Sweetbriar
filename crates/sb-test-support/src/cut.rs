@@ -385,6 +385,31 @@ impl WriteFile for CutWrite {
     }
 }
 
+/// How many of `span` operations a sampled crash suite cuts, given its
+/// pull request's `sample` (spec/11 "Fault injection": sampled on every
+/// pull request, full nightly). `SB_FAULT_SCALE` multiplies the sample;
+/// `full`, which the nightly job sets, takes every operation. Never
+/// more than `span`: a suite cuts every operation when this equals it.
+///
+/// # Panics
+///
+/// When `SB_FAULT_SCALE` is set but is neither `full` nor a positive
+/// whole number.
+pub fn fault_points(sample: usize, span: u64) -> usize {
+    let span = usize::try_from(span).unwrap_or(usize::MAX);
+    let wanted = match env::var("SB_FAULT_SCALE") {
+        Err(_) => sample,
+        Ok(scale) if scale == "full" => span,
+        Ok(scale) => scale
+            .parse::<usize>()
+            .ok()
+            .filter(|&scale| scale > 0)
+            .map(|scale| sample.saturating_mul(scale))
+            .expect("SB_FAULT_SCALE is `full` or a positive whole number"),
+    };
+    wanted.min(span)
+}
+
 /// Run `child` (an `#[ignore]`d test of this binary, invoked with
 /// `--exact <child> --ignored`) once per cut point `n` = 1, 2, … with
 /// `n` in `cut_env` and a fresh directory from `fresh_root` in

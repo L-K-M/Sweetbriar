@@ -52,6 +52,19 @@ public enum FilingDestinations {
         mailboxes.filter { $0.kind == .label }
     }
 
+    /// What dropping rows on `mailbox` does (spec/08: a folder moves, a
+    /// label adds it). The core explains the other kinds' refusals.
+    public static func dropAction(
+        onto mailbox: Mailbox, shownMailboxId: Int64?
+    ) throws(FilingRefusal) -> FilingAction {
+        guard mailbox.mailboxId != shownMailboxId else {
+            throw .alreadyThere(mailbox: mailbox.name)
+        }
+        if mailbox.kind == .label { return .addLabel(mailbox) }
+        guard mailbox.selectable else { throw .holdsNoMessages(mailbox: mailbox.name) }
+        return .move(to: mailbox)
+    }
+
     /// The mailboxes whose names contain every word of `query`,
     /// ignoring case and diacritics: recent ones first, newest first,
     /// then the order they were given in.

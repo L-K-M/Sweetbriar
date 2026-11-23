@@ -103,6 +103,8 @@ pub struct OutBoxRow {
     pub draft_id: String,
     pub account_id: String,
     pub identity_id: String,
+    /// The sending address the attempt froze (`envelope_from`, spec/07).
+    pub envelope_from: String,
     pub subject: String,
     pub recipients: Vec<OutBoxRecipient>,
     pub state: AttemptState,
@@ -142,6 +144,7 @@ impl From<sb_service::OutBoxRow> for OutBoxRow {
             draft_id: value.draft_id,
             account_id: value.account_id,
             identity_id: value.identity_id,
+            envelope_from: value.envelope_from,
             subject: value.subject,
             recipients: value.recipients.into_iter().map(Into::into).collect(),
             state: value.state.into(),

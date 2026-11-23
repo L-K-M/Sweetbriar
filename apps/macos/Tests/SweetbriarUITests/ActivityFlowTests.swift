@@ -46,6 +46,12 @@ final class ActivityFlowTests: XCTestCase {
         app.menuBars.menuItems["Activity"].click()
 
         XCTAssertTrue(app.windows["Activity"].waitForExistence(timeout: Self.timeout))
+        // spec/04-sync-proton "Coverage": the seeded account's listing
+        // is complete, so its row says so with the counts.
+        let coverage = app.descendants(matching: .any)["proton-coverage"]
+        XCTAssertTrue(coverage.waitForExistence(timeout: Self.timeout))
+        XCTAssertTrue(coverage.staticTexts["Proton messages synced"].exists)
+        XCTAssertTrue(coverage.staticTexts["0 messages, 0 with bodies"].exists)
         let firstRow = app.descendants(matching: .any)["breaker-\(Self.firstEvent)"]
         let secondRow = app.descendants(matching: .any)["breaker-\(Self.secondEvent)"]
         XCTAssertTrue(firstRow.waitForExistence(timeout: Self.timeout))

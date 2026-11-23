@@ -87,6 +87,30 @@ struct SearchFieldModelTests {
         }
     }
 
+    /// spec/08's `search` span starts at a keystroke that will parse,
+    /// under the ticket its results present with; blank text and marked
+    /// composition start none.
+    @Test(.timeLimit(.minutes(1)))
+    func aParsingKeystrokeNamesTheTicketItsResultsPresentUnder() async throws {
+        try await withFieldCore { bridge in
+            let model = SearchFieldModel(parser: bridge, debounce: .zero,
+                                         context: { .init(tz: "UTC", clock: 0) })
+            defer { model.close() }
+            var edited: [UInt64] = []
+            var shown: [UInt64] = []
+            model.onQueryEdited = { edited.append($0) }
+            model.onPresent = { _, ticket in shown.append(ticket) }
+            model.navigated(to: .mailbox(99))
+            model.updateText("is:read")
+            try await settled(model)
+            #expect(edited.count == 1)
+            #expect(shown == edited)
+            model.updateText("is:rea", composition: .marked)
+            model.updateText("  ")
+            #expect(edited.count == 1)
+        }
+    }
+
     @Test(.timeLimit(.minutes(1)))
     func allActualParseCodesKeepLastValidResultsAndNativeSpans() async throws {
         try await withFieldCore { bridge in

@@ -81,7 +81,7 @@ private actor FakeOutBoxSource: SendSource {
 private func heldRow(_ attemptId: String) -> OutBoxRow {
     OutBoxRow(
         attemptId: attemptId, draftId: "draft-\(attemptId)", accountId: "a1",
-        identityId: "i1", subject: "Subject \(attemptId)", recipients: [], state: .held,
+        identityId: "i1", envelopeFrom: "me@example.test", subject: "Subject \(attemptId)", recipients: [], state: .held,
         createdAtMs: 1_699_999_999_000, updatedAtMs: 1_700_000_000_000,
         holdUntilMs: 1_700_000_005_000, resolvedAtMs: nil, sendRequestedAtMs: nil,
         protonDraftId: nil, finalReply: nil, resolution: nil,

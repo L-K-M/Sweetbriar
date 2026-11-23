@@ -39,6 +39,12 @@ final class ImportFlowTests: XCTestCase {
         // The inventory, before anything is imported.
         let inventory = app.staticTexts["1 source, \(Self.messages) messages."]
         XCTAssertTrue(inventory.waitForExistence(timeout: Self.timeout))
+        // Each source's line: its mailbox, messages and size (spec/09).
+        let sourceLines = app.staticTexts["importInventory"]
+        XCTAssertTrue(sourceLines.waitForExistence(timeout: Self.timeout))
+        let line = sourceLines.value as? String ?? ""
+        XCTAssertTrue(
+            line.hasPrefix("\(Self.mailbox): \(Self.messages) messages, "), "inventory: \(line)")
         let confirm = app.buttons["importConfirm"]
         XCTAssertTrue(confirm.waitForExistence(timeout: Self.timeout))
         XCTAssertTrue(confirm.isEnabled)
