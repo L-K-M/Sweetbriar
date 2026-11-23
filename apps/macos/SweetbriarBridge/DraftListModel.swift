@@ -19,10 +19,22 @@ extension CoreBridge: DraftListSource {}
 @MainActor
 @Observable
 public final class DraftListModel {
+    /// A row's sending identity (spec/08 "Drafts (local)").
+    public enum From: Equatable, Sendable {
+        /// The draft has no identity.
+        case none
+        /// The compose catalog names it.
+        case identity(ComposeIdentity)
+        /// The catalog doesn't name it, or couldn't be read: never a
+        /// guessed address.
+        case unavailable(identityId: String)
+    }
+
     /// One local draft, as the list shows it.
     public struct Row: Identifiable, Equatable, Sendable {
         /// The draft's id.
         public var id: String
+        public var from: From
         /// The subject, or "No Subject".
         public var subject: String
         /// To, then Cc, by name or address; Bcc is never shown.
@@ -30,8 +42,15 @@ public final class DraftListModel {
         public var isQueued: Bool
         public var updated: Date
 
-        init(_ summary: DraftSummary) {
+        init(_ summary: DraftSummary, identities: [ComposeIdentity]?) {
             id = summary.draftId
+            from =
+                if let identityId = summary.identityId {
+                    identities?.first { $0.identityId.utf8.elementsEqual(identityId.utf8) }
+                        .map(From.identity) ?? .unavailable(identityId: identityId)
+                } else {
+                    .none
+                }
             let subject = summary.subject.trimmingCharacters(in: .whitespacesAndNewlines)
             self.subject = subject.isEmpty ? DraftListModel.noSubject : subject
             recipients = (summary.to + summary.cc).map(Self.label(of:)).joined(separator: ", ")
@@ -56,13 +75,16 @@ public final class DraftListModel {
     public private(set) var isRetired = false
 
     private let source: any DraftListSource
+    /// Names each row's identity; without it every identity is unavailable.
+    private let catalog: (any ComposeCatalogSource)?
     @ObservationIgnored
     private var reloading = false
     @ObservationIgnored
     private var reloadAgain = false
 
-    public init(source: any DraftListSource) {
+    public init(source: any DraftListSource, catalog: (any ComposeCatalogSource)? = nil) {
         self.source = source
+        self.catalog = catalog
     }
 
     /// Re-read the drafts. A call during a reload makes it run once
@@ -97,8 +119,11 @@ public final class DraftListModel {
     private func readOnce() async {
         do {
             let summaries = try await source.drafts()
+            // A catalog that can't be read leaves the identities
+            // unavailable; it doesn't fail the list.
+            let identities = try? await catalog?.composeCatalog(preferredAccountId: nil).identities
             guard !isRetired else { return }
-            rows = summaries.map(Row.init)
+            rows = summaries.map { Row($0, identities: identities) }
             lastError = nil
         } catch {
             guard !isRetired else { return }

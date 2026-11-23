@@ -195,6 +195,12 @@ is up. Choosing any other entry brings its message list back.
   `editing` and `queued` only): the subject or "No Subject", the To
   then Cc recipients by name or address (Bcc is not shown), "Queued"
   for a queued draft, and the update time.
+- **From:** each row shows its sending identity as an identity chip
+  (Account chips, with the identity's monogram and colors) labelled
+  like the identity strip: the account, the name and the full address.
+  A draft without an identity says "No sending identity". One whose
+  identity the compose catalog doesn't name, or that couldn't be read,
+  says "Sending identity unavailable", neutral, never a guessed address.
 - **Opening:** double-click or Return opens the row's draft. There is
   one compose window per draft: opening a draft whose window is open,
   or already opening, brings that window forward and opens nothing
@@ -766,6 +772,9 @@ destinations.
   is one accessibility element with that label.
 - Without the account's appearance the chip is neutral: the label alone,
   in the secondary label color.
+- An identity chip is the same chip with the identity's own monogram and
+  colors (its overrides, else its account's), where a surface shows a
+  sending identity rather than an account.
 
 ## Keyboard filing ("type to file")
 
