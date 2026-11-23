@@ -45,6 +45,46 @@ private struct PresentationSource: ReaderSource {
     func releaseLease(_ leaseID: String) {}
 }
 
+/// A body Proton hasn't fetched yet: the open waits, so it isn't a
+/// cached open.
+private struct UnfetchedSource: ReaderSource {
+    let inner: PresentationSource
+    func messageForOccurrence(occurrenceId: Int64) async throws -> Int64 { 7 }
+    func getMessage(messageId: Int64) async throws -> ReaderMessage { inner.message }
+    func openBody(messageID: Int64, preferred: BodyKind) async throws -> BodyLease {
+        throw CoreFailure.unavailable(reason: "not acquired")
+    }
+    func openAttachment(messageID: Int64, partID: String) async throws -> AttachmentLease {
+        try await inner.openAttachment(messageID: messageID, partID: partID)
+    }
+    func releaseLease(_ leaseID: String) {}
+}
+
+/// spec/08 "Latency log": a single selection's body on screen ends its
+/// `open_message` span; a body still to fetch, or several selected
+/// messages, record nothing.
+@Test @MainActor
+func aSelectionsShownBodyEndsItsOpenSpan() async throws {
+    let source = try PresentationSource(plainOnly: true)
+    defer { try? FileManager.default.removeItem(at: source.directory) }
+    let fixture = try LatencyFixture()
+    defer { fixture.cleanUp() }
+    let unfetched = ReaderViewController(
+        model: ReaderModel(source: UnfetchedSource(inner: source), preferred: .sanitizedHtml),
+        latency: fixture.recorder)
+    await unfetched.show(selection: [42])
+    unfetched.close()
+    let controller = ReaderViewController(
+        model: ReaderModel(source: source, preferred: .sanitizedHtml), latency: fixture.recorder)
+    await controller.show(selection: [1, 2])
+    await controller.show(selection: [42])
+    #expect(controller.plainText.text == "Plain fallback body")
+    #expect(try await fixture.interactions(count: 1) == [.openMessage])
+    try await Task.sleep(for: .milliseconds(50))
+    #expect(try #require(fixture.recorder.log).read().entries.count == 1)
+    controller.close()
+}
+
 @Test @MainActor
 func readerHeaderChipAttachmentsAndSourceToggle() async throws {
     let source = try PresentationSource()

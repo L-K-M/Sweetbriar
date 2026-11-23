@@ -41,6 +41,9 @@ public final class SearchFieldModel {
     private var closed = false
 
     @ObservationIgnored public var onPresent: (@MainActor (WindowSpec, UInt64) -> Void)?
+    /// A keystroke that will parse, with the ticket its results present
+    /// under: where spec/08's `search` span starts.
+    @ObservationIgnored public var onQueryEdited: (@MainActor (UInt64) -> Void)?
     @ObservationIgnored public var hasMarkedText: @MainActor () -> Bool = { false }
     // Lifecycle tests join superseded work instead of guessing when it finished.
     @ObservationIgnored private(set) var pending: Task<Void, Never>?
@@ -93,6 +96,7 @@ public final class SearchFieldModel {
             if restore { onPresent?(previous, ticket) }
             return
         }
+        onQueryEdited?(ticket)
         launch(.text(value, context()), ticket: ticket, delay: debounce)
     }
 
@@ -122,6 +126,7 @@ public final class SearchFieldModel {
         _ = invalidate()
         closed = true
         onPresent = nil
+        onQueryEdited = nil
     }
 
     /// Editing selects the clause in core-formatted text, retaining group/context.

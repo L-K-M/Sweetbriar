@@ -27,6 +27,15 @@ enum IdentityStripContent {
         return "\(identity.accountName) · \(name)<\(identity.email)>\(provisional)"
     }
 
+    /// The compose window's title (spec/08 "The window title"): the
+    /// sending account first, so the Window menu, Mission Control and
+    /// Stage Manager show it.
+    static func windowTitle(subject: String, identity: ComposeIdentity?) -> String {
+        let subject = subject.isEmpty ? "New Message" : subject
+        guard let identity else { return subject }
+        return "\(identity.accountName) · \(subject) · \(identity.email)"
+    }
+
     static func matchingAppearance(for identity: ComposeIdentity, in appearance: Appearance?)
         -> IdentityAppearance?
     {
