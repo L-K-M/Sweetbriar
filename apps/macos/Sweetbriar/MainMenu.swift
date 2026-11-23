@@ -83,8 +83,9 @@ final class MainMenuBuilder: NSObject {
 
     /// Every command's stable identifier, in the `ch.lkmc.Sweetbriar.cmd.*`
     /// namespace (spec/08 "Menus and commands"). AppKit's own items
-    /// (About, Hide, Quit, Undo, Cut, Copy, Paste, Select All, Minimize,
-    /// Close) carry none: they are AppKit's commands, not Sweetbriar's.
+    /// (About, Hide, Hide Others, Show All, Quit, Undo, Redo, Cut, Copy,
+    /// Paste, Select All, Minimize, Close) carry none: they are AppKit's
+    /// commands, not Sweetbriar's.
     enum ItemID {
         static func command(_ name: String) -> NSUserInterfaceItemIdentifier {
             NSUserInterfaceItemIdentifier("ch.lkmc.Sweetbriar.cmd.\(name)")
