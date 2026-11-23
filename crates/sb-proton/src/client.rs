@@ -553,8 +553,9 @@ pub(crate) async fn read_response_bounded(
 }
 
 /// Reads a message's response to bytes under the download deadline,
-/// which allows for a body the 30 s request deadline would cut off.
-/// The in-flight permit is released once the body is read.
+/// which allows for a body the 30 s request deadline would cut off,
+/// and its bound, [`crate::mail::MAX_MESSAGE_BYTES`]. The in-flight
+/// permit is released once the body is read or the bound is breached.
 pub(crate) async fn read_response_message(
     answer: Answer,
 ) -> Result<(StatusCode, Vec<u8>), ProtonError> {
@@ -568,7 +569,7 @@ where
     B: Body<Data = Bytes> + Unpin,
     B::Error: fmt::Display,
 {
-    collect_download(body, Some(limit)).await
+    collect_download(body, limit).await
 }
 
 async fn collect_message<B>(body: B) -> Result<Vec<u8>, ProtonError>
@@ -576,13 +577,13 @@ where
     B: Body<Data = Bytes> + Unpin,
     B::Error: fmt::Display,
 {
-    collect_download(body, None).await
+    collect_download(body, crate::mail::MAX_MESSAGE_BYTES).await
 }
 
 /// Reads a download frame by frame. Each frame must arrive within the
 /// request timeout and the whole within [`download_timeout`], so a
 /// server dribbling frames can't hold the in-flight permit forever.
-async fn collect_download<B>(mut body: B, limit: Option<u64>) -> Result<Vec<u8>, ProtonError>
+async fn collect_download<B>(mut body: B, limit: u64) -> Result<Vec<u8>, ProtonError>
 where
     B: Body<Data = Bytes> + Unpin,
     B::Error: fmt::Display,
@@ -608,8 +609,8 @@ where
                 message: "the response body carried a trailer instead of data".to_owned(),
             })?;
         total = total.saturating_add(data.len() as u64);
-        if limit.is_some_and(|limit| total > limit) {
-            return Err(ProtonError::AttachmentTooLarge);
+        if total > limit {
+            return Err(ProtonError::DownloadTooLarge);
         }
         bytes.extend_from_slice(&data);
     }
@@ -1146,6 +1147,25 @@ mod tests {
             .await
             .expect("100 s is within a body's 120 s");
         assert_eq!(bytes.len() as u64, 10 * KIB);
+    }
+
+    /// A message past its bound is refused as it grows, never
+    /// truncated; one at the bound is read whole.
+    #[tokio::test(start_paused = true)]
+    async fn a_message_past_its_bound_is_too_large() {
+        let limit = crate::mail::MAX_MESSAGE_BYTES;
+        let frames = u32::try_from(limit / MIB).expect("a frame count");
+        let bytes = collect_message(Trickle::new(frames, MIB, 0, None))
+            .await
+            .expect("a message at its bound");
+        assert_eq!(bytes.len() as u64, limit);
+        drop(bytes);
+        let read = collect_message(Trickle::new(frames + 1, MIB, 0, None)).await;
+        assert!(
+            matches!(read, Err(ProtonError::DownloadTooLarge)),
+            "{:?}",
+            read.as_ref().map(Vec::len)
+        );
     }
 
     #[tokio::test(start_paused = true)]

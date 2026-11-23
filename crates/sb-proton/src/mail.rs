@@ -36,6 +36,10 @@ pub const ATTACHMENT_PATH: &str = "/mail/v4/attachments";
 /// The bound on one attachment data packet: 30 MiB. A larger body is a
 /// typed failure, never a truncated return (spec/04 step 3).
 pub const MAX_ATTACHMENT_BYTES: u64 = 30 * 1024 * 1024;
+/// The bound on one message response, whose encrypted body it carries:
+/// 100 MiB, spec/10's per-message limit. A larger one is a typed
+/// failure, never a truncated return (spec/04 "Timeouts").
+pub const MAX_MESSAGE_BYTES: u64 = 100 * 1024 * 1024;
 /// The largest page the transport asks for (research `mail-sync.md`
 /// §3: go-proton-api's client page size).
 pub const MAX_PAGE_SIZE: u32 = 150;
