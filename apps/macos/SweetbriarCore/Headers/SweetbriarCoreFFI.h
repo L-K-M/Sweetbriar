@@ -468,6 +468,11 @@ uint64_t uniffi_sb_ffi_fn_method_core_move_messages(uint64_t ptr, uint64_t token
 uint64_t uniffi_sb_ffi_fn_method_core_remove_label(uint64_t ptr, uint64_t token, RustBuffer idempotency_key, RustBuffer selection, int64_t label_mailbox_id
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_SELECTION_FLAGS
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_SELECTION_FLAGS
+uint64_t uniffi_sb_ffi_fn_method_core_selection_flags(uint64_t ptr, uint64_t token, RustBuffer selection
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_SET_FLAGS
 #define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_SET_FLAGS
 uint64_t uniffi_sb_ffi_fn_method_core_set_flags(uint64_t ptr, uint64_t token, RustBuffer idempotency_key, RustBuffer selection, RustBuffer add, RustBuffer remove
@@ -1378,6 +1383,12 @@ uint16_t uniffi_sb_ffi_checksum_method_core_move_messages(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_REMOVE_LABEL
 #define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_REMOVE_LABEL
 uint16_t uniffi_sb_ffi_checksum_method_core_remove_label(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_SELECTION_FLAGS
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_SELECTION_FLAGS
+uint16_t uniffi_sb_ffi_checksum_method_core_selection_flags(void
     
 );
 #endif

@@ -50,6 +50,34 @@ struct FilingSelectionTests {
         await model.close()
     }
 
+    /// The flag toggles take the same token: only a mailbox window's
+    /// whole selection past the limit has one (spec/08 "Message list").
+    @Test func onlyAWholeMailboxPastTheLimitHasAToken() async throws {
+        let fake = FakeListWindowSource()
+        let generation = await fake.fill(1_200)
+        let mailbox = try await openList(fake, spec: .mailbox(1))
+
+        guard case .window(_, let tokenGeneration) = mailbox.wholeWindowSelection(
+            of: Set(mailbox.ids))
+        else {
+            Issue.record("expected the window's token")
+            return
+        }
+        #expect(tokenGeneration == generation)
+        #expect(mailbox.wholeWindowSelection(of: Set(mailbox.ids.prefix(1_199))) == nil)
+        await mailbox.close()
+
+        let small = FakeListWindowSource()
+        await small.fill(1_000)
+        let whole = try await openList(small, spec: .mailbox(1))
+        #expect(whole.wholeWindowSelection(of: Set(whole.ids)) == nil, "ids carry 1,000")
+        await whole.close()
+
+        let flagged = try await openList(fake, spec: .flagged)
+        #expect(flagged.wholeWindowSelection(of: Set(flagged.ids)) == nil)
+        await flagged.close()
+    }
+
     @Test func anyOtherSelectionPastTheLimitIsRefused() async throws {
         let fake = FakeListWindowSource()
         await fake.fill(1_200)

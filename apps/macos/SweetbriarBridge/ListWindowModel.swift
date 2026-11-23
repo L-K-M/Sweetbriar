@@ -540,6 +540,19 @@ public final class ListWindowModel {
         selection = ids
     }
 
+    /// The window's `SelectionToken` when `selected` is a mailbox
+    /// window's whole exact selection of more than the explicit limit
+    /// (spec/08 "Message list" Selection): what a bulk command passes
+    /// for it. Nil for any other selection, which the command sends as
+    /// ids or refuses.
+    public func wholeWindowSelection(of selected: Set<Int64>) -> MessageSelection? {
+        guard !closed, let windowId, case .mailbox = spec, hasExactIndex,
+            selected.count > FilingSelection.explicitLimit, selected.count == ids.count,
+            ids.allSatisfy(selected.contains)
+        else { return nil }
+        return .window(windowId: windowId, generation: generation)
+    }
+
     /// `selected` as a filing command takes it (spec/08 "Keyboard
     /// filing"): the ids it was invoked on, a part per account. A
     /// mailbox window has one account, so one row answers for all, and
