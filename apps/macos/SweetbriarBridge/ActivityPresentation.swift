@@ -86,8 +86,6 @@ public struct ActivityPresentation: Sendable {
             + (event.disappeared == 1 ? "message" : "messages")
     }
 
-    /// Whether the row offers "Sign in again": a disconnected account
-    /// and a refused refresh both sign in again (spec/07).
     /// What the row offers an account Proton asked to verify (spec/08
     /// "Verifying during sync"): the sheet while the core holds the
     /// challenge, Try Again once it doesn't; nothing for another
@@ -97,6 +95,17 @@ public struct ActivityPresentation: Sendable {
         return challengeHeld ? .verify : .tryAgain
     }
 
+    /// The refusal a row shows (spec/08 "Verifying during sync"): the
+    /// last attempt's, while the account still asks to be verified;
+    /// none once it has moved on.
+    public static func verifyRefusal(
+        _ condition: AccountCondition, refusal: String?
+    ) -> String? {
+        verifyAction(condition) == nil ? nil : refusal
+    }
+
+    /// Whether the row offers "Sign in again": a disconnected account
+    /// and a refused refresh both sign in again (spec/07).
     public static func offersSignInAgain(_ condition: AccountCondition) -> Bool {
         switch condition {
         case .signInAgain, .disconnected:

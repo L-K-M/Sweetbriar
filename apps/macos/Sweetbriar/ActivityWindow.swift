@@ -231,7 +231,8 @@ private struct ActivityView: View {
                     .disabled(verification.busy.contains(health.accountId))
                     .accessibilityIdentifier("verify-\(health.accountId)")
             }
-            if let refusal = verification.refusals[health.accountId] {
+            if let refusal = ActivityPresentation.verifyRefusal(
+                health.condition, refusal: verification.refusals[health.accountId]) {
                 Text(refusal).foregroundStyle(.secondary)
             }
             ForEach(health.breakerEvents, id: \.eventId) { event in

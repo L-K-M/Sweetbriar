@@ -100,6 +100,21 @@ struct SyncVerificationTests {
         #expect(await source.sent.count == 1)
     }
 
+    /// A refusal shows while the account still asks to be verified,
+    /// and not once it has moved on.
+    @Test func aRefusalShowsOnlyWhileTheAccountAsksToBeVerified() {
+        let refusal = "Proton's challenge is no longer here. Try Again."
+        for held in [true, false] {
+            #expect(
+                ActivityPresentation.verifyRefusal(.verify(challengeHeld: held), refusal: refusal)
+                    == refusal)
+        }
+        #expect(ActivityPresentation.verifyRefusal(.verify(challengeHeld: true), refusal: nil) == nil)
+        for condition: AccountCondition in [.signInAgain, .paused, .disconnected, .healthy] {
+            #expect(ActivityPresentation.verifyRefusal(condition, refusal: refusal) == nil)
+        }
+    }
+
     /// The challenge's description never carries its URL's token.
     @Test func aChallengeDescriptionLeavesOutItsURL() {
         let challenge = SyncVerificationChallenge(url: page, methods: ["captcha"])

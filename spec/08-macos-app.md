@@ -164,7 +164,8 @@ conversation; the Bridge account sheet is no longer offered.
   with goes to `verify_proton_account`; closing it without one changes
   nothing. Without a held challenge the row offers "Try Again", which
   calls `verify_proton_account` without a token. A refusal shows on the
-  row.
+  row until the next attempt, and only while the account still asks to
+  be verified.
 - Password fields are `NSSecureTextField`s; their contents go to the
   Swift bridge (`SweetbriarBridge`, not Proton Bridge) as bytes and are
   cleared when the step is sent.
