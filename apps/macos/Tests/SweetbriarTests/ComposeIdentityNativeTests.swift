@@ -580,6 +580,20 @@ struct ComposeIdentityNativeTests {
                     first.identityControls.popup.bounds, to: nil)
                 let layout = try #require(first.window?.contentLayoutRect)
                 #expect(popupRect.maxY <= layout.maxY + 1)
+                #expect(await cue.setMode(.minimal))
+                try #require(
+                    await identityEventually {
+                        [first, second].allSatisfy {
+                            $0.identityStrip.strip.cueMode == .minimal
+                                && $0.window?.styleMask.contains(.fullSizeContentView) == false
+                        }
+                    })
+                #expect(first.window?.titlebarAppearsTransparent == false)
+                #expect(first.window?.backgroundColor == .windowBackgroundColor)
+                #expect(first.cueStatusLabel.isHidden && second.cueStatusLabel.isHidden)
+                #expect(first.identityStrip.strip.accessibilityLabel()?.contains("a@EXAMPLE.test") == true)
+                #expect(first.textView.hasMarkedText() && first.textView.markedRange() == marked)
+                #expect(first.model.content == firstContent && announcements.isEmpty)
                 #expect(await cue.setMode(.standard))
                 try #require(
                     await identityEventually {

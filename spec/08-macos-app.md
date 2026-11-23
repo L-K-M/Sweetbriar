@@ -700,8 +700,9 @@ Implements [15-account-colors](../research/15-account-colors.md):
 - **Strong mode** (Settings → Appearance) tints the upper window via
   `backgroundColor`, `titlebarAppearsTransparent` and
   `.fullSizeContentView`. The editor stays neutral. The existing
-  `appearance.compose_cue` setting is a typed Standard/Strong preference;
-  missing or malformed answers are explicit errors, never a guessed mode.
+  `appearance.compose_cue` setting is a typed Standard/Strong/Minimal
+  preference; missing or malformed answers are explicit errors, never a
+  guessed mode.
   Publish a user change only after its receipt, retain an explicitly stale
   last value on failure, and prevent an older read from undoing that change.
   Settings writers use current admission and their frozen editor tickets;
@@ -717,6 +718,22 @@ Implements [15-account-colors](../research/15-account-colors.md):
   leaving preferences permanently unavailable. Refusing compose quit leaves
   preference owners usable.
   Appearance changes must not edit draft source or its undo history.
+- **Minimal mode** (research 15's Minimal marker) reduces only the color:
+  - the strip keeps its size, monogram, account name, full From address,
+    accessibility label and full-screen height;
+  - its fill is the opaque neutral window background and the window
+    isn't tinted, so the monogram is the only colored part;
+  - its text uses the system label color. The monogram keeps its
+    account marker, outlined in the system label color wherever the
+    marker is under 3:1 against that background (the account's outline
+    token is solved against its strip, not this one);
+  - an unavailable route and every warning look as they do in Standard.
+- **Mode previews:** Settings → Appearance shows Standard, Strong and
+  Minimal each with a preview of a compose window's top, drawn from the
+  same presentation as the real strip with the selected account's
+  tokens, or the neutral route when there is no account. A preview
+  never takes focus. Its mode's accessibility label says in words what
+  the mode colors.
 - **Cross-account check:** replying through a different account than the
   one that received the original shows an inline banner with **Use
   <account>** and **Keep <account>**. An unacknowledged mismatch is
