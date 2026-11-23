@@ -61,6 +61,13 @@ final class AppKitPrototypeList: NSView {
     /// list's own clicks and a new index's changes alike.
     var onSelectionChange: (@MainActor (Set<Int64>) -> Void)?
 
+    /// Opens a row's message in its own window: Return with one row
+    /// selected, or a double-click on a row (spec/08 "Message window").
+    var onOpen: (@MainActor (Int64) -> Void)?
+
+    /// Space and ⇧Space: page the reader (spec/08 "Message window").
+    var onPage: (@MainActor (ReaderPage) -> Void)?
+
     /// The commands the context menu offers for the rows it targets;
     /// without them, as in the prototype, its items are no-ops.
     var contextActions: (@MainActor (Set<Int64>) -> [MessageContextAction])?
@@ -181,6 +188,9 @@ final class AppKitPrototypeList: NSView {
         tableView.setDraggingSourceOperationMask(.move, forLocal: true)
         tableView.setDraggingSourceOperationMask([], forLocal: false)
         tableView.resumeSelection = { [weak self] step in self?.resumeSelection(step) == true }
+        tableView.perform = { [weak self] command in self?.perform(command) == true }
+        tableView.target = self
+        tableView.doubleAction = #selector(openClicked)
         tableView.setAccessibilityIdentifier(Self.accessibilityID)
 
         scrollView.documentView = tableView
@@ -279,6 +289,30 @@ final class AppKitPrototypeList: NSView {
         tableView.selectRowIndexes([row], byExtendingSelection: false)
         tableView.scrollRowToVisible(row)
         return true
+    }
+
+    /// Return opens the one selected row; with none or several it is
+    /// left to AppKit. Space pages whenever paging is wired.
+    private func perform(_ command: MessageTableView.Command) -> Bool {
+        switch command {
+        case .open:
+            guard let onOpen, selectedOccurrenceIDs.count == 1, let id = selectedOccurrenceIDs.first else {
+                return false
+            }
+            onOpen(id)
+            return true
+        case .page(let direction):
+            guard let onPage else { return false }
+            onPage(direction)
+            return true
+        }
+    }
+
+    /// A double-click opens the row it hit, whatever else is selected.
+    @objc private func openClicked() {
+        let row = tableView.clickedRow
+        guard row >= 0, let id = model.occurrenceID(at: row) else { return }
+        onOpen?(id)
     }
 
     /// Give the table the keyboard, as the filing palette does when it

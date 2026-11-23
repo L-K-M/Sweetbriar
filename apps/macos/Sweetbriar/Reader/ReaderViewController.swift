@@ -3,6 +3,12 @@ import SwiftUI
 import SweetbriarBridge
 import WebKit
 
+/// Which way Space pages the reader (spec/08 "Message window").
+enum ReaderPage: Equatable {
+    case down
+    case up
+}
+
 @MainActor
 final class ReaderViewController: NSViewController {
     let model: ReaderModel
@@ -230,6 +236,42 @@ final class ReaderViewController: NSViewController {
         updateReadingToggle()
         clearReadingNote()
         await render()
+    }
+
+    /// Scroll the shown body a page, as Space does in the list
+    /// (spec/08 "Message window"); nothing when no body is shown.
+    func page(_ direction: ReaderPage) {
+        if !html.isHidden {
+            switch direction {
+            case .down: html.webView.scrollPageDown(nil)
+            case .up: html.webView.scrollPageUp(nil)
+            }
+            return
+        }
+        guard let scroll = [textScroll, readingScroll].first(where: { !$0.isHidden }) else { return }
+        Self.page(scroll, direction)
+    }
+
+    /// Move `scroll` a visible height less AppKit's page overlap,
+    /// within its document, by moving its clip view.
+    static func page(_ scroll: NSScrollView, _ direction: ReaderPage) {
+        let clip = scroll.contentView
+        let visible = clip.bounds
+        let step = max(visible.height - scroll.verticalPageScroll, visible.height / 2)
+        let bottom = max((scroll.documentView?.frame.height ?? 0) - visible.height, 0)
+        let wanted = visible.origin.y + (direction == .down ? step : -step)
+        clip.scroll(to: NSPoint(x: visible.origin.x, y: min(max(wanted, 0), bottom)))
+        scroll.reflectScrolledClipView(clip)
+    }
+
+    /// The subject of the message shown, for a message window's title.
+    var shownSubject: String? {
+        switch model.state {
+        case .plainText(let message, _), .source(let message, _), .html(let message, _):
+            message.headers.subject
+        default:
+            nil
+        }
     }
 
     @objc private func toggleSource() {
