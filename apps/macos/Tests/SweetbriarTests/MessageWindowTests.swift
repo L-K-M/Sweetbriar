@@ -132,14 +132,27 @@ struct MessageWindowTests {
             styleMask: [.titled, .resizable], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         window.contentViewController = controller
+        // The controller's view starts at zero size, which the window
+        // takes on; give it the room a reader has.
+        window.setContentSize(NSSize(width: 480, height: 360))
         defer {
             controller.close()
             window.close()
         }
         await controller.show(selection: [11])
         window.layoutIfNeeded()
+        let text = controller.plainText
+        if let layout = text.textLayoutManager {
+            layout.ensureLayout(for: layout.documentRange)
+        }
+        text.sizeToFit()
+        window.layoutIfNeeded()
         let clip = controller.textScroll.contentView
-        #expect(!controller.textScroll.isHidden)
+        try #require(!controller.textScroll.isHidden)
+        try #require(clip.bounds.height > 0, "the body has room on screen")
+        try #require(
+            text.frame.height > clip.bounds.height * 2,
+            "the body is taller than two pages: \(text.frame.height) in \(clip.bounds.height)")
         let top = clip.bounds.origin.y
 
         controller.page(.down)

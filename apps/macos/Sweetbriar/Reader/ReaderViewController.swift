@@ -218,10 +218,19 @@ final class ReaderViewController: NSViewController {
             return
         }
         guard let scroll = [textScroll, readingScroll].first(where: { !$0.isHidden }) else { return }
-        switch direction {
-        case .down: scroll.pageDown(nil)
-        case .up: scroll.pageUp(nil)
-        }
+        Self.page(scroll, direction)
+    }
+
+    /// Move `scroll` a visible height less AppKit's page overlap,
+    /// within its document, by moving its clip view.
+    static func page(_ scroll: NSScrollView, _ direction: ReaderPage) {
+        let clip = scroll.contentView
+        let visible = clip.bounds
+        let step = max(visible.height - scroll.verticalPageScroll, visible.height / 2)
+        let bottom = max((scroll.documentView?.frame.height ?? 0) - visible.height, 0)
+        let wanted = visible.origin.y + (direction == .down ? step : -step)
+        clip.scroll(to: NSPoint(x: visible.origin.x, y: min(max(wanted, 0), bottom)))
+        scroll.reflectScrolledClipView(clip)
     }
 
     /// The subject of the message shown, for a message window's title.
