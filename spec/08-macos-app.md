@@ -798,7 +798,10 @@ and the undo toast offers **Undo** for 10 s.
 
 - **Every action is a command** with a stable identifier, in the
   `ch.lkmc.Sweetbriar.cmd.*` namespace, wired to the menus and the responder
-  chain.
+  chain. A command keeps its identifier in every menu that offers it,
+  context menus included, and no two commands share one. AppKit's own
+  commands (About, Hide, Quit, Undo, Redo, Cut, Copy, Paste, Select
+  All, Minimize, Close) keep AppKit's actions and carry no identifier.
 - **Versioning:** the persisted intent and query formats are versioned
   now (research debate/04, resolution change 15). The scripting surfaces (AppleScript, App Intents, a CLI) are
   *later* and will attach to these commands.
