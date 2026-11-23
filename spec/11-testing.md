@@ -393,7 +393,8 @@ test, except where the spec says "manual qualification".
     and checks invariants.
   - **Sampled and full:** a suite whose operation is too long to cut at
     every point on each pull request (the import, bundle import, send,
-    scheduled-maintenance and export suites) cuts a fixed sample there.
+    scheduled-maintenance, export and migration suites) cuts a fixed
+    sample there.
     `SB_FAULT_SCALE` multiplies that sample, and `SB_FAULT_SCALE=full`,
     which the nightly `fault-injection` job sets, cuts every operation.
   - **Where** — at minimum:
@@ -402,7 +403,13 @@ test, except where the spec says "manual qualification".
     - after an IMAP command is sent but before its response;
     - after SMTP `DATA` but before the final reply;
     - during backup and restore;
-    - during migrations;
+    - during migrations: a store left at version 27, with rows in
+      every table migration 28 rebuilds, opens in a child that the test
+      SQLite VFS below kills before its Nth write, truncation or sync.
+      Reopening finishes the migrations to the latest version with every
+      row and id kept and invariant 5's checks clean. At most two
+      `pre-migration-` snapshots remain, and the newest is a whole
+      database;
     - during an import job (09), at 50 seeded cut points over a fixture
       import. After each cut, reopening and finishing the job gives the
       uncut run's final counts, with no duplicate occurrence or
@@ -441,6 +448,11 @@ test, except where the spec says "manual qualification".
     what remains. The tests cut after each write, truncation or sync
     of an operation's span in turn, and check the invariants above
     after each.
+
+    Its kill mode serves crash cuts inside SQLite's own I/O: before the
+    Nth write, truncation or sync it applies every pending write, as
+    the OS would keep a killed process's writes, and the process kills
+    itself with `SIGKILL`.
 - Real power-cut tests on the owner's Mac are a manual qualification
   before the pilot is declared done.
 

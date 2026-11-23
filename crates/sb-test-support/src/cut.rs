@@ -41,15 +41,22 @@ const KILL_REFUSED_EXIT: i32 = 86;
 fn trip(count: &AtomicU64, nth: u64) {
     let n = count.fetch_add(1, Ordering::SeqCst) + 1;
     if n == nth {
-        // SAFETY: killing our own process takes no capability a child
-        // test does not have.
-        cut(
-            || unsafe {
-                libc::kill(libc::getpid(), libc::SIGKILL);
-            },
-            KILL_PATIENCE,
-        );
+        kill_now();
     }
+}
+
+/// Kill this process with `SIGKILL` at its cut point, as [`CutFs`]
+/// does, for a crash-cut child that counts its operations another way
+/// (the store's test SQLite VFS). Never returns or unwinds.
+pub fn kill_now() -> ! {
+    // SAFETY: killing our own process takes no capability a child
+    // test does not have.
+    cut(
+        || unsafe {
+            libc::kill(libc::getpid(), libc::SIGKILL);
+        },
+        KILL_PATIENCE,
+    )
 }
 
 /// End this process at its cut point, running nothing more on this
