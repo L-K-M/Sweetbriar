@@ -225,9 +225,14 @@ struct ActivityModelTests {
         #expect(model.acting.isEmpty)
         #expect(model.actionError as? CoreFailure == .notFound(what: "intent"))
         await source.failIntentAction(nil)
+        let gate = Gate()
+        await source.holdIntents(gate)
         model.cancel(intentIds: ["intent-1"])
         try #require(await eventually { await model.actionError == nil })
-        #expect(model.acting.isEmpty)
+        // The error clears before the re-read lands, which frees the row.
+        #expect(model.acting == ["intent-1"])
+        await gate.open()
+        try #require(await eventually { await model.acting.isEmpty })
         #expect(await source.cancelCalls.count == 1)
         model.stop()
     }

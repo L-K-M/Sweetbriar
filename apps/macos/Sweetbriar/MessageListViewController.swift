@@ -76,6 +76,10 @@ final class MessageListViewController: NSViewController {
     var onIndexChangedForBenchmark: (@MainActor (UInt64) -> Void)?
     private(set) var shownSpec: WindowSpec?
     private(set) var choiceSerial = 0
+    /// spec/08's launch and `search` spans end when a choice's rows
+    /// show; a search choice keeps the field's ticket its span names.
+    private let latency: LatencyRecorder
+    private var shownSearchTicket: UInt64?
     var failureForBenchmark: (any Error)? { openError ?? model?.lastError }
     /// When the latest choice was shown, its opening page returned from
     /// the core, its first pages landed and its list's open returned, in
@@ -91,8 +95,10 @@ final class MessageListViewController: NSViewController {
 
     init(bridge: CoreBridge, sidebar: SidebarModel, appearance: AppearanceModel,
          listSource: (any ListWindowSource)? = nil, clock: (any FrameClock)? = nil,
-         writes: ArchiveWriteTasks? = nil, canWrite: @escaping @MainActor () -> Bool = { true }) {
+         writes: ArchiveWriteTasks? = nil, canWrite: @escaping @MainActor () -> Bool = { true },
+         latency: LatencyRecorder = .shared) {
         self.bridge = bridge
+        self.latency = latency
         self.listSource = listSource ?? bridge
         self.clockOverride = clock
         self.writes = writes ?? ArchiveWriteTasks()
@@ -130,7 +136,10 @@ final class MessageListViewController: NSViewController {
         observeControls()
         model.onPresent = { [weak self, weak model] spec, ticket in
             guard model?.isCurrent(ticket) == true else { return }
-            self?.show(spec)
+            self?.show(spec, searchTicket: spec.isSearch ? ticket : nil)
+        }
+        model.onQueryEdited = { [weak self] ticket in
+            self?.latency.begin(.search, replacing: ticket)
         }
         search.onSaveAsView = { [weak self] name in
             try await self?.saveView(name: name) ?? ()
@@ -214,9 +223,10 @@ final class MessageListViewController: NSViewController {
     }
 
     /// List `spec`: close the current model, then open a fresh one in
-    /// a fresh list.
-    func show(_ spec: WindowSpec) {
+    /// a fresh list. A search the field presented names its ticket.
+    func show(_ spec: WindowSpec, searchTicket: UInt64? = nil) {
         search.navigated(to: spec)
+        shownSearchTicket = searchTicket
         standalone = false
         indexControls.stopPolling()
         let ticket = tickets.next()
@@ -259,6 +269,7 @@ final class MessageListViewController: NSViewController {
             guard let self else { return }
             if landedAtForBenchmark == nil, let model, self.model === model {
                 landedAtForBenchmark = CACurrentMediaTime()
+                rowsShown()
             }
             onPagesDeliveredForBenchmark?(pages)
         }
@@ -304,12 +315,22 @@ final class MessageListViewController: NSViewController {
         }
         guard tickets.isCurrent(ticket) else { return }
         openedAtForBenchmark = CACurrentMediaTime()
+        // An empty list has no pages to land: it shows once open.
+        if openError == nil, model.count == 0 { rowsShown() }
         opening = false
         if Self.isUnavailable(openError) {
             enterStandalone()
         }
         updateStatus()
         updateCoverage()
+    }
+
+    /// The current choice's first rows are on screen (spec/08 "Latency
+    /// log"): the first ends the launch, a search's ends its span.
+    private func rowsShown() {
+        guard let list else { return }
+        latency.launchShown(in: list)
+        if let shownSearchTicket { latency.end(.search, key: shownSearchTicket, shownIn: list) }
     }
 
     /// Close the list's model; the window is going away.

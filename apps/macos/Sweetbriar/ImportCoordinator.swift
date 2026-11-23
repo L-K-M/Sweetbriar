@@ -7,7 +7,6 @@
 
 import AppKit
 import SweetbriarBridge
-import UniformTypeIdentifiers
 
 @MainActor
 final class ImportCoordinator {
@@ -47,16 +46,22 @@ final class ImportCoordinator {
             return
         }
         let panel = NSOpenPanel()
+        Self.configure(panel)
+        guard await panel.beginSheetModal(for: window) == .OK else { return }
+        await start(paths: panel.urls.map { $0.path(percentEncoded: false) })
+    }
+
+    /// The Import picker (spec/09 "In the app"): files, packages and
+    /// folders, several at once, filtered by no extension, since a
+    /// chosen file without `.eml` is an mbox candidate.
+    static func configure(_ panel: NSOpenPanel) {
         panel.canChooseFiles = true
         panel.canChooseDirectories = true
         panel.allowsMultipleSelection = true
         panel.treatsFilePackagesAsDirectories = false
+        panel.allowedContentTypes = []
         panel.prompt = "Import"
-        panel.message = "Choose mailboxes (.mbox), messages (.eml) or folders holding them."
-        panel.allowedContentTypes = [UTType(filenameExtension: "mbox"), UTType(filenameExtension: "eml"), .folder]
-            .compactMap { $0 }
-        guard await panel.beginSheetModal(for: window) == .OK else { return }
-        await start(paths: panel.urls.map { $0.path(percentEncoded: false) })
+        panel.message = "Choose mbox files or .mbox packages, .eml messages, or folders holding them."
     }
 
     /// Start a job over `paths` and show its sheet.
