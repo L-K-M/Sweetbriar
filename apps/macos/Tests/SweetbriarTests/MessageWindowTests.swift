@@ -104,6 +104,8 @@ struct MessageWindowTests {
         let other = windows.open(12) { make(12) }
         #expect(windows.controllers.count == 2)
         #expect(windows.occurrence(of: other.window) == 12)
+        // The second window cascades rather than covering the first.
+        #expect(other.window?.frame.origin != first.window?.frame.origin)
 
         other.close()
         #expect(windows.controllers.keys.sorted() == [11])

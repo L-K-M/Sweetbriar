@@ -354,7 +354,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
             openMessageWindow(id)
         }
         messageList.onPageReader = { [weak self] page in
-            guard let self, contentSerial == serial else { return }
+            guard let self, !closed, contentSerial == serial else { return }
             self.reader?.page(page)
         }
         messageList.onViewSaved = { [weak self] view in
@@ -675,15 +675,15 @@ extension MainWindowController: MessageWindowCommands {
     /// The row the list showed decides whether it is marked read.
     func openMessageWindow(_ id: Int64) {
         guard let bridge else { return }
-        let target = flagTargets(for: [id])?.first
-        let markRead = backups.canWrite ? MarkReadTimer(source: bridge) : nil
-        let memory = readingViewMemory.model(source: bridge)
+        // Built only for a new window; an open one just comes forward.
         messageWindows.open(id) {
-            MessageWindowController(
+            let memory = readingViewMemory.model(source: bridge)
+            return MessageWindowController(
                 occurrenceId: id,
                 reader: ReaderViewController(
                     model: ReaderModel(source: bridge, preferred: .sanitizedHtml), memory: memory),
-                markRead: markRead, target: target)
+                markRead: backups.canWrite ? MarkReadTimer(source: bridge) : nil,
+                target: flagTargets(for: [id])?.first)
         }
     }
 }
