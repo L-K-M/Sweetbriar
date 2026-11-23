@@ -531,6 +531,10 @@ pub enum Fault {
     /// before the TLS handshake, so a client with a deadline sees a
     /// connect timeout. One-shot.
     StallHandshake(Duration),
+    /// Answers 200 with a body of this many bytes, past a client's
+    /// download bound (spec/04 "Timeouts"); use it through
+    /// [`Fault::OnceAt`].
+    Oversized(usize),
 }
 
 /// Takes a connection-level fault ([`Fault::RefuseConnection`] or
@@ -1506,6 +1510,9 @@ async fn dispatch(
                 ));
             }
             Fault::BadServerProof => {}
+            Fault::Oversized(bytes) => {
+                return Ok(Response::new(Full::new(Bytes::from(vec![b' '; bytes]))));
+            }
             // Connection-level faults are consumed by the accept loop
             // before the handshake; if one reaches here it was never
             // triggered, so let the request through.
