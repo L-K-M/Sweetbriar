@@ -418,6 +418,14 @@ async fn answering_the_challenge_activates_the_account_and_rides_one_request() {
         .await
         .expect("the package");
     assert!(!package.contains(&token), "the package holds the token");
+    // A message that arrives while the sync waits: only an events
+    // poll Proton accepts after the answer brings it in.
+    h.server.add_message(
+        USER,
+        FakeMessage::new("after-verify")
+            .with_time(500)
+            .with_labels(&["0", "5"]),
+    );
     let answer = ProtonVerificationAnswer {
         token: token.clone(),
         token_type: "captcha".to_owned(),
@@ -435,15 +443,15 @@ async fn answering_the_challenge_activates_the_account_and_rides_one_request() {
         "the receipt leaked it"
     );
 
-    // The activation itself reads Healthy before the new worker's
-    // first successful sync, so wait for that sync's time.
-    for _ in 0..10_000 {
-        let row = fetch(&h, &id).await;
-        if row.state == AccountState::Active && row.last_sync_ms.is_some() {
-            break;
-        }
-        tokio::time::sleep(TICK).await;
-    }
+    // The row alone can't show the sync ran again: the new worker
+    // records its sync time once the finished bootstrap checks out,
+    // before its first request, so wait for the message instead.
+    until(
+        &h,
+        "logical_messages WHERE provider_key = 'after-verify'",
+        1,
+    )
+    .await;
     let row = fetch(&h, &id).await;
     assert_eq!(row.state, AccountState::Active);
     assert!(row.last_sync_ms.is_some(), "the sync ran again");
@@ -627,6 +635,12 @@ async fn verification_errors_and_a_replayed_key() {
         .await
         .expect("the query")
         .expect("the held challenge");
+    h.server.add_message(
+        USER,
+        FakeMessage::new("after-answer")
+            .with_time(500)
+            .with_labels(&["0", "5"]),
+    );
     let first = h
         .core
         .verify_proton_account(
@@ -639,12 +653,14 @@ async fn verification_errors_and_a_replayed_key() {
         )
         .await
         .expect("the answer activates");
-    for _ in 0..10_000 {
-        if fetch(&h, &id).await.last_sync_ms.is_some() {
-            break;
-        }
-        tokio::time::sleep(TICK).await;
-    }
+    // The answer's request has run once its poll brings the message
+    // (see `answering_the_challenge_activates_the_account_and_rides_one_request`).
+    until(
+        &h,
+        "logical_messages WHERE provider_key = 'after-answer'",
+        1,
+    )
+    .await;
     let second = h
         .core
         .verify_proton_account(
