@@ -13,7 +13,7 @@ use serde::{Deserialize, Deserializer};
 use serde_json::Value;
 
 use crate::auth::Session;
-use crate::client::{Client, Priority, code_of, error_message, read_response_bounded};
+use crate::client::{Client, Priority, code_of, details_of, error_message, read_response_bounded};
 use crate::error::ProtonError;
 
 /// `GET /core/v4/labels` (research `mail-sync.md` §1).
@@ -696,6 +696,11 @@ impl Client {
             let message = error_message(&bytes);
             return Err(
                 match code_of(&bytes).and_then(crate::error::ApiCode::from_i64) {
+                    Some(crate::error::ApiCode::HumanVerificationRequired) => {
+                        ProtonError::HumanVerificationRequired {
+                            challenge: Some(crate::auth::human_verification(&details_of(&bytes))),
+                        }
+                    }
                     Some(api) => {
                         ProtonError::from_api(api, &message).unwrap_or(ProtonError::Unavailable {
                             message: message.clone(),
