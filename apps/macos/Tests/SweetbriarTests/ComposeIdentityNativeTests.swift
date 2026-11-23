@@ -771,7 +771,7 @@ struct ComposeIdentityNativeTests {
             #expect(b.title.contains("b@EXAMPLE.test") && b.title.contains("provisional"))
             let image = try #require(a.image)
             #expect(!image.isTemplate && b.image?.isTemplate == false)
-            #expect(try swatchPixel(image, x: 0.5, y: 0.5).redComponent < 0.1)
+            #expect(try swatchMarker(image).redComponent < 0.1)
             controller.identityControls.render()
             #expect(popup.selectedItem?.image === image)
             let content = controller.model.content
@@ -782,7 +782,7 @@ struct ComposeIdentityNativeTests {
             try #require(
                 await identityEventually {
                     guard let image = popup.selectedItem?.image,
-                        let color = try? swatchPixel(image, x: 0.5, y: 0.5)
+                        let color = try? swatchMarker(image)
                     else { return false }
                     return color.redComponent > 0.7
                 })
@@ -790,7 +790,7 @@ struct ComposeIdentityNativeTests {
             try #require(
                 await identityEventually {
                     guard let image = popup.selectedItem?.image,
-                        let color = try? swatchPixel(image, x: 0.5, y: 0.5)
+                        let color = try? swatchMarker(image)
                     else { return false }
                     return abs(color.redComponent - 0x56 / 255.0) < 0.02
                 })
@@ -835,7 +835,7 @@ struct ComposeIdentityNativeTests {
             try #require(
                 await identityEventually {
                     guard let image = popup.selectedItem?.image,
-                        let color = try? swatchPixel(image, x: 0.5, y: 0.5)
+                        let color = try? swatchMarker(image)
                     else { return false }
                     return abs(color.redComponent - 0x56 / 255.0) < 0.02
                 })
