@@ -1353,6 +1353,15 @@ CREATE TABLE send_recipients (
   (redacted, 10), and
   `send_recipients.rcpt_reply` the reason a recipient was refused
   before submission; both are NULL otherwise.
+- **A Proton recipient's scheme (05):** migration 36 adds
+  `send_recipients.scheme TEXT CHECK (scheme IN ('internal','clear'))`,
+  the package scheme 05 step 4 chose for the recipient: `internal`
+  encrypted to its Proton keys, `clear` an external address sent
+  without end-to-end encryption. It is written in the transaction that
+  commits `send_requested_at`, so it names what the send request
+  carried; NULL before that and for generic attempts. A requeue that
+  clears `send_requested_at` (05 step 5) clears it too, and the retry's
+  commit writes it again.
 
 ## Commands, receipts and settings
 
@@ -1800,6 +1809,8 @@ CREATE INDEX d_message_bindings_by_assembly ON d_message_bindings(acquisition_id
 - **Migration 35 (plan M5.1a)** rebuilds `intents` the same way for the
   `remove_label` op in its `CHECK`, keeping every row and id; as a
   rewrite it brings the `VACUUM INTO` snapshot.
+- **Migration 36** adds `send_recipients.scheme` ("Sending"); it only
+  adds a column, so it takes no snapshot.
 - **Before any migration that rewrites or drops data,** the engine takes a
   `VACUUM INTO` snapshot, keeping the last two. Migration 28 is the first;
   migration 1 has none. A new store migrating from version 0 holds
