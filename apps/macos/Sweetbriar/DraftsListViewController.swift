@@ -183,7 +183,7 @@ final class DraftsTableView: NSTableView {
 final class DraftRowView: NSTableCellView {
     private let subject = NSTextField(labelWithString: "")
     /// The From identity's chip (spec/08 "Drafts (local)").
-    let from = NSHostingView(rootView: AccountChip(label: "", accountId: "", appearance: nil))
+    private let from = NSHostingView(rootView: AccountChip(label: "", accountId: "", appearance: nil))
     private let recipients = NSTextField(labelWithString: "")
     private let detail = NSTextField(labelWithString: "")
     private static let updated = Date.FormatStyle(date: .abbreviated, time: .shortened)
@@ -227,8 +227,17 @@ final class DraftRowView: NSTableCellView {
         detail.stringValue = row.isQueued ? "Queued · \(updated)" : updated
         setAccessibilityIdentifier("draftRow-\(row.id)")
         setAccessibilityLabel(
-            [row.subject, "From \(label)", row.recipients, detail.stringValue].filter { !$0.isEmpty }
+            [row.subject, Self.spokenFrom(row.from), row.recipients, detail.stringValue]
+                .filter { !$0.isEmpty }
                 .joined(separator: ", "))
+    }
+
+    /// What VoiceOver reads for the From line: "From" and the identity,
+    /// or the row's own words when there is none (spec/08 "Drafts
+    /// (local)"), never "From No sending identity".
+    static func spokenFrom(_ from: DraftListModel.From) -> String {
+        let (label, owner) = Self.from(from)
+        return owner == nil ? label : "From \(label)"
     }
 
     /// A row's From label, and the identity whose chip it is: none when

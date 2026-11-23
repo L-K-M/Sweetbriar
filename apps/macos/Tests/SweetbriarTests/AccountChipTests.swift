@@ -92,5 +92,9 @@ struct AccountChipTests {
         let gone = DraftRowView.from(.unavailable(identityId: "work"))
         #expect(gone.label == "Sending identity unavailable")
         #expect(gone.owner == nil)
+        #expect(DraftRowView.spokenFrom(.identity(identity)) == "From Work · Alex <alex@example.test>")
+        #expect(DraftRowView.spokenFrom(.none) == "No sending identity")
+        #expect(
+            DraftRowView.spokenFrom(.unavailable(identityId: "work")) == "Sending identity unavailable")
     }
 }
