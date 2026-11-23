@@ -61,6 +61,16 @@ final class AppKitPrototypeList: NSView {
     /// list's own clicks and a new index's changes alike.
     var onSelectionChange: (@MainActor (Set<Int64>) -> Void)?
 
+    /// Where this list's filing undo is kept, apart from the window's,
+    /// which the text editors share: ⌘Z in those never moves mail
+    /// (spec/08 "Keyboard filing").
+    var filingUndoManager: UndoManager?
+
+    /// The table finds this through the responder chain.
+    override var undoManager: UndoManager? {
+        filingUndoManager ?? super.undoManager
+    }
+
     /// True while the table's selection is set from the ids, not by the
     /// user: its callbacks then must not overwrite the model's ids — a
     /// new index may lack one the model is still following (spec/08).
@@ -242,6 +252,12 @@ final class AppKitPrototypeList: NSView {
         tableView.selectRowIndexes(indexes, byExtendingSelection: false)
     }
 
+    /// Give the table the keyboard, as the filing palette does when it
+    /// closes (spec/08 "Keyboard filing").
+    func focus() {
+        window?.makeFirstResponder(tableView)
+    }
+
     /// The context menu — rebuilt per click in `menuNeedsUpdate`,
     /// when `clickedRow` is valid.
     private func contextMenu() -> NSMenu {
@@ -302,6 +318,24 @@ extension AppKitPrototypeList: NSTableViewDataSource, NSTableViewDelegate {
         selectedOccurrenceIDs = ids
         model.select(ids)
         onSelectionChange?(ids)
+    }
+}
+
+// MARK: - Edit → Undo
+
+/// A window answers `undo:` with its own undo manager, whatever its
+/// first responder's is, so the list answers it while it has the
+/// keyboard (spec/08 "Keyboard filing").
+extension AppKitPrototypeList: NSMenuItemValidation {
+    @objc func undo(_ sender: Any?) {
+        undoManager?.undo()
+    }
+
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        guard menuItem.action == #selector(undo(_:)) else { return true }
+        guard let undoManager else { return false }
+        menuItem.title = undoManager.undoMenuItemTitle
+        return undoManager.canUndo
     }
 }
 
