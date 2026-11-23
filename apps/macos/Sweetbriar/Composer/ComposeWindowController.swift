@@ -250,6 +250,12 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
 
     required init?(coder: NSCoder) { fatalError("ComposeWindowController is built in code") }
 
+    /// The draft's first load and render are done: its fields take
+    /// keystrokes unless the load failed.
+    func waitForLoad() async {
+        await loadTask?.value
+    }
+
     /// `-recordRouteAnnouncements YES` (UI-test hook, spec/11 "UI"): the
     /// default `announceRoute` additionally writes the last message into a
     /// `RouteAnnouncementRecorder` in this window, so the From-switch test
@@ -923,12 +929,10 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
 
     private func renderChrome() {
         guard let window else { return }
-        var tint: NSColor?
-        if cue?.mode == .strong, case .identity(_, _, let tokens) = identityStrip.strip.content {
-            let dark =
-                identityStrip.strip.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-            tint = appearanceColor(dark ? tokens.dark.stripSrgb : tokens.light.stripSrgb)
-        }
+        let strip = identityStrip.strip
+        strip.cueMode = cue?.mode
+        let tint = ComposeCuePresentation.windowTint(
+            mode: cue?.mode, content: strip.content, appearance: strip.effectiveAppearance)
         if let tint {
             if !window.styleMask.contains(.fullSizeContentView) {
                 window.styleMask.insert(.fullSizeContentView)

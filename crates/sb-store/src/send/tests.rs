@@ -1082,6 +1082,7 @@ fn out_box_splits_live_and_history_orders_each_and_cuts_at_30_days() {
     let held = row("a_held");
     assert_eq!(held.state, AttemptState::Held);
     assert_eq!(held.subject, "s");
+    assert_eq!(held.envelope_from, "me@example.test");
     assert_eq!(held.hold_until, Some(Timestamp::from_millis(base + 2)));
     assert_eq!(held.sent_copy, SentCopy::ServerSaves);
     assert!(!held.waits_for_confirmation);
@@ -1092,11 +1093,13 @@ fn out_box_splits_live_and_history_orders_each_and_cuts_at_30_days() {
                 address: "a@X.NET".to_owned(),
                 kind: RecipientKind::To,
                 state: RecipientState::Pending,
+                scheme: None,
             },
             OutBoxRecipient {
                 address: "b@Y.NET".to_owned(),
                 kind: RecipientKind::Bcc,
                 state: RecipientState::Pending,
+                scheme: None,
             },
         ]
     );
@@ -1117,6 +1120,7 @@ fn out_box_splits_live_and_history_orders_each_and_cuts_at_30_days() {
             address: "a@X.NET".to_owned(),
             kind: RecipientKind::To,
             state: RecipientState::Unknown,
+            scheme: None,
         }]
     );
     let failed = row("a_failed_live");
@@ -1128,6 +1132,7 @@ fn out_box_splits_live_and_history_orders_each_and_cuts_at_30_days() {
             address: "a@X.NET".to_owned(),
             kind: RecipientKind::To,
             state: RecipientState::Unsent,
+            scheme: None,
         }]
     );
     let accepted = row("a_accepted");
@@ -1140,11 +1145,13 @@ fn out_box_splits_live_and_history_orders_each_and_cuts_at_30_days() {
                 address: "a@X.NET".to_owned(),
                 kind: RecipientKind::To,
                 state: RecipientState::Sent,
+                scheme: None,
             },
             OutBoxRecipient {
                 address: "b@Y.NET".to_owned(),
                 kind: RecipientKind::Bcc,
                 state: RecipientState::Sent,
+                scheme: None,
             },
         ]
     );
@@ -1585,6 +1592,106 @@ fn records_apply_only_while_submitting_and_survive_a_requeue() {
     let claimed = claim(&store);
     assert_eq!(claimed.proton_draft_id.as_deref(), Some("pd"));
     assert_eq!(claimed.uploads, vec![upload(0), upload(1)]);
+    store.close().unwrap();
+}
+
+#[test]
+fn a_recipient_scheme_is_recorded_shown_and_cleared_by_a_requeue() {
+    let (_scratch, _paths, store) = scratch();
+    seed(&store);
+    queue(&store);
+    force(&store, "a1", "queued", None);
+    writing(&store, |tx| {
+        assert!(claim_send_attempt(tx, "acct", now())?.is_some());
+        assert!(record_proton_draft(tx, "a1", "pd")?);
+        assert!(commit_send_requested(tx, "a1", now())?);
+        record_recipient_schemes(
+            tx,
+            "a1",
+            &[
+                ("a@x.net".to_owned(), RecipientScheme::Internal),
+                ("b@y.net".to_owned(), RecipientScheme::Clear),
+            ],
+        )?;
+        Ok(())
+    });
+    let out_box = read_out_box(&store, now().as_millis());
+    let row = out_box
+        .live
+        .iter()
+        .find(|row| row.attempt_id == "a1")
+        .expect("the attempt is live");
+    let recipient = |address: &str| {
+        row.recipients
+            .iter()
+            .find(|recipient| recipient.address == address)
+            .unwrap_or_else(|| panic!("{address} is not on the row"))
+    };
+    assert_eq!(recipient("a@X.NET").scheme, Some(RecipientScheme::Internal));
+    assert_eq!(recipient("b@Y.NET").scheme, Some(RecipientScheme::Clear));
+
+    let requeued = writing(&store, |tx| requeue_before_request(tx, "a1", now()));
+    assert!(requeued);
+    assert_eq!(
+        one_i64(
+            &store,
+            "SELECT count(send_requested_at) FROM send_attempts WHERE attempt_id = 'a1'"
+        ),
+        0
+    );
+    let out_box = read_out_box(&store, now().as_millis());
+    let row = out_box
+        .live
+        .iter()
+        .find(|row| row.attempt_id == "a1")
+        .expect("the requeued attempt is live");
+    assert!(
+        row.recipients
+            .iter()
+            .all(|recipient| recipient.scheme.is_none()),
+        "a requeue clears every recipient's scheme"
+    );
+
+    // The retry's commit records the scheme again.
+    writing(&store, |tx| {
+        assert!(claim_send_attempt(tx, "acct", now())?.is_some());
+        assert!(commit_send_requested(tx, "a1", now())?);
+        record_recipient_schemes(
+            tx,
+            "a1",
+            &[("a@x.net".to_owned(), RecipientScheme::Internal)],
+        )?;
+        Ok(())
+    });
+    assert_eq!(
+        one(
+            &store,
+            "SELECT scheme FROM send_recipients
+             WHERE attempt_id = 'a1' AND canonical = 'a@x.net'"
+        ),
+        "internal"
+    );
+
+    // A canonical with no row is a programming bug, and the failed
+    // write changes nothing.
+    let error = block_on(store.write(WritePriority::User, |tx| {
+        record_recipient_schemes(
+            tx,
+            "a1",
+            &[("nobody@x.net".to_owned(), RecipientScheme::Clear)],
+        )
+    }))
+    .unwrap_err();
+    assert!(matches!(error, StoreError::Internal { .. }), "{error:?}");
+    assert_eq!(
+        one(
+            &store,
+            "SELECT scheme FROM send_recipients
+             WHERE attempt_id = 'a1' AND canonical = 'a@x.net'"
+        ),
+        "internal",
+        "the failed write changed the recorded scheme"
+    );
     store.close().unwrap();
 }
 

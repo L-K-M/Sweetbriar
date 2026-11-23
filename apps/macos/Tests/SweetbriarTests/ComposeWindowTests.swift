@@ -191,13 +191,13 @@ private final class ComposeFixture {
         return editor
     }
 
-    func makeOwner() -> ComposeWindows {
+    func makeOwner(latency: LatencyRecorder = .shared) -> ComposeWindows {
         let source = source
         let owner = ComposeWindows(
             backups: backups, appearance: appearance, cues: cues, openCore: { source },
             reportError: { [weak self] in
                 self?.errors.append($1)
-            })
+            }, latency: latency)
         self.owner = owner
         return owner
     }
@@ -345,6 +345,20 @@ struct ComposeWindowTests {
                 owner.windows.values.allSatisfy {
                     $0.window?.styleMask.contains(.fullSizeContentView) == false
                 })
+        }
+    }
+
+    /// spec/08 "Latency log": New Message's span ends once the window's
+    /// editor takes keystrokes.
+    @Test func newMessageEndsItsOpenSpanWhenTheEditorTakesKeystrokes() async throws {
+        let fixture = try LatencyFixture()
+        defer { fixture.cleanUp() }
+        try await withComposeFixture { f in
+            let owner = f.makeOwner(latency: fixture.recorder)
+            owner.newMessage()
+            #expect(try await fixture.interactions(count: 1) == [.openCompose])
+            let window = try #require(owner.windows.values.first)
+            #expect(window.textView.isEditable)
         }
     }
 

@@ -18,6 +18,7 @@ final class ImportSheetController: NSViewController {
         static let close = "importClose"
         static let showReport = "importShowReport"
         static let retryReport = "importRetryReport"
+        static let inventory = "importInventory"
     }
 
     private static let width: CGFloat = 520
@@ -30,6 +31,7 @@ final class ImportSheetController: NSViewController {
     private let session: ImportSession
     private let headline = NSTextField(labelWithString: "")
     private let detail = NSTextField(wrappingLabelWithString: "")
+    private let inventory = NSTextField(wrappingLabelWithString: "")
     private let progress = NSProgressIndicator()
     private let choices = NSStackView()
     private let choicesScroll = NSScrollView()
@@ -61,6 +63,7 @@ final class ImportSheetController: NSViewController {
     override func loadView() {
         headline.font = .boldSystemFont(ofSize: 15)
         detail.textColor = .secondaryLabelColor
+        inventory.setAccessibilityIdentifier(ID.inventory)
         problems.textColor = .secondaryLabelColor
         reportStatus.textColor = .secondaryLabelColor
         progress.isIndeterminate = false
@@ -118,7 +121,9 @@ final class ImportSheetController: NSViewController {
             fitsContent,
         ])
 
-        let stack = NSStackView(views: [headline, detail, progress, choicesScroll, problems, report, buttons])
+        let stack = NSStackView(views: [
+            headline, detail, inventory, progress, choicesScroll, problems, report, buttons,
+        ])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 12
@@ -137,6 +142,7 @@ final class ImportSheetController: NSViewController {
             content.widthAnchor.constraint(equalToConstant: Self.width),
             progress.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -40),
             detail.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -40),
+            inventory.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -40),
             problems.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -40),
             choicesScroll.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -40),
         ])
@@ -167,6 +173,11 @@ final class ImportSheetController: NSViewController {
         progress.isHidden = state != .running
         progress.maxValue = Double(max(messages, 1))
         progress.doubleValue = Double(done)
+
+        // spec/09: the inventory shows before confirmation.
+        let listed = state == .awaitingConfirmation ? ImportInventory.lines(job?.sources ?? []) : []
+        inventory.stringValue = listed.joined(separator: "\n")
+        inventory.isHidden = listed.isEmpty
 
         renderChoices(state == .awaitingConfirmation ? session.ambiguousSources : [])
         renderProblems(job)

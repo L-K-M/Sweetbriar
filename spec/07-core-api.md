@@ -744,7 +744,9 @@ a receipt or file-export command; Service/FFI exposure remains M1.7e/f.
     answering with the next retry, rate limited with the time, or
     healthy); its warnings (addresses whose keys didn't unlock); open
     breaker events (id, mailbox, count, detected time); coverage
-    (`coverage(scope)` for the account); and the last sync time. A
+    (`coverage(scope)` for the account); for a Proton account, its
+    Proton coverage (04-sync-proton "Coverage"); and the last sync
+    time. A
     `disconnected` account's condition is disconnected, offering "Sign
     in again". Retry
     times and the last sync time come from the running worker's memory:
@@ -771,8 +773,10 @@ a receipt or file-export command; Service/FFI exposure remains M1.7e/f.
     last 30 days' history (`accepted`, `cancelled`, resolved
     `outcome_unknown`, and `failed` ones a newer attempt replaced),
     newest first within each part. Each holds the attempt and draft ids,
-    account, identity, the frozen subject and recipients with each
-    recipient's state, the attempt's state, times, Proton's code and
+    account, identity, the frozen sending address (`envelope_from`), the
+    frozen subject and recipients with each recipient's state and, once
+    the send request was committed, its Proton scheme (`internal` or
+    `clear`, 05 step 4), the attempt's state, times, Proton's code and
     message (`final_reply`), its resolution, the Proton evidence
     observed since launch (05; kept in memory, so a relaunch shows
     none until the worker's next check) and, after `accepted`, whether

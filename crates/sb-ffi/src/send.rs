@@ -74,13 +74,34 @@ impl From<sb_service::RecipientState> for RecipientState {
     }
 }
 
+/// A Proton recipient's package scheme (spec/02 "Sending", spec/05
+/// step 4): `internal` encrypted to its Proton keys, `clear` an
+/// external address sent without end-to-end encryption. None before
+/// the send request commits and for generic attempts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum RecipientScheme {
+    Internal,
+    Clear,
+}
+
+impl From<sb_service::RecipientScheme> for RecipientScheme {
+    fn from(value: sb_service::RecipientScheme) -> Self {
+        match value {
+            sb_service::RecipientScheme::Internal => Self::Internal,
+            sb_service::RecipientScheme::Clear => Self::Clear,
+        }
+    }
+}
+
 /// One recipient on an Out Box row (spec/07): the address as first
-/// written, its field and its stored state.
+/// written, its field, its stored state and, once the send request
+/// committed, its Proton scheme.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct OutBoxRecipient {
     pub address: String,
     pub kind: RecipientKind,
     pub state: RecipientState,
+    pub scheme: Option<RecipientScheme>,
 }
 
 impl From<sb_service::OutBoxRecipient> for OutBoxRecipient {
@@ -89,6 +110,7 @@ impl From<sb_service::OutBoxRecipient> for OutBoxRecipient {
             address: value.address,
             kind: value.kind.into(),
             state: value.state.into(),
+            scheme: value.scheme.map(Into::into),
         }
     }
 }
@@ -103,6 +125,8 @@ pub struct OutBoxRow {
     pub draft_id: String,
     pub account_id: String,
     pub identity_id: String,
+    /// The sending address the attempt froze (`envelope_from`, spec/07).
+    pub envelope_from: String,
     pub subject: String,
     pub recipients: Vec<OutBoxRecipient>,
     pub state: AttemptState,
@@ -142,6 +166,7 @@ impl From<sb_service::OutBoxRow> for OutBoxRow {
             draft_id: value.draft_id,
             account_id: value.account_id,
             identity_id: value.identity_id,
+            envelope_from: value.envelope_from,
             subject: value.subject,
             recipients: value.recipients.into_iter().map(Into::into).collect(),
             state: value.state.into(),

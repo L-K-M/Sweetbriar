@@ -580,6 +580,9 @@ pub struct OutBoxRow {
     pub draft_id: String,
     pub account_id: String,
     pub identity_id: String,
+    /// The sending address the attempt froze (`envelope_from`): the
+    /// route's address when it was queued, not the identity's current one.
+    pub envelope_from: String,
     pub subject: String,
     pub recipients: Vec<OutBoxRecipient>,
     pub state: AttemptState,
@@ -620,6 +623,7 @@ impl OutBoxRow {
             draft_id: row.draft_id,
             account_id: row.account_id,
             identity_id: row.identity_id,
+            envelope_from: row.envelope_from,
             subject: row.subject,
             recipients: row.recipients,
             state: row.state,

@@ -24,6 +24,9 @@ public final class OutBoxModel {
         public var subject: String
         /// To, then Cc, by address; Bcc is never shown.
         public var recipients: String
+        /// The frozen route: the account's name, when the compose catalog
+        /// knows it, and the address the attempt froze (spec/08 "Out Box").
+        public var from: String
         /// The state word the list shows.
         public var status: String
         public var updated: Date
@@ -32,8 +35,9 @@ public final class OutBoxModel {
         /// The raw row, for the details (spec/08 "Out Box").
         public var row: OutBoxRow
 
-        init(_ row: OutBoxRow, isHistory: Bool, now: Date) {
+        init(_ row: OutBoxRow, isHistory: Bool, now: Date, accountNames: [String: String]) {
             self.id = row.attemptId
+            from = accountNames[row.accountId].map { "\($0) · \(row.envelopeFrom)" } ?? row.envelopeFrom
             self.draftId = row.draftId
             let subject = row.subject.trimmingCharacters(in: .whitespacesAndNewlines)
             self.subject = subject.isEmpty ? OutBoxModel.noSubject : subject
@@ -73,6 +77,8 @@ public final class OutBoxModel {
     public private(set) var isRetired = false
 
     private let source: any SendSource
+    /// Names each row's account; without it a row shows the address alone.
+    private let catalog: (any ComposeCatalogSource)?
     private let now: @Sendable () -> Date
     private let canWrite: @MainActor () -> Bool
     @ObservationIgnored
@@ -84,10 +90,12 @@ public final class OutBoxModel {
 
     public init(
         source: any SendSource,
+        catalog: (any ComposeCatalogSource)? = nil,
         now: @escaping @Sendable () -> Date = Date.init,
         canWrite: @escaping @MainActor () -> Bool = { true }
     ) {
         self.source = source
+        self.catalog = catalog
         self.now = now
         self.canWrite = canWrite
     }
@@ -214,10 +222,13 @@ public final class OutBoxModel {
     private func readOnce() async {
         do {
             let box = try await source.outBox()
+            // An unreadable catalog only leaves the account names out.
+            let identities = (try? await catalog?.composeCatalog(preferredAccountId: nil).identities) ?? []
+            let names = Dictionary(identities.map { ($0.accountId, $0.accountName) }) { first, _ in first }
             guard !isRetired else { return }
             let stamp = now()
-            rows = box.live.map { Row($0, isHistory: false, now: stamp) }
-                + box.history.map { Row($0, isHistory: true, now: stamp) }
+            rows = box.live.map { Row($0, isHistory: false, now: stamp, accountNames: names) }
+                + box.history.map { Row($0, isHistory: true, now: stamp, accountNames: names) }
             lastError = nil
         } catch {
             guard !isRetired else { return }

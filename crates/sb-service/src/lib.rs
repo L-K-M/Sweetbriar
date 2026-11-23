@@ -7,6 +7,7 @@
 mod account_health;
 pub use account_health::{
     AccountBreakerEvent, AccountCondition, AccountHealth, AccountHealthSubscription,
+    ProtonCoverage, ProtonMailboxCoverage,
 };
 mod accounts;
 mod appearance;
@@ -93,8 +94,8 @@ pub use search::{
     SearchRebuildProgress, SearchScope, SearchSort, SearchSpec, SearchStatus,
 };
 pub use send::{
-    CrossAccountNotice, OutBox, OutBoxRecipient, OutBoxRow, RecipientKind, RecipientState,
-    ResolvedUnknown, SendQueued, SentCopy, UnknownResolution,
+    CrossAccountNotice, OutBox, OutBoxRecipient, OutBoxRow, RecipientKind, RecipientScheme,
+    RecipientState, ResolvedUnknown, SendQueued, SentCopy, UnknownResolution,
 };
 pub use sidebar::{Account, AccountKind, AccountState, Mailbox, MailboxKind, Mailboxes};
 pub use views::{SavedView, SavedViewParams, SavedViewSort};

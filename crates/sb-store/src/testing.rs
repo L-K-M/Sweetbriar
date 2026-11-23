@@ -37,6 +37,20 @@ pub(crate) fn test_seams(fs: Arc<dyn Fs>) -> Seams {
     )
 }
 
+/// Copy a closed store's directory tree, files and all.
+pub(crate) fn copy_tree(from: &std::path::Path, to: &std::path::Path) {
+    for entry in std::fs::read_dir(from).unwrap() {
+        let entry = entry.unwrap();
+        let target = to.join(entry.file_name());
+        if entry.file_type().unwrap().is_dir() {
+            std::fs::create_dir_all(&target).unwrap();
+            copy_tree(&entry.path(), &target);
+        } else {
+            std::fs::copy(entry.path(), &target).unwrap();
+        }
+    }
+}
+
 /// A fresh data root under a unique scratch dir, as `StorePaths`.
 pub(crate) fn scratch_paths(label: &str) -> (ScratchDir, StorePaths) {
     let scratch = ScratchDir::new(label);

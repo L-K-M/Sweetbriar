@@ -167,6 +167,13 @@ public final class ListWindowModel {
     private let spec: WindowSpec
     private let clock: any FrameClock
 
+    /// The mailbox this window lists, which Move to… leaves out
+    /// (spec/08 "Keyboard filing"); nil for every other window.
+    public var mailboxId: Int64? {
+        guard case .mailbox(let id) = spec else { return nil }
+        return id
+    }
+
     // The bookkeeping below is invisible to Observation: only `ids`,
     // `generation`, `lastError` and each `Page`'s rows are observed,
     // so a page landing invalidates only its own rows' views — not

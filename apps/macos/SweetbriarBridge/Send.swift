@@ -64,17 +64,41 @@ public enum RecipientState: Sendable, Equatable {
     }
 }
 
+/// A Proton recipient's package scheme (spec/02 `send_recipients.scheme`,
+/// spec/05 step 4): `internal` is encrypted to the recipient's Proton
+/// keys, `clear` is an external address Proton sends without end-to-end
+/// encryption.
+public enum RecipientScheme: Sendable, Equatable {
+    case `internal`
+    case clear
+
+    /// Map the generated enum case by case.
+    init(_ g: SweetbriarCore.RecipientScheme) {
+        switch g {
+        case .internal: self = .internal
+        case .clear: self = .clear
+        }
+    }
+}
+
 /// One recipient on an Out Box row (spec/07): the address as first
-/// written, its field and its stored state.
+/// written, its field, its stored state and, once a Proton send request
+/// has committed, its scheme.
 public struct OutBoxRecipient: Sendable, Equatable {
     public var address: String
     public var kind: RecipientKind
     public var state: RecipientState
+    /// None before the send request commits and for generic attempts.
+    public var scheme: RecipientScheme?
 
-    public init(address: String, kind: RecipientKind, state: RecipientState) {
+    public init(
+        address: String, kind: RecipientKind, state: RecipientState,
+        scheme: RecipientScheme? = nil
+    ) {
         self.address = address
         self.kind = kind
         self.state = state
+        self.scheme = scheme
     }
 
     /// Map the generated record field by field.
@@ -82,6 +106,7 @@ public struct OutBoxRecipient: Sendable, Equatable {
         address = g.address
         kind = RecipientKind(g.kind)
         state = RecipientState(g.state)
+        scheme = g.scheme.map(RecipientScheme.init)
     }
 }
 
@@ -94,6 +119,8 @@ public struct OutBoxRow: Sendable, Equatable {
     public var draftId: String
     public var accountId: String
     public var identityId: String
+    /// The sending address the attempt froze (spec/07 `out_box()`).
+    public var envelopeFrom: String
     public var subject: String
     public var recipients: [OutBoxRecipient]
     public var state: AttemptState
@@ -119,7 +146,7 @@ public struct OutBoxRow: Sendable, Equatable {
 
     public init(
         attemptId: String, draftId: String, accountId: String, identityId: String,
-        subject: String, recipients: [OutBoxRecipient], state: AttemptState,
+        envelopeFrom: String, subject: String, recipients: [OutBoxRecipient], state: AttemptState,
         createdAtMs: Int64, updatedAtMs: Int64, holdUntilMs: Int64?,
         resolvedAtMs: Int64?, sendRequestedAtMs: Int64?, protonDraftId: String?,
         finalReply: String?, resolution: UnknownResolution?, sentCopy: SentCopy,
@@ -130,6 +157,7 @@ public struct OutBoxRow: Sendable, Equatable {
         self.draftId = draftId
         self.accountId = accountId
         self.identityId = identityId
+        self.envelopeFrom = envelopeFrom
         self.subject = subject
         self.recipients = recipients
         self.state = state
@@ -155,6 +183,7 @@ public struct OutBoxRow: Sendable, Equatable {
             draftId: g.draftId,
             accountId: g.accountId,
             identityId: g.identityId,
+            envelopeFrom: g.envelopeFrom,
             subject: g.subject,
             recipients: g.recipients.map(OutBoxRecipient.init),
             state: AttemptState(g.state),

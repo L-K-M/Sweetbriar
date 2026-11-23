@@ -96,6 +96,10 @@ pub struct MailboxCoverage {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProtonCoverage {
     pub listing: ProtonListingState,
+    /// A running listing that started over a complete one, which only a
+    /// Proton `Refresh` does: the event cursor stayed (a restore clears
+    /// it first). Activity says "Proton asked Sweetbriar to resync".
+    pub resync: bool,
     /// Live mailboxes, by name.
     pub mailboxes: Vec<MailboxCoverage>,
     pub messages: u64,
@@ -353,6 +357,8 @@ pub fn proton_coverage(tx: &Transaction, account_id: &str) -> Result<ProtonCover
         .map_err(read)?;
     Ok(ProtonCoverage {
         listing: account.listing_state,
+        resync: account.listing_state == ProtonListingState::Listing
+            && account.event_cursor.is_some(),
         mailboxes,
         messages: count(messages),
         with_body: count(with_body),

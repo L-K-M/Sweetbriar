@@ -233,7 +233,8 @@ fn the_same_file_decodes_by_its_chosen_variant_and_the_job_asks_first() {
 }
 
 /// 50 distinct cut points in `first..=last`, drawn by splitmix64 from
-/// a fixed seed so a failure replays exactly.
+/// a fixed seed so a failure replays exactly; more, up to every
+/// operation, under `SB_FAULT_SCALE`.
 pub(super) fn cut_points(first: u64, last: u64) -> Vec<u64> {
     assert!(
         first <= last,
@@ -244,9 +245,10 @@ pub(super) fn cut_points(first: u64, last: u64) -> Vec<u64> {
         span >= CUT_POINTS as u64,
         "only {span} import operations to cut"
     );
+    let count = sb_test_support::fault_points(CUT_POINTS, span);
     let mut state = CUT_SEED;
     let mut points = std::collections::BTreeSet::new();
-    while points.len() < CUT_POINTS {
+    while points.len() < count {
         state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
         let mut z = state;
         z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
