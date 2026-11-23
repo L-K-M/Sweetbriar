@@ -59,6 +59,20 @@ pub use send::{
 type EncryptBody = Arc<dyn Fn(&[u8]) -> Vec<u8> + Send + Sync>;
 /// Encrypts an attachment, returning its key packets and data packet.
 type EncryptAttachment = Arc<dyn Fn(&[u8]) -> (Vec<u8>, Vec<u8>) + Send + Sync>;
+/// Makes a new primary address key for an email and key id, signed by
+/// the account's user key, as Proton's key rotation does.
+type MakeAddressKey = Arc<dyn Fn(&str, &str) -> RotatedKey + Send + Sync>;
+
+/// A key [`FakeProtonServer::rotate_address_key`] made: the locked key
+/// the API serves, its armored public key, the encryptors to it and
+/// its recipient key.
+struct RotatedKey {
+    locked: LockedKey,
+    public: String,
+    encrypt_body: EncryptBody,
+    encrypt_attachment: EncryptAttachment,
+    recipient: Arc<dyn send::RecipientKey>,
+}
 
 /// The synthetic plaintext body the fake encrypts for its message
 /// fixture; tests compare a decryption against it.
@@ -531,6 +545,10 @@ pub enum Fault {
     /// before the TLS handshake, so a client with a deadline sees a
     /// connect timeout. One-shot.
     StallHandshake(Duration),
+    /// Answers 200 with a body of this many bytes, past a client's
+    /// download bound (spec/04 "Timeouts"); use it through
+    /// [`Fault::OnceAt`].
+    Oversized(usize),
 }
 
 /// Takes a connection-level fault ([`Fault::RefuseConnection`] or
@@ -591,6 +609,8 @@ struct Account {
     /// Encrypts an attachment to the primary address key, returning the
     /// key packets and the data packet.
     encrypt_attachment: EncryptAttachment,
+    /// Makes a rotated address key (spec/11 "rotate a key").
+    make_address_key: MakeAddressKey,
     /// Unlocked address keys by email, for tests that decrypt as an
     /// internal recipient (spec/11 M4.3c).
     recipient_keys: HashMap<String, Arc<dyn send::RecipientKey>>,
@@ -899,6 +919,39 @@ impl FakeProtonServer {
             // Every message and attachment body is encrypted to the
             // primary address key when it is added (M2.16a).
             let (encrypt_body, encrypt_attachment) = encryptors(&provider, &primary_unlocked);
+            let make_address_key: MakeAddressKey = {
+                let provider = provider.clone();
+                let user_unlocked = user_unlocked.clone();
+                Arc::new(move |email: &str, id: &str| {
+                    let local = LocalAddressKey::generate(
+                        &provider,
+                        email,
+                        KeyGeneratorAlgorithm::default(),
+                        KeyFlag::default(),
+                        true,
+                        &user_unlocked,
+                    )
+                    .expect("a rotated address key generates");
+                    let unlocked = local
+                        .unlock_and_assign_key_id(
+                            &provider,
+                            KeyId::from(id.to_owned()),
+                            &user_unlocked,
+                        )
+                        .expect("the rotated address key unlocks");
+                    let public = public_key_armor(&provider, &unlocked.public_key);
+                    let (encrypt_body, encrypt_attachment) = encryptors(&provider, &unlocked);
+                    let recipient =
+                        send::recipient_key(&provider, public.clone(), &unlocked.private_key);
+                    RotatedKey {
+                        locked: address_locked_key(id, local),
+                        public,
+                        encrypt_body,
+                        encrypt_attachment,
+                        recipient,
+                    }
+                })
+            };
 
             // The fixtures are encrypted to the primary address key.
             let mut body = Vec::new();
@@ -957,6 +1010,7 @@ impl FakeProtonServer {
                     attachment_plaintext: ATTACHMENT_PLAINTEXT.to_vec(),
                     encrypt_body,
                     encrypt_attachment,
+                    make_address_key,
                     labels: system_labels(),
                     messages: Vec::new(),
                     events: Vec::new(),
@@ -1265,6 +1319,37 @@ impl FakeProtonServer {
         account.record(FakeEvent::address(id.to_owned(), ADDRESS_CREATED));
     }
 
+    /// Rotates an address's key as Proton does: a new key, signed by the
+    /// user key, becomes the address's primary, and the old ones stay
+    /// active so earlier messages still decrypt. When it is the
+    /// account's primary address (order 1), messages and attachments
+    /// added from now on are encrypted to the new key. Appends an
+    /// address update event (spec/11 "rotate a key").
+    pub fn rotate_address_key(&self, username: &str, id: &str) {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let account = account_mut(&mut state, username);
+        let index = account
+            .addresses
+            .iter()
+            .position(|address| address.id == id)
+            .expect("the address exists");
+        let email = account.addresses[index].email.clone();
+        let key_id = format!("{id}-key-{}", account.addresses[index].keys.len() + 1);
+        let rotated = (account.make_address_key)(&email, &key_id);
+        let address = &mut account.addresses[index];
+        for key in &mut address.keys {
+            key.primary = false;
+        }
+        address.keys.insert(0, rotated.locked);
+        address.public_keys.insert(0, rotated.public);
+        if address.order == 1 {
+            account.encrypt_body = rotated.encrypt_body;
+            account.encrypt_attachment = rotated.encrypt_attachment;
+        }
+        account.recipient_keys.insert(email, rotated.recipient);
+        account.record(FakeEvent::address(id.to_owned(), ADDRESS_UPDATED));
+    }
+
     /// Marks every address key inactive and appends a user event. A
     /// password change made elsewhere leaves the keys active but
     /// encrypted under another passphrase; either way no address key
@@ -1525,6 +1610,9 @@ async fn dispatch(
                 ));
             }
             Fault::BadServerProof => {}
+            Fault::Oversized(bytes) => {
+                return Ok(Response::new(Full::new(Bytes::from(vec![b' '; bytes]))));
+            }
             // Connection-level faults are consumed by the accept loop
             // before the handshake; if one reaches here it was never
             // triggered, so let the request through.

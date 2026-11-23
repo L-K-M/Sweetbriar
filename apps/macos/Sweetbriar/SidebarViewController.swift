@@ -61,6 +61,9 @@ final class SidebarViewController: NSViewController, NSMenuDelegate {
     /// no choice.
     private var selectingInCode = false
 
+    /// Takes rows dropped on a mailbox (spec/08 "Keyboard filing").
+    weak var dropTarget: (any MessageDropTarget)?
+
     /// Choosing an entry that opens a window.
     var onChoose: (@MainActor (WindowSpec) -> Void)?
     /// Choosing Drafts (local) (spec/08 "Drafts (local)").
@@ -126,6 +129,7 @@ final class SidebarViewController: NSViewController, NSMenuDelegate {
         outlineView.floatsGroupRows = false
         outlineView.allowsEmptySelection = true
         outlineView.dataSource = self
+        outlineView.registerForDraggedTypes([MessageListDrag.pasteboardType])
         outlineView.delegate = self
         outlineView.setAccessibilityIdentifier(Self.accessibilityID)
         contextMenu.delegate = self
@@ -407,6 +411,32 @@ extension SidebarViewController: NSOutlineViewDataSource, NSOutlineViewDelegate 
         if item is SectionNode { return 24 }
         if let node = item as? EntryNode, node.isHealth { return 18 }
         return outlineView.rowHeight
+    }
+
+    /// Rows of this window's list may be dropped on any mailbox, which
+    /// files them or says why it can't; nothing else takes a drop.
+    func outlineView(
+        _ outlineView: NSOutlineView, validateDrop info: any NSDraggingInfo,
+        proposedItem item: Any?, proposedChildIndex index: Int
+    ) -> NSDragOperation {
+        guard let item, dropMailbox(for: item) != nil,
+            dropTarget?.takesDrop(from: info.draggingSource) == true
+        else { return [] }
+        outlineView.setDropItem(item, dropChildIndex: NSOutlineViewDropOnItemIndex)
+        return .move
+    }
+
+    func outlineView(
+        _ outlineView: NSOutlineView, acceptDrop info: any NSDraggingInfo,
+        item: Any?, childIndex index: Int
+    ) -> Bool {
+        guard let item, let mailbox = dropMailbox(for: item) else { return false }
+        return dropTarget?.drop(from: info.draggingSource, onto: mailbox) == true
+    }
+
+    private func dropMailbox(for item: Any) -> Mailbox? {
+        guard let node = item as? EntryNode, !node.isHealth else { return nil }
+        return model.mailbox(forEntry: node.entry.id)
     }
 
     /// Only entries that open a window or the drafts list can be

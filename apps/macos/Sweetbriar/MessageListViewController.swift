@@ -182,8 +182,8 @@ final class MessageListViewController: NSViewController {
             coverage.trailingAnchor.constraint(equalTo: content.trailingAnchor),
             coverage.bottomAnchor.constraint(equalTo: content.bottomAnchor),
             coverageCollapsed,
-            // The window's content runs under the title bar; the field
-            // must sit below it to take clicks.
+            // Where content runs under a title bar the field must sit
+            // below it to take clicks.
             search.view.topAnchor.constraint(equalTo: content.safeAreaLayoutGuide.topAnchor),
             search.view.leadingAnchor.constraint(equalTo: content.leadingAnchor),
             search.view.trailingAnchor.constraint(equalTo: content.trailingAnchor),
@@ -209,6 +209,17 @@ final class MessageListViewController: NSViewController {
     override func viewWillDisappear() {
         super.viewWillDisappear()
         indexControls.stopPolling()
+    }
+
+    /// The context menu's commands for the rows it targets, given to
+    /// each list as it is installed.
+    var contextActions: (@MainActor (Set<Int64>) -> [MessageContextAction])? {
+        didSet { list?.contextActions = contextActions }
+    }
+
+    /// The filing undo each installed list answers Edit → Undo with.
+    var filingUndoManager: UndoManager? {
+        didSet { list?.filingUndoManager = filingUndoManager }
     }
 
     /// List `spec`: close the current model, then open a fresh one in
@@ -281,6 +292,8 @@ final class MessageListViewController: NSViewController {
         list.onSelectionChange = { [weak self] ids in
             self?.onSelectionChange?(ids)
         }
+        list.contextActions = contextActions
+        list.filingUndoManager = filingUndoManager
         list.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(list, positioned: .below, relativeTo: statusLabel)
         NSLayoutConstraint.activate([
