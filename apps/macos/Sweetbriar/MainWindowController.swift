@@ -380,6 +380,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
             canFile: { [weak listPane] in policy.canWrite && listPane?.pane == .messages })
         self.filing?.retire()
         self.filing = filing
+        sidebar.dropTarget = filing
+        messageList.contextActions = { [weak self] ids in self?.contextActions(for: ids) ?? [] }
         messageList.filingUndoManager = filing.undoManager
         root.view.addSubview(filing.toastView)
         NSLayoutConstraint.activate([
@@ -514,8 +516,12 @@ extension MainWindowController: MessageFlagCommands {
     /// later (spec/07 "Flags"), so a selection with one of its rows
     /// disables the commands.
     var flagTargets: [FlagTarget]? {
-        guard listPane?.pane == .messages, let model = messageList?.model,
-            let ids = messageList?.list?.selectedIDs, !ids.isEmpty,
+        messageList?.list.flatMap { flagTargets(for: $0.selectedIDs) }
+    }
+
+    /// The same for `ids`, the rows a context click targets.
+    private func flagTargets(for ids: Set<Int64>) -> [FlagTarget]? {
+        guard listPane?.pane == .messages, let model = messageList?.model, !ids.isEmpty,
             ids.count <= Self.maxFlagSelection
         else { return nil }
         var targets: [FlagTarget] = []
@@ -538,8 +544,8 @@ extension MainWindowController: MessageFlagCommands {
     /// Message → Star or Unstar (⇧⌘L).
     @objc func toggleStar(_ sender: Any?) { toggle(.flagged) }
 
-    private func toggle(_ flag: MessageFlag) {
-        guard backups.canWrite, let bridge, let targets = flagTargets,
+    private func toggle(_ flag: MessageFlag, ids: Set<Int64>? = nil) {
+        guard backups.canWrite, let bridge, let targets = ids.map(flagTargets(for:)) ?? flagTargets,
             let toggle = FlagToggle.plan(flag, targets: targets)
         else {
             NSSound.beep()
@@ -556,8 +562,10 @@ extension MainWindowController: MessageFlagCommands {
     }
 
     /// The commands' titles follow what they would do to the selection.
-    func flagCommandState(_ action: Selector) -> (enabled: Bool, title: String)? {
-        let targets = backups.canWrite ? flagTargets : nil
+    func flagCommandState(
+        _ action: Selector, ids: Set<Int64>? = nil
+    ) -> (enabled: Bool, title: String)? {
+        let targets = backups.canWrite ? (ids.map(flagTargets(for:)) ?? flagTargets) : nil
         switch action {
         case #selector(toggleRead(_:)):
             let read = targets.map { FlagToggle.plan(.seen, targets: $0)?.set ?? true } ?? true
@@ -568,6 +576,44 @@ extension MainWindowController: MessageFlagCommands {
         default:
             return nil
         }
+    }
+}
+
+// MARK: - The list's context menu (spec/08 "Selection")
+
+extension MainWindowController {
+    /// The flag and filing commands on the rows a context click
+    /// targets, under the menu's identifiers.
+    func contextActions(for ids: Set<Int64>) -> [MessageContextAction] {
+        typealias Item = MainMenuBuilder.ItemID
+        let read = flagCommandState(#selector(toggleRead(_:)), ids: ids)
+        let star = flagCommandState(#selector(toggleStar(_:)), ids: ids)
+        let files = filing?.canAct(on: ids) == true
+        return [
+            MessageContextAction(
+                title: read?.title ?? "Mark as Read", identifier: Item.toggleRead,
+                enabled: read?.enabled == true
+            ) { [weak self] in self?.toggle(.seen, ids: ids) },
+            MessageContextAction(
+                title: star?.title ?? "Star", identifier: Item.toggleStar,
+                enabled: star?.enabled == true
+            ) { [weak self] in self?.toggle(.flagged, ids: ids) },
+            MessageContextAction(title: "Archive", identifier: Item.archive, enabled: files) {
+                [weak self] in self?.filing?.file(.archive, ids: ids)
+            },
+            MessageContextAction(title: "Move to Trash", identifier: Item.trash, enabled: files) {
+                [weak self] in self?.filing?.file(.trash, ids: ids)
+            },
+            MessageContextAction(title: "Move to…", identifier: Item.move, enabled: files) {
+                [weak self] in self?.filing?.choose(.move, ids: ids)
+            },
+            MessageContextAction(title: "Add Label…", identifier: Item.addLabel, enabled: files) {
+                [weak self] in self?.filing?.choose(.addLabel, ids: ids)
+            },
+            MessageContextAction(title: "Remove Label…", identifier: Item.removeLabel, enabled: files) {
+                [weak self] in self?.filing?.choose(.removeLabel, ids: ids)
+            },
+        ]
     }
 }
 

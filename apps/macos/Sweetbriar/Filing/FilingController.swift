@@ -47,15 +47,19 @@ final class FilingController: NSObject {
     /// The commands act in the key main window on a selection, never
     /// while text is being edited.
     var isEnabled: Bool {
-        guard !retired, let window, window.isKeyWindow, window.attachedSheet == nil,
-            !window.isEditingText, canFile(), let selected = list.list?.selectedIDs
-        else { return false }
-        return !selected.isEmpty
+        list.list.map { canAct(on: $0.selectedIDs) } ?? false
     }
 
-    /// Archive or Move to Trash.
-    func file(_ action: FilingAction) {
-        guard isEnabled, let captured = capture() else {
+    /// The commands' rule for `ids`: the selection, or the rows a
+    /// context click targets.
+    func canAct(on ids: Set<Int64>) -> Bool {
+        guard !ids.isEmpty, !retired, let window, window.isKeyWindow else { return false }
+        return window.attachedSheet == nil && !window.isEditingText && canFile()
+    }
+
+    /// Archive or Move to Trash, on `ids` or the selection.
+    func file(_ action: FilingAction, ids: Set<Int64>? = nil) {
+        guard let captured = capture(ids), canAct(on: captured.ids) else {
             NSSound.beep()
             return
         }
@@ -66,9 +70,9 @@ final class FilingController: NSObject {
     }
 
     /// Move to… or a label command: the palette, then the action on
-    /// the selection as it was when the command was invoked.
-    func choose(_ choice: FilingChoice) {
-        guard isEnabled, let captured = capture() else {
+    /// the selection, or `ids`, as it was when the command was invoked.
+    func choose(_ choice: FilingChoice, ids: Set<Int64>? = nil) {
+        guard let captured = capture(ids), canAct(on: captured.ids) else {
             NSSound.beep()
             return
         }
@@ -103,8 +107,8 @@ final class FilingController: NSObject {
         palette?.cancel(nil)
     }
 
-    private func capture() -> (model: ListWindowModel, ids: Set<Int64>)? {
-        guard let model = list.model, let ids = list.list?.selectedIDs else { return nil }
+    private func capture(_ ids: Set<Int64>?) -> (model: ListWindowModel, ids: Set<Int64>)? {
+        guard let model = list.model, let ids = ids ?? list.list?.selectedIDs else { return nil }
         return (model, ids)
     }
 
@@ -164,7 +168,7 @@ final class FilingController: NSObject {
         }
     }
 
-    private static let refusedTitle = "Couldn't file the messages"
+    fileprivate static let refusedTitle = "Couldn't file the messages"
 
     private func perform(_ action: FilingAction, on selection: FilingSelection) async {
         let failures = await model.perform(action, on: selection, mailboxes: sidebar.mailboxes)
@@ -229,5 +233,31 @@ final class FilingController: NSObject {
             MainActor.assumeIsolated { controller.undo(id) }
         }
         undoManager.setActionName("Filing")
+    }
+}
+
+// MARK: - Drops on the sidebar
+
+extension FilingController: MessageDropTarget {
+    func takesDrop(from source: Any?) -> Bool {
+        guard !retired, canFile(), let window, window.attachedSheet == nil else { return false }
+        return list.list?.isDragSource(source) == true
+    }
+
+    func drop(from source: Any?, onto mailbox: Mailbox) -> Bool {
+        guard takesDrop(from: source), let captured = capture(list.list?.draggedIDs),
+            !captured.ids.isEmpty
+        else { return false }
+        return writes.run(revision: writes.revision) { [weak self] in
+            guard let self, let selection = await resolve(captured) else { return }
+            do {
+                let action = try FilingDestinations.dropAction(
+                    onto: mailbox, shownMailboxId: captured.model.mailboxId)
+                await perform(action, on: selection)
+            } catch {
+                explain(
+                    [FilingFailure(error: error)], title: Self.refusedTitle, accountsNamed: false)
+            }
+        }
     }
 }

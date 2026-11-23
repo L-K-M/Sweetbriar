@@ -211,6 +211,12 @@ final class MessageListViewController: NSViewController {
         indexControls.stopPolling()
     }
 
+    /// The context menu's commands for the rows it targets, given to
+    /// each list as it is installed.
+    var contextActions: (@MainActor (Set<Int64>) -> [MessageContextAction])? {
+        didSet { list?.contextActions = contextActions }
+    }
+
     /// The filing undo each installed list answers Edit → Undo with.
     var filingUndoManager: UndoManager? {
         didSet { list?.filingUndoManager = filingUndoManager }
@@ -286,6 +292,7 @@ final class MessageListViewController: NSViewController {
         list.onSelectionChange = { [weak self] ids in
             self?.onSelectionChange?(ids)
         }
+        list.contextActions = contextActions
         list.filingUndoManager = filingUndoManager
         list.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(list, positioned: .below, relativeTo: statusLabel)

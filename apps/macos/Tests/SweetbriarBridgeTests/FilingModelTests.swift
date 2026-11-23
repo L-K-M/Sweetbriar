@@ -368,6 +368,30 @@ struct FilingModelTests {
         mailbox(7, "Travel", kind: .label), mailbox(8, "Parent", selectable: false),
     ]
 
+    @Test func aDropMovesToAFolderAndAddsALabel() throws {
+        guard case .move(let folder) = try FilingDestinations.dropAction(onto: all[4], shownMailboxId: 1)
+        else {
+            Issue.record("expected a move")
+            return
+        }
+        #expect(folder.mailboxId == 5)
+        guard case .addLabel(let label) = try FilingDestinations.dropAction(onto: all[6], shownMailboxId: 1)
+        else {
+            Issue.record("expected a label")
+            return
+        }
+        #expect(label.mailboxId == 7)
+    }
+
+    @Test func aDropThatCantFileSaysWhy() {
+        #expect(throws: FilingRefusal.alreadyThere(mailbox: "Inbox")) {
+            try FilingDestinations.dropAction(onto: all[0], shownMailboxId: 1)
+        }
+        #expect(throws: FilingRefusal.holdsNoMessages(mailbox: "Parent")) {
+            try FilingDestinations.dropAction(onto: all[7], shownMailboxId: 1)
+        }
+    }
+
     @Test func movesListFoldersExceptSentDraftsAndTheShownOne() {
         let folders = FilingDestinations.folders(in: all, shownMailboxId: 1)
         #expect(folders.map(\.mailboxId) == [5, 6])
