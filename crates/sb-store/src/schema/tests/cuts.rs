@@ -3,8 +3,8 @@
 //! its Nth write, truncation or sync, through migration 28's and 35's
 //! snapshots and rebuilds. The parent reopens what each kill left.
 
-use std::env;
 use std::path::{Path, PathBuf};
+use std::{env, fs};
 
 use rusqlite::{Connection, OpenFlags, types::Value};
 use sb_test_support::{ScratchDir, fault_points, real_fs, run_crash_cut_points};
@@ -21,6 +21,13 @@ const CHILD: &str = "schema::tests::cuts::migration_cut_child";
 
 /// The cut points a pull request samples; nightly cuts every one.
 const CUT_POINTS: usize = 40;
+
+/// Where a child that finished before its cut point records how many
+/// operations its run made, beside the store.
+const RAN: &str = "operations";
+
+/// How many shorter runs the final cut follows before giving up.
+const FINAL_CUT_TRIES: usize = 3;
 
 /// The rows migration 28 and 35 rebuild, as `store_at_27` seeded them.
 type Rebuilt = (Vec<Vec<Value>>, Vec<Vec<Value>>, Vec<Vec<Value>>);
@@ -39,7 +46,7 @@ fn store_paths(root: &Path) -> StorePaths {
 
 /// The child: open the store under `ROOT_ENV`, which runs migrations 28
 /// to the latest, and die before operation `CUT_ENV`. A run that
-/// finishes first exits cleanly.
+/// finishes first records its length in `RAN` and exits cleanly.
 #[test]
 #[ignore = "the child of migrations_survive_a_kill_at_any_write, which runs it"]
 fn migration_cut_child() {
@@ -49,6 +56,7 @@ fn migration_cut_child() {
     supply.kill_before(nth);
     let store = open(&store_paths(&root), &test_seams(real_fs())).unwrap();
     store.close().unwrap();
+    fs::write(root.join(RAN), supply.operations().to_string()).unwrap();
 }
 
 /// What a kill during the upgrade left, reopened: the migrations finish
@@ -148,21 +156,52 @@ fn migrations_survive_a_kill_at_any_write() {
 
     let points = spread(span, fault_points(CUT_POINTS, span));
     assert_eq!(points.last(), Some(&span), "the final commit is cut");
+    let survived = cut_at(&points, template.path(), &expected);
+    // A child outlives only points past the end of its own run.
+    for &(n, ran) in &survived {
+        assert!(ran < n, "N={n} survived a run of {ran} operations");
+    }
+
+    // A child's run can be shorter than the measured one: after the
+    // clean-shutdown marker, the writer's idle checkpoint (spec/03)
+    // races `close`, and when `close` wins the WAL is never truncated.
+    // The final cut then moves to that run's own last operation.
+    let mut short = survived.last().copied();
+    for _ in 0..FINAL_CUT_TRIES {
+        let Some((_, ran)) = short else { break };
+        short = cut_at(&[ran], template.path(), &expected).first().copied();
+    }
+    assert_eq!(
+        short, None,
+        "the final cut outran each shorter run (point, run length)"
+    );
+}
+
+/// Run the child once per point on a fresh copy of `template`, checking
+/// what each kill left. Returns each point the child outlived, with how
+/// many operations that run made.
+fn cut_at(points: &[u64], template: &Path, expected: &Rebuilt) -> Vec<(u64, u64)> {
     let mut roots = Vec::new();
     let cuts = run_crash_cut_points(
         CUT_ENV,
         ROOT_ENV,
         CHILD,
-        &points,
+        points,
         &mut |n| {
             let scratch = ScratchDir::new(&format!("migration-cut-{n}"));
-            copy_tree(template.path(), scratch.path());
+            copy_tree(template, scratch.path());
             let root = scratch.path().to_path_buf();
-            roots.push(scratch);
+            roots.push((n, scratch));
             root
         },
-        &mut |root| check(root, &expected),
+        &mut |root| check(root, expected),
     );
-    // The child repeats the measured run, so every point lands in it.
-    assert_eq!(cuts.killed, points, "survived: {:?}", cuts.survived);
+    cuts.survived
+        .into_iter()
+        .map(|n| {
+            let (_, scratch) = roots.iter().find(|(point, _)| *point == n).unwrap();
+            let ran = fs::read_to_string(scratch.path().join(RAN)).unwrap();
+            (n, ran.parse().unwrap())
+        })
+        .collect()
 }
