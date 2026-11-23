@@ -80,10 +80,52 @@ struct MainMenuTests {
         try await withFocusedEditor { textView in
             textView.string = "say word"
 
-            let handled = try press("\u{8}", keyCode: kVK_Delete)
+            let handled = try pressCommandDelete()
             #expect(!handled)
             #expect(textView.string == "say word")
         }
+    }
+
+    /// Outside text, ⌘⌫ reaches Move to Trash (spec/08 "Keyboard
+    /// filing"), pressed as the keyboard sends it.
+    @Test("⌘⌫ moves the selection to Trash")
+    func commandDeleteMovesToTrash() throws {
+        let menu = try #require(NSApplication.shared.mainMenu)
+        try #require(NSApplication.shared.keyWindow?.isEditingText != true)
+        let trash = try #require(Self.item(MainMenuBuilder.ItemID.trash, in: menu))
+        let filer = TrashProbe()
+        trash.target = filer
+        defer { trash.target = nil }
+
+        #expect(try pressCommandDelete())
+        #expect(filer.trashed == 1)
+    }
+
+    /// ⌘⌫ as the keyboard sends it. The Delete key's event carries
+    /// U+007F, and AppKit matches it to Move to Trash's U+0008 through
+    /// the key code; a synthetic event built from characters alone
+    /// wouldn't match, so this one comes from a Quartz key event.
+    private func pressCommandDelete() throws -> Bool {
+        let menu = try #require(NSApplication.shared.mainMenu)
+        let key = try #require(CGEvent(
+            keyboardEventSource: CGEventSource(stateID: .hidSystemState),
+            virtualKey: CGKeyCode(kVK_Delete), keyDown: true))
+        key.flags = .maskCommand
+        let event = try #require(NSEvent(cgEvent: key))
+        menu.update()
+        return menu.performKeyEquivalent(with: event)
+    }
+
+    private static func item(
+        _ identifier: NSUserInterfaceItemIdentifier, in menu: NSMenu
+    ) -> NSMenuItem? {
+        for item in menu.items {
+            if item.identifier == identifier { return item }
+            if let found = item.submenu.flatMap({ Self.item(identifier, in: $0) }) {
+                return found
+            }
+        }
+        return nil
     }
 
     private func withFocusedEditor(
@@ -138,6 +180,14 @@ struct MainMenuTests {
 #endif
 
 #if canImport(AppKit)
+/// Move to Trash's target in place of a mailbox window.
+@MainActor
+private final class TrashProbe: NSObject {
+    private(set) var trashed = 0
+
+    @objc func trashMessages(_ sender: Any?) { trashed += 1 }
+}
+
 /// What the menu's callbacks saw: a reference the sendable callbacks
 /// share, since they can't capture a mutable local.
 @MainActor
