@@ -102,7 +102,9 @@ where Proton differs.
 - **Timeouts:** 30 s per request; 120 s per body or attachment download,
   scaled for large ones:
   - 120 s through 1 MiB, plus 1 s for each further 100 KiB or part of
-    it, up to 30 MiB (417 s);
+    it, up to the download's bound below: 30 MiB for an attachment
+    (417 s) and 100 MiB for a message (1,134 s), so either fits its
+    bound at 100 KiB/s;
   - the size is the larger of the announced length and the bytes read
     so far. The deadline runs from the first read and can only move
     later, never restart;
