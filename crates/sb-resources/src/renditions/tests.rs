@@ -2,6 +2,7 @@ use std::io::Read;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::{env, fs};
 
+use sb_platform::{Location, Metadata, ReadFile, WriteFile};
 use sb_test_support::{
     CutFs, FaultFs, FaultKind, FsOp, ScratchDir, SeededRandom, SimFs, real_fs, run_crash_cuts,
 };
@@ -31,6 +32,88 @@ fn contents(fs: &dyn Fs, path: &Path) -> Vec<u8> {
     let mut bytes = Vec::new();
     fs.open(path).unwrap().read_to_end(&mut bytes).unwrap();
     bytes
+}
+
+/// An `Fs` that records every path passed to `exclude_from_backup` and
+/// forwards the cache's filesystem operations to a `SimFs`. With
+/// `fail`, the exclusion fails, to prove the cache treats it as a
+/// backup hint.
+struct RecordingFs {
+    inner: SimFs,
+    excluded: Arc<Mutex<Vec<PathBuf>>>,
+    fail: bool,
+}
+
+impl RecordingFs {
+    fn new(fail: bool) -> Arc<Self> {
+        Arc::new(Self {
+            inner: SimFs::new(),
+            excluded: Arc::new(Mutex::new(Vec::new())),
+            fail,
+        })
+    }
+
+    fn excluded(&self) -> Vec<PathBuf> {
+        self.excluded.lock().unwrap().clone()
+    }
+}
+
+impl Fs for RecordingFs {
+    fn create(&self, path: &Path) -> io::Result<Box<dyn WriteFile>> {
+        self.inner.create(path)
+    }
+    fn open(&self, path: &Path) -> io::Result<Box<dyn ReadFile>> {
+        self.inner.open(path)
+    }
+    fn open_regular(&self, path: &Path) -> io::Result<(Box<dyn ReadFile>, Metadata)> {
+        self.inner.open_regular(path)
+    }
+    fn metadata(&self, path: &Path) -> io::Result<Option<Metadata>> {
+        self.inner.metadata(path)
+    }
+    fn read_dir(&self, path: &Path) -> io::Result<Vec<PathBuf>> {
+        self.inner.read_dir(path)
+    }
+    fn create_dir(&self, path: &Path) -> io::Result<()> {
+        self.inner.create_dir(path)
+    }
+    fn create_private_dir(&self, path: &Path) -> io::Result<()> {
+        self.inner.create_private_dir(path)
+    }
+    fn restrict_dir(&self, path: &Path) -> io::Result<()> {
+        self.inner.restrict_dir(path)
+    }
+    fn remove_dir_all(&self, path: &Path) -> io::Result<()> {
+        self.inner.remove_dir_all(path)
+    }
+    fn quarantine(&self, path: &Path) -> io::Result<()> {
+        self.inner.quarantine(path)
+    }
+    fn sync_dir(&self, path: &Path) -> io::Result<()> {
+        self.inner.sync_dir(path)
+    }
+    fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
+        self.inner.rename(from, to)
+    }
+    fn remove(&self, path: &Path) -> io::Result<()> {
+        self.inner.remove(path)
+    }
+    fn canonicalize(&self, path: &Path) -> io::Result<PathBuf> {
+        self.inner.canonicalize(path)
+    }
+    fn lock_exclusive(&self, path: &Path) -> Result<Box<dyn Lease>, LockError> {
+        self.inner.lock_exclusive(path)
+    }
+    fn location(&self, path: &Path) -> io::Result<Location> {
+        self.inner.location(path)
+    }
+    fn exclude_from_backup(&self, path: &Path) -> io::Result<()> {
+        self.excluded.lock().unwrap().push(path.to_path_buf());
+        if self.fail {
+            return Err(io::Error::other("backup exclusion unavailable"));
+        }
+        Ok(())
+    }
 }
 
 /// Half a lease: the size the budget tests reserve in.
@@ -409,6 +492,60 @@ fn named_publication_rejects_paths_and_duplicate_names() {
             .is_err()
     );
     assert_eq!(contents(fs.as_ref(), &path), b"x");
+}
+
+/// The canonical cache root is excluded once at open and again after
+/// each published file, and nothing else is.
+#[test]
+fn cache_root_is_excluded_at_open_and_after_each_publish() {
+    let fs = RecordingFs::new(false);
+    let cache =
+        RenditionCache::open_on(Path::new("/cache"), fs.clone(), Arc::new(Tokens::default()))
+            .unwrap();
+    assert_eq!(fs.excluded(), vec![PathBuf::from("/cache")]);
+    let mut files = cache.reserve(&[4]).unwrap();
+    assert_eq!(fs.excluded(), vec![PathBuf::from("/cache")]);
+    let path = files
+        .publish(0, b"test", RenditionProtection::Internal)
+        .unwrap();
+    assert_eq!(
+        fs.excluded(),
+        vec![PathBuf::from("/cache"), PathBuf::from("/cache")]
+    );
+    assert_eq!(contents(&fs.inner, &path), b"test");
+    files.remove().unwrap();
+}
+
+/// An open that doesn't get the cache's lock leaves the root alone.
+#[test]
+fn a_refused_open_excludes_nothing() {
+    let fs = RecordingFs::new(false);
+    let open =
+        || RenditionCache::open_on(Path::new("/cache"), fs.clone(), Arc::new(Tokens::default()));
+    let _held = open().unwrap();
+
+    assert!(matches!(open(), Err(RenditionError::Locked)));
+    assert_eq!(fs.excluded(), vec![PathBuf::from("/cache")]);
+}
+
+/// Exclusion is a backup hint: a failure neither stops the cache from
+/// opening nor a rendition from publishing.
+#[test]
+fn a_failing_exclusion_still_opens_and_publishes() {
+    let fs = RecordingFs::new(true);
+    let cache =
+        RenditionCache::open_on(Path::new("/cache"), fs.clone(), Arc::new(Tokens::default()))
+            .unwrap();
+    assert_eq!(fs.excluded(), vec![PathBuf::from("/cache")]);
+    let mut files = cache.reserve(&[4]).unwrap();
+    let path = files
+        .publish(0, b"test", RenditionProtection::Internal)
+        .unwrap();
+    assert_eq!(
+        fs.excluded(),
+        vec![PathBuf::from("/cache"), PathBuf::from("/cache")]
+    );
+    assert_eq!(contents(&fs.inner, &path), b"test");
 }
 
 // ---------------------------------------------------------------------------

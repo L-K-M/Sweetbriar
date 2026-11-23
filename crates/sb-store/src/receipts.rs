@@ -1,14 +1,22 @@
 //! Idempotent command receipts (spec/02 `command_receipts`, spec/07
 //! "Commands"): a command runs under an idempotency key inside one
 //! write transaction; the effect and its receipt commit together, so
-//! a retry that finds the receipt never re-runs the effect.
+//! a retry that finds the receipt never re-runs the effect. The daily
+//! GC pass prunes receipts older than spec/02's thirty days.
 
 use rusqlite::Transaction;
 use rusqlite::params;
 use sb_types::time::Timestamp;
 
-use crate::StoreError;
 use crate::schema::classify;
+use crate::writer::WritePriority;
+use crate::{Store, StoreError};
+
+/// How long a receipt is kept (spec/02).
+const RETENTION_MS: i64 = 30 * 24 * 60 * 60 * 1000;
+
+/// The receipts one prune transaction deletes at most.
+const PRUNE_BATCH: i64 = 1_000;
 
 /// A job command's receipt body (spec/07 "Engine command boundary"):
 /// `{"job_id":"<id>"}` plus the command's optional `"state"` word. The
@@ -176,6 +184,67 @@ fn insert(
         params![key, command, result_json, now.as_millis()],
     )
     .map_err(|e| classify(e, "record a command receipt"))?;
+    Ok(())
+}
+
+/// How far [`prune`] got.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum Pruning {
+    /// No expired receipt is left, or the store takes no writes.
+    Finished,
+    /// Asked to stop: the rest wait for the next pass.
+    Stopped,
+}
+
+/// Delete the receipts older than [`RETENTION_MS`] at `now`, and nothing
+/// else (spec/02). Each batch is upkeep, so it makes no backup
+/// generation due, and with none expired nothing is written. A latched
+/// store keeps them all. Blocking; never on the writer thread.
+pub(crate) fn prune(
+    store: &Store,
+    now: Timestamp,
+    stopped: impl Fn() -> bool,
+) -> Result<Pruning, StoreError> {
+    let Some(cutoff) = now.as_millis().checked_sub(RETENTION_MS) else {
+        return Ok(Pruning::Finished);
+    };
+    if store.writer.latched().is_some() {
+        return Ok(Pruning::Finished);
+    }
+
+    loop {
+        if !store.read(|tx| any_older(tx, cutoff))? {
+            return Ok(Pruning::Finished);
+        }
+        if stopped() {
+            return Ok(Pruning::Stopped);
+        }
+        crate::store::await_write(
+            store
+                .writer
+                .upkeep(WritePriority::Index, move |tx| delete_older(tx, cutoff)),
+        )?;
+    }
+}
+
+/// Whether any receipt was recorded before `cutoff`.
+fn any_older(tx: &Transaction, cutoff: i64) -> Result<bool, StoreError> {
+    tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM command_receipts WHERE created_at < ?1)",
+        params![cutoff],
+        |row| row.get(0),
+    )
+    .map_err(|e| classify(e, "look for expired command receipts"))
+}
+
+/// Delete one batch of the receipts recorded before `cutoff`.
+fn delete_older(tx: &Transaction, cutoff: i64) -> Result<(), StoreError> {
+    tx.execute(
+        "DELETE FROM command_receipts WHERE rowid IN (
+             SELECT rowid FROM command_receipts WHERE created_at < ?1 LIMIT ?2)",
+        params![cutoff, PRUNE_BATCH],
+    )
+    .map_err(|e| classify(e, "prune expired command receipts"))?;
     Ok(())
 }
 

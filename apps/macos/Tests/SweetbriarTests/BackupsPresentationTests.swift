@@ -9,6 +9,13 @@ import Testing
 @Suite
 @MainActor
 struct BackupsPresentationTests {
+    @Test func encryptionAtRestNamesFileVaultAndTheBackupDisk() {
+        let note = BackupsPresentation.encryptionAtRest
+        #expect(note.contains("doesn't encrypt"))
+        #expect(note.contains("FileVault"))
+        #expect(note.contains("backup on another disk"))
+    }
+
     @Test func countsAndDatesKeepTheirFullDomain() {
         #expect(BackupsPresentation.byteCount(UInt64.max) == "18446744073709551615 bytes")
         #expect(BackupsPresentation.objectCount(UInt64.max) == "18446744073709551615 objects")

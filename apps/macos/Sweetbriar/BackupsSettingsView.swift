@@ -109,6 +109,10 @@ struct BackupsSettingsView: View {
                 .disabled(!model.canSaveDestination)
                 .accessibilityIdentifier("backupDefault")
             }
+            Text(BackupsPresentation.encryptionAtRest)
+                .font(.footnote).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityIdentifier("backupEncryption")
         }
     }
 

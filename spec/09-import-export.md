@@ -182,9 +182,12 @@ user-granted permission path.
   and counts, and, once the report is written, its path; a terminal
   state alone doesn't mean the report exists. `import_report(id)`
   returns the report itself once written.
-- **In the app** (08), File → Import… picks supported files, packages
-  and folders. The inventory and its problems are shown before
-  confirmation, and an ambiguous source needs its own variant choice.
+- **In the app** (08), File → Import… picks files, packages and
+  folders. It filters nothing by extension, since a chosen file without
+  `.eml` is an mbox candidate (Procedure, step 1). The inventory and its
+  problems are shown before confirmation: each source's mailbox name,
+  message count and size, the first eight in inventory order and then
+  how many more. An ambiguous source needs its own variant choice.
   Progress is polled with at most one request in flight. Closing the
   progress sheet leaves the job running; Cancel waits for `cancel_job`'s
   receipt. The shell keeps its active job's id and reattaches after a
