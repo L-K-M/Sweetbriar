@@ -488,8 +488,9 @@ A message window is the reader for one message on its own, with its own
   opens the row's message. Return and ⌘O need exactly one selected
   message row and do nothing otherwise; a double-click opens the row it
   hit. Drafts and the Out Box keep their own Return (above).
-- **One window per message:** opening an occurrence that already has a
-  window brings that window to the front.
+- **One window per occurrence:** opening an occurrence that already
+  has a window brings that window to the front. A new window cascades
+  from the last one opened, so it doesn't hide it.
 - **Contents:** the main window's reader over that occurrence: the
   header area with its chip, tags and note, the reading-view controls
   and the link warnings. The title is the subject, or "No Subject".

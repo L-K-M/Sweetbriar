@@ -87,6 +87,9 @@ final class MessageWindowController: NSWindowController, NSWindowDelegate {
 @MainActor
 final class MessageWindows {
     private(set) var controllers: [Int64: MessageWindowController] = [:]
+    /// Where the next new window's top left goes, so one doesn't hide
+    /// the last; zero leaves the first one centered.
+    private var cascade = NSPoint.zero
 
     /// Bring `occurrenceId`'s window to the front, or open one that
     /// `make` builds.
@@ -98,7 +101,9 @@ final class MessageWindows {
             open.showWindow(nil)
             return open
         }
+        if controllers.isEmpty { cascade = .zero }
         let controller = make()
+        if let window = controller.window { cascade = window.cascadeTopLeft(from: cascade) }
         controllers[occurrenceId] = controller
         controller.onClose = { [weak self] closed in
             guard let self, controllers[closed.occurrenceId] === closed else { return }
