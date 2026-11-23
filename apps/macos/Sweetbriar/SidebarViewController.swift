@@ -137,6 +137,9 @@ final class SidebarViewController: NSViewController, NSMenuDelegate {
         renameItem.target = self
         deleteItem.target = self
         signInAgainItem.target = self
+        renameItem.identifier = MainMenuBuilder.ItemID.command("savedView.rename")
+        deleteItem.identifier = MainMenuBuilder.ItemID.command("savedView.delete")
+        signInAgainItem.identifier = MainMenuBuilder.ItemID.command("account.signInAgain")
         contextMenu.addItem(renameItem)
         contextMenu.addItem(deleteItem)
         contextMenu.addItem(signInAgainItem)

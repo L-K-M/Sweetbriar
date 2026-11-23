@@ -78,60 +78,78 @@ final class MainMenuBuilder: NSObject {
     private let onShowActivity: @MainActor () -> Void
     private let isWriteEnabled: @MainActor () -> Bool
 
-    /// `NSMenuItem.identifier`s that `validateMenuItem` treats
-    /// specially.
+    /// Every command's stable identifier, in the `ch.lkmc.Sweetbriar.cmd.*`
+    /// namespace (spec/08 "Menus and commands"). AppKit's own items
+    /// (About, Hide, Quit, Undo, Cut, Copy, Paste, Select All, Minimize,
+    /// Close) carry none: they are AppKit's commands, not Sweetbriar's.
     enum ItemID {
-        /// Both "List Implementation" submenu items — the radio pair.
-        static let implementation = NSUserInterfaceItemIdentifier(
-            "debug.listImplementation"
-        )
+        static func command(_ name: String) -> NSUserInterfaceItemIdentifier {
+            NSUserInterfaceItemIdentifier("ch.lkmc.Sweetbriar.cmd.\(name)")
+        }
+
+        /// Sweetbriar → Settings….
+        static let settings = command("settings")
+        /// File → New Message.
+        static let newMessage = command("newMessage")
+        /// File → Add Proton Account… (spec/08 "Proton sign-in").
+        static let addProtonAccount = command("addProtonAccount")
+        /// File → Import… (spec/09).
+        static let importMail = command("importMail")
+        /// Edit → Paste as Markdown… (spec/08 "Composer").
+        static let pasteAsMarkdown = command("pasteAsMarkdown")
+        /// Edit → Insert Image….
+        static let insertImage = command("insertImage")
+        /// Edit → Edit in External Editor.
+        static let editInExternalEditor = command("editInExternalEditor")
+        /// Format → Bold.
+        static let bold = command("bold")
+        /// Format → Italic.
+        static let italic = command("italic")
+        /// Message → Open in New Window (spec/08 "Message window").
+        static let openMessage = command("openMessage")
         /// Message → Reply (spec/08 "Cross-account check").
-        static let reply = NSUserInterfaceItemIdentifier(
-            "ch.lkmc.Sweetbriar.cmd.reply"
-        )
+        static let reply = command("reply")
         /// Message → Reply All.
-        static let replyAll = NSUserInterfaceItemIdentifier(
-            "ch.lkmc.Sweetbriar.cmd.replyAll"
-        )
+        static let replyAll = command("replyAll")
         /// Message → Forward.
-        static let forward = NSUserInterfaceItemIdentifier(
-            "ch.lkmc.Sweetbriar.cmd.forward"
-        )
+        static let forward = command("forward")
         /// Message → Mark as Read or Unread (spec/08 "Message list").
-        static let openMessage = NSUserInterfaceItemIdentifier(
-            "ch.lkmc.Sweetbriar.cmd.openMessage"
-        )
-        static let toggleRead = NSUserInterfaceItemIdentifier(
-            "ch.lkmc.Sweetbriar.cmd.toggleRead"
-        )
+        static let toggleRead = command("toggleRead")
         /// Message → Star or Unstar.
-        static let toggleStar = NSUserInterfaceItemIdentifier(
-            "ch.lkmc.Sweetbriar.cmd.toggleStar"
-        )
+        static let toggleStar = command("toggleStar")
         /// Message → Archive (spec/08 "Keyboard filing").
-        static let archive = NSUserInterfaceItemIdentifier(
-            "ch.lkmc.Sweetbriar.cmd.archive"
-        )
+        static let archive = command("archive")
         /// Message → Move to Trash.
-        static let trash = NSUserInterfaceItemIdentifier(
-            "ch.lkmc.Sweetbriar.cmd.trash"
-        )
+        static let trash = command("trash")
         /// Message → Move to….
-        static let move = NSUserInterfaceItemIdentifier(
-            "ch.lkmc.Sweetbriar.cmd.move"
-        )
+        static let move = command("move")
         /// Message → Add Label….
-        static let addLabel = NSUserInterfaceItemIdentifier(
-            "ch.lkmc.Sweetbriar.cmd.addLabel"
-        )
+        static let addLabel = command("addLabel")
         /// Message → Remove Label….
-        static let removeLabel = NSUserInterfaceItemIdentifier(
-            "ch.lkmc.Sweetbriar.cmd.removeLabel"
-        )
-        /// "Run List Benchmark" — disabled while a run is in flight.
-        static let benchmark = NSUserInterfaceItemIdentifier(
-            "debug.runListBenchmark"
-        )
+        static let removeLabel = command("removeLabel")
+        /// Window → Activity.
+        static let showActivity = command("showActivity")
+        /// Debug → Fill 500,000 Synthetic Rows (spec/08 "Debug menu").
+        static let fillSynthetic = command("debug.fillSynthetic")
+        /// Debug → List Prototype.
+        static let listPrototype = command("debug.listPrototype")
+        /// Debug → List Implementation → one implementation, named by
+        /// its stored value.
+        static func listImplementation(_ raw: String) -> NSUserInterfaceItemIdentifier {
+            command("debug.listImplementation.\(raw)")
+        }
+        /// Debug → Run List Benchmark.
+        static let listBenchmark = command("debug.runListBenchmark")
+        /// Debug → Run Store Benchmark.
+        static let storeBenchmark = command("debug.runStoreBenchmark")
+        /// Debug → Run Search Benchmark.
+        static let searchBenchmark = command("debug.runSearchBenchmark")
+        /// The three benchmarks, disabled while a run is in flight.
+        static let benchmarks: Set<NSUserInterfaceItemIdentifier> = [
+            listBenchmark, storeBenchmark, searchBenchmark,
+        ]
+        /// Debug → Composer Probe.
+        static let composerProbe = command("debug.composerProbe")
     }
 
     /// - Parameters:
@@ -223,7 +241,8 @@ final class MainMenuBuilder: NSObject {
             action: #selector(NSApplication.orderFrontStandardAboutPanel(_:))
         ))
         menu.addItem(.separator())
-        let settings = Self.item("Settings…", action: #selector(showSettings(_:)), key: ",")
+        let settings = Self.item(
+            "Settings…", action: #selector(showSettings(_:)), key: ",", id: ItemID.settings)
         settings.target = self
         menu.addItem(settings)
         menu.addItem(.separator())
@@ -261,19 +280,23 @@ final class MainMenuBuilder: NSObject {
     private func makeFileMenu() -> NSMenuItem {
         let item = NSMenuItem()
         let menu = NSMenu(title: "File")
-        menu.addItem(Self.item("New Message", action: #selector(newMessage(_:)), key: "n", target: self))
+        menu.addItem(Self.item(
+            "New Message", action: #selector(newMessage(_:)), key: "n", target: self,
+            id: ItemID.newMessage))
         menu.addItem(.separator())
         menu.addItem(Self.item(
             "Add Proton Account…",
             action: #selector(addProtonAccount(_:)),
             key: "",
-            target: self
+            target: self,
+            id: ItemID.addProtonAccount
         ))
         menu.addItem(Self.item(
             "Import…",
             action: #selector(importMail(_:)),
             key: "I",
-            target: self
+            target: self,
+            id: ItemID.importMail
         ))
         item.submenu = menu
         return item
@@ -298,17 +321,20 @@ final class MainMenuBuilder: NSObject {
             "Paste as Markdown…",
             action: #selector(ComposeWindowController.pasteAsMarkdown(_:)),
             key: "v",
-            modifiers: [.option, .command]
+            modifiers: [.option, .command],
+            id: ItemID.pasteAsMarkdown
         ))
         menu.addItem(Self.item(
             "Insert Image…",
             action: #selector(ComposeWindowController.insertImage(_:)),
-            key: ""
+            key: "",
+            id: ItemID.insertImage
         ))
         menu.addItem(Self.item(
             "Edit in External Editor",
             action: #selector(ComposeWindowController.editInExternalEditor(_:)),
-            key: "E"
+            key: "E",
+            id: ItemID.editInExternalEditor
         ))
         menu.addItem(.separator())
         menu.addItem(Self.item(
@@ -401,12 +427,14 @@ final class MainMenuBuilder: NSObject {
         menu.addItem(Self.item(
             "Bold",
             action: #selector(ComposerTextView.toggleBoldMarkdown(_:)),
-            key: "b"
+            key: "b",
+            id: ItemID.bold
         ))
         menu.addItem(Self.item(
             "Italic",
             action: #selector(ComposerTextView.toggleItalicMarkdown(_:)),
-            key: "i"
+            key: "i",
+            id: ItemID.italic
         ))
         item.submenu = menu
         return item
@@ -432,7 +460,8 @@ final class MainMenuBuilder: NSObject {
             action: #selector(showActivity(_:)),
             key: "0",
             modifiers: [.option, .command],
-            target: self
+            target: self,
+            id: ItemID.showActivity
         ))
         NSApplication.shared.windowsMenu = menu
         item.submenu = menu
@@ -447,12 +476,14 @@ final class MainMenuBuilder: NSObject {
         menu.addItem(Self.item(
             "Fill 500,000 Synthetic Rows",
             action: #selector(fillSyntheticRows(_:)),
-            target: self
+            target: self,
+            id: ItemID.fillSynthetic
         ))
         menu.addItem(Self.item(
             "List Prototype",
             action: #selector(showListPrototype(_:)),
-            target: self
+            target: self,
+            id: ItemID.listPrototype
         ))
         menu.addItem(makeImplementationItem())
         menu.addItem(.separator())
@@ -461,7 +492,7 @@ final class MainMenuBuilder: NSObject {
             action: #selector(runListBenchmark(_:)),
             target: self
         )
-        benchmark.identifier = ItemID.benchmark
+        benchmark.identifier = ItemID.listBenchmark
         benchmark.toolTip =
             "Run the four list benchmark runs and show the report"
         menu.addItem(benchmark)
@@ -470,7 +501,7 @@ final class MainMenuBuilder: NSObject {
             action: #selector(runStoreBenchmark(_:)),
             target: self
         )
-        storeBenchmark.identifier = ItemID.benchmark
+        storeBenchmark.identifier = ItemID.storeBenchmark
         storeBenchmark.toolTip =
             "Run the list benchmark over the imported mailboxes and show the report"
         menu.addItem(storeBenchmark)
@@ -479,7 +510,7 @@ final class MainMenuBuilder: NSObject {
             action: #selector(runSearchBenchmark(_:)),
             target: self
         )
-        searchBenchmark.identifier = ItemID.benchmark
+        searchBenchmark.identifier = ItemID.searchBenchmark
         searchBenchmark.toolTip =
             "Time Search from the last keystroke to the first rows and show the report"
         menu.addItem(searchBenchmark)
@@ -487,7 +518,8 @@ final class MainMenuBuilder: NSObject {
         menu.addItem(Self.item(
             "Composer Probe",
             action: #selector(showComposerProbe(_:)),
-            target: self
+            target: self,
+            id: ItemID.composerProbe
         ))
         item.submenu = menu
         return item
@@ -505,7 +537,7 @@ final class MainMenuBuilder: NSObject {
                 target: self
             )
             subItem.representedObject = implementation.rawValue
-            subItem.identifier = ItemID.implementation
+            subItem.identifier = ItemID.listImplementation(implementation.rawValue)
             subItem.state = implementation == .stored ? .on : .off
             menu.addItem(subItem)
         }
@@ -520,13 +552,15 @@ final class MainMenuBuilder: NSObject {
         action: Selector,
         key: String = "",
         modifiers: NSEvent.ModifierFlags = [.command],
-        target: NSObject? = nil
+        target: NSObject? = nil,
+        id: NSUserInterfaceItemIdentifier? = nil
     ) -> NSMenuItem {
         let item = NSMenuItem(title: title, action: action, keyEquivalent: key)
         if !key.isEmpty {
             item.keyEquivalentModifierMask = modifiers
         }
         item.target = target
+        item.identifier = id
         return item
     }
 
@@ -612,10 +646,10 @@ extension MainMenuBuilder: NSMenuItemValidation {
             .contains(action) {
             return isWriteEnabled()
         }
-        if menuItem.identifier == ItemID.benchmark {
+        if let identifier = menuItem.identifier, ItemID.benchmarks.contains(identifier) {
             return isBenchmarkEnabled()
         }
-        if menuItem.identifier == ItemID.implementation {
+        if menuItem.action == #selector(pickImplementation(_:)) {
             let raw = menuItem.representedObject as? String
             menuItem.state =
                 raw.flatMap(PrototypeImplementation.init) == .stored ? .on : .off
