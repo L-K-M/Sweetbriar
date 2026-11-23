@@ -281,10 +281,10 @@ final class MainMenuBuilder: NSObject {
     private func makeEditMenu() -> NSMenuItem {
         let item = NSMenuItem()
         let menu = NSMenu(title: "Edit")
-        menu.addItem(Self.item("Undo", action: Selector(("undo:")), key: "z"))
+        menu.addItem(Self.item("Undo", action: #selector(EditUndoCommands.undo(_:)), key: "z"))
         menu.addItem(Self.item(
             "Redo",
-            action: Selector(("redo:")),
+            action: #selector(EditUndoCommands.redo(_:)),
             key: "Z"
         ))
         menu.addItem(.separator())
@@ -609,6 +609,15 @@ extension MainMenuBuilder: NSMenuItemValidation {
         }
         return true
     }
+}
+
+/// The responder chain's undo and redo. AppKit's text views and windows
+/// answer `undo:` and `redo:` but declare them nowhere Swift can name,
+/// and Xcode 27 refuses a `Selector` spelled out by hand.
+@MainActor
+@objc protocol EditUndoCommands {
+    func undo(_ sender: Any?)
+    func redo(_ sender: Any?)
 }
 
 /// The main window's read and star commands, named here so the menu's

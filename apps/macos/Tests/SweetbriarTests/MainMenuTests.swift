@@ -183,6 +183,28 @@ struct BenchmarkMenuTests {
     }
 }
 
+@Suite("edit commands")
+@MainActor
+struct EditMenuTests {
+    /// Undo and Redo go down the responder chain as AppKit's own
+    /// `undo:` and `redo:`, with ⌘Z and ⇧⌘Z.
+    @Test func undoAndRedoSendAppKitsSelectorsToTheFirstResponder() throws {
+        let builder = MainMenuBuilder(
+            onFillSynthetic: {}, onShowPrototype: {}, onImplementationChanged: { _ in },
+            onRunBenchmark: {}, onRunStoreBenchmark: {}, onRunSearchBenchmark: {},
+            isBenchmarkEnabled: { false }, onShowComposerProbe: {}, onImport: {}
+        )
+        let menu = builder.makeMainMenu()
+        let edit = try #require(menu.items.compactMap(\.submenu).first { $0.title == "Edit" })
+        let undo = try #require(edit.items.first { $0.title == "Undo" })
+        let redo = try #require(edit.items.first { $0.title == "Redo" })
+        #expect(undo.action.map(NSStringFromSelector) == "undo:")
+        #expect(redo.action.map(NSStringFromSelector) == "redo:")
+        #expect(undo.target == nil && redo.target == nil)
+        #expect(undo.keyEquivalent == "z" && redo.keyEquivalent == "Z")
+    }
+}
+
 @MainActor
 private final class MessageMenuProbe {
     var enabled = false
