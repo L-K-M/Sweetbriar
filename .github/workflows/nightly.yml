@@ -9,6 +9,7 @@ on:
     paths:
       - '.github/actions/package-macos/**'
       - '.github/workflows/nightly.yml'
+      - 'ci/cargo-test-nonempty.sh'
       - '.github/workflows/release.yml'
       - 'apps/macos/project.yml'
       - 'ci/go-proton-api/**'
@@ -56,23 +57,28 @@ jobs:
           rustup show
           rustc -Vv
           echo "Runner image: ${ImageOS:-unknown} ${ImageVersion:-unknown}"
+      # Each step fails if its filter selects no test.
       - name: Power loss in the store (SQLite VFS and SimFs)
-        run: cargo test --locked -p sb-store --lib power
+        run: ci/cargo-test-nonempty.sh --locked -p sb-store --lib power
       - name: Power loss in resources (SimFs)
-        run: cargo test --locked -p sb-resources --features test-seams power
+        run: >-
+          ci/cargo-test-nonempty.sh --locked -p sb-resources --features test-seams --
+          publication_is_durable_generated_and_exclusive
+          startup_creates_missing_ancestors_and_sweeps_only_its_namespace
+          claim_retry_repeats_the_durability_barriers
       - name: Migration crash cuts
-        run: cargo test --locked -p sb-store --lib migrations_survive_a_kill_at_any_write
+        run: ci/cargo-test-nonempty.sh --locked -p sb-store --lib migrations_survive_a_kill_at_any_write
       - name: Import crash cuts
-        run: cargo test --locked -p sb-engine --lib imports_reach_the_uncut_counts_after_crash_cuts
+        run: ci/cargo-test-nonempty.sh --locked -p sb-engine --lib imports_reach_the_uncut_counts_after_crash_cuts
       - name: Bundle import crash cuts
-        run: cargo test --locked -p sb-engine --lib bundle_imports_reach_the_uncut_result_after_crash_cuts
+        run: ci/cargo-test-nonempty.sh --locked -p sb-engine --lib bundle_imports_reach_the_uncut_result_after_crash_cuts
       - name: Send crash cuts
-        run: cargo test --locked -p sb-engine --lib send_crash_cuts_never_duplicate_a_send
+        run: ci/cargo-test-nonempty.sh --locked -p sb-engine --lib send_crash_cuts_never_duplicate_a_send
       - name: Maintenance crash cuts
-        run: cargo test --locked -p sb-engine --lib crash_cuts_through_a_scheduled_pass
+        run: ci/cargo-test-nonempty.sh --locked -p sb-engine --lib crash_cuts_through_a_scheduled_pass
       - name: Export crash cuts
         run: >-
-          cargo test --locked -p sb-resources --features test-seams
+          ci/cargo-test-nonempty.sh --locked -p sb-resources --features test-seams
           --test export_files export_crash_cuts_resume_to_identical_output
 
   # spec/11 "Model": the state-machine models with more cases than a
