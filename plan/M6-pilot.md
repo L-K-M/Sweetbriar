@@ -178,7 +178,8 @@ M6.6a, and M6.6d on M6.6a and M6.6b.
   - `settings()` reports `wash` when unset and keeps a stored
     `standard`; `set_setting` accepts `wash`;
   - a reply's and a reply-all's draft report the answered
-    occurrence's account; a forward and a new message report none;
+    occurrence's account, a local-archive one included; a forward and a
+    new message report none;
   - `cargo xtask check-ffi` passes; macOS CI's app tests parse `wash`.
 
 **M6.6b (core) — M, linux.** Account logos.
@@ -208,9 +209,9 @@ Send as the account, the reply line, the Color Wash preview.
   - Color Wash draws the strip fill behind the header and the gradient
     behind the editor, which draws no background; injected Increase
     Contrast and Reduce Transparency render Strong;
-  - for every palette color, in light and dark, the body, secondary,
-    Markdown styling, link and placeholder colors reach 4.5:1 on both
-    rendered stops;
+  - for every palette color, in light and dark, body and status text
+    reach 4.5:1 on both rendered stops, and status text uses the label
+    color; banners keep the window background;
   - Send's title and accessibility label name the account in Color
     Wash and Strong, and the plain Send stays in Standard and Minimal
     and without a route;
@@ -227,8 +228,9 @@ account logo and the Settings letter, logo and address controls.
 - **Depends on:** M6.6a, M6.6b.
 - **Acceptance:**
   - a message window takes the receiving account's fill in Color Wash
-    and Strong, and stays neutral in Standard and Minimal and with
-    the accessibility fallbacks;
+    and Strong, Increase Contrast and Reduce Transparency included, and
+    stays neutral in Standard and Minimal and without the account's
+    appearance;
   - the letter field trims, limits to two grapheme clusters and clears
     back to the automatic letter;
   - the logo pipeline refuses a file over 20 MB before decoding,

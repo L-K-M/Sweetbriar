@@ -229,7 +229,7 @@ the device except in backups.
   without decoding pixels: the 8-byte PNG signature; a first chunk that
   is a 13-byte `IHDR` with a matching CRC, width and height 128, and a
   valid bit depth and color type pair; and a last chunk that is an
-  empty `IEND`. Anything else is `InvalidInput`; a stored value that
+  empty `IEND` with a matching CRC, ending the bytes. Anything else is `InvalidInput`; a stored value that
   fails the same checks is `Corrupt`.
 - **Writes:** `set_account_logo` takes the observed revision, absent
   when no row exists, and a PNG or none to clear. Clearing keeps the

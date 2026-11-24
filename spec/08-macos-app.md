@@ -530,9 +530,11 @@ A message window is the reader for one message on its own, with its own
   and the reader's header area take the receiving account's strip
   fill, with their labels in its strip foreground. The message body
   keeps the reader's own surface, since mail draws its own colors.
-  Standard and Minimal leave the window neutral. Increase Contrast,
-  Reduce Transparency and an account without an appearance also leave
-  it neutral. The header's chip still names the account in text.
+  Standard and Minimal leave the window neutral. The fill is opaque
+  and solved for contrast, so, as in a Strong compose window, Increase
+  Contrast adds the outline and Reduce Transparency changes nothing.
+  When the account's appearance is unavailable the window stays
+  neutral. The header's chip still names the account in text.
 - **Commands:** while a message window is key, Reply, Reply All and
   Forward act on its message. The list's commands (mark read or
   unread, star, filing) belong to the main window and are unavailable
@@ -731,8 +733,9 @@ Implements [15-account-colors](../research/15-account-colors.md):
   - separate light, dark and high-contrast variants.
   The core's light/dark bundles contain an opaque strip, marker,
   foreground and high-contrast outline, and since M6.6a the Color
-  Wash pair (below) and the marker's ink: black or white, whichever
-  contrasts more with the marker, which is always at least 4.5:1. On the final 8-bit sRGB values,
+  Wash pair (below) and the marker's ink. That ink is black or white,
+  whichever contrasts more with the marker; one of the two always
+  reaches 4.5:1 against it. On the final 8-bit sRGB values,
   foreground reaches 4.5:1 and marker/outline 3:1 against the bundle's
   strip. The shell must also verify contrast on its actual surfaces,
   including selected rows; a strip ratio alone does not qualify the UI.
@@ -765,25 +768,34 @@ Implements [15-account-colors](../research/15-account-colors.md):
     abandonment still drains begun work without starting another write;
   - crossfades in 150 ms, or instantly with Reduce Motion;
   - posts one accessibility announcement.
-- **Color Wash mode** (the default; owner decision 2026-11-24, research
-  15 "Window tint survey") tints the whole window, M6.6c:
+- **Color Wash mode** (the `appearance.compose_cue` default; owner
+  decision 2026-11-24, research 15 "Window tint survey") tints the whole
+  window, M6.6c:
   - The title bar, the strip and the header rows (From, To, Cc, Bcc,
-    Subject, the reply line and banners) sit on the opaque strip fill.
-    Their labels use the strip foreground. Fields keep their own
-    backgrounds and native editing colors.
+    Subject and the reply line) sit on the opaque strip fill. Their
+    labels use the strip foreground. Fields keep their own backgrounds
+    and native editing colors. Banners, such as the cross-account
+    warning, keep the window background, so a warning never takes an
+    account's color (Cross-account check).
   - Below the header, a vertical gradient from the wash's top stop to
     its bottom stop fills the rest of the window, behind the editor and
     the controls. The editor and its scroll view draw no background of
     their own, so the text sits on the wash.
   - **The wash stops** come from the core (M6.6a): fixed OKLCH
-    lightness with a capped chroma in the account's hue, the top stop
-    deeper than the bottom one. Every color of the gradient lies,
-    channel by channel, between its stops, so the core checks the
-    appearance's text ink (black in light, white in dark) against the
-    stops' channel-wise minimum in light and maximum in dark. That ink
-    reaches at least 7:1 (WCAG 1.4.6). The shell verifies its actual
-    text colors on both rendered stops: body, secondary, Markdown
-    styling, links and placeholders reach 4.5:1.
+    lightness with a capped chroma in the account's hue, pale in light
+    and deep in dark, far from the mid-luminance band where neither
+    black nor white reaches 7:1, the top stop deeper than the bottom
+    one. Every color of the gradient lies, channel by channel, between
+    its stops, so the core checks the appearance's text ink (black in
+    light, white in dark) against the stops' channel-wise minimum in
+    light and maximum in dark. That ink reaches at least 7:1 (WCAG
+    1.4.6), and a hue that would miss it gets neutral stops.
+  - **Text on the wash** uses the text and label colors, which that
+    check covers. Status text that Standard draws in the secondary
+    label color, below 4.5:1 even on the plain background, uses the
+    label color here. Markdown syntax marks keep their tertiary color,
+    decorative as on the plain background. The shell's tests check body
+    and status text on both rendered stops at 4.5:1 or more.
   - Native selection and the insertion point are unchanged; the account
     color never replaces them.
   - **Fallbacks:** with Increase Contrast or Reduce Transparency on, the

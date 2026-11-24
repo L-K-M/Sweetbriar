@@ -813,8 +813,9 @@ a receipt or file-export command; Service/FFI exposure remains M1.7e/f.
     (local), 08);
   - `draft(draft_id)`, `saved_views()`, `settings()`. A reply's or
     reply-all's draft also carries the account of the occurrence it
-    answers (`reply_account_id`, M6.6a), which the compose window's
-    reply line shows (08); it is absent for new messages and forwards;
+    answers, whichever account that is, the local archive included
+    (`reply_account_id`, M6.6a). The compose window's reply line shows
+    it (08); it is absent for new messages and forwards;
   - `import_job(job_id)` → state, inventory, problems and counts (09);
   - `import_report(job_id)` → a finished job's published report, its
     path and version-1 JSON, or none while it is still being written; an
