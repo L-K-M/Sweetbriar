@@ -286,7 +286,7 @@ struct ComposeCueSettingsTests {
             try #require(
                 await cueSettingsEventually {
                     cueButton(content, identifier: "composeCueStrong")?.isEnabled == true
-                        && cueButton(content, identifier: "composeCueStandard")?.state == .on
+                        && cueButton(content, identifier: "composeCueColorWash")?.state == .on
                 })
             try #require(cueButton(content, identifier: "composeCueStrong")).performClick(nil)
             try #require(
@@ -413,19 +413,21 @@ struct ComposeCueSettingsTests {
             if let preview = view as? ComposeCuePreview { return [preview] }
             return view.subviews.flatMap(previews)
         }
-        try #require(await cueSettingsEventually { previews(host).count == 3 })
+        try #require(await cueSettingsEventually { previews(host).count == ComposeCueMode.allCases.count })
         host.layoutSubtreeIfNeeded()
         let shown = previews(host)
         #expect(Set(shown.map(\.mode)) == Set(ComposeCueMode.allCases))
         for preview in shown {
             #expect(preview.strip.content == route && preview.strip.cueMode == preview.mode)
-            #expect((preview.windowTint != nil) == (preview.mode == .strong))
+            // Color Wash draws as Strong until its wash lands (plan M6.6c).
+            #expect((preview.windowTint != nil) == [.strong, .wash].contains(preview.mode))
             #expect(!preview.acceptsFirstResponder && !preview.strip.acceptsFirstResponder)
             #expect(preview.hitTest(.zero) == nil && !preview.strip.isAccessibilityElement())
             #expect(preview.frame.width >= 300 && preview.strip.frame.height >= 32)
         }
 
         for (id, words) in [
+            ("composeCueColorWash", "behind the text"),
             ("composeCueStandard", "identity strip"), ("composeCueStrong", "upper window"),
             ("composeCueMinimal", "only the monogram"),
         ] {

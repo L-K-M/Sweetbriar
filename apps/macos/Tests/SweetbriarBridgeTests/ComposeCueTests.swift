@@ -270,7 +270,7 @@ struct ComposeCueTests {
         var core = try await CoreBridge.open(
             config: config, snapshots: sinkBatcher(clock: ManualFrameClock()))
         do {
-            #expect(try await core.composeCue() == .standard)
+            #expect(try await core.composeCue() == .wash)
             let initial = try await core.settings().first { $0.key == "appearance.compose_cue" }
             #expect(initial?.isDefault == true)
             let receipt = try await core.setComposeCue(.strong)

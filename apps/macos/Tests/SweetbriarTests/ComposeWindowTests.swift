@@ -332,7 +332,7 @@ struct ComposeWindowTests {
                     owner.windows.count == 2 && owner.windows.values.allSatisfy { $0.model.content != nil }
                 })
             let cue = try #require(f.cues.model(source: f.source))
-            try #require(await composeEventually { cue.mode == .standard })
+            try #require(await composeEventually { cue.mode == .wash })
             #expect(await cue.setMode(.strong))
             try #require(
                 await composeEventually {
@@ -373,7 +373,7 @@ struct ComposeWindowTests {
                 })
             let windows = Array(owner.windows.values)
             let cue = try #require(f.cues.model(source: f.source))
-            try #require(await composeEventually { cue.mode == .standard })
+            try #require(await composeEventually { cue.mode == .wash })
             let editor = f.makeEditor()
             let view = ComposeCueSettingsView(cue: cue, editor: editor, revision: editor.revision) {
                 f.backups.canWrite

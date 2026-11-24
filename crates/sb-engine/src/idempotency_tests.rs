@@ -137,7 +137,7 @@ fn set_setting_rejects_an_empty_or_overlong_idempotency_key() {
     }
     assert_eq!(receipt_count(&engine), 0, "no receipt may be written");
     let settings = block_on(engine.settings()).unwrap();
-    assert_eq!(settings[0].value(), "standard", "the setting is unchanged");
+    assert_eq!(settings[0].value(), "wash", "the setting is unchanged");
 }
 
 /// Every search-rebuild command rejects an empty and an overlong key
