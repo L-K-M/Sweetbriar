@@ -22,9 +22,9 @@
 //! WAL that survived.
 //!
 //! Its kill mode cuts a crash-cut child inside SQLite's own I/O
-//! instead: before the chosen operation it applies every pending write,
-//! as the OS keeps a killed process's writes, and the process kills
-//! itself.
+//! instead: before the chosen operation it applies every pending write
+//! and truncation in order, as the OS keeps a killed process's writes,
+//! and the process kills itself.
 //!
 //! The store's connection constructor opens through this VFS only for
 //! paths under an armed root, and only in test builds.
