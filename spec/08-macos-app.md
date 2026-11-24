@@ -176,7 +176,8 @@ conversation; the Bridge account sheet is no longer offered.
   Drafts (local) (`drafts()`), Out Box (`out_box()`), then saved views
   (07). Each account's own synced Drafts mailbox appears under the
   account.
-- **One section per account,** with its colored monogram and name; its
+- **One section per account,** with its colored monogram (or logo,
+  "Identity strip and account colors") and name; its
   mailboxes are below: system folders, then folders (nested), then
   labels, as 04-sync-proton maps them.
 - **Built with** an `NSOutlineView`, source-list style.
@@ -524,6 +525,16 @@ A message window is the reader for one message on its own, with its own
   and the link warnings. The title is the subject, or "No Subject".
   It marks the message read as the main reader does (Reader, "Marking
   read"), and closing it cancels a pending mark.
+- **Tint** (M6.6d; owner decision 2026-11-24): in Color Wash and Strong
+  modes (Composer, "Identity strip and account colors"), the title bar
+  and the reader's header area take the receiving account's strip
+  fill, with their labels in its strip foreground. The message body
+  keeps the reader's own surface, since mail draws its own colors.
+  Standard and Minimal leave the window neutral. The fill is opaque
+  and solved for contrast, so, as in a Strong compose window, Increase
+  Contrast adds the outline and Reduce Transparency changes nothing.
+  When the account's appearance is unavailable the window stays
+  neutral. The header's chip still names the account in text.
 - **Commands:** while a message window is key, Reply, Reply All and
   Forward act on its message. The list's commands (mark read or
   unread, star, filing) belong to the main window and are unavailable
@@ -710,7 +721,8 @@ Implements [15-account-colors](../research/15-account-colors.md):
   size.
 - **`fullScreenMinHeight`** is set to the strip's height, so it stays
   visible in full screen.
-- **Contents:** monogram, account name and the full From address, as in
+- **Contents:** monogram (or logo, below), account name and the full
+  From address, as in
   "**W** Work · Alex Example <alex@company.example>". Wrap rather than
   truncate long labels, growing the strip to fit. The whole strip is one
   accessibility element with that label. An unavailable route has an
@@ -720,7 +732,10 @@ Implements [15-account-colors](../research/15-account-colors.md):
   - foreground chosen per surface for ≥ 4.5:1 contrast;
   - separate light, dark and high-contrast variants.
   The core's light/dark bundles contain an opaque strip, marker,
-  foreground and high-contrast outline. On the final 8-bit sRGB values,
+  foreground and high-contrast outline, and since M6.6a the Color
+  Wash pair (below) and the marker's ink. That ink is black or white,
+  whichever contrasts more with the marker; one of the two always
+  reaches 4.5:1 against it. On the final 8-bit sRGB values,
   foreground reaches 4.5:1 and marker/outline 3:1 against the bundle's
   strip. The shell must also verify contrast on its actual surfaces,
   including selected rows; a strip ratio alone does not qualify the UI.
@@ -753,11 +768,53 @@ Implements [15-account-colors](../research/15-account-colors.md):
     abandonment still drains begun work without starting another write;
   - crossfades in 150 ms, or instantly with Reduce Motion;
   - posts one accessibility announcement.
+- **Color Wash mode** (the `appearance.compose_cue` default; owner
+  decision 2026-11-24, research 15 "Window tint survey") tints the whole
+  window, M6.6c:
+  - The title bar, the strip and the header rows (From, To, Cc, Bcc,
+    Subject and the reply line) sit on the opaque strip fill. Their
+    labels use the strip foreground. Fields keep their own backgrounds
+    and native editing colors. Banners, such as the cross-account
+    warning, keep the window background, so a warning never takes an
+    account's color (Cross-account check).
+  - Below the header, a vertical gradient from the wash's top stop to
+    its bottom stop fills the rest of the window, behind the editor and
+    the controls. The editor and its scroll view draw no background of
+    their own, so the text sits on the wash.
+  - **The wash stops** come from the core (M6.6a): fixed OKLCH
+    lightness with a capped chroma in the account's hue, pale in light
+    and deep in dark, far from the mid-luminance band where neither
+    black nor white reaches 7:1, the top stop deeper than the bottom
+    one. Every color of the gradient lies, channel by channel, between
+    its stops, so the core checks the appearance's text ink (black in
+    light, white in dark) against the stops' channel-wise minimum in
+    light and maximum in dark. That ink reaches at least 7:1 (WCAG
+    1.4.6), and a hue that would miss it gets neutral stops.
+  - **Text on the wash** uses the text and label colors, which that
+    check covers. Status text that Standard draws in the secondary
+    label color, below 4.5:1 even on the plain background, uses the
+    label color here. Markdown syntax marks keep their tertiary color,
+    decorative as on the plain background. The shell's tests check body
+    and status text on both rendered stops at 4.5:1 or more.
+  - Native selection and the insertion point are unchanged; the account
+    color never replaces them.
+  - **Fallbacks:** with Increase Contrast or Reduce Transparency on, the
+    window renders as Strong mode, with the editor back on the text
+    background. Dark Mode uses the dark stops. An unavailable route
+    shows the neutral window, as in Standard.
+  - Switching From changes the fill, the wash and the Send button in
+    the strip's transition (crossfade, or instant with Reduce Motion).
+- **Send as the account** (Color Wash and Strong modes, M6.6c): Send
+  reads "Send as <account name>", filled with the marker color, its
+  label in the marker's ink. A long name truncates in the middle; the
+  accessibility label is "Send as <account name>, <full address>".
+  Without a resolved identity it is the plain, disabled Send. Standard
+  and Minimal keep the plain Send.
 - **Strong mode** (Settings → Appearance) tints the upper window via
   `backgroundColor`, `titlebarAppearsTransparent` and
   `.fullSizeContentView`. The editor stays neutral. The existing
-  `appearance.compose_cue` setting is a typed Standard/Strong/Minimal
-  preference; missing or malformed answers are explicit errors, never a
+  `appearance.compose_cue` setting is a typed Color Wash/Standard/
+  Strong/Minimal preference (02); missing or malformed answers are explicit errors, never a
   guessed mode.
   Publish a user change only after its receipt, retain an explicitly stale
   last value on failure, and prevent an older read from undoing that change.
@@ -784,8 +841,8 @@ Implements [15-account-colors](../research/15-account-colors.md):
     marker is under 3:1 against that background (the account's outline
     token is solved against its strip, not this one);
   - an unavailable route and every warning look as they do in Standard.
-- **Mode previews:** Settings → Appearance shows Standard, Strong and
-  Minimal each with a preview of a compose window's top, drawn from the
+- **Mode previews:** Settings → Appearance shows Color Wash, Standard,
+  Strong and Minimal each with a preview of a compose window's top, drawn from the
   same presentation as the real strip with the selected account's
   tokens, or the neutral route when there is no account. A preview
   never takes focus. Its mode's accessibility label says in words what
@@ -800,6 +857,43 @@ Implements [15-account-colors](../research/15-account-colors.md):
   - The banner leads with a warning symbol in the label color, and the
     confirmation is a warning alert, so neither looks like any account's
     color.
+- **Reply line** (M6.6c): a reply or reply-all shows, under its header
+  in every mode, "Reply to a message received in" and the receiving
+  account's chip (`reply_account_id`, 07), whether or not the accounts
+  differ, so the original's account is always next to the sending one.
+  A mismatch still adds the cross-account banner. A reply to a
+  local-archive message shows the local archive's chip and no banner
+  (05). New messages and forwards have no reply line. The line is one
+  accessibility element: "Reply to a message received in <account>".
+- **Logo** (M6.6d): an account's logo (02 "Account logos") replaces its
+  monogram in the strip, the From menu's swatches, the sidebar, account
+  chips and the Settings previews. List rows keep the monogram, which
+  stays legible at row size.
+  - It is drawn at the monogram's size, clipped to a rounded square on
+    an opaque plate of the window background, and ringed in the marker
+    color: 1 pt, or 2 pt with Increase Contrast or Differentiate
+    Without Color. The ring keeps the account color visible around
+    any logo.
+  - It is decorative: every accessibility label keeps the account's
+    name, and the name stays visible as text.
+  - An identity with its own symbol override shows that symbol rather
+    than the account's logo.
+  - A stored logo the shell can't decode shows the monogram and a note
+    in Settings, never an empty mark.
+- **Settings → Appearance, per account** (M6.6d), next to the color:
+  - **Letter:** the account's own monogram, one or two characters
+    (grapheme clusters, surrounding whitespace trimmed); empty restores
+    the automatic letter. It is the account's `symbol` (02).
+  - **Logo:** Choose Image… opens an `NSOpenPanel` for images; files
+    over 20 MB are refused before decoding. ImageIO decodes the file,
+    which is scaled to fill 128 × 128 pixels, cropped to the center and
+    encoded as PNG. One still over 65,536 bytes is refused with
+    "Choose a simpler image." Remove clears it.
+  - **Addresses:** each of the account's identities with "Use account
+    color" (the default) or its own swatch or custom color, written
+    through `set_identity_appearance`.
+  - Every write takes the observed revision. A `Conflict` reloads the
+    values and says so, never overwriting another window's change.
 - **Window tabs** get an `NSWindowTab.accessoryView` swatch (P2, later).
 - **Accessibility settings honored:**
   - `accessibilityDisplayShouldDifferentiateWithoutColor`: stronger
@@ -814,8 +908,9 @@ list): the reader's "Received in <account>", each account's row in
 Settings → Accounts and in Activity, and the move picker's
 destinations.
 
-- It shows the account's monogram in the marker color and its label in
-  the foreground color, on the strip fill: the identity strip's tokens
+- It shows the account's monogram in the marker color, or its logo
+  (Identity strip), and its label in the foreground color, on the strip
+  fill: the identity strip's tokens
   for the current appearance. Increase Contrast and Differentiate
   Without Color add the outline.
 - The label is text, so the chip never relies on color alone. The chip

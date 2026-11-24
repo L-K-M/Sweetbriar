@@ -61,7 +61,7 @@ async fn Core::shutdown(self);   // flush writer, release the lease
 
 | Area | Commands |
 |---|---|
-| Accounts | `begin_proton_sign_in(params)`, `continue_proton_sign_in(sign_in_id, step)`, `cancel_proton_sign_in(sign_in_id)` (M2.13), `add_bridge_account(params)` (merged; the app no longer offers it), `update_account(id, params)`, `pause_account(id)`, `resume_account(id)`, `verify_proton_account(id, answer)`, `disconnect_account(id)`, `set_account_appearance(id, expected_revision, appearance)` |
+| Accounts | `begin_proton_sign_in(params)`, `continue_proton_sign_in(sign_in_id, step)`, `cancel_proton_sign_in(sign_in_id)` (M2.13), `add_bridge_account(params)` (merged; the app no longer offers it), `update_account(id, params)`, `pause_account(id)`, `resume_account(id)`, `verify_proton_account(id, answer)`, `disconnect_account(id)`, `set_account_appearance(id, expected_revision, appearance)`, `set_account_logo(id, expected_revision, png)` (`png` none clears; 02 "Account logos", M6.6b) |
 | Identities | `upsert_identity(params)`, `set_default_identity(id)`, `set_identity_appearance(id, expected_revision, appearance)` |
 | Import/export | `start_import(paths, target)` → job id, `confirm_import(job_id, variants)` (09), `cancel_job(id)`, `start_export(scope, format, destination)` |
 | Search index | `start_search_rebuild()` → job id, `resume_search_rebuild(job_id)`, `retry_search_index()`; `cancel_job(id)` also routes to rebuild jobs |
@@ -728,7 +728,10 @@ a receipt or file-export command; Service/FFI exposure remains M1.7e/f.
   - `appearance()` → every account and identity with its resolved
     color, monogram and rendering tokens at one committed
     `appearance_generation`: an account carries its stored color,
-    symbol, palette/custom assignment, collision flag and revision;
+    symbol, palette/custom assignment, collision flag and revision,
+    and its logo: the PNG, absent without a row or once cleared, and
+    the row's revision, absent only without a row (02 "Account logos",
+    M6.6b);
     an identity carries its stored overrides, the effective values —
     its overrides where set, its account's where absent — and a
     revision that is absent only when no record exists. A missing
@@ -808,7 +811,11 @@ a receipt or file-export command; Service/FFI exposure remains M1.7e/f.
   - `drafts()` → local drafts with state, route, subject, recipients,
     update time and any live attempt's state (the sidebar's Drafts
     (local), 08);
-  - `draft(draft_id)`, `saved_views()`, `settings()`;
+  - `draft(draft_id)`, `saved_views()`, `settings()`. A reply's or
+    reply-all's draft also carries the account of the occurrence it
+    answers, whichever account that is, the local archive included
+    (`reply_account_id`, M6.6a). The compose window's reply line shows
+    it (08); it is absent for new messages and forwards;
   - `import_job(job_id)` → state, inventory, problems and counts (09);
   - `import_report(job_id)` → a finished job's published report, its
     path and version-1 JSON, or none while it is still being written; an

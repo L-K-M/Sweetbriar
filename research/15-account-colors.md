@@ -378,6 +378,39 @@ IdentityAppearance  identity_id, color_override_srgb? (null = inherit), symbol_o
   - always choose the identity (off);
   - per-account domain rules (later).
 
+## Window tint survey (owner request, 2026-11-24)
+
+The owner asked for compose windows tinted in the account color, so the
+wrong account is hard to miss, and pointed to a themed native AppKit
+client as an example. How the precedents tint a window:
+
+| App | What takes the color | Text surface |
+|---|---|---|
+| The owner's example (AppKit, macOS 26) | A gradient backdrop behind the whole conversation; the sidebar under a tint at a set opacity; a tinted glass composer (`NSGlassEffectView.tintColor` at 0.22 alpha); the send button in the accent | Transparent over the gradient; text colors are audited against it, and Increase Contrast hides the wallpaper |
+| Chrome and Edge profiles | The window frame, tab strip and toolbar | The page is untouched |
+| Arc spaces | The sidebar and window chrome, with a ring of color around the page | The page is untouched |
+| Thunderbird (Account Colors add-on, then core) | The compose header: From, To, Cc and Bcc fields | The body editor is untouched |
+| Safari profiles | Only the profile button | Untouched |
+
+**Findings:**
+- The strongest recognition comes from color across the whole window,
+  not a single control (forum comparisons of Safari's button with
+  Chrome's frame).
+- Text over a tint stays safe when the tint is solved against the
+  text's ink rather than picked by eye; the example audits its theme
+  colors this way.
+- Every precedent keeps native selection and keeps an accessibility
+  path that drops decoration (Increase Contrast, Reduce Transparency).
+
+**Owner decision, 2026-11-24:** a **color wash** like the example
+becomes the default compose mode: the header in the strip fill, a soft
+gradient of the account color behind the text, and Send named for the
+account in its color. Message windows take the receiving account's
+tint; a reply names the account that received the original. Standard,
+Strong and Minimal remain. Accounts can show a logo inside the app,
+never in sent mail. Settings gain the per-identity color and the
+account's own letter (08 "Identity strip and account colors").
+
 ## v1 and later
 
 - **v1:** all P0 and P1 surfaces; Standard and Strong modes on both
@@ -446,3 +479,6 @@ All checked 2026-10-12. The raw reports carry many more.
 - **Color and contrast:**
   - [Okabe–Ito palette](https://jfly.uni-koeln.de/color/), [WCAG 2.2](https://www.w3.org/TR/WCAG22/), [WCAG use of color](https://www.w3.org/WAI/WCAG22/Understanding/use-of-color.html);
   - [RFC 9979](https://www.rfc-editor.org/rfc/rfc9979.html), [RFC 5464](https://www.rfc-editor.org/rfc/rfc5464.html). Claude recomputed the four contrast ratios from WCAG's relative-luminance formula.
+- **Window tint survey** (checked 2026-11-24):
+  - [Safari profile coloring discussion](https://forums.macrumors.com/threads/safari-extension-for-more-robust-profile-coloring.2404863), [Orion: colored tab chrome](https://orionfeedback.org/d/505-colored-tab-chrome/60), [Arc overview (TidBITS)](https://tidbits.com/2023/05/01/arc-will-change-the-way-you-work-on-the-web/);
+  - [Account Colors for Thunderbird](https://addons.mozilla.org/en-us/thunderbird/addon/account-colors/versions/), [Thunderbird bug 1482172](https://bugzilla.mozilla.org/show_bug.cgi?id=1482172), [Chrome themes: frame and toolbar](https://developer.chrome.com/docs/extensions/develop/ui/themes).
