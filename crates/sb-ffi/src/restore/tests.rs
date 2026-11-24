@@ -156,7 +156,7 @@ fn cancellation_does_not_abandon_begun_preparation_and_keeps_completed_stages() 
         );
         gate.release();
         assert!(matches!(block_on(work), Err(CoreError::Cancelled)));
-        assert_eq!(cue(&core), "standard");
+        assert_eq!(cue(&core), "wash");
         if phase == Phase::Prepared {
             let names = block_on(core.list_restore_artifacts(CancelToken::new())).unwrap();
             assert_eq!(names.len(), 1);
@@ -192,7 +192,7 @@ fn cancellation_after_taking_the_core_finishes_and_reinstalls_the_refused_core()
     );
     assert_eq!(
         cue(&core),
-        "standard",
+        "wash",
         "the returned live core must not be lost"
     );
     let names = block_on(core.list_restore_artifacts(CancelToken::new())).unwrap();
@@ -276,7 +276,7 @@ fn receipt_failure_projection_preserves_the_returned_core_and_closed_has_none() 
     ));
     assert!(slot.is_some());
     drop(slot);
-    assert_eq!(cue(&core), "standard");
+    assert_eq!(cue(&core), "wash");
     block_on(core.shutdown());
     let mut slot = block_on(core.service.write());
     let result = install_result(
