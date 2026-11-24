@@ -723,11 +723,15 @@ CREATE TABLE recipient_allowances (               -- the user's decisions; kept 
   is the first From of a complete summary (`parse_state='ok'`) of one
   of that account's logical messages, unless the address is one of the
   account's own identity addresses (its sent mail). The local archive
-  gets no rows. Rows are added in the writer transaction that completes
-  a summary, and never removed when an occurrence vanishes: having
-  written once is the history. Migration 38 fills the table from the
-  existing summaries. It is derived: a rebuild recomputes it from
-  summaries and identities and changes no other table.
+  gets no rows. The received-address sweep ("Received-address
+  population") adds them: publishing an eligible source also records
+  its first From for its account, in the same transaction. Rows are
+  never removed when an occurrence vanishes: having written once is
+  the history. Migration 38 advances `seen_address_inputs`, so the next
+  sweep fills the table from the existing summaries; until it has, the
+  check can miss history, never invent it. The table is derived: a
+  rebuild recomputes it from summaries and identities and changes no
+  other table.
 - **Allowances** are user data, not derived: they survive rebuilds,
   restore with backups and stay with disconnected accounts. Allowing an
   already allowed address writes nothing; removing one that isn't

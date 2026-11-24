@@ -92,9 +92,10 @@ and [raw/plan-proton-bridge/codex.md](../research/raw/plan-proton-bridge/codex.m
     has written to, removing the recipient, or `allow_recipient` for
     the route's account (07), a lasting decision listed in Settings and
     revocable there.
-  - The check reads the account senders when Send is pressed. An
-    attempt already accepted for sending keeps its frozen route and
-    isn't checked again.
+  - The check reads the account senders when Send is pressed, as far
+    as the received-address sweep has recorded them (02). An attempt
+    already accepted for sending keeps its frozen route and isn't
+    checked again.
 
 ## Composing
 
