@@ -30,6 +30,10 @@ so it can ask it to quit. `SWEETBRIAR_APPLICATIONS_DIR=~/Applications`
 installs there instead. `scripts/build.sh --help` lists the other
 options. Builds are signed ad hoc, not notarized.
 
+The build script puts rustup's tools (`${CARGO_HOME:-~/.cargo}/bin`)
+first on PATH so the repository's `rust-toolchain.toml` applies even
+when Homebrew Rust is installed.
+
 ## Licence
 
 Sweetbriar's own code is available under the [Unlicense](LICENSE)

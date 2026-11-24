@@ -24,7 +24,7 @@ OVERRIDES=""
 # pinned toolchain from the repository's rust-toolchain.toml: the one that
 # built the XCFramework, whose standard library is statically linked into
 # the app.
-export PATH="$HOME/.cargo/bin:$PATH"
+export PATH="${CARGO_HOME:-$HOME/.cargo}/bin:$PATH"
 RUST_SYSROOT="$(cd "$ROOT" && rustc --print sysroot)"
 # Files shipped verbatim, as SOURCE=NAME-IN-RESOURCES. Add the root LICENSE
 # when it carries someone else's copyright (forks) or a finding asks for it.

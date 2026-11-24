@@ -35,16 +35,33 @@ printf '[workspace.package]\nversion = "9.9.9"\n' > "$repo/Cargo.toml"
 #   ditto-fails, open-fails, xcodebuild-fails, app-ignores-quit,
 #   osascript-fails
 fakes="$work/bin"
+rust_bin="$work/cargo home/bin"
 log="$work/calls.log"
 state="$work/state"
-mkdir -p "$fakes"
+mkdir -p "$fakes" "$rust_bin"
 
 fake() {
   printf '#!/usr/bin/env bash\nlog=%q; state=%q\n%s\n' "$log" "$state" "$2" > "$fakes/$1"
   chmod +x "$fakes/$1"
 }
 fake uname 'if [[ -e "$state/linux" ]]; then echo Linux; else echo Darwin; fi'
-fake cargo 'echo "cargo $*" >> "$log"'
+fake cargo '
+echo "cargo $*" >> "$log"
+if [[ "$1" == xtask ]]; then
+  rustc --version || exit 1
+  cargo build -p sb-ffi || exit 1
+fi'
+mv "$fakes/cargo" "$rust_bin/cargo"
+fake rustc '
+echo "rustc $*" >> "$log"
+if [[ "$*" == "--print sysroot" ]]; then echo "$CARGO_HOME/sysroot"; fi'
+mv "$fakes/rustc" "$rust_bin/rustc"
+fake rustup ':'
+mv "$fakes/rustup" "$rust_bin/rustup"
+# Homebrew can precede rustup in the caller's PATH. Neither its Cargo
+# nor its compiler may build the archive linked into the macOS app.
+fake cargo 'echo "unmanaged cargo $*" >> "$log"; exit 1'
+fake rustc 'echo "unmanaged rustc $*" >> "$log"; exit 1'
 fake xcodegen 'echo "xcodegen $*" >> "$log"'
 fake xcodebuild '
 echo "xcodebuild $*" >> "$log"
@@ -116,7 +133,7 @@ run() {
   fi
   echo "== $name"
   status=0
-  out="$(PATH="$fakes:$PATH" SWEETBRIAR_APPLICATIONS_DIR="${applications_dir:-$apps}" \
+  out="$(PATH="$fakes:$PATH" CARGO_HOME="$work/cargo home" SWEETBRIAR_APPLICATIONS_DIR="${applications_dir:-$apps}" \
     SWEETBRIAR_QUIT_SECONDS="${quit_seconds:-2}" "$BASH" "$repo/scripts/build.sh" "$@" 2>&1)" || status=$?
   touch "$log"
 }
@@ -136,6 +153,10 @@ expect_no_staging() {
 run "builds the app through xtask, XcodeGen and xcodebuild" -- app
 expect_status 0
 expect_call "cargo xtask ffi"
+expect_call "rustc --version"
+expect_call "cargo build -p sb-ffi"
+expect_no_call "unmanaged cargo"
+expect_no_call "unmanaged rustc"
 expect_call "xcodegen generate --spec apps/macos/project.yml"
 expect_call "-scheme Sweetbriar -configuration Release -destination platform=macOS,arch=arm64"
 expect_out "app: built (Release) -> dist/Sweetbriar.app"
@@ -235,6 +256,32 @@ expect_status 0
 expect_installed old
 expect_out "-- would install: $apps/Sweetbriar.app"
 expect_no_call "xcodebuild"
+
+for tool in rustup cargo rustc; do
+  mv "$rust_bin/$tool" "$rust_bin/$tool.saved"
+  run "rejects an incomplete rustup installation ($tool)" -- app --install
+  expect_status 1
+  expect_out "rustup's $tool not found"
+  expect_installed old
+  expect_no_call "cargo"
+  expect_no_call "xcodebuild"
+  mv "$rust_bin/$tool.saved" "$rust_bin/$tool"
+done
+
+# The Xcode build phase must bundle the same toolchain's standard-library
+# notices, including when rustup lives in a custom CARGO_HOME.
+cp "$here/bundle-notices.sh" "$repo/scripts/bundle-notices.sh"
+for file in THIRD_PARTY_NOTICES.md LICENSE LICENSE-0BSD; do
+  echo "synthetic $file" > "$repo/$file"
+done
+mkdir -p "$work/cargo home/sysroot/share/doc/rust"
+echo 'synthetic Rust notices' > "$work/cargo home/sysroot/share/doc/rust/COPYRIGHT-library.html"
+if ! PATH="$fakes:$PATH" CARGO_HOME="$work/cargo home" \
+    "$BASH" "$repo/scripts/bundle-notices.sh" "$work/Resources"; then
+  fail "bundling notices from the selected Rust toolchain"
+elif [[ "$(cat "$work/Resources/Rust-Licenses.html")" != 'synthetic Rust notices' ]]; then
+  fail "bundled notices came from another Rust toolchain"
+fi
 
 if [[ $failures -ne 0 ]]; then
   echo "test-build-install: $failures failure(s)" >&2

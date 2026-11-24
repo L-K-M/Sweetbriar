@@ -4,7 +4,7 @@
 # local entry point; macOS CI builds the same app in
 # .github/workflows/macos.yml.
 #
-#   app - Sweetbriar.app from apps/macos/ (needs macOS, cargo, Xcode and
+#   app - Sweetbriar.app from apps/macos/ (needs macOS, rustup, Xcode and
 #         XcodeGen); the Rust core is built into it by `cargo xtask ffi`
 #
 # Usage:
@@ -167,7 +167,16 @@ build_app() {
   if [[ "$HOST" != "macos" ]]; then
     skip_or_fail app "macOS is required (Xcode, AppKit, the UniFFI XCFramework)"; return
   fi
-  if ! have cargo; then skip_or_fail app "cargo not found (see https://rustup.rs)"; return; fi
+  # Homebrew's Rust can precede rustup in PATH and bypass the repository
+  # pin. Its prebuilt standard library may require a newer macOS than
+  # the app supports. Select the proxies for Cargo and its subprocesses.
+  local rust_bin="${CARGO_HOME:-$HOME/.cargo}/bin" tool
+  for tool in rustup cargo rustc; do
+    if [[ ! -x "$rust_bin/$tool" ]]; then
+      skip_or_fail app "rustup's $tool not found at $rust_bin/$tool (see https://rustup.rs)"; return
+    fi
+  done
+  export PATH="$rust_bin:$PATH"
   if ! have xcodebuild; then skip_or_fail app "Xcode (xcodebuild) not found"; return; fi
   if ! have xcodegen; then
     skip_or_fail app "XcodeGen not found - install it with: brew install xcodegen"; return
