@@ -300,14 +300,15 @@ final class SearchFieldController: NSViewController {
     /// Expiring UUIDs prevent a stale menu action from editing another clause.
     private func clauseMenu(for clause: SearchClause) -> NSMenu {
         let menu = NSMenu(title: clause.label)
-        for (title, action) in [
-            ("Edit", #selector(editClauseItem(_:))),
-            ("Remove", #selector(removeClauseItem(_:))),
-            ("Move earlier", #selector(moveClauseItem(_:))),
-            ("Move later", #selector(moveClauseItem(_:))),
-        ] as [(String, Selector)] {
+        for (title, action, command) in [
+            ("Edit", #selector(editClauseItem(_:)), "search.editClause"),
+            ("Remove", #selector(removeClauseItem(_:)), "search.removeClause"),
+            ("Move earlier", #selector(moveClauseItem(_:)), "search.moveClauseEarlier"),
+            ("Move later", #selector(moveClauseItem(_:)), "search.moveClauseLater"),
+        ] as [(String, Selector, String)] {
             let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
             item.target = self
+            item.identifier = MainMenuBuilder.ItemID.command(command)
             item.representedObject = clause.id
             item.isEnabled = model.canEditClauses
             menu.addItem(item)

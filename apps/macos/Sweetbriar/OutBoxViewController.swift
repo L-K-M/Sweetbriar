@@ -433,6 +433,7 @@ final class OutBoxViewController: NSViewController, NSTableViewDataSource, NSTab
                 title: Self.label(for: action).title, action: #selector(menuAction(_:)),
                 keyEquivalent: "")
             item.target = self
+            item.identifier = MainMenuBuilder.ItemID.command("outBox.\(Self.label(for: action).name)")
             item.isEnabled = !model.isActing
             item.representedObject = action
             menu.addItem(item)
