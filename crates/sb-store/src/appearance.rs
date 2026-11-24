@@ -1,6 +1,13 @@
 //! Versioned appearance records. Setters run inside the writer transaction;
 //! new-account writers initialize appearance in that same transaction.
 
+mod logo;
+
+pub use logo::{
+    LOGO_SIDE_PIXELS, MAX_LOGO_BYTES, StoredAccountLogo, account_logo, account_logos,
+    check_logo_png, set_account_logo,
+};
+
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
 use crate::{ACCOUNT_PALETTE_V1, StoreError};

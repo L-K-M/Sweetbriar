@@ -63,7 +63,8 @@ const FOREIGN_KEYS_OFF_MIGRATIONS: &[u32] = &[28, 35];
 /// adds the Proton send columns and the runnable index (02, 05);
 /// version 35 adds the `remove_label` intent op and rebuilds `intents`
 /// for its CHECK (02); version 36 adds the Proton recipient's scheme
-/// column (02, 05 step 4).
+/// column (02, 05 step 4); version 37 adds `account_logos`, the
+/// per-account logo table (02).
 pub(crate) const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 1,
@@ -208,6 +209,10 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 36,
         run: migration_36,
+    },
+    Migration {
+        version: 37,
+        run: migration_37,
     },
 ];
 
@@ -1143,6 +1148,20 @@ fn migration_36(tx: &Transaction, _seams: &Seams) -> Result<(), StoreError> {
     tx.execute_batch(
         "ALTER TABLE send_recipients ADD COLUMN scheme TEXT
            CHECK (scheme IN ('internal','clear'));",
+    )
+    .map_err(bug)
+}
+
+/// Version 37 (spec/02 "Account logos"): the M6.6b per-account logo.
+/// Additive only; the write path checks the PNG structure and owns the
+/// row's revision (02).
+fn migration_37(tx: &Transaction, _seams: &Seams) -> Result<(), StoreError> {
+    tx.execute_batch(
+        "CREATE TABLE account_logos (                         -- migration 37 (M6.6b)
+  account_id  TEXT PRIMARY KEY REFERENCES accounts(account_id),
+  png         BLOB CHECK (png IS NULL OR length(png) BETWEEN 1 AND 65536), -- null: cleared
+  revision    INTEGER NOT NULL DEFAULT 1
+) STRICT;",
     )
     .map_err(bug)
 }
