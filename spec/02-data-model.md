@@ -135,6 +135,12 @@ CREATE TABLE identity_appearance (
   symbol_override      TEXT,
   revision             INTEGER NOT NULL DEFAULT 1
 ) STRICT;
+
+CREATE TABLE account_logos (                         -- migration 37 (M6.6b)
+  account_id  TEXT PRIMARY KEY REFERENCES accounts(account_id),
+  png         BLOB CHECK (png IS NULL OR length(png) BETWEEN 1 AND 65536), -- null: cleared
+  revision    INTEGER NOT NULL DEFAULT 1
+) STRICT;
 ```
 
 - The **local archive** is an account with `kind='local'`. Imported
@@ -204,6 +210,31 @@ and never panic. Unreadable counter metadata emits no invented generation and
 does not suppress independent list/Search announcements. Register an observer
 before reading the initial generation; registration does not invent a commit.
 Engine/Service queries, receipts and subscriptions remain M1.10c2.
+
+### Account logos (M6.6b)
+
+Owner decision 2026-11-24: an account may show a logo inside the app
+in place of its monogram (08). A logo is never sent and never leaves
+the device except in backups.
+
+- **Migration 37** adds `account_logos`; it only adds a table, so it
+  takes no snapshot.
+- **Format:** the app normalizes a chosen image to a PNG of exactly
+  128 × 128 pixels and at most 65,536 bytes. The core checks the bytes
+  without decoding pixels: the 8-byte PNG signature; a first chunk that
+  is a 13-byte `IHDR` with a matching CRC, width and height 128, and a
+  valid bit depth and color type pair; and a last chunk that is an
+  empty `IEND`. Anything else is `InvalidInput`; a stored value that
+  fails the same checks is `Corrupt`.
+- **Writes:** `set_account_logo` takes the observed revision, absent
+  when no row exists, and a PNG or none to clear. Clearing keeps the
+  row with a null `png` and a new revision. Revisions, `Conflict`,
+  no-op and replay rules are those of the appearance setters above, and
+  each changed write advances `appearance_generation` in its
+  transaction. The 4,096-byte bound above doesn't apply; the column's
+  own bound does.
+- **Retention:** a logo stays with a disconnected account, like its
+  appearance, and is part of the store's backups.
 
 ## Proton accounts
 
@@ -1396,7 +1427,7 @@ extend:
 
 | Key | Values | Default |
 |---|---|---|
-| `appearance.compose_cue` | `standard`, `strong`, `minimal` (08 Strong and Minimal modes) | `standard` |
+| `appearance.compose_cue` | `wash`, `standard`, `strong`, `minimal` (08 Color Wash, Strong and Minimal modes) | `wash` (owner decision 2026-11-24; was `standard`, and a stored choice is kept) |
 | `sending.undo_seconds` | `5`, `7`, `10`, `20`, `30`: the undo-send window a new attempt is held for (05, M4.3; Settings → Sending safety, M4.4) | `7` |
 | `notifications.previews` | `off`, `on`: whether new-mail notifications show sender and subject (10, M2.7) | `off` |
 | `backups.destination` | Empty for the default, or an absolute directory path without NUL (M1.8j1b) | Empty: the data root's `backups/` |
@@ -1813,6 +1844,8 @@ CREATE INDEX d_message_bindings_by_assembly ON d_message_bindings(acquisition_id
   rewrite it brings the `VACUUM INTO` snapshot.
 - **Migration 36** adds `send_recipients.scheme` ("Sending"); it only
   adds a column, so it takes no snapshot.
+- **Migration 37 (plan M6.6b)** adds `account_logos` ("Account
+  logos"); it only adds a table, so it takes no snapshot.
 - **Before any migration that rewrites or drops data,** the engine takes a
   `VACUUM INTO` snapshot, keeping the last two. Migration 28 is the first;
   migration 1 has none. A new store migrating from version 0 holds

@@ -1,7 +1,8 @@
 # M6 — Pilot complete
 
-**Outcome:** the classic workflows, complete account colors and
-qualified performance, durability and accessibility. The pilot's
+**Outcome:** the classic workflows, complete account colors with the
+owner's appearance requests (M6.6) and qualified performance,
+durability and accessibility. The pilot's
 definition of done ([plan/README](README.md#definition-of-done-for-the-pilot))
 is met.
 
@@ -146,6 +147,102 @@ views, a tag picker and a reader note editor.
     without Gatekeeper warnings on the owner's Mac;
   - the Keychain uses the protected store.
 - Sparkle updates wait until there's a second user.
+
+### M6.6 Account appearance requests — L, linux + macos-ci + owner
+
+Owner request, 2026-11-24 (research 15 "Window tint survey"): a color
+wash over the whole compose window as the default, Send named for the
+account, message windows in the receiving account's tint, a reply line
+naming the account that received the original, an in-app account logo,
+and Settings controls for the account's letter and per-address colors.
+Lanes: M6.6a and M6.6b are independent core steps; M6.6c stacks on
+M6.6a, and M6.6d on M6.6a and M6.6b.
+
+**M6.6a (core) — M, linux + macos-ci.** The Color Wash tokens, the
+`wash` setting and the reply's account.
+- **Spec:** 02 (Settings registry), 07 (`appearance()`, `draft()`), 08
+  (Color Wash mode, Send as the account, Reply line).
+- **Depends on:** M1.10, M4.4.
+- **Deliverables:** `derive_tokens` adds each appearance's wash stops
+  and the marker's ink, exported through `sb-service` and `sb-ffi`;
+  `appearance.compose_cue` accepts `wash` and defaults to it; `draft()`
+  carries `reply_account_id`; regenerated bindings; the app parses
+  `wash` (drawn as Strong until M6.6c), so main never meets an unknown
+  value.
+- **Acceptance:**
+  - for every palette color and a sweep of custom colors (black, white,
+    the sRGB primaries and secondaries, near-grays), the ink reaches
+    7:1 against the stops' channel-wise minimum in light and maximum in
+    dark, and the marker's ink reaches 4.5:1 against the marker;
+  - the tokens are deterministic across runs;
+  - `settings()` reports `wash` when unset and keeps a stored
+    `standard`; `set_setting` accepts `wash`;
+  - a reply's and a reply-all's draft report the answered
+    occurrence's account; a forward and a new message report none;
+  - `cargo xtask check-ffi` passes; macOS CI's app tests parse `wash`.
+
+**M6.6b (core) — M, linux.** Account logos.
+- **Spec:** 02 ("Account logos", migration 37), 07
+  (`set_account_logo`, `appearance()`).
+- **Depends on:** M1.10.
+- **Deliverables:** migration 37; the store's checked writer and
+  reader; the engine and service command with receipts; `appearance()`
+  carrying each logo and its revision; the FFI export and bindings.
+- **Acceptance:**
+  - a synthetic 128 × 128 PNG round-trips through `appearance()`;
+  - a wrong signature, a wrong or corrupted `IHDR`, other dimensions, a
+    missing `IEND`, an empty value and 65,537 bytes are each
+    `InvalidInput`, and such a stored value is `Corrupt`;
+  - a stale revision is `Conflict`; an unchanged write writes nothing;
+    clearing keeps the row with a new revision; each changed write
+    advances `appearance_generation` once; a replayed command
+    returns its receipt;
+  - a logo survives backup and restore; the schema drift test passes.
+
+**M6.6c (macOS UI) — L, macos-ci.** Color Wash in compose windows,
+Send as the account, the reply line, the Color Wash preview.
+- **Spec:** 08 (Color Wash mode, Send as the account, Reply line, Mode
+  previews).
+- **Depends on:** M6.6a.
+- **Acceptance (app-hosted tests):**
+  - Color Wash draws the strip fill behind the header and the gradient
+    behind the editor, which draws no background; injected Increase
+    Contrast and Reduce Transparency render Strong;
+  - for every palette color, in light and dark, the body, secondary,
+    Markdown styling, link and placeholder colors reach 4.5:1 on both
+    rendered stops;
+  - Send's title and accessibility label name the account in Color
+    Wash and Strong, and the plain Send stays in Standard and Minimal
+    and without a route;
+  - switching From changes the fill, the wash and Send in one
+    transition;
+  - the reply line shows for a reply, a reply-all and a local-archive
+    reply, and not for a forward or a new message;
+  - Settings shows the Color Wash preview.
+
+**M6.6d (macOS UI) — L, macos-ci + owner.** Message window tint, the
+account logo and the Settings letter, logo and address controls.
+- **Spec:** 08 (Message window "Tint"; Logo; Settings → Appearance,
+  per account; Sidebar; Account chips).
+- **Depends on:** M6.6a, M6.6b.
+- **Acceptance:**
+  - a message window takes the receiving account's fill in Color Wash
+    and Strong, and stays neutral in Standard and Minimal and with
+    the accessibility fallbacks;
+  - the letter field trims, limits to two grapheme clusters and clears
+    back to the automatic letter;
+  - the logo pipeline refuses a file over 20 MB before decoding,
+    writes a 128 × 128 PNG within the bound, refuses a synthetic noise
+    image with "Choose a simpler image." and removes a logo;
+  - the logo shows with its plate and ring in the strip, swatches,
+    sidebar, chips and previews; list rows keep the monogram;
+    accessibility labels are unchanged; an undecodable stored logo
+    shows the monogram and the note; an identity's symbol override
+    wins;
+  - a per-address color writes through `set_identity_appearance`, and
+    a `Conflict` reloads without overwriting;
+  - **owner:** the M6.2 recognition check, repeated in Color Wash with
+    the owner's accounts.
 
 ### Pilot exit
 
