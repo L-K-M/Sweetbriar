@@ -857,6 +857,25 @@ Implements [15-account-colors](../research/15-account-colors.md):
   - The banner leads with a warning symbol in the label color, and the
     confirmation is a warning alert, so neither looks like any account's
     color.
+- **Recipient check** (M6.7b; 05): a blocked recipient gets a banner
+  for each, in the cross-account banner's warning style: "<address> has
+  written to <account chip> but never to <sending account>. Sweetbriar
+  won't send to it from <sending account>."
+  - **Use <account>** switches From to that account's default identity,
+    as the cross-account banner does, when that account can send.
+  - **Allow for <sending account>…** asks first, in a warning alert:
+    "Allow sending to <address> from <sending account>? Sweetbriar
+    stops blocking this address for <sending account>; Settings →
+    Sending lists it." Allow calls `allow_recipient`; Cancel changes
+    nothing.
+  - The recipient's token shows a warning symbol, never an account
+    color. Send stays disabled while any recipient is blocked, and its
+    tooltip and accessibility help name the reason.
+  - The window rereads `recipient_fence` whenever the recipients or the
+    route change, after an allowance, and when mail arrives. A
+    `Conflict` from Send for `recipient_fence` shows the banner.
+  - **Settings → Sending** lists the allowances by account, each with
+    Remove, which calls `remove_recipient_allowance`.
 - **Reply line** (M6.6c): a reply or reply-all shows, under its header
   in every mode, "Reply to a message received in" and the receiving
   account's chip (`reply_account_id`, 07), whether or not the accounts

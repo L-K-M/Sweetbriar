@@ -411,6 +411,22 @@ Strong and Minimal remain. Accounts can show a logo inside the app,
 never in sent mail. Settings gain the per-identity color and the
 account's own letter (08 "Identity strip and account colors").
 
+## Recipient fencing (owner decision, 2026-11-24)
+
+The owner asked that Sweetbriar prevent sending to an address from
+account A when account B has received mail from it. Postbox's Domain
+Fencing is the precedent ("Why it matters"); this version learns from
+mail instead of rules:
+
+- **Blocked, with a lasting per-address allowance** for the sending
+  account, rather than a warning confirmed each time.
+- **Triggered only when A has no history** with the address: someone
+  who writes to both accounts never triggers it.
+- **Imported mail doesn't count:** the local archive can't send, and an
+  import doesn't say which sending account received a message.
+
+05 "Recipient check" specifies it; plan M6.7 implements it.
+
 ## v1 and later
 
 - **v1:** all P0 and P1 surfaces; Standard and Strong modes on both

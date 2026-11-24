@@ -694,6 +694,46 @@ A full `contacts` table (D22) is *later*. `seen_addresses` is
 technically derived but kept: rebuilding it would lose sent-to counts
 from discarded drafts. It is listed in the backup.
 
+### Account senders and recipient allowances (M6.7a)
+
+Owner decision 2026-11-24: Sweetbriar blocks sending from an account to
+an address that has written only to other accounts (05 "Recipient
+check"). Two tables carry it; migration 38 adds both. Until M6.7a lands
+their definitions stay out of the schema blocks, which the schema drift
+test executes:
+
+```text
+CREATE TABLE d_account_senders (                  -- derived: who has written to each sending account
+  account_id     TEXT NOT NULL REFERENCES accounts(account_id),
+  canonical      TEXT NOT NULL,                   -- the Contacts canonical form
+  first_seen_at  INTEGER NOT NULL,
+  PRIMARY KEY (account_id, canonical)
+) STRICT, WITHOUT ROWID;
+
+CREATE TABLE recipient_allowances (               -- the user's decisions; kept in backups
+  account_id  TEXT NOT NULL REFERENCES accounts(account_id),
+  canonical   TEXT NOT NULL,
+  email       TEXT NOT NULL,                      -- the spelling the user allowed
+  created_at  INTEGER NOT NULL,
+  PRIMARY KEY (account_id, canonical)
+) STRICT;
+```
+
+- **Account senders:** one row per account and canonical address that
+  is the first From of a complete summary (`parse_state='ok'`) of one
+  of that account's logical messages, unless the address is one of the
+  account's own identity addresses (its sent mail). The local archive
+  gets no rows. Rows are added in the writer transaction that completes
+  a summary, and never removed when an occurrence vanishes: having
+  written once is the history. Migration 38 fills the table from the
+  existing summaries. It is derived: a rebuild recomputes it from
+  summaries and identities and changes no other table.
+- **Allowances** are user data, not derived: they survive rebuilds,
+  restore with backups and stay with disconnected accounts. Allowing an
+  already allowed address writes nothing; removing one that isn't
+  allowed is `NotFound`. The local archive can't send, so an allowance
+  for it is `InvalidInput`.
+
 ### Received-address population (M1.6)
 
 - Read the summary's first From, Reply-To, To and Cc mailboxes; ignore

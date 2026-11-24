@@ -74,6 +74,27 @@ and [raw/plan-proton-bridge/codex.md](../research/raw/plan-proton-bridge/codex.m
   isn't persisted: after a relaunch, Send asks again. The window passes
   it with the send request (`send_draft`'s `acks`, 07); the core checks
   it against the revision and never stores it.
+- **Recipient check** (owner decision 2026-11-24, M6.7): a send from
+  account A is **blocked** for a recipient (To, Cc or Bcc) who has
+  written to another sending account but never to A, unless the user
+  allowed that address for A.
+  - "Has written to" an account means the address is the first From of
+    a message in that account (02 "Account senders"). The local archive
+    is never counted: imported mail doesn't say which sending account
+    received it.
+  - An address that has written to A, or to no account at all, passes.
+  - It applies to new messages, replies, reply-alls and forwards alike,
+    next to the cross-account check, which still covers replies.
+  - **Blocking is enforced by the core:** `send_draft` refuses a
+    revision with a blocked recipient with `Conflict` naming
+    `recipient_fence` and the addresses. No acknowledgement overrides
+    it. The ways through are changing From to an account the address
+    has written to, removing the recipient, or `allow_recipient` for
+    the route's account (07), a lasting decision listed in Settings and
+    revocable there.
+  - The check reads the account senders when Send is pressed. An
+    attempt already accepted for sending keeps its frozen route and
+    isn't checked again.
 
 ## Composing
 
