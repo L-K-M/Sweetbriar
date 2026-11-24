@@ -84,8 +84,8 @@ pub struct AppearanceTokens {
     pub dark: AppearanceVariant,
 }
 
-/// One appearance's tokens: the accent, its strip fill, text ink and
-/// edge, each `#rrggbb`.
+/// One appearance's tokens: the accent, its strip fill, text ink, edge,
+/// Color Wash stops and the accent's label ink, each `#rrggbb`.
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
 pub struct AppearanceVariant {
     /// The saturated accent: the list rail and monograms.
@@ -96,6 +96,12 @@ pub struct AppearanceVariant {
     pub foreground_srgb: String,
     /// The Increase-Contrast edge and separator.
     pub outline_srgb: String,
+    /// The Color Wash gradient's top stop (spec/08 "Color Wash mode").
+    pub wash_top_srgb: String,
+    /// The Color Wash gradient's bottom stop.
+    pub wash_bottom_srgb: String,
+    /// The label on a marker-filled control, such as Send as the account.
+    pub marker_ink_srgb: String,
 }
 
 /// Where an account's color came from (spec/02 `assignment`): a
@@ -362,6 +368,9 @@ impl AppearanceVariant {
             strip_srgb: variant.strip_srgb.clone(),
             foreground_srgb: variant.foreground_srgb.clone(),
             outline_srgb: variant.outline_srgb.clone(),
+            wash_top_srgb: variant.wash_top_srgb.clone(),
+            wash_bottom_srgb: variant.wash_bottom_srgb.clone(),
+            marker_ink_srgb: variant.marker_ink_srgb.clone(),
         }
     }
 }

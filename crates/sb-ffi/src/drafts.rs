@@ -192,6 +192,10 @@ pub struct Draft {
     pub draft_id: String,
     pub state: DraftState,
     pub reply_to_occurrence_id: Option<i64>,
+    /// The account that received the answered occurrence (spec/07
+    /// `reply_account_id`); `None` for new messages and forwards.
+    #[uniffi(default = None)]
+    pub reply_account_id: Option<String>,
     pub forward_of_message_id: Option<i64>,
     pub revision: Option<DraftRevision>,
     pub attempt: Option<LiveAttempt>,
@@ -204,6 +208,7 @@ impl From<sb_service::Draft> for Draft {
             draft_id: value.draft_id,
             state: value.state.into(),
             reply_to_occurrence_id: value.reply_to_occurrence_id,
+            reply_account_id: value.reply_account_id,
             forward_of_message_id: value.forward_of_message_id,
             revision: value.revision.map(Into::into),
             attempt: value.attempt.map(Into::into),

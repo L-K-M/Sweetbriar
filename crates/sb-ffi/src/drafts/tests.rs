@@ -188,6 +188,7 @@ fn draft_records_map_every_field_and_round_trip_the_codec() {
         draft_id: "draft".into(),
         state: sb_service::DraftState::Queued,
         reply_to_occurrence_id: Some(42),
+        reply_account_id: Some("acct-proton".to_owned()),
         forward_of_message_id: Some(43),
         revision: Some(sb_service::DraftRevision {
             revision_id: "revision".into(),
@@ -222,6 +223,7 @@ fn draft_records_map_every_field_and_round_trip_the_codec() {
         draft_id: "draft".into(),
         state: DraftState::Queued,
         reply_to_occurrence_id: Some(42),
+        reply_account_id: Some("acct-proton".to_owned()),
         forward_of_message_id: Some(43),
         revision: Some(DraftRevision {
             revision_id: "revision".into(),
@@ -298,6 +300,7 @@ fn draft_records_map_every_field_and_round_trip_the_codec() {
         draft_id: "empty".into(),
         state: DraftState::Editing,
         reply_to_occurrence_id: None,
+        reply_account_id: None,
         forward_of_message_id: None,
         revision: None,
         attempt: None,

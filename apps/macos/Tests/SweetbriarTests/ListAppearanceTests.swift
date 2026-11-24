@@ -12,8 +12,8 @@ struct ListAppearanceTests {
     private let account = AccountAppearance(
         accountId: "one", colorSrgb: "#ff0000",
         tokens: AppearanceTokens(
-            light: AppearanceVariant(markerSrgb: "#ff0000", stripSrgb: "#ffffff", foregroundSrgb: "#000000", outlineSrgb: "#000000"),
-            dark: AppearanceVariant(markerSrgb: "#00ff00", stripSrgb: "#000000", foregroundSrgb: "#ffffff", outlineSrgb: "#ffffff")
+            light: AppearanceVariant(markerSrgb: "#ff0000", stripSrgb: "#ffffff", foregroundSrgb: "#000000", outlineSrgb: "#000000", washTopSrgb: "#eef2f6", washBottomSrgb: "#fafbfc", markerInkSrgb: "#ffffff"),
+            dark: AppearanceVariant(markerSrgb: "#00ff00", stripSrgb: "#000000", foregroundSrgb: "#ffffff", outlineSrgb: "#ffffff", washTopSrgb: "#eef2f6", washBottomSrgb: "#fafbfc", markerInkSrgb: "#ffffff")
         ), symbol: nil, monogram: "W", collides: true, assignment: .custom, revision: 0
     )
 

@@ -256,12 +256,18 @@ fn records_round_trip_through_the_uniffi_codec() {
             strip_srgb: "#b7ddfd".to_owned(),
             foreground_srgb: "#000000".to_owned(),
             outline_srgb: "#005b90".to_owned(),
+            wash_top_srgb: "#daeeff".to_owned(),
+            wash_bottom_srgb: "#f6fbff".to_owned(),
+            marker_ink_srgb: "#ffffff".to_owned(),
         },
         dark: AppearanceVariant {
             marker_srgb: "#1a7ebe".to_owned(),
             strip_srgb: "#04314e".to_owned(),
             foreground_srgb: "#ffffff".to_owned(),
             outline_srgb: "#98d1ff".to_owned(),
+            wash_top_srgb: "#142b3d".to_owned(),
+            wash_bottom_srgb: "#151b21".to_owned(),
+            marker_ink_srgb: "#000000".to_owned(),
         },
     };
     let snapshot = Appearance {

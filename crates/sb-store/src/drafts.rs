@@ -220,6 +220,10 @@ pub struct StoredDraft {
     pub draft_id: String,
     pub state: DraftState,
     pub reply_to_occurrence_id: Option<i64>,
+    /// The answered occurrence's account (spec/07 `reply_account_id`):
+    /// the account that received the original, which the compose
+    /// window's reply line names. `None` without a reply.
+    pub reply_account_id: Option<String>,
     pub forward_of_message_id: Option<i64>,
     pub revision: Option<StoredRevision>,
     pub attempt: Option<LiveAttempt>,
@@ -510,31 +514,45 @@ pub fn draft(tx: &Transaction, draft_id: &str) -> Result<Option<StoredDraft>, St
     let err = |e| classify(e, "read a draft");
     let row = tx
         .query_row(
-            "SELECT state, reply_to_occurrence_id, forward_of_message_id,
-                    current_revision_id, created_at, updated_at
-             FROM drafts WHERE draft_id = ?1",
+            "SELECT d.state, d.reply_to_occurrence_id, d.forward_of_message_id,
+                    d.current_revision_id, d.created_at, d.updated_at, o.account_id
+             FROM drafts d
+             LEFT JOIN occurrences o ON o.occurrence_id = d.reply_to_occurrence_id
+             WHERE d.draft_id = ?1",
             params![draft_id],
             |row| {
                 Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, Option<i64>>(1)?,
-                    row.get::<_, Option<i64>>(2)?,
+                    (
+                        row.get::<_, String>(0)?,
+                        row.get::<_, Option<i64>>(1)?,
+                        row.get::<_, Option<i64>>(2)?,
+                    ),
                     row.get::<_, Option<String>>(3)?,
                     row.get::<_, i64>(4)?,
                     row.get::<_, i64>(5)?,
+                    row.get::<_, Option<String>>(6)?,
                 ))
             },
         )
         .optional()
         .map_err(err)?;
-    let Some((state, reply_to, forward_of, current, created_at, updated_at)) = row else {
+    let Some(((state, reply_to, forward_of), current, created_at, updated_at, reply_account)) = row
+    else {
         return Ok(None);
     };
+    // The foreign key keeps a reply's occurrence: an answered row that
+    // reads back without one is a broken store, not an absent account.
+    if reply_to.is_some() && reply_account.is_none() {
+        return Err(StoreError::Corrupt {
+            detail: format!("draft {draft_id} answers an occurrence that does not exist"),
+        });
+    }
     let attempt = live_attempt(tx, draft_id, current.as_deref())?;
     Ok(Some(StoredDraft {
         draft_id: draft_id.to_owned(),
         state: DraftState::from_stored(&state)?,
         reply_to_occurrence_id: reply_to,
+        reply_account_id: reply_account,
         forward_of_message_id: forward_of,
         revision: match current {
             Some(revision_id) => Some(revision(tx, draft_id, &revision_id)?),

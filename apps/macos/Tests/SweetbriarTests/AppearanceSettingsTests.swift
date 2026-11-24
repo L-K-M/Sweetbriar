@@ -217,7 +217,13 @@ struct AppearanceSettingsTests {
 
 private let settingsAccount = AccountAppearance(
     accountId: "one", colorSrgb: "#000000",
-    tokens: .init(light: .init(markerSrgb: "#000000", stripSrgb: "#ffffff", foregroundSrgb: "#000000", outlineSrgb: "#000000"), dark: .init(markerSrgb: "#ffffff", stripSrgb: "#000000", foregroundSrgb: "#ffffff", outlineSrgb: "#ffffff")),
+    tokens: .init(
+        light: .init(
+            markerSrgb: "#000000", stripSrgb: "#ffffff", foregroundSrgb: "#000000", outlineSrgb: "#000000",
+            washTopSrgb: "#f4f4f4", washBottomSrgb: "#fcfcfc", markerInkSrgb: "#ffffff"),
+        dark: .init(
+            markerSrgb: "#ffffff", stripSrgb: "#000000", foregroundSrgb: "#ffffff", outlineSrgb: "#ffffff",
+            washTopSrgb: "#202020", washBottomSrgb: "#181818", markerInkSrgb: "#000000")),
     symbol: "S", monogram: "S", collides: false, assignment: .paletteV1(slot: 0), revision: 3
 )
 

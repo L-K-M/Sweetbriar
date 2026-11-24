@@ -133,6 +133,59 @@ fn check_contract(color: SrgbColor, tokens: &AppearanceTokens) {
         luminance(light.strip()) > luminance(dark.strip()),
         "{color}: strip variants not ordered"
     );
+
+    // ≥ 7:1 body ink on every color of the Color Wash gradient (SC
+    // 1.4.6): a per-channel gradient never leaves the box its stops
+    // span, so its darkest color in light is no darker than the
+    // channel-wise minimum, and its lightest in dark no lighter than
+    // the maximum.
+    let black = SrgbColor::new(0x00, 0x00, 0x00);
+    let white = SrgbColor::new(0xff, 0xff, 0xff);
+    let light_floor = channels(light.wash_top(), light.wash_bottom(), u8::min);
+    let dark_ceiling = channels(dark.wash_top(), dark.wash_bottom(), u8::max);
+    assert!(
+        contrast(black, light_floor) >= 7.0,
+        "{color}: light wash {}",
+        contrast(black, light_floor)
+    );
+    assert!(
+        contrast(white, dark_ceiling) >= 7.0,
+        "{color}: dark wash {}",
+        contrast(white, dark_ceiling)
+    );
+
+    // The top stop is the deeper one, below the strip's header.
+    assert!(
+        luminance(light.wash_top()) < luminance(light.wash_bottom()),
+        "{color}: light wash not ordered"
+    );
+    assert!(
+        luminance(dark.wash_top()) > luminance(dark.wash_bottom()),
+        "{color}: dark wash not ordered"
+    );
+
+    // ≥ 4.5:1 labels on marker-filled controls, in one of the two inks.
+    for variant in [light, dark] {
+        assert!(
+            contrast(variant.marker_ink(), variant.marker()) >= 4.5,
+            "{color}: marker ink {}",
+            contrast(variant.marker_ink(), variant.marker())
+        );
+        assert!(
+            variant.marker_ink() == black || variant.marker_ink() == white,
+            "{color}: marker ink {}",
+            variant.marker_ink()
+        );
+    }
+}
+
+/// The color whose channels are `pick` of the two colors' channels.
+fn channels(a: SrgbColor, b: SrgbColor, pick: fn(u8, u8) -> u8) -> SrgbColor {
+    SrgbColor::new(
+        pick(a.red(), b.red()),
+        pick(a.green(), b.green()),
+        pick(a.blue(), b.blue()),
+    )
 }
 
 #[test]
@@ -280,6 +333,26 @@ fn markers_stay_saturated_and_strips_stay_restrained() {
                 strip_chroma <= stored_chroma + 0.001,
                 "{}: strip chroma {strip_chroma:.3} exceeds stored {stored_chroma:.3}",
                 palette.color()
+            );
+        }
+    }
+}
+
+#[test]
+fn palette_washes_keep_the_account_hue() {
+    // Every preset clears the bar with its own tint, so none falls back
+    // to the neutral stops, and the wash carries the preset's hue.
+    for palette in PaletteColor::ALL {
+        let color = palette.color();
+        let (_, _, stored_hue) = oklch(color);
+        let tokens = color.derive_tokens();
+        for stop in [tokens.light().wash_top(), tokens.dark().wash_top()] {
+            let (_, chroma, hue) = oklch(stop);
+            assert!(chroma > 0.01, "{color}: {stop} is neutral");
+            let drift = (hue - stored_hue).abs();
+            assert!(
+                drift.min(360.0 - drift) < 12.0,
+                "{color}: {stop} hue {hue} vs {stored_hue}"
             );
         }
     }

@@ -2,6 +2,8 @@ import Observation
 
 /// The registered appearance.compose_cue setting, not an account color.
 public enum ComposeCueMode: String, Sendable, CaseIterable {
+    /// Color Wash, the default since 2026-11-24 (spec/08).
+    case wash
     case standard, strong, minimal
 
     static let settingKey = "appearance.compose_cue"
@@ -12,7 +14,8 @@ public enum ComposeCueMode: String, Sendable, CaseIterable {
         }
         // Setting.value is the service's scalar, not SQLite's JSON encoding.
         guard let mode = Self(rawValue: value.value) else {
-            throw CoreFailure.unavailable(reason: "The compose cue preference is not Standard, Strong or Minimal.")
+            throw CoreFailure.unavailable(
+                reason: "The compose cue preference is not Color Wash, Standard, Strong or Minimal.")
         }
         return mode
     }

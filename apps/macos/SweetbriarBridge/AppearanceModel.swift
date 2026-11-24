@@ -161,8 +161,8 @@ public struct AppearanceTokens: Sendable, Equatable {
     }
 }
 
-/// One appearance's tokens: accent, strip fill, text ink and edge,
-/// each `#rrggbb`.
+/// One appearance's tokens: accent, strip fill, text ink, edge, the
+/// Color Wash stops and the accent's label ink, each `#rrggbb`.
 public struct AppearanceVariant: Sendable, Equatable {
     /// The saturated accent: the list rail and monograms.
     public var markerSrgb: String
@@ -172,24 +172,38 @@ public struct AppearanceVariant: Sendable, Equatable {
     public var foregroundSrgb: String
     /// The Increase-Contrast edge and separator.
     public var outlineSrgb: String
+    /// The Color Wash gradient's top stop (spec/08 "Color Wash mode").
+    public var washTopSrgb: String
+    /// The Color Wash gradient's bottom stop.
+    public var washBottomSrgb: String
+    /// The label on a marker-filled control, such as Send as the account.
+    public var markerInkSrgb: String
 
     public init(
         markerSrgb: String,
         stripSrgb: String,
         foregroundSrgb: String,
-        outlineSrgb: String
+        outlineSrgb: String,
+        washTopSrgb: String,
+        washBottomSrgb: String,
+        markerInkSrgb: String
     ) {
         self.markerSrgb = markerSrgb
         self.stripSrgb = stripSrgb
         self.foregroundSrgb = foregroundSrgb
         self.outlineSrgb = outlineSrgb
+        self.washTopSrgb = washTopSrgb
+        self.washBottomSrgb = washBottomSrgb
+        self.markerInkSrgb = markerInkSrgb
     }
 
     /// Map the generated record field by field.
     init(_ value: SweetbriarCore.AppearanceVariant) {
         self.init(
             markerSrgb: value.markerSrgb, stripSrgb: value.stripSrgb,
-            foregroundSrgb: value.foregroundSrgb, outlineSrgb: value.outlineSrgb
+            foregroundSrgb: value.foregroundSrgb, outlineSrgb: value.outlineSrgb,
+            washTopSrgb: value.washTopSrgb, washBottomSrgb: value.washBottomSrgb,
+            markerInkSrgb: value.markerInkSrgb
         )
     }
 }

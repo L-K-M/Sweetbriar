@@ -5,16 +5,20 @@ import SwiftUI
 extension ComposeCueMode {
     fileprivate var title: String {
         switch self {
+        case .wash: "Color Wash"
         case .standard: "Standard"
         case .strong: "Strong"
         case .minimal: "Minimal"
         }
     }
 
-    fileprivate var radioIdentifier: String { "composeCue\(title)" }
+    fileprivate var radioIdentifier: String {
+        "composeCue\(title.replacingOccurrences(of: " ", with: ""))"
+    }
 
     fileprivate var spokenLabel: String {
         switch self {
+        case .wash: "Color Wash, colors the header and the window behind the text"
         case .standard: "Standard, colors the identity strip"
         case .strong: "Strong, colors the identity strip and the upper window"
         case .minimal: "Minimal, colors only the monogram"

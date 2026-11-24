@@ -124,8 +124,10 @@ pub(crate) const UNDO_SECONDS_KEY: &str = "sending.undo_seconds";
 const REGISTRY: &[RegisteredSetting] = &[
     RegisteredSetting {
         key: "appearance.compose_cue",
-        values: Values::Choices(&["standard", "strong", "minimal"]),
-        default: "standard",
+        values: Values::Choices(&["wash", "standard", "strong", "minimal"]),
+        // Color Wash since the owner's 2026-11-24 decision (spec/02);
+        // a stored choice, `standard` included, is kept.
+        default: "wash",
     },
     RegisteredSetting {
         key: UNDO_SECONDS_KEY,

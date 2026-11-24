@@ -101,7 +101,7 @@ fn destination_settings_are_escaped_display_lines_not_terminal_controls() {
     assert_eq!(
         stdout(&out),
         format!(
-            "appearance.compose_cue=standard\nsending.undo_seconds=7\nnotifications.previews=off\n{expected}reader.mark_read=immediately\nreader.reading_view_senders=\nfiling.recent_mailboxes=\nidentity.default=\n"
+            "appearance.compose_cue=wash\nsending.undo_seconds=7\nnotifications.previews=off\n{expected}reader.mark_read=immediately\nreader.reading_view_senders=\nfiling.recent_mailboxes=\nidentity.default=\n"
         )
     );
 }

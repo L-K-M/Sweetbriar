@@ -222,8 +222,8 @@ private struct SidebarAccounts: SidebarSource {
 let sampleAccount = AccountAppearance(
     accountId: "account-1", colorSrgb: "#0072b2",
     tokens: AppearanceTokens(
-        light: AppearanceVariant(markerSrgb: "#0072b2", stripSrgb: "#ffffff", foregroundSrgb: "#000000", outlineSrgb: "#000000"),
-        dark: AppearanceVariant(markerSrgb: "#56b4e9", stripSrgb: "#000000", foregroundSrgb: "#ffffff", outlineSrgb: "#ffffff")
+        light: AppearanceVariant(markerSrgb: "#0072b2", stripSrgb: "#ffffff", foregroundSrgb: "#000000", outlineSrgb: "#000000", washTopSrgb: "#eef2f6", washBottomSrgb: "#fafbfc", markerInkSrgb: "#ffffff"),
+        dark: AppearanceVariant(markerSrgb: "#56b4e9", stripSrgb: "#000000", foregroundSrgb: "#ffffff", outlineSrgb: "#ffffff", washTopSrgb: "#eef2f6", washBottomSrgb: "#fafbfc", markerInkSrgb: "#ffffff")
     ), symbol: nil, monogram: "W", collides: true, assignment: .custom, revision: 0
 )
 
