@@ -291,7 +291,10 @@ private struct AccountAppearanceSettings: View {
                     catalog.identities.map { ($0.identityId, $0.email) }, uniquingKeysWith: { first, _ in first })
             }
         }
-        .task(id: "\(selected ?? "")#\(current?.revision ?? 0)") { letterText = current?.symbol ?? "" }
+        // Reseed the field when the account or its stored letter changes,
+        // not on every revision: another write (a color, an address) must
+        // not clear a letter still being typed.
+        .task(id: "\(selected ?? "")#\(current?.symbol ?? "")") { letterText = current?.symbol ?? "" }
         .sheet(isPresented: $customOpen) {
             VStack(alignment: .leading, spacing: 16) {
                 Text(editingIdentity == nil ? "Custom account color" : "Custom address color").font(.headline)

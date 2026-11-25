@@ -139,8 +139,10 @@ private func withMessageWindow(
         await model.reload()
         cue = model
     }
+    let source = try TintMessageSource()
+    defer { try? FileManager.default.removeItem(at: source.directory) }
     let reader = ReaderViewController(
-        model: ReaderModel(source: try TintMessageSource(), preferred: .plainText), appearance: appearance)
+        model: ReaderModel(source: source, preferred: .plainText), appearance: appearance)
     let controller = MessageWindowController(
         occurrenceId: 11, reader: reader, markRead: nil, target: nil, appearance: appearance, cue: cue)
     controller.increaseContrast = { false }
