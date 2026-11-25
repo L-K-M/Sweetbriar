@@ -16,11 +16,23 @@ private final class Running {
 @Suite("command identifiers")
 @MainActor
 struct CommandIdentifierTests {
-    /// AppKit's own commands, which keep AppKit's names.
+    /// AppKit's own commands, which keep AppKit's names (spec/08 lists
+    /// them); AppKit gives some of them its own identifiers.
     private static let appKitActions: Set<String> = [
         "orderFrontStandardAboutPanel:", "hide:", "hideOtherApplications:",
         "unhideAllApplications:", "terminate:", "undo:", "redo:", "cut:", "copy:", "paste:",
-        "selectAll:", "performMiniaturize:", "performClose:",
+        "delete:", "selectAll:", "performMiniaturize:", "performClose:",
+        // Find, Spelling and Grammar, Substitutions, Transformations, Speech.
+        "performFindPanelAction:", "centerSelectionInVisibleArea:", "showGuessPanel:",
+        "checkSpelling:", "toggleContinuousSpellChecking:", "toggleGrammarChecking:",
+        "toggleAutomaticSpellingCorrection:", "orderFrontSubstitutionsPanel:",
+        "toggleSmartInsertDelete:", "toggleAutomaticQuoteSubstitution:",
+        "toggleAutomaticDashSubstitution:", "toggleAutomaticLinkDetection:",
+        "toggleAutomaticDataDetection:", "toggleAutomaticTextReplacement:",
+        "uppercaseWord:", "lowercaseWord:", "capitalizeWord:", "startSpeaking:", "stopSpeaking:",
+        // The sidebar and toolbar items and Enter Full Screen.
+        "toggleSidebar:", "toggleToolbarShown:", "runToolbarCustomizationPalette:",
+        "toggleFullScreen:",
     ]
 
     private static func items(_ menu: NSMenu) -> [NSMenuItem] {
