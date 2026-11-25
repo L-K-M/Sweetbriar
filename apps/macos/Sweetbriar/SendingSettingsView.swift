@@ -6,6 +6,8 @@ import SwiftUI
 /// cross-account or always-choose-identity key to register here (spec/02).
 struct SendingSettingsView: View {
     let model: SendSafetySettingsModel
+    /// The recipient check's allowances (spec/08); nil hides the list.
+    var allowances: RecipientAllowancesModel? = nil
 
     var body: some View {
         ScrollView {
@@ -43,13 +45,47 @@ struct SendingSettingsView: View {
                         }
                     }
                 }
+                if let allowances { allowanceList(allowances) }
                 Spacer(minLength: 0)
             }
             .padding(24)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
-        .task { await model.load() }
+        .task {
+            await model.load()
+            await allowances?.load()
+        }
         .accessibilityIdentifier("sendingSettings")
+    }
+
+    /// Addresses allowed despite the recipient check, by account, each
+    /// with Remove (spec/08 "Recipient check").
+    @ViewBuilder
+    private func allowanceList(_ allowances: RecipientAllowancesModel) -> some View {
+        Divider()
+        Text("Allowed recipients").font(.headline)
+        Text("Sweetbriar blocks sending to an address that has written only to your other accounts. These addresses are allowed anyway.")
+            .font(.footnote)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+        if allowances.groups.isEmpty, !allowances.isLoading {
+            Text("No allowed recipients.").foregroundStyle(.secondary)
+        }
+        ForEach(allowances.groups, id: \.accountId) { group in
+            Text(group.accountName).font(.subheadline.bold())
+            ForEach(group.allowances, id: \.address) { allowance in
+                HStack {
+                    Text(allowance.address)
+                    Spacer()
+                    Button("Remove") { Task { await allowances.remove(allowance) } }
+                        .disabled(allowances.removing != nil)
+                        .accessibilityLabel("Remove \(allowance.address) for \(group.accountName)")
+                }
+            }
+        }
+        if let error = allowances.error {
+            Text(error).foregroundStyle(.red).accessibilityIdentifier("allowancesError")
+        }
     }
 
     /// The registered choices as the help text lists them: "5, 7, 10, 20 or 30 seconds".

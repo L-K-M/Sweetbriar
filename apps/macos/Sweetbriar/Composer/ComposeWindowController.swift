@@ -25,7 +25,7 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
         labels: ["Plain", "Markdown"], trackingMode: .selectOne,
         target: nil, action: nil)
     private let saveButton = NSButton(title: "Save", target: nil, action: nil)
-    private let sendButton = NSButton(title: "Send", target: nil, action: nil)
+    let sendButton = NSButton(title: "Send", target: nil, action: nil)
     private let undoSendButton = NSButton(title: "Undo Send", target: nil, action: nil)
     private let sendStatusLabel = NSTextField(wrappingLabelWithString: "")
     private lazy var sendBar: NSStackView = {
@@ -79,6 +79,20 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
     private var washBelowReplyLine: NSLayoutConstraint?
     /// What Send shows now; nil is the plain Send.
     private(set) var sendAsAccount: ComposeCuePresentation.SendAsAccount?
+    /// The recipient check (spec/08 "Recipient check"): its source, the
+    /// current revision's answer, a banner per blocked recipient and the
+    /// not-ready note.
+    private let fenceSource: (any RecipientFenceSource)?
+    let recipientFence = RecipientFenceModel()
+    let recipientFenceBanners = NSStackView()
+    let recipientCheckNote = NSTextField(wrappingLabelWithString: RecipientFencePresentation.notReady)
+    /// How often the window rereads the check while it has recipients:
+    /// sender history and readiness change without a compose event.
+    var fenceRereadInterval: Duration = .seconds(30)
+    private var fenceReread: Task<Void, Never>?
+    private var mailArrivalObserver: (any NSObjectProtocol)?
+    /// Allow's confirmation, while it shows.
+    private(set) var allowAlert: NSAlert?
     /// Increase Contrast and Reduce Transparency, read on each render;
     /// tests replace it (spec/08 "Fallbacks").
     var displayOptions: () -> (increaseContrast: Bool, reduceTransparency: Bool) = {
@@ -225,6 +239,7 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
         pasteboard: NSPasteboard = .general,
         externalEditor: ExternalEditor? = nil,
         replyAccountSource: (any ReplyAccountSource)? = nil,
+        fenceSource: (any RecipientFenceSource)? = nil,
         announceRoute: @escaping @MainActor (String) -> Void = { message in
             NSAccessibility.post(
                 element: NSApp!, notification: .announcementRequested,
@@ -242,6 +257,7 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
         self.pasteboard = pasteboard
         self.externalEditor = externalEditor
         self.replyAccountSource = replyAccountSource
+        self.fenceSource = fenceSource
         catalogSource = source
         self.preferredAccountId = preferredAccountId
         let policy = ComposeSavePolicy(source: source, canWrite: canWrite)
@@ -283,6 +299,7 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
         render()
         observeModel()
         observeBanner()
+        observeFence()
         observeSend()
         observeAppearance()
         observeCue()
@@ -291,6 +308,7 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
             render()
             if !isClosing, !finished { identityControls.startDiscovery() }
         }
+        startFenceRereads()
     }
 
     required init?(coder: NSCoder) { fatalError("ComposeWindowController is built in code") }
@@ -407,10 +425,19 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
             width: scroll.contentSize.width, height: CGFloat.greatestFiniteMagnitude)
         textView.textContainer?.widthTracksTextView = true
         let stack = NSStackView(
-            views: [crossAccountBannerView, externalEditBanner, identity as NSView] + recipientRows + [
+            views: [crossAccountBannerView, recipientFenceBanners, externalEditBanner, identity as NSView]
+                + recipientRows + [
                 subjectField, replyLine, attachmentControls.list, controls, sendBar, scroll, statusLabel,
-                cueStatusLabel,
+                cueStatusLabel, recipientCheckNote,
             ])
+        recipientFenceBanners.orientation = .vertical
+        recipientFenceBanners.alignment = .leading
+        recipientFenceBanners.spacing = 6
+        recipientFenceBanners.isHidden = true
+        recipientFenceBanners.setAccessibilityIdentifier("recipientFenceBanners")
+        recipientCheckNote.textColor = .labelColor
+        recipientCheckNote.isHidden = true
+        recipientCheckNote.setAccessibilityIdentifier("recipientCheckNote")
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 10
@@ -441,6 +468,7 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
                 toItem: contentGuide, attribute: .top, multiplier: 1, constant: 16),
             stack.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -12),
             crossAccountBannerView.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            recipientFenceBanners.widthAnchor.constraint(equalTo: stack.widthAnchor),
             externalEditBanner.widthAnchor.constraint(equalTo: stack.widthAnchor),
             identity.widthAnchor.constraint(equalTo: stack.widthAnchor),
             subjectField.widthAnchor.constraint(equalTo: stack.widthAnchor),
@@ -768,6 +796,11 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
             model.stop()
             finished = true
             replyAccountTask?.cancel()
+            fenceReread?.cancel()
+            if let mailArrivalObserver { NotificationCenter.default.removeObserver(mailArrivalObserver) }
+            if let allowAlert, let sheet = window?.attachedSheet, sheet === allowAlert.window {
+                window?.endSheet(sheet, returnCode: .alertSecondButtonReturn)
+            }
             if let displayOptionsObserver {
                 NSWorkspace.shared.notificationCenter.removeObserver(displayOptionsObserver)
             }
@@ -816,6 +849,7 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
                 // landing meanwhile still triggers its own refresh.
                 observeModel()
                 await refreshCrossAccountNotice()
+                await refreshRecipientFence(sameRevision: false)
             }
         }
     }
@@ -859,6 +893,138 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
             routeAccountId: notice.routeAccountId,
             routeAccountName: accountDisplayName(notice.routeAccountId),
             identity: identityControls.model.selectedIdentity)
+    }
+
+    // MARK: Recipient check (spec/08 "Recipient check")
+
+    private func observeFence() {
+        withObservationTracking {
+            _ = recipientFence.fence
+        } onChange: { [weak self] in
+            Task { @MainActor [weak self] in
+                guard let self, !finished else { return }
+                render()
+                observeFence()
+            }
+        }
+    }
+
+    /// Reread the check for the current saved revision. Without
+    /// `sameRevision` only a revision not yet asked about is queried.
+    func refreshRecipientFence(sameRevision: Bool) async {
+        guard !finished, !isClosing, let fenceSource else { return }
+        guard let revision = model.baseRevisionId else {
+            recipientFence.clear()
+            return
+        }
+        guard sameRevision || recipientFence.revisionId != revision else { return }
+        await recipientFence.refresh(source: fenceSource, draftId: model.draftId, revisionId: revision)
+    }
+
+    /// Reread every interval while the draft has recipients, and when
+    /// mail arrives (spec/08).
+    private func startFenceRereads() {
+        guard fenceSource != nil else { return }
+        mailArrivalObserver = NotificationCenter.default.addObserver(
+            forName: .sweetbriarMailArrived, object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in await self?.refreshRecipientFence(sameRevision: true) }
+        }
+        fenceReread = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let interval = self?.fenceRereadInterval else { return }
+                try? await Task.sleep(for: interval)
+                guard let self, !Task.isCancelled, !finished else { return }
+                let content = model.content
+                if content.map({ !$0.to.isEmpty || !$0.cc.isEmpty || !$0.bcc.isEmpty }) == true {
+                    await refreshRecipientFence(sameRevision: true)
+                }
+            }
+        }
+    }
+
+    /// The sending account's name, for the banner and Send's help.
+    private func fenceSendingName() -> String {
+        identityControls.model.selectedIdentity?.accountName ?? "this account"
+    }
+
+    /// A banner per blocked recipient, the tokens' warning symbol and
+    /// the not-ready note.
+    private func renderRecipientFence() {
+        recipientCheckNote.isHidden = !recipientFence.isWaitingForHistory
+        let sending = fenceSendingName()
+        // The words name accounts from the identity catalog: until it
+        // loads they would show raw ids, and Send is disabled without a
+        // From anyway.
+        let catalog = identityControls.model.catalog
+        let identities = catalog?.identities ?? []
+        let contents = (catalog == nil ? [] : recipientFence.blocked).map { recipient in
+            RecipientFenceBanner.Content(
+                address: recipient.address,
+                text: RecipientFencePresentation.banner(
+                    address: recipient.address,
+                    accountNames: recipient.accountIds.map(accountDisplayName), sendingName: sending),
+                accounts: recipient.accountIds.map { ($0, accountDisplayName($0)) },
+                uses: RecipientFencePresentation.useIdentities(for: recipient, in: identities).map {
+                    .init(identityId: $0.identityId, accountName: $0.accountName)
+                },
+                sendingName: sending)
+        }
+        let shown = recipientFenceBanners.arrangedSubviews.compactMap { ($0 as? RecipientFenceBanner)?.content }
+        if shown != contents {
+            for view in recipientFenceBanners.arrangedSubviews { view.removeFromSuperview() }
+            for content in contents {
+                let banner = RecipientFenceBanner(
+                    content, appearance: appearance?.appearance,
+                    onUse: { [weak self] identityId in self?.useFenceAccount(identityId) },
+                    onAllow: { [weak self] address in self?.askToAllow(address) })
+                recipientFenceBanners.addArrangedSubview(banner)
+                banner.widthAnchor.constraint(equalTo: recipientFenceBanners.widthAnchor).isActive = true
+            }
+        }
+        recipientFenceBanners.isHidden = contents.isEmpty
+        let enabled = sendModel?.isBusy != true && !finished && !isClosing
+        for case let banner as RecipientFenceBanner in recipientFenceBanners.arrangedSubviews {
+            banner.setControlsEnabled(enabled)
+        }
+        let blocked = Set(recipientFence.blocked.map { RecipientFencePresentation.canonical($0.address) })
+        for field in recipientFields { field.blockedAddresses = blocked }
+    }
+
+    /// Use <account>: the identity picker's route change saves a new
+    /// revision, whose check is reread.
+    private func useFenceAccount(_ identityId: String) {
+        guard sendModel?.isBusy != true, !finished else { return }
+        identityControls.choose(identityId: identityId)
+    }
+
+    /// Allow asks first; Allow calls `allow_recipient` for the sending
+    /// account, Cancel changes nothing (spec/08).
+    private func askToAllow(_ address: String) {
+        guard let window, !finished, allowAlert == nil, let fenceSource,
+            let accountId = identityControls.model.selectedIdentity?.accountId
+        else { return }
+        let text = RecipientFencePresentation.allowConfirmation(address: address, sendingName: fenceSendingName())
+        let alert = NSAlert()
+        alert.messageText = text.message
+        alert.informativeText = text.information
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Allow")
+        alert.addButton(withTitle: "Cancel")
+        allowAlert = alert
+        alert.beginSheetModal(for: window) { [weak self] response in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                allowAlert = nil
+                guard response == .alertFirstButtonReturn, !finished else { return }
+                do {
+                    _ = try await fenceSource.allowRecipient(accountId: accountId, address: address)
+                } catch {
+                    statusLabel.stringValue = "Couldn't allow \(address): \(error.localizedDescription)"
+                }
+                await refreshRecipientFence(sameRevision: true)
+            }
+        }
     }
 
     /// The banner's text and buttons for the current notice (spec/08).
@@ -950,6 +1116,10 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
                 guard let self, !finished else { return }
                 render()
                 observeSend()
+                // Send's refusal names the check: show its banner (spec/08).
+                if case .failed(let message) = sendModel?.state, message.contains("recipient_fence") {
+                    await refreshRecipientFence(sameRevision: true)
+                }
             }
         }
     }
@@ -1080,6 +1250,9 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
             // IMAP attempt would wait in the queue with nothing to send it.
             identity.accountKind == .proton
         else { return false }
+        // A blocked recipient keeps Send disabled; the core refuses it
+        // anyway (spec/05 "Recipient check").
+        guard !recipientFence.isBlocking else { return false }
         return !content.to.isEmpty || !content.cc.isEmpty || !content.bcc.isEmpty
     }
 
@@ -1189,10 +1362,18 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
 
     private func renderSendChrome() {
         sendButton.isEnabled = canSendNow
-        sendButton.toolTip =
-            sendModel == nil
-            ? "Sending needs an archive that can write and a sending identity."
-            : "Send this draft from a Proton identity."
+        if recipientFence.isBlocking, identityControls.model.selectedIdentity != nil {
+            let help = RecipientFencePresentation.sendHelp(
+                addresses: recipientFence.blocked.map(\.address), sendingName: fenceSendingName())
+            sendButton.toolTip = help
+            sendButton.setAccessibilityHelp(help)
+        } else {
+            sendButton.toolTip =
+                sendModel == nil
+                ? "Sending needs an archive that can write and a sending identity."
+                : "Send this draft from a Proton identity."
+            sendButton.setAccessibilityHelp(nil)
+        }
         guard let sendModel else {
             sendBar.isHidden = true
             return
@@ -1229,6 +1410,7 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
         saveButton.isEnabled = editable && canWrite() && !model.isSaving && model.conflict == nil
         attachmentControls.render()
         renderCrossAccountBanner()
+        renderRecipientFence()
         renderExternalEditBanner()
         renderReplyLine()
         renderSendChrome()

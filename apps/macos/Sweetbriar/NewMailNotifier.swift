@@ -5,6 +5,12 @@ import UserNotifications
 /// One new-mail notification's text (spec/10 "Notifications"): the
 /// finished title, subtitle, body and userInfo, already redacted by
 /// the formatter.
+extension Notification.Name {
+    /// New mail arrived in some account; compose windows reread their
+    /// recipient check (spec/08 "Recipient check").
+    static let sweetbriarMailArrived = Notification.Name("ch.lkmc.Sweetbriar.mailArrived")
+}
+
 struct NewMailNotification: Sendable, Equatable {
     var title: String
     var subtitle: String?
@@ -143,6 +149,8 @@ final class NewMailNotifier {
     /// Handle one arrival. Tests drive this directly so a previews
     /// read is observable without a notification center.
     func handle(_ mail: NewMail) async {
+        // Compose windows reread their recipient check (spec/08).
+        NotificationCenter.default.post(name: .sweetbriarMailArrived, object: nil)
         let previewEnabled = await previewsEnabled()
         var preview: MessagePreview?
         if previewEnabled, mail.messageIds.count == 1 {

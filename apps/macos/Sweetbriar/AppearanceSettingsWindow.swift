@@ -60,6 +60,7 @@ private struct AppearanceSettingsLoader: View {
     @State private var accountsModel: AccountsSettingsModel?
     @State private var diagnosticsModel: DiagnosticsModel?
     @State private var sendingModel: SendSafetySettingsModel?
+    @State private var allowancesModel: RecipientAllowancesModel?
     @State private var readingModel: ReadingSettingsModel?
     @State private var failure: String?
 
@@ -126,7 +127,8 @@ private struct AppearanceSettingsLoader: View {
                         } else if backups.isRestoring {
                             ProgressView("Waiting for the restore outcome…")
                         } else if let sendingModel {
-                            SendingSettingsView(model: sendingModel).id(editor.revision)
+                            SendingSettingsView(model: sendingModel, allowances: allowancesModel)
+                                .id(editor.revision)
                         } else {
                             ProgressView("Opening sending settings…")
                         }
@@ -157,6 +159,13 @@ private struct AppearanceSettingsLoader: View {
                 accountsModel = AccountsSettingsModel(source: bridge)
                 diagnosticsModel = DiagnosticsModel(source: bridge)
                 sendingModel = SendSafetySettingsModel(source: bridge)
+                allowancesModel = RecipientAllowancesModel(
+                    source: bridge,
+                    accountNames: {
+                        let accounts = (try? await bridge.accounts()) ?? []
+                        return Dictionary(
+                            accounts.map { ($0.accountId, $0.displayName) }, uniquingKeysWith: { first, _ in first })
+                    })
                 readingModel = ReadingSettingsModel(source: bridge)
                 if model == nil { failure = "Settings are unavailable while quitting." }
             } catch { failure = error.localizedDescription }
