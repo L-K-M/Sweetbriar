@@ -77,6 +77,7 @@ final class MainMenuBuilder: NSObject {
     private let onAddProtonAccount: @MainActor () -> Void
     private let onSettings: @MainActor () -> Void
     private let onShowActivity: @MainActor () -> Void
+    private let onShowViewer: @MainActor () -> Void
     private let isWriteEnabled: @MainActor () -> Bool
     /// The opt-in latency log the Debug items control (spec/08).
     private let latency: LatencyRecorder
@@ -148,6 +149,8 @@ final class MainMenuBuilder: NSObject {
         static let removeLabel = command("removeLabel")
         /// Window → Activity.
         static let showActivity = command("showActivity")
+        /// Window → Message Viewer: the main window, after it was closed.
+        static let showViewer = command("showViewer")
         /// Debug → Fill 500,000 Synthetic Rows (spec/08 "Debug menu").
         static let fillSynthetic = command("debug.fillSynthetic")
         /// Debug → List Prototype.
@@ -213,6 +216,7 @@ final class MainMenuBuilder: NSObject {
         onAddProtonAccount: @escaping @MainActor () -> Void = {},
         onSettings: @escaping @MainActor () -> Void = {},
         onShowActivity: @escaping @MainActor () -> Void = {},
+        onShowViewer: @escaping @MainActor () -> Void = {},
         isWriteEnabled: @escaping @MainActor () -> Bool = { true },
         onNewMessage: @escaping @MainActor () -> Void = {},
         isComposeEnabled: @escaping @MainActor () -> Bool = { true },
@@ -241,6 +245,7 @@ final class MainMenuBuilder: NSObject {
         self.onAddProtonAccount = onAddProtonAccount
         self.onSettings = onSettings
         self.onShowActivity = onShowActivity
+        self.onShowViewer = onShowViewer
         self.isWriteEnabled = isWriteEnabled
         super.init()
     }
@@ -310,6 +315,8 @@ final class MainMenuBuilder: NSObject {
 
     /// Window → Activity (spec/08 "Activity / account health").
     @objc private func showActivity(_ sender: NSMenuItem) { onShowActivity() }
+
+    @objc private func showViewer(_ sender: NSMenuItem) { onShowViewer() }
 
     /// File: local composition, the key window's Close and the draft's
     /// Save and Attach Files…, then account setup and import (spec/08–09).
@@ -555,7 +562,8 @@ final class MainMenuBuilder: NSObject {
         return item
     }
 
-    /// Window: Minimize, Zoom, Activity and Bring All to Front;
+    /// Window: Minimize, Zoom, Message Viewer, Activity and Bring All
+    /// to Front;
     /// registered as the app's `windowsMenu`, so AppKit adds its tiling
     /// items and the window list. Close lives in File.
     private func makeWindowMenu() -> NSMenuItem {
@@ -568,6 +576,14 @@ final class MainMenuBuilder: NSObject {
         ))
         menu.addItem(Self.item("Zoom", action: #selector(NSWindow.performZoom(_:))))
         menu.addItem(.separator())
+        // Mail's way back to the main window once it was closed.
+        menu.addItem(Self.item(
+            "Message Viewer",
+            action: #selector(showViewer(_:)),
+            key: "0",
+            target: self,
+            id: ItemID.showViewer
+        ))
         menu.addItem(Self.item(
             "Activity",
             action: #selector(showActivity(_:)),
