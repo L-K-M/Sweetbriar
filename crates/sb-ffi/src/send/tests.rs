@@ -646,3 +646,67 @@ fn cross_account_notice_answers_a_reply_and_send_accepts_its_ack() {
     assert_eq!(queued.receipt.command, "send_draft");
     block_on(core.shutdown());
 }
+
+/// An allowance crosses to Swift and back: it lists for Settings,
+/// replays under its key, revokes through the canonical form, and the
+/// fence refuses an unknown draft (spec/05, spec/07).
+#[test]
+fn recipient_allowances_cross_and_the_fence_refuses_an_unknown_draft() {
+    let (scratch, core) = scratch_core("ffi-send-recipient-fence");
+    block_on(core.shutdown());
+    seed_sender(&state_db(&scratch));
+    let core = reopen(&scratch);
+
+    let key = "00000000-0000-4000-8000-0000000000a1".to_owned();
+    let receipt = block_on(core.allow_recipient(
+        CancelToken::new(),
+        key.clone(),
+        "acct-1".into(),
+        "them@example.Test".into(),
+    ))
+    .unwrap();
+    assert_eq!(receipt.command, "allow_recipient");
+    let replayed = block_on(core.allow_recipient(
+        CancelToken::new(),
+        key,
+        "acct-1".into(),
+        "them@Example.TEST".into(),
+    ))
+    .unwrap();
+    assert_eq!(replayed, receipt, "a replayed key returns its receipt");
+
+    let listed = block_on(core.recipient_allowances(CancelToken::new())).unwrap();
+    assert_eq!(
+        listed,
+        vec![RecipientAllowance {
+            account_id: "acct-1".into(),
+            address: "them@example.Test".into(),
+            created_at_ms: receipt.created_at_ms,
+        }]
+    );
+    assert_eq!(round_trip(listed[0].clone()), listed[0]);
+
+    // An unknown draft is NotFound, not an empty fence.
+    let error = block_on(core.recipient_fence(
+        CancelToken::new(),
+        "no-such-draft".into(),
+        "no-such-revision".into(),
+    ))
+    .unwrap_err();
+    assert!(matches!(error, CoreError::NotFound { .. }), "{error}");
+
+    let removed = block_on(core.remove_recipient_allowance(
+        CancelToken::new(),
+        "00000000-0000-4000-8000-0000000000a2".into(),
+        "acct-1".into(),
+        "them@Example.TEST".into(),
+    ))
+    .unwrap();
+    assert_eq!(removed.command, "remove_recipient_allowance");
+    assert!(
+        block_on(core.recipient_allowances(CancelToken::new()))
+            .unwrap()
+            .is_empty()
+    );
+    block_on(core.shutdown());
+}

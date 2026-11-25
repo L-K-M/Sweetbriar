@@ -361,3 +361,57 @@ fn an_account_logo_survives_backup_and_restore() {
     assert_eq!(logo(&core), saved);
     block_on(core.shutdown());
 }
+
+/// Plan M6.7a: an allowance survives the real backup and restore, so
+/// a restored store does not re-block an address the user allowed.
+#[test]
+fn a_recipient_allowance_survives_backup_and_restore() {
+    let scratch = ScratchDir::new("service-restore-recipient-allowance");
+    let core = open(&scratch);
+    block_on(core.shutdown());
+    // The local archive refuses allowances; seed a second account.
+    execute_sql(
+        &scratch.path().join("store/state.sqlite"),
+        "INSERT INTO accounts (account_id, kind, provider, display_name, state, sort_order, created_at)
+         VALUES ('acct-work', 'imap', 'generic_imap', 'Work', 'active', 1, 0);",
+    );
+    let core = open(&scratch);
+
+    let receipt = block_on(core.allow_recipient(
+        "00000000-0000-4000-8000-0000000000b1",
+        "acct-work",
+        "them@example.Test",
+    ))
+    .unwrap();
+    assert_eq!(receipt.command, "allow_recipient");
+    let saved = block_on(core.recipient_allowances()).unwrap();
+    assert_eq!(saved.len(), 1);
+    assert_eq!(saved[0].account_id, "acct-work");
+    assert_eq!(saved[0].address, "them@example.Test");
+    assert_eq!(saved[0].created_at_ms, receipt.created_at_ms);
+
+    let id = back_up(&core, "00000000-0000-4000-8000-0000000000b2");
+    let removed = block_on(core.remove_recipient_allowance(
+        "00000000-0000-4000-8000-0000000000b3",
+        "acct-work",
+        "them@Example.TEST",
+    ))
+    .unwrap();
+    assert_eq!(removed.command, "remove_recipient_allowance");
+    assert!(block_on(core.recipient_allowances()).unwrap().is_empty());
+
+    let prepared = block_on(core.prepare_restore(&id, unflagged())).unwrap();
+    let Restored { core, receipt } = block_on(core.restore(
+        "00000000-0000-4000-8000-0000000000b4",
+        prepared,
+        unflagged(),
+    ))
+    .unwrap();
+    receipt.unwrap();
+    assert_eq!(block_on(core.recipient_allowances()).unwrap(), saved);
+    block_on(core.shutdown());
+
+    let core = open(&scratch);
+    assert_eq!(block_on(core.recipient_allowances()).unwrap(), saved);
+    block_on(core.shutdown());
+}
