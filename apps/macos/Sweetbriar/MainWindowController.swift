@@ -28,6 +28,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
 
     private let session: CoreSession
     private let appearance: SharedAppearance
+    /// The compose cue mode, which also tints message windows (spec/08
+    /// Message window "Tint").
+    private let cues: SharedComposeCue?
     private let backups: SharedBackups
     private let readingViewMemory: SharedReadingViewMemory
     private let openBackups: @MainActor () -> Void
@@ -82,12 +85,13 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     private var closed = false
 
 
-    init(session: CoreSession, appearance: SharedAppearance, backups: SharedBackups,
-         readingViewMemory: SharedReadingViewMemory,
+    init(session: CoreSession, appearance: SharedAppearance, cues: SharedComposeCue? = nil,
+         backups: SharedBackups, readingViewMemory: SharedReadingViewMemory,
          openBackups: @escaping @MainActor () -> Void = {},
          openDraft: @escaping @MainActor (String) -> Void = { _ in }) {
         self.session = session
         self.appearance = appearance
+        self.cues = cues
         self.backups = backups
         self.readingViewMemory = readingViewMemory
         self.openBackups = openBackups
@@ -756,12 +760,15 @@ extension MainWindowController: MessageWindowCommands {
         // Built only for a new window; an open one just comes forward.
         messageWindows.open(id) {
             let memory = readingViewMemory.model(source: bridge)
+            let appearanceModel = appearance.model(source: bridge)
             return MessageWindowController(
                 occurrenceId: id,
                 reader: ReaderViewController(
-                    model: ReaderModel(source: bridge, preferred: .sanitizedHtml), memory: memory),
+                    model: ReaderModel(source: bridge, preferred: .sanitizedHtml), memory: memory,
+                    appearance: appearanceModel),
                 markRead: backups.canWrite ? MarkReadTimer(source: bridge) : nil,
-                target: flagTargets(for: [id])?.first)
+                target: flagTargets(for: [id])?.first,
+                appearance: appearanceModel, cue: cues?.model(source: bridge))
         }
     }
 }

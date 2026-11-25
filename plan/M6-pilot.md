@@ -245,6 +245,16 @@ account logo and the Settings letter, logo and address controls.
     a `Conflict` reloads without overwriting;
   - **owner:** the M6.2 recognition check, repeated in Color Wash with
     the owner's accounts.
+- **Split (2026-11-25):** the window tint with the letter and address
+  controls measured 758 changed lines, and the logo's pipeline and its
+  six surfaces need about as many again, so the step ships as two PRs:
+  - **M6.6d1:** the message window tint and the Settings letter and
+    address controls, with their checks (the tint in every mode, the
+    letter, an address's color and its `Conflict`).
+  - **M6.6d2:** the logo: the Swift mapping of `logo_png` and
+    `logo_revision`, Choose Image… and Remove, and the logo wherever the
+    monogram shows, with the pipeline, surface and undecodable-logo
+    checks. The owner's recognition check runs after it.
 
 ### M6.7 Recipient check — L, linux + macos-ci + owner
 

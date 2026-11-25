@@ -19,19 +19,32 @@ final class MessageWindowController: NSWindowController, NSWindowDelegate {
 
     private let markRead: MarkReadTimer?
     private let target: FlagTarget?
+    private let appearance: AppearanceModel?
+    private let cue: ComposeCueModel?
     private var loading: Task<Void, Never>?
     private var closed = false
+    private var displayOptionsObserver: NSObjectProtocol?
+    /// The tint the window shows (spec/08 Message window "Tint"), if any.
+    private(set) var tint: MessageWindowTint?
+    /// Whether Increase Contrast is on; tests inject it.
+    var increaseContrast: () -> Bool = { NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast } {
+        didSet { renderTint() }
+    }
 
     /// `target` is the row as the list showed it, so a Proton account's
-    /// unread message is marked read; nil marks nothing.
+    /// unread message is marked read; nil marks nothing. `appearance`
+    /// and `cue` tint the window in Color Wash and Strong; without them
+    /// it stays neutral.
     init(
         occurrenceId: Int64, reader: ReaderViewController, markRead: MarkReadTimer?,
-        target: FlagTarget?
+        target: FlagTarget?, appearance: AppearanceModel? = nil, cue: ComposeCueModel? = nil
     ) {
         self.occurrenceId = occurrenceId
         self.reader = reader
         self.markRead = markRead
         self.target = target
+        self.appearance = appearance
+        self.cue = cue
         let window = NSWindow(
             contentRect: NSRect(origin: .zero, size: Self.defaultContentSize),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
@@ -48,6 +61,13 @@ final class MessageWindowController: NSWindowController, NSWindowDelegate {
         window.center()
         super.init(window: window)
         window.delegate = self
+        reader.backdrop.appearanceDidChange = { [weak self] in self?.renderTint() }
+        displayOptionsObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.renderTint() }
+        }
+        observeTint()
     }
 
     @available(*, unavailable)
@@ -60,7 +80,48 @@ final class MessageWindowController: NSWindowController, NSWindowDelegate {
             await reader.show(selection: [occurrenceId])
             guard !closed, !Task.isCancelled else { return }
             window?.title = Self.title(reader.shownSubject)
+            renderTint()
             markRead?.show(target)
+        }
+    }
+
+    /// Tint the title bar and the reader's header area with the
+    /// receiving account's strip fill in Color Wash and Strong; leave
+    /// the window neutral otherwise (spec/08 Message window "Tint").
+    func renderTint() {
+        guard let window, !closed else { return }
+        let accountId = reader.model.currentMessage?.accountId
+        let tokens = accountId.flatMap { id in
+            appearance?.appearance?.accounts.first { $0.accountId == id }?.tokens
+        }
+        let tint = MessageWindowTint.resolve(
+            mode: cue?.mode, tokens: tokens, appearance: reader.view.effectiveAppearance,
+            increaseContrast: increaseContrast())
+        self.tint = tint
+        if let tint {
+            if !window.styleMask.contains(.fullSizeContentView) { window.styleMask.insert(.fullSizeContentView) }
+            if !window.titlebarAppearsTransparent { window.titlebarAppearsTransparent = true }
+            if window.backgroundColor != tint.fill { window.backgroundColor = tint.fill }
+        } else {
+            if window.titlebarAppearsTransparent { window.titlebarAppearsTransparent = false }
+            if window.styleMask.contains(.fullSizeContentView) { window.styleMask.remove(.fullSizeContentView) }
+            if window.backgroundColor != .windowBackgroundColor { window.backgroundColor = .windowBackgroundColor }
+        }
+        reader.applyHeaderTint(tint)
+    }
+
+    /// Follow the account's appearance and the compose cue mode.
+    private func observeTint() {
+        guard appearance != nil || cue != nil else { return }
+        withObservationTracking {
+            _ = appearance?.appearance
+            _ = cue?.mode
+        } onChange: { [weak self] in
+            Task { @MainActor [weak self] in
+                guard let self, !self.closed else { return }
+                self.renderTint()
+                self.observeTint()
+            }
         }
     }
 
@@ -77,6 +138,10 @@ final class MessageWindowController: NSWindowController, NSWindowDelegate {
         guard !closed else { return }
         closed = true
         loading?.cancel()
+        if let displayOptionsObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(displayOptionsObserver)
+            self.displayOptionsObserver = nil
+        }
         markRead?.cancel()
         reader.close()
         onClose?(self)
