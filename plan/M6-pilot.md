@@ -280,6 +280,21 @@ and the refusal.
     backup and restore, and both commands refuse the local archive;
   - migration 38's backfill matches the incremental rows on a seeded
     archive, and a vanished occurrence keeps its row.
+- **Split (2026-11-25):** the store and engine alone measured 1,734
+  changed lines, before the service and FFI layers, so the step ships
+  as two PRs, each keeping its deliverables and checks:
+  - **M6.7a1 (store):** migration 38 with its backfill, the sweep's
+    account-sender rows, readiness, the allowance and check rules in
+    `sb-store` and the derived rebuild. It carries the checks on
+    readiness, the local archive and own mail, the backfill, the
+    vanished occurrence, store-level allowance replay and allowances
+    surviving the rebuild.
+  - **M6.7a2 (engine, service, FFI):** `recipient_fence`,
+    `recipient_allowances` and both commands with receipts,
+    `send_draft`'s refusal, the service and FFI exports and the
+    regenerated bindings. It carries the blocking checks for new
+    messages, replies and forwards, the refusal and its ways through,
+    command replay, the local archive's refusal, and backup and restore.
 
 **M6.7b (macOS UI) — M, macos-ci + owner.** The banners, the
 allowance flow and Settings → Sending's list.

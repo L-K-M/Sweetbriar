@@ -693,11 +693,9 @@ from discarded drafts. It is listed in the backup.
 
 Owner decision 2026-11-24: Sweetbriar blocks sending from an account to
 an address that has written only to other accounts (05 "Recipient
-check"). Two tables carry it; migration 38 adds both. Until M6.7a lands
-their definitions stay out of the schema blocks, which the schema drift
-test executes:
+check"). Two tables carry it; migration 38 adds both:
 
-```text
+```sql
 CREATE TABLE d_account_senders (                  -- derived: who has written to each sending account
   account_id     TEXT NOT NULL REFERENCES accounts(account_id),
   canonical      TEXT NOT NULL,                   -- the Contacts canonical form
@@ -1903,6 +1901,10 @@ CREATE INDEX d_message_bindings_by_assembly ON d_message_bindings(acquisition_id
   adds a column, so it takes no snapshot.
 - **Migration 37 (plan M6.6b)** adds `account_logos` ("Account
   logos"); it only adds a table, so it takes no snapshot.
+- **Migration 38 (plan M6.7a1)** adds `d_account_senders` and
+  `recipient_allowances` ("Account senders and recipient allowances"),
+  advances `seen_address_inputs` and stores `account_senders_from`
+  ("Readiness"); it rewrites no data, so it takes no snapshot.
 - **Before any migration that rewrites or drops data,** the engine takes a
   `VACUUM INTO` snapshot, keeping the last two. Migration 28 is the first;
   migration 1 has none. A new store migrating from version 0 holds

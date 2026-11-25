@@ -110,7 +110,10 @@ fn a_fresh_store_reaches_the_latest_version_with_its_meta() {
     assert_eq!(meta.get("search_generation").unwrap(), "1");
     assert_eq!(meta.get("search_extractor_version").unwrap(), "1");
     assert_eq!(meta.get("seen_address_target").unwrap(), "1");
-    assert_eq!(meta.get("seen_address_inputs").unwrap(), "1");
+    // Migration 38 advanced the input revision once for the account
+    // senders' readiness watermark.
+    assert_eq!(meta.get("seen_address_inputs").unwrap(), "2");
+    assert_eq!(meta.get("account_senders_from").unwrap(), "2");
     assert_eq!(meta.get("seen_address_swept").unwrap(), "0");
     assert_eq!(meta.get("mime_repair_target").unwrap(), "2");
     assert_eq!(meta.get("repair_inputs").unwrap(), "1");
@@ -119,7 +122,7 @@ fn a_fresh_store_reaches_the_latest_version_with_its_meta() {
     }
     assert_eq!(meta.get("content_changes").unwrap(), "1");
     assert_eq!(meta.get("backed_up_changes").unwrap(), "0");
-    assert_eq!(meta.len(), 22, "unexpected extra store_meta keys: {meta:?}");
+    assert_eq!(meta.len(), 23, "unexpected extra store_meta keys: {meta:?}");
 }
 
 /// 2. Reopening runs no migration: `created_at` and both UUIDs
