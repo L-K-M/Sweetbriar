@@ -187,8 +187,13 @@ private struct AccountAppearanceSettings: View {
     @State private var loadError: String?
     @State private var customOpen = false
     @State private var editingAccount: AccountAppearance?
+    /// The address the custom color sheet edits; nil edits the account.
+    @State private var editingIdentity: IdentityAppearance?
     @State private var customColor = Color.black
     @State private var customError: String?
+    @State private var letterText = ""
+    /// Each identity's address, from the compose catalog.
+    @State private var addresses: [String: String] = [:]
 
     private var current: AccountAppearance? {
         model.appearance.appearance?.accounts.first { $0.accountId == selected }
@@ -252,6 +257,7 @@ private struct AccountAppearanceSettings: View {
                             .disabled(model.saving || model.appearanceFailure != nil)
                             Button("Custom…") {
                                 editingAccount = current
+                                editingIdentity = nil
                                 customColor = color(current.colorSrgb)
                                 customError = nil
                                 customOpen = true
@@ -260,6 +266,8 @@ private struct AccountAppearanceSettings: View {
                             if current.assignment == .custom {
                                 Text("Custom: \(current.colorSrgb)").foregroundStyle(.secondary)
                             }
+                            letterControls(current)
+                            addressControls(current)
                             HStack(spacing: 12) {
                                 preview("Light", current.tokens.light, current.monogram)
                                 preview("Dark", current.tokens.dark, current.monogram)
@@ -286,10 +294,19 @@ private struct AccountAppearanceSettings: View {
                 selected = accounts.first?.accountId
             } catch { loadError = error.localizedDescription }
             loadingAccounts = false
+            // Without the catalog an address row shows its identity id.
+            if let catalog = try? await bridge.composeCatalog() {
+                addresses = Dictionary(
+                    catalog.identities.map { ($0.identityId, $0.email) }, uniquingKeysWith: { first, _ in first })
+            }
         }
+        // Reseed the field when the account or its stored letter changes,
+        // not on every revision: another write (a color, an address) must
+        // not clear a letter still being typed.
+        .task(id: "\(selected ?? "")#\(current?.symbol ?? "")") { letterText = current?.symbol ?? "" }
         .sheet(isPresented: $customOpen) {
             VStack(alignment: .leading, spacing: 16) {
-                Text("Custom account color").font(.headline)
+                Text(editingIdentity == nil ? "Custom account color" : "Custom address color").font(.headline)
                 ColorPicker("Color", selection: $customColor, supportsOpacity: false)
                 if let customError { Text(customError).foregroundStyle(.red) }
                 HStack {
@@ -300,9 +317,12 @@ private struct AccountAppearanceSettings: View {
                             customError = "Choose an opaque sRGB color."
                             return
                         }
-                        guard let account = editingAccount else { customOpen = false; return }
                         customOpen = false
-                        save(.custom(colorSrgb: value), account: account)
+                        if let identity = editingIdentity {
+                            run { await model.setAddressColor(value, identity: identity) }
+                        } else if let account = editingAccount {
+                            save(.custom(colorSrgb: value), account: account)
+                        }
                     }.keyboardShortcut(.defaultAction)
                 }
             }.padding(24).frame(width: 360)
@@ -310,13 +330,83 @@ private struct AccountAppearanceSettings: View {
     }
 
     private func save(_ color: AccountColor, account: AccountAppearance) {
+        run { await model.choose(color, account: account) }
+    }
+
+    /// One write through the editor's admission: a read-only archive or a
+    /// retired editor writes nothing and says why.
+    private func run(_ write: @escaping @MainActor () async -> Void) {
         guard backups.canWrite else {
             admissionError = "The archive is not writable. Check Backups for its status."
             return
         }
         admissionError = nil
-        if !editor.run(revision: editorRevision, { await model.choose(color, account: account) }) {
+        if !editor.run(revision: editorRevision, write) {
             admissionError = "The archive changed. Reopen this editor before saving."
+        }
+    }
+
+    /// The account's own letter (spec/08 "Letter"): one or two characters,
+    /// empty for the automatic one.
+    @ViewBuilder
+    private func letterControls(_ account: AccountAppearance) -> some View {
+        HStack {
+            TextField("Letter", text: $letterText, prompt: Text(account.monogram))
+                .frame(width: 140)
+                .onChange(of: letterText) { _, text in
+                    // Typing stops at two characters.
+                    let limited = AppearanceSettingsModel.letter(text) ?? ""
+                    if text.trimmingCharacters(in: .whitespacesAndNewlines).count > 2 { letterText = limited }
+                }
+                .onSubmit { run { await model.setLetter(letterText, account: account) } }
+            Button("Set Letter") { run { await model.setLetter(letterText, account: account) } }
+        }
+        .disabled(model.saving || model.appearanceFailure != nil)
+        Text("One or two characters. Leave it empty for the automatic letter.").font(.footnote)
+            .foregroundStyle(.secondary)
+    }
+
+    /// Each of the account's addresses with the account color or its own
+    /// (spec/08 "Addresses").
+    @ViewBuilder
+    private func addressControls(_ account: AccountAppearance) -> some View {
+        let identities = model.appearance.appearance?.identities.filter { $0.accountId == account.accountId } ?? []
+        if !identities.isEmpty {
+            Text("Addresses").font(.headline)
+            ForEach(identities, id: \.identityId) { identity in
+                let address = addresses[identity.identityId] ?? identity.identityId
+                HStack {
+                    Text(address)
+                    Spacer()
+                    Picker(
+                        "Color for \(address)",
+                        selection: Binding<String?>(
+                            get: { identity.colorOverrideSrgb },
+                            set: { value in run { await model.setAddressColor(value, identity: identity) } })
+                    ) {
+                        Text("Use account color").tag(String?.none)
+                        ForEach(model.appearance.palette, id: \.slot) { preset in
+                            Text(preset.name).tag(Optional(preset.colorSrgb))
+                        }
+                        if let custom = identity.colorOverrideSrgb,
+                            !model.appearance.palette.contains(where: { $0.colorSrgb == custom })
+                        {
+                            Text("Custom: \(custom)").tag(Optional(custom))
+                        }
+                    }
+                    .labelsHidden()
+                    .frame(width: 200)
+                    .accessibilityLabel("Color for \(address)")
+                    Button("Custom…") {
+                        editingAccount = nil
+                        editingIdentity = identity
+                        customColor = color(identity.colorSrgb)
+                        customError = nil
+                        customOpen = true
+                    }
+                }
+                .disabled(model.saving || model.appearanceFailure != nil)
+            }
         }
     }
 

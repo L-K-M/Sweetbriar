@@ -34,6 +34,11 @@ final class ReaderViewController: NSViewController {
     let readingScroll = NSScrollView()
     private let body = NSView()
     private let details = NSStackView()
+    /// Draws a message window's header tint (spec/08 Message window
+    /// "Tint"); neutral, it draws nothing.
+    let backdrop = ReaderBackdropView()
+    /// The tint the header shows, if any.
+    private(set) var headerTint: MessageWindowTint?
     private let reads = ArchiveViewTasks()
     private let memory: ReadingViewMemory
     private let opener: @MainActor (URL) -> Bool
@@ -117,7 +122,8 @@ final class ReaderViewController: NSViewController {
     }
 
     override func loadView() {
-        view = NSView()
+        view = backdrop
+        backdrop.headerEnd = details
         let stack = NSStackView()
         stack.orientation = .vertical
         stack.alignment = .leading
@@ -191,6 +197,28 @@ final class ReaderViewController: NSViewController {
         tagPicker.onAdd = { [weak self] name in self?.setTag(name, applied: true) }
         tagPicker.onRemove = { [weak self] tag in self?.setTag(tag.name, applied: false) }
         noteEditor.onEndEditing = { [weak self] text in self?.saveNote(text) }
+    }
+
+    /// Tint the header area for a message window, or return it to
+    /// neutral: the backdrop draws the fill and the header's labels take
+    /// its foreground (spec/08 Message window "Tint").
+    func applyHeaderTint(_ tint: MessageWindowTint?) {
+        loadViewIfNeeded()
+        guard tint != headerTint else { return }
+        headerTint = tint
+        backdrop.tint = tint
+        header.textColor = tint?.foreground ?? .labelColor
+        for label in [remoteContent, readingNote] {
+            label.textColor = tint?.foreground ?? .secondaryLabelColor
+        }
+        let title = readingViewToggle.title
+        if let tint {
+            readingViewToggle.attributedTitle = NSAttributedString(
+                string: title,
+                attributes: [.foregroundColor: tint.foreground, .font: readingViewToggle.font ?? .systemFont(ofSize: 0)])
+        } else {
+            readingViewToggle.title = title
+        }
     }
 
     @discardableResult
