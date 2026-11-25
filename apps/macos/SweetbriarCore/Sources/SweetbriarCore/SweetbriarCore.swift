@@ -1400,6 +1400,17 @@ public protocol CoreProtocol: AnyObject, Sendable {
     func setAccountAppearance(token: CancelToken, idempotencyKey: String, accountId: String, expectedRevision: Int64, change: AccountAppearanceChange) async throws  -> Receipt
     
     /**
+     * `set_account_logo` (spec/07 "Commands", spec/02 "Account
+     * logos"): one command under an idempotency key the shell made. A
+     * PNG that fails the structural check is `InvalidInput` on `png`;
+     * `expected_revision` absent names the no-row state, a stale one is
+     * `Conflict`, and an unknown account `NotFound`. `png` `None`
+     * clears. Like every command it honours the token only until it
+     * holds the core; once begun it runs to completion.
+     */
+    func setAccountLogo(token: CancelToken, idempotencyKey: String, accountId: String, expectedRevision: Int64?, png: Data?) async throws  -> Receipt
+    
+    /**
      * `set_identity_appearance` (spec/07 "Commands", spec/02
      * "Identity appearance"): one command under an idempotency key.
      * `expected_revision` names the record it writes — `None` the
@@ -1797,6 +1808,17 @@ public protocol CoreProtocol: AnyObject, Sendable {
     func coverage(token: CancelToken, scope: SearchScope) async throws  -> Coverage
     
     /**
+     * `allow_recipient(idempotency_key, account_id, address)`
+     * (spec/07 "Commands", spec/05 "Recipient check"): one command
+     * under an idempotency key the shell made (`UUID()` in Swift); a
+     * repeated key returns its receipt. Allowing an allowed address
+     * writes nothing; the local archive is `InvalidInput`, an unknown
+     * account `NotFound`. Like every command it honours the token only
+     * until it holds the core; once begun it runs to completion.
+     */
+    func allowRecipient(token: CancelToken, idempotencyKey: String, accountId: String, address: String) async throws  -> Receipt
+    
+    /**
      * `cancel_send(attempt_id)` (spec/07 "Commands"): a `held` or
      * `queued` attempt becomes `cancelled` and its draft returns to
      * `editing`; any other state is `Conflict`, an unknown attempt
@@ -1831,6 +1853,35 @@ public protocol CoreProtocol: AnyObject, Sendable {
      * itself (spec/07).
      */
     func outBox(token: CancelToken) async throws  -> OutBox
+    
+    /**
+     * `recipient_allowances()` (spec/07 "Other queries"): every
+     * allowance, ordered by account then canonical address, for
+     * Settings (spec/05 "Recipient check"). A query: the token races
+     * the core's read lock and the read itself (spec/07).
+     */
+    func recipientAllowances(token: CancelToken) async throws  -> [RecipientAllowance]
+    
+    /**
+     * `recipient_fence(draft_id, revision_id)` (spec/07 "Other
+     * queries", spec/05 "Recipient check"): which recipients of the
+     * draft's current revision are blocked for its route's account. A
+     * revision without a route blocks nothing yet; a revision that
+     * isn't the draft's current one is `Conflict`, an unknown draft
+     * `NotFound`. A query: the token races the core's read lock and
+     * the read itself (spec/07).
+     */
+    func recipientFence(token: CancelToken, draftId: String, revisionId: String) async throws  -> RecipientFence
+    
+    /**
+     * `remove_recipient_allowance(idempotency_key, account_id,
+     * address)` (spec/07 "Commands", spec/05 "Recipient check"):
+     * revoke an allowance, so the block applies again. An address that
+     * isn't allowed is `NotFound`; the local archive `InvalidInput`.
+     * Like every command it honours the token only until it holds the
+     * core; once begun it runs to completion.
+     */
+    func removeRecipientAllowance(token: CancelToken, idempotencyKey: String, accountId: String, address: String) async throws  -> Receipt
     
     /**
      * `resolve_unknown_send(attempt_id, resolution)` (spec/07
@@ -2434,6 +2485,31 @@ open func setAccountAppearance(token: CancelToken, idempotencyKey: String, accou
             rustFutureFunc: {
                 uniffi_sb_ffi_fn_method_core_set_account_appearance(
                         self.uniffiCloneHandle(),FfiConverterTypeCancelToken_lower(token),FfiConverterString.lower(idempotencyKey),FfiConverterString.lower(accountId),FfiConverterInt64.lower(expectedRevision),FfiConverterTypeAccountAppearanceChange_lower(change)
+                )
+            },
+            pollFunc: ffi_sb_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_sb_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_sb_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeReceipt_lift,
+            errorHandler: FfiConverterTypeCoreError_lift
+        )
+}
+    
+    /**
+     * `set_account_logo` (spec/07 "Commands", spec/02 "Account
+     * logos"): one command under an idempotency key the shell made. A
+     * PNG that fails the structural check is `InvalidInput` on `png`;
+     * `expected_revision` absent names the no-row state, a stale one is
+     * `Conflict`, and an unknown account `NotFound`. `png` `None`
+     * clears. Like every command it honours the token only until it
+     * holds the core; once begun it runs to completion.
+     */
+open func setAccountLogo(token: CancelToken, idempotencyKey: String, accountId: String, expectedRevision: Int64?, png: Data?)async throws  -> Receipt  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_sb_ffi_fn_method_core_set_account_logo(
+                        self.uniffiCloneHandle(),FfiConverterTypeCancelToken_lower(token),FfiConverterString.lower(idempotencyKey),FfiConverterString.lower(accountId),FfiConverterOptionInt64.lower(expectedRevision),FfiConverterOptionData.lower(png)
                 )
             },
             pollFunc: ffi_sb_ffi_rust_future_poll_rust_buffer,
@@ -3577,6 +3653,31 @@ open func coverage(token: CancelToken, scope: SearchScope)async throws  -> Cover
 }
     
     /**
+     * `allow_recipient(idempotency_key, account_id, address)`
+     * (spec/07 "Commands", spec/05 "Recipient check"): one command
+     * under an idempotency key the shell made (`UUID()` in Swift); a
+     * repeated key returns its receipt. Allowing an allowed address
+     * writes nothing; the local archive is `InvalidInput`, an unknown
+     * account `NotFound`. Like every command it honours the token only
+     * until it holds the core; once begun it runs to completion.
+     */
+open func allowRecipient(token: CancelToken, idempotencyKey: String, accountId: String, address: String)async throws  -> Receipt  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_sb_ffi_fn_method_core_allow_recipient(
+                        self.uniffiCloneHandle(),FfiConverterTypeCancelToken_lower(token),FfiConverterString.lower(idempotencyKey),FfiConverterString.lower(accountId),FfiConverterString.lower(address)
+                )
+            },
+            pollFunc: ffi_sb_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_sb_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_sb_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeReceipt_lift,
+            errorHandler: FfiConverterTypeCoreError_lift
+        )
+}
+    
+    /**
      * `cancel_send(attempt_id)` (spec/07 "Commands"): a `held` or
      * `queued` attempt becomes `cancelled` and its draft returns to
      * `editing`; any other state is `Conflict`, an unknown attempt
@@ -3664,6 +3765,77 @@ open func outBox(token: CancelToken)async throws  -> OutBox  {
             completeFunc: ffi_sb_ffi_rust_future_complete_rust_buffer,
             freeFunc: ffi_sb_ffi_rust_future_free_rust_buffer,
             liftFunc: FfiConverterTypeOutBox_lift,
+            errorHandler: FfiConverterTypeCoreError_lift
+        )
+}
+    
+    /**
+     * `recipient_allowances()` (spec/07 "Other queries"): every
+     * allowance, ordered by account then canonical address, for
+     * Settings (spec/05 "Recipient check"). A query: the token races
+     * the core's read lock and the read itself (spec/07).
+     */
+open func recipientAllowances(token: CancelToken)async throws  -> [RecipientAllowance]  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_sb_ffi_fn_method_core_recipient_allowances(
+                        self.uniffiCloneHandle(),FfiConverterTypeCancelToken_lower(token)
+                )
+            },
+            pollFunc: ffi_sb_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_sb_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_sb_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterSequenceTypeRecipientAllowance.lift,
+            errorHandler: FfiConverterTypeCoreError_lift
+        )
+}
+    
+    /**
+     * `recipient_fence(draft_id, revision_id)` (spec/07 "Other
+     * queries", spec/05 "Recipient check"): which recipients of the
+     * draft's current revision are blocked for its route's account. A
+     * revision without a route blocks nothing yet; a revision that
+     * isn't the draft's current one is `Conflict`, an unknown draft
+     * `NotFound`. A query: the token races the core's read lock and
+     * the read itself (spec/07).
+     */
+open func recipientFence(token: CancelToken, draftId: String, revisionId: String)async throws  -> RecipientFence  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_sb_ffi_fn_method_core_recipient_fence(
+                        self.uniffiCloneHandle(),FfiConverterTypeCancelToken_lower(token),FfiConverterString.lower(draftId),FfiConverterString.lower(revisionId)
+                )
+            },
+            pollFunc: ffi_sb_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_sb_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_sb_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeRecipientFence_lift,
+            errorHandler: FfiConverterTypeCoreError_lift
+        )
+}
+    
+    /**
+     * `remove_recipient_allowance(idempotency_key, account_id,
+     * address)` (spec/07 "Commands", spec/05 "Recipient check"):
+     * revoke an allowance, so the block applies again. An address that
+     * isn't allowed is `NotFound`; the local archive `InvalidInput`.
+     * Like every command it honours the token only until it holds the
+     * core; once begun it runs to completion.
+     */
+open func removeRecipientAllowance(token: CancelToken, idempotencyKey: String, accountId: String, address: String)async throws  -> Receipt  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_sb_ffi_fn_method_core_remove_recipient_allowance(
+                        self.uniffiCloneHandle(),FfiConverterTypeCancelToken_lower(token),FfiConverterString.lower(idempotencyKey),FfiConverterString.lower(accountId),FfiConverterString.lower(address)
+                )
+            },
+            pollFunc: ffi_sb_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_sb_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_sb_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeReceipt_lift,
             errorHandler: FfiConverterTypeCoreError_lift
         )
 }
@@ -4736,6 +4908,16 @@ public struct AccountAppearance: Equatable, Hashable {
      * The record's revision; `set_account_appearance` requires it.
      */
     public var revision: Int64
+    /**
+     * The stored logo PNG, absent without a row or once cleared
+     * (spec/02 "Account logos").
+     */
+    public var logoPng: Data?
+    /**
+     * The logo row's revision, absent only without a row (spec/02
+     * "Account logos").
+     */
+    public var logoRevision: Int64?
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
@@ -4760,7 +4942,15 @@ public struct AccountAppearance: Equatable, Hashable {
          */assignment: AppearanceAssignment, 
         /**
          * The record's revision; `set_account_appearance` requires it.
-         */revision: Int64) {
+         */revision: Int64, 
+        /**
+         * The stored logo PNG, absent without a row or once cleared
+         * (spec/02 "Account logos").
+         */logoPng: Data? = nil, 
+        /**
+         * The logo row's revision, absent only without a row (spec/02
+         * "Account logos").
+         */logoRevision: Int64? = nil) {
         self.accountId = accountId
         self.colorSrgb = colorSrgb
         self.tokens = tokens
@@ -4769,6 +4959,8 @@ public struct AccountAppearance: Equatable, Hashable {
         self.collides = collides
         self.assignment = assignment
         self.revision = revision
+        self.logoPng = logoPng
+        self.logoRevision = logoRevision
     }
 
     
@@ -4794,7 +4986,9 @@ public struct FfiConverterTypeAccountAppearance: FfiConverterRustBuffer {
                 monogram: FfiConverterString.read(from: &buf), 
                 collides: FfiConverterBool.read(from: &buf), 
                 assignment: FfiConverterTypeAppearanceAssignment.read(from: &buf), 
-                revision: FfiConverterInt64.read(from: &buf)
+                revision: FfiConverterInt64.read(from: &buf), 
+                logoPng: FfiConverterOptionData.read(from: &buf), 
+                logoRevision: FfiConverterOptionInt64.read(from: &buf)
         )
     }
 
@@ -4807,6 +5001,8 @@ public struct FfiConverterTypeAccountAppearance: FfiConverterRustBuffer {
         FfiConverterBool.write(value.collides, into: &buf)
         FfiConverterTypeAppearanceAssignment.write(value.assignment, into: &buf)
         FfiConverterInt64.write(value.revision, into: &buf)
+        FfiConverterOptionData.write(value.logoPng, into: &buf)
+        FfiConverterOptionInt64.write(value.logoRevision, into: &buf)
     }
 }
 
@@ -5584,6 +5780,64 @@ public func FfiConverterTypeBackupVerification_lift(_ buf: RustBuffer) throws ->
 #endif
 public func FfiConverterTypeBackupVerification_lower(_ value: BackupVerification) -> RustBuffer {
     return FfiConverterTypeBackupVerification.lower(value)
+}
+
+
+/**
+ * One blocked recipient (spec/05 "Recipient check"): its address as
+ * the draft spells it and the sending accounts it has written to.
+ */
+public struct BlockedRecipient: Equatable, Hashable {
+    public var address: String
+    public var accountIds: [String]
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(address: String, accountIds: [String]) {
+        self.address = address
+        self.accountIds = accountIds
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension BlockedRecipient: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeBlockedRecipient: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> BlockedRecipient {
+        return
+            try BlockedRecipient(
+                address: FfiConverterString.read(from: &buf), 
+                accountIds: FfiConverterSequenceString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: BlockedRecipient, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.address, into: &buf)
+        FfiConverterSequenceString.write(value.accountIds, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBlockedRecipient_lift(_ buf: RustBuffer) throws -> BlockedRecipient {
+    return try FfiConverterTypeBlockedRecipient.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBlockedRecipient_lower(_ value: BlockedRecipient) -> RustBuffer {
+    return FfiConverterTypeBlockedRecipient.lower(value)
 }
 
 
@@ -10269,6 +10523,127 @@ public func FfiConverterTypeReceipt_lift(_ buf: RustBuffer) throws -> Receipt {
 #endif
 public func FfiConverterTypeReceipt_lower(_ value: Receipt) -> RustBuffer {
     return FfiConverterTypeReceipt.lower(value)
+}
+
+
+/**
+ * One allowance, for Settings (spec/07): the account, the address as
+ * the user allowed it and when it was allowed.
+ */
+public struct RecipientAllowance: Equatable, Hashable {
+    public var accountId: String
+    public var address: String
+    public var createdAtMs: Int64
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(accountId: String, address: String, createdAtMs: Int64) {
+        self.accountId = accountId
+        self.address = address
+        self.createdAtMs = createdAtMs
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension RecipientAllowance: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeRecipientAllowance: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> RecipientAllowance {
+        return
+            try RecipientAllowance(
+                accountId: FfiConverterString.read(from: &buf), 
+                address: FfiConverterString.read(from: &buf), 
+                createdAtMs: FfiConverterInt64.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: RecipientAllowance, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.accountId, into: &buf)
+        FfiConverterString.write(value.address, into: &buf)
+        FfiConverterInt64.write(value.createdAtMs, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeRecipientAllowance_lift(_ buf: RustBuffer) throws -> RecipientAllowance {
+    return try FfiConverterTypeRecipientAllowance.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeRecipientAllowance_lower(_ value: RecipientAllowance) -> RustBuffer {
+    return FfiConverterTypeRecipientAllowance.lower(value)
+}
+
+
+/**
+ * The recipient check for one draft revision (spec/05 "Recipient
+ * check", spec/07): whether the check is ready and each blocked
+ * recipient with the sending accounts it has written to.
+ */
+public struct RecipientFence: Equatable, Hashable {
+    public var ready: Bool
+    public var blocked: [BlockedRecipient]
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(ready: Bool, blocked: [BlockedRecipient]) {
+        self.ready = ready
+        self.blocked = blocked
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension RecipientFence: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeRecipientFence: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> RecipientFence {
+        return
+            try RecipientFence(
+                ready: FfiConverterBool.read(from: &buf), 
+                blocked: FfiConverterSequenceTypeBlockedRecipient.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: RecipientFence, into buf: inout [UInt8]) {
+        FfiConverterBool.write(value.ready, into: &buf)
+        FfiConverterSequenceTypeBlockedRecipient.write(value.blocked, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeRecipientFence_lift(_ buf: RustBuffer) throws -> RecipientFence {
+    return try FfiConverterTypeRecipientFence.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeRecipientFence_lower(_ value: RecipientFence) -> RustBuffer {
+    return FfiConverterTypeRecipientFence.lower(value)
 }
 
 
@@ -17382,6 +17757,30 @@ fileprivate struct FfiConverterOptionString: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterOptionData: FfiConverterRustBuffer {
+    typealias SwiftType = Data?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterData.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterData.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterOptionTypeBackupCopy: FfiConverterRustBuffer {
     typealias SwiftType = BackupCopy?
 
@@ -18013,6 +18412,31 @@ fileprivate struct FfiConverterSequenceTypeBackupGeneration: FfiConverterRustBuf
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterSequenceTypeBlockedRecipient: FfiConverterRustBuffer {
+    typealias SwiftType = [BlockedRecipient]
+
+    public static func write(_ value: [BlockedRecipient], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeBlockedRecipient.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [BlockedRecipient] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [BlockedRecipient]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeBlockedRecipient.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterSequenceTypeBridgeIdentity: FfiConverterRustBuffer {
     typealias SwiftType = [BridgeIdentity]
 
@@ -18480,6 +18904,31 @@ fileprivate struct FfiConverterSequenceTypeReadingListItem: FfiConverterRustBuff
         seq.reserveCapacity(Int(len))
         for _ in 0 ..< len {
             seq.append(try FfiConverterTypeReadingListItem.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeRecipientAllowance: FfiConverterRustBuffer {
+    typealias SwiftType = [RecipientAllowance]
+
+    public static func write(_ value: [RecipientAllowance], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeRecipientAllowance.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [RecipientAllowance] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [RecipientAllowance]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeRecipientAllowance.read(from: &buf))
         }
         return seq
     }
@@ -18959,6 +19408,9 @@ private let initializationResult: InitializationResult = {
     if (uniffi_sb_ffi_checksum_method_core_set_account_appearance() != 2756) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_sb_ffi_checksum_method_core_set_account_logo() != 16820) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_sb_ffi_checksum_method_core_set_identity_appearance() != 18317) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -19118,6 +19570,9 @@ private let initializationResult: InitializationResult = {
     if (uniffi_sb_ffi_checksum_method_core_coverage() != 60982) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_sb_ffi_checksum_method_core_allow_recipient() != 57746) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_sb_ffi_checksum_method_core_cancel_send() != 23657) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -19128,6 +19583,15 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sb_ffi_checksum_method_core_out_box() != 29312) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sb_ffi_checksum_method_core_recipient_allowances() != 7416) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sb_ffi_checksum_method_core_recipient_fence() != 26968) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sb_ffi_checksum_method_core_remove_recipient_allowance() != 14151) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sb_ffi_checksum_method_core_resolve_unknown_send() != 878) {

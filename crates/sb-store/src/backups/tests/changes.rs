@@ -234,6 +234,7 @@ fn a_store_migrating_in_starts_due() {
     edit_closed(
         &paths,
         "DELETE FROM store_meta WHERE key IN ('content_changes', 'backed_up_changes');
+         DELETE FROM store_meta WHERE key = 'account_senders_from';
          DROP TABLE maintenance_jobs;
          ALTER TABLE backup_generations DROP COLUMN verification;
          ALTER TABLE backup_generations DROP COLUMN verified_at;
@@ -241,6 +242,9 @@ fn a_store_migrating_in_starts_due() {
          DROP TABLE proton_listed;
          DROP TABLE proton_accounts;
          DROP TABLE proton_body_failures;
+         DROP TABLE account_logos;
+         DROP TABLE recipient_allowances;
+         DROP TABLE d_account_senders;
          DROP INDEX mailboxes_provider_key;
          ALTER TABLE mailboxes DROP COLUMN provider_key;
          ALTER TABLE mailboxes DROP COLUMN remote_total;

@@ -161,9 +161,11 @@ pub use sb_mime::{
 pub use sb_platform::{default_cache_root, default_data_root};
 pub use sb_store::ACCOUNT_PALETTE_V1;
 pub use sb_store::appearance::{
-    AccountColor, AppearanceAssignment, StoredAccountAppearance, StoredIdentityAppearance,
-    account_appearance, appearance_generation, identity_appearance, identity_appearances,
-    initialize_account_appearance, set_account_appearance, set_identity_appearance,
+    AccountColor, AppearanceAssignment, LOGO_SIDE_PIXELS, MAX_LOGO_BYTES, StoredAccountAppearance,
+    StoredAccountLogo, StoredIdentityAppearance, account_appearance, account_logo, account_logos,
+    appearance_generation, check_logo_png, identity_appearance, identity_appearances,
+    initialize_account_appearance, set_account_appearance, set_account_logo,
+    set_identity_appearance,
 };
 pub use sb_store::compose::{
     ComposeCatalog, ComposeIdentity, MAX_RECIPIENT_INPUT_BYTES, RecipientInputError,
@@ -227,6 +229,10 @@ pub use sb_store::query::{
     SearchRebuildProgress, SearchScope, StoredSearchCoverage as Coverage, TextFormatError,
     UnknownCount, counts, read_search_date_page, read_search_relevance_page, search_date_ids,
     search_relevance_ids,
+};
+pub use sb_store::recipients::{
+    StoredAllowance, StoredBlockedRecipient, StoredRecipientFence, account_senders_ready,
+    allow_recipient, recipient_allowances, recipient_fence, remove_recipient_allowance,
 };
 pub use sb_store::recovery::{
     MAX_RECOVERY_PAGE_ROWS, RecoveryAnchor, RecoveryKey, RecoveryPage, RecoveryState,

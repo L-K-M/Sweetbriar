@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::task::{Context, Poll, Waker};
 use std::time::{Duration, Instant};
 
-use sb_test_support::ScratchDir;
+use sb_test_support::{MAX_LOGO_BYTES, ScratchDir, logo_png};
 
 use super::*;
 use crate::api::{CoreConfig, SHUT_DOWN_MESSAGE, open_core};
@@ -281,6 +281,8 @@ fn records_round_trip_through_the_uniffi_codec() {
             collides: true,
             assignment: AppearanceAssignment::Custom,
             revision: i64::MAX,
+            logo_png: Some(vec![0x89, b'P', b'N', b'G']),
+            logo_revision: Some(i64::MAX),
         }],
         identities: vec![
             IdentityAppearance {
@@ -920,6 +922,215 @@ fn malformed_stored_data_is_corrupt() {
     );
     let err = sb_test_support::block_on(core.appearance(token())).unwrap_err();
     assert!(matches!(err, CoreError::Corrupt { .. }), "{err}");
+    sb_test_support::block_on(core.shutdown());
+}
+
+/// `set_account_logo` commits through the FFI surface: the receipt
+/// crosses field by field, an account without a row carries neither
+/// logo value, clearing keeps the row while leaving no PNG, and a
+/// repeated key returns the stored receipt and writes nothing else,
+/// even aimed at another target or different values (spec/02 "Account
+/// logos", spec/07 "Commands").
+#[test]
+fn set_account_logo_commits_receipts_and_clears() {
+    let (_scratch, core) = scratch_core("ffi-appearance-logo-set");
+    let archive = archive_id(&core);
+    let png = logo_png();
+    let key = idempotency_key();
+    let receipt = sb_test_support::block_on(core.set_account_logo(
+        token(),
+        key.clone(),
+        archive.clone(),
+        None,
+        Some(png.clone()),
+    ))
+    .unwrap();
+    assert_eq!(receipt.command, "set_account_logo");
+    assert_eq!(receipt.result_json, "{\"revision\":1}");
+    assert!(receipt.created_at_ms > 0);
+
+    let appearance = sb_test_support::block_on(core.appearance(token())).unwrap();
+    assert_eq!(appearance.generation, 1);
+    let account = &appearance.accounts[0];
+    assert_eq!(account.logo_png.as_deref(), Some(png.as_slice()));
+    assert_eq!(account.logo_revision, Some(1));
+
+    // Clearing keeps the row, so its revision survives with no PNG.
+    let cleared = sb_test_support::block_on(core.set_account_logo(
+        token(),
+        idempotency_key(),
+        archive.clone(),
+        Some(1),
+        None,
+    ))
+    .unwrap();
+    assert_eq!(cleared.result_json, "{\"revision\":2}");
+    let appearance = sb_test_support::block_on(core.appearance(token())).unwrap();
+    assert_eq!(appearance.accounts[0].logo_png, None);
+    assert_eq!(appearance.accounts[0].logo_revision, Some(2));
+
+    for (target, revision, png) in [(archive.as_str(), Some(9), None), ("missing", None, None)] {
+        let replayed = sb_test_support::block_on(core.set_account_logo(
+            token(),
+            key.clone(),
+            target.to_owned(),
+            revision,
+            png,
+        ))
+        .unwrap();
+        assert_eq!(replayed, receipt);
+    }
+    assert_eq!(
+        sb_test_support::block_on(core.appearance(token()))
+            .unwrap()
+            .generation,
+        2,
+        "replay advanced nothing"
+    );
+    sb_test_support::block_on(core.shutdown());
+}
+
+/// Refused logo writes map to the typed FFI errors: `InvalidInput`
+/// naming the field — a malformed or oversized PNG, a bad revision, an
+/// empty id — `NotFound` for unknown targets, and `Conflict` on a stale
+/// revision, `Some` against an absent row included (spec/02, spec/07).
+#[test]
+fn refused_logo_writes_map_to_typed_errors() {
+    let (_scratch, core) = scratch_core("ffi-appearance-logo-refused");
+    let archive = archive_id(&core);
+    for (bytes, field) in [
+        (Vec::new(), "png"),
+        (vec![0u8; MAX_LOGO_BYTES + 1], "png"),
+        (b"not a png".to_vec(), "png"),
+    ] {
+        match sb_test_support::block_on(core.set_account_logo(
+            token(),
+            idempotency_key(),
+            archive.clone(),
+            None,
+            Some(bytes),
+        )) {
+            Err(CoreError::InvalidInput { field: named, .. }) => assert_eq!(named, field),
+            other => panic!("expected InvalidInput({field}), got {other:?}"),
+        }
+    }
+    assert!(matches!(
+        sb_test_support::block_on(core.set_account_logo(
+            token(),
+            idempotency_key(),
+            archive.clone(),
+            Some(0),
+            Some(logo_png()),
+        )),
+        Err(CoreError::InvalidInput { ref field, .. }) if field == "expected_revision"
+    ));
+    assert!(matches!(
+        sb_test_support::block_on(core.set_account_logo(
+            token(),
+            idempotency_key(),
+            String::new(),
+            None,
+            Some(logo_png()),
+        )),
+        Err(CoreError::InvalidInput { ref field, .. }) if field == "account_id"
+    ));
+    assert!(matches!(
+        sb_test_support::block_on(core.set_account_logo(
+            token(),
+            idempotency_key(),
+            "missing".to_owned(),
+            None,
+            Some(logo_png()),
+        )),
+        Err(CoreError::NotFound { .. })
+    ));
+    assert!(
+        matches!(
+            sb_test_support::block_on(core.set_account_logo(
+                token(),
+                idempotency_key(),
+                archive.clone(),
+                Some(1),
+                None,
+            )),
+            Err(CoreError::Conflict { .. })
+        ),
+        "`Some` against an absent row expects a row; it conflicts"
+    );
+    assert_eq!(
+        sb_test_support::block_on(core.appearance(token()))
+            .unwrap()
+            .generation,
+        0,
+        "the refused calls committed nothing"
+    );
+    sb_test_support::block_on(core.shutdown());
+}
+
+/// A changed logo write advances the committed appearance generation
+/// once and wakes a pending subscription; an unchanged write and a
+/// replayed key invalidate nothing (spec/02, spec/07).
+#[test]
+fn a_committed_logo_change_invalidates_a_waiting_next() {
+    let (_scratch, core) = scratch_core("ffi-appearance-logo-sub");
+    let archive = archive_id(&core);
+    let subscription = sb_test_support::block_on(core.subscribe_appearance(token(), 0)).unwrap();
+
+    let mut next = pin!(subscription.next(token()));
+    assert_quiet(next.as_mut());
+
+    let png = logo_png();
+    let key = idempotency_key();
+    sb_test_support::block_on(core.set_account_logo(
+        token(),
+        key.clone(),
+        archive.clone(),
+        None,
+        Some(png.clone()),
+    ))
+    .unwrap();
+    assert!(matches!(
+        next.as_mut().poll(&mut Context::from_waker(Waker::noop())),
+        Poll::Ready(Ok(AppearanceEvent::Invalidated { generation: 1 }))
+    ));
+
+    // The same key and the same PNG write nothing: quiet.
+    sb_test_support::block_on(core.set_account_logo(
+        token(),
+        key,
+        archive.clone(),
+        Some(1),
+        Some(png.clone()),
+    ))
+    .unwrap();
+    sb_test_support::block_on(core.set_account_logo(
+        token(),
+        idempotency_key(),
+        archive.clone(),
+        Some(1),
+        Some(png),
+    ))
+    .unwrap();
+    assert_quiet(pin!(subscription.next(token())).as_mut());
+    assert_eq!(
+        sb_test_support::block_on(core.appearance(token()))
+            .unwrap()
+            .generation,
+        1
+    );
+
+    sb_test_support::block_on(core.set_account_logo(
+        token(),
+        idempotency_key(),
+        archive,
+        Some(1),
+        None,
+    ))
+    .unwrap();
+    assert_eq!(
+        sb_test_support::block_on(subscription.next(token())).unwrap(),
+        AppearanceEvent::Invalidated { generation: 2 }
+    );
     sb_test_support::block_on(core.shutdown());
 }
 

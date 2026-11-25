@@ -136,6 +136,11 @@ CREATE TABLE identity_appearance (
   revision             INTEGER NOT NULL DEFAULT 1
 ) STRICT;
 
+CREATE TABLE account_logos (                         -- migration 37 (M6.6b)
+  account_id  TEXT PRIMARY KEY REFERENCES accounts(account_id),
+  png         BLOB CHECK (png IS NULL OR length(png) BETWEEN 1 AND 65536), -- null: cleared
+  revision    INTEGER NOT NULL DEFAULT 1
+) STRICT;
 ```
 
 - The **local archive** is an account with `kind='local'`. Imported
@@ -213,17 +218,7 @@ in place of its monogram (08). A logo is never sent and never leaves
 the device except in backups.
 
 - **Migration 37** adds `account_logos`; it only adds a table, so it
-  takes no snapshot. Until M6.6b lands, its definition stays out of the
-  schema block above, which the schema drift test executes; M6.6b
-  moves it there:
-
-  ```text
-  CREATE TABLE account_logos (
-    account_id  TEXT PRIMARY KEY REFERENCES accounts(account_id),
-    png         BLOB CHECK (png IS NULL OR length(png) BETWEEN 1 AND 65536), -- null: cleared
-    revision    INTEGER NOT NULL DEFAULT 1
-  ) STRICT;
-  ```
+  takes no snapshot.
 - **Format:** the app normalizes a chosen image to a PNG of exactly
   128 × 128 pixels and at most 65,536 bytes. The core checks the bytes
   without decoding pixels: the 8-byte PNG signature; a first chunk that
@@ -698,11 +693,9 @@ from discarded drafts. It is listed in the backup.
 
 Owner decision 2026-11-24: Sweetbriar blocks sending from an account to
 an address that has written only to other accounts (05 "Recipient
-check"). Two tables carry it; migration 38 adds both. Until M6.7a lands
-their definitions stay out of the schema blocks, which the schema drift
-test executes:
+check"). Two tables carry it; migration 38 adds both:
 
-```text
+```sql
 CREATE TABLE d_account_senders (                  -- derived: who has written to each sending account
   account_id     TEXT NOT NULL REFERENCES accounts(account_id),
   canonical      TEXT NOT NULL,                   -- the Contacts canonical form
@@ -1908,6 +1901,10 @@ CREATE INDEX d_message_bindings_by_assembly ON d_message_bindings(acquisition_id
   adds a column, so it takes no snapshot.
 - **Migration 37 (plan M6.6b)** adds `account_logos` ("Account
   logos"); it only adds a table, so it takes no snapshot.
+- **Migration 38 (plan M6.7a1)** adds `d_account_senders` and
+  `recipient_allowances` ("Account senders and recipient allowances"),
+  advances `seen_address_inputs` and stores `account_senders_from`
+  ("Readiness"); it rewrites no data, so it takes no snapshot.
 - **Before any migration that rewrites or drops data,** the engine takes a
   `VACUUM INTO` snapshot, keeping the last two. Migration 28 is the first;
   migration 1 has none. A new store migrating from version 0 holds
