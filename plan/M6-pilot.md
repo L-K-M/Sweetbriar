@@ -246,6 +246,59 @@ account logo and the Settings letter, logo and address controls.
   - **owner:** the M6.2 recognition check, repeated in Color Wash with
     the owner's accounts.
 
+### M6.7 Recipient check — L, linux + macos-ci + owner
+
+Owner request, 2026-11-24 (research 15 "Recipient fencing"): block
+sending from an account to an address that has written only to other
+accounts, with a lasting per-address allowance. Stacks on M6.6c for
+the compose banners' surroundings; the core step can start at once.
+
+**M6.7a (core) — L, linux.** Account senders, allowances, the check
+and the refusal.
+- **Spec:** 02 ("Account senders and recipient allowances", migration
+  38), 05 ("Recipient check"), 07 (`recipient_fence`,
+  `recipient_allowances`, `allow_recipient`,
+  `remove_recipient_allowance`, `send_draft`).
+- **Depends on:** M4.3.
+- **Deliverables:** migration 38 with its backfill; account-sender rows
+  written by the received-address sweep; the query and commands with
+  receipts through `sb-engine`, `sb-service` and `sb-ffi`;
+  `send_draft`'s refusal; regenerated bindings. If the measured diff exceeds the
+  limit, split the FFI export into its own step.
+- **Acceptance:**
+  - an address that wrote only to B is blocked from A in To, Cc and
+    Bcc, for a new message, a reply and a forward; one that wrote to A,
+    or to no account, passes;
+  - before the first pass after migration 38 completes the check
+    reports not ready and blocks nothing, even with B's rows recorded;
+  - the local archive's mail and A's own sent mail add no history;
+  - `send_draft` refuses a blocked revision with `Conflict` naming
+    `recipient_fence`, whatever the `acks`, and sends after
+    `allow_recipient`, a route change or removing the recipient from
+    the draft;
+  - allowances replay idempotently, survive a derived rebuild and
+    backup and restore, and both commands refuse the local archive;
+  - migration 38's backfill matches the incremental rows on a seeded
+    archive, and a vanished occurrence keeps its row.
+
+**M6.7b (macOS UI) — M, macos-ci + owner.** The banners, the
+allowance flow and Settings → Sending's list.
+- **Spec:** 08 ("Recipient check").
+- **Depends on:** M6.7a, M6.6c.
+- **Acceptance (app-hosted tests):**
+  - a blocked recipient shows its banner and warning token, and Send is
+    disabled with the reason; a check that isn't ready shows its note
+    and blocks nothing;
+  - Use <account> switches From and clears the banner; an address that
+    wrote to two other accounts shows both chips and offers both;
+  - Allow asks first; Cancel changes nothing; Allow clears the banner
+    and the allowance appears in Settings, where Remove brings the
+    block back;
+  - a `Conflict` from Send for `recipient_fence` shows the banner;
+  - **owner:** sending from one Proton address to a correspondent of
+    another is blocked, and allowed after Allow (needs a second sending
+    account; recorded as pending until one exists).
+
 ### Pilot exit
 
 The pilot is done when every item in the definition of done is checked
