@@ -57,6 +57,39 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
         })
     private let canWrite: @MainActor () -> Bool
     private let catalogSource: any ComposeCatalogSource
+    /// Names the account a reply's original arrived in; nil shows no
+    /// reply line.
+    private let replyAccountSource: (any ReplyAccountSource)?
+    /// The reply line's account: its id and, once read, its name.
+    private var replyAccountId: String?
+    private var replyAccountName: String?
+    private var replyAccountTask: Task<Void, Never>?
+    /// "Reply to a message received in" and that account's chip, under
+    /// the header (spec/08 "Reply line").
+    let replyLine = ComposeReplyLine(frame: .zero)
+    /// Color Wash's gradient behind everything below the header.
+    let washView = ComposeWashView(frame: .zero)
+    let editorScroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 640, height: 340))
+    /// The header rows' labels, which take the strip foreground on the
+    /// wash's strip fill.
+    private var headerLabels: [NSTextField] = []
+    /// Where the wash begins: under Subject, or under the reply line
+    /// while it shows.
+    private var washBelowSubject: NSLayoutConstraint?
+    private var washBelowReplyLine: NSLayoutConstraint?
+    /// What Send shows now; nil is the plain Send.
+    private(set) var sendAsAccount: ComposeCuePresentation.SendAsAccount?
+    /// Increase Contrast and Reduce Transparency, read on each render;
+    /// tests replace it (spec/08 "Fallbacks").
+    var displayOptions: () -> (increaseContrast: Bool, reduceTransparency: Bool) = {
+        (
+            NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast,
+            NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency
+        )
+    } {
+        didSet { renderChrome() }
+    }
+    private var displayOptionsObserver: (any NSObjectProtocol)?
     private let preferredAccountId: String?
     private let sendSource: (any SendSource)?
     private let sendSettingsSource: (any SendSafetySettingsSource)?
@@ -107,7 +140,7 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
             ?? NSImage())
     private let crossAccountUseButton = NSButton(title: "", target: nil, action: nil)
     private let crossAccountKeepButton = NSButton(title: "", target: nil, action: nil)
-    private lazy var crossAccountBannerView: NSStackView = {
+    private(set) lazy var crossAccountBannerView: NSStackView = {
         crossAccountLabel.textColor = .labelColor
         crossAccountLabel.setAccessibilityIdentifier("crossAccountBannerLabel")
         crossAccountSymbol.contentTintColor = .labelColor
@@ -125,6 +158,7 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
         stack.spacing = 8
         stack.alignment = .centerY
         stack.setAccessibilityIdentifier("crossAccountBanner")
+        stack.edgeInsets = Self.bannerInsets
         crossAccountLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
         stack.isHidden = true
         return stack
@@ -165,6 +199,7 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
         stack.spacing = 8
         stack.alignment = .centerY
         stack.setAccessibilityIdentifier("externalEditBanner")
+        stack.edgeInsets = Self.bannerInsets
         externalEditLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
         stack.isHidden = true
         return stack
@@ -189,6 +224,7 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
         pasteSource: (any PasteConversionSource)? = nil,
         pasteboard: NSPasteboard = .general,
         externalEditor: ExternalEditor? = nil,
+        replyAccountSource: (any ReplyAccountSource)? = nil,
         announceRoute: @escaping @MainActor (String) -> Void = { message in
             NSAccessibility.post(
                 element: NSApp!, notification: .announcementRequested,
@@ -205,6 +241,7 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
         self.pasteSource = pasteSource
         self.pasteboard = pasteboard
         self.externalEditor = externalEditor
+        self.replyAccountSource = replyAccountSource
         catalogSource = source
         self.preferredAccountId = preferredAccountId
         let policy = ComposeSavePolicy(source: source, canWrite: canWrite)
@@ -234,6 +271,14 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
             }
         }
         buildContent(window)
+        displayOptionsObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self, !finished else { return }
+                renderChrome()
+            }
+        }
         installRouteAnnouncementRecorder(in: window)
         render()
         observeModel()
@@ -249,6 +294,11 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
     }
 
     required init?(coder: NSCoder) { fatalError("ComposeWindowController is built in code") }
+
+    /// Room around a banner's plate of window background.
+    private static let bannerInsets = NSEdgeInsets(top: 6, left: 8, bottom: 6, right: 8)
+    /// Send's widest title before a long account name truncates.
+    private static let sendMaximumWidth: CGFloat = 260
 
     /// The draft's first load and render are done: its fields take
     /// keystrokes unless the load failed.
@@ -282,6 +332,7 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
             let label = NSTextField(labelWithString: title)
             label.alignment = .right
             label.widthAnchor.constraint(equalToConstant: 32).isActive = true
+            headerLabels.append(label)
             let row = NSStackView(views: [label, field.control])
             row.spacing = 8
             field.control.setContentHuggingPriority(.defaultLow, for: .horizontal)
@@ -311,14 +362,22 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
         statusLabel.textColor = .secondaryLabelColor
         cueStatusLabel.setAccessibilityIdentifier("composeAppearanceStatus")
         cueStatusLabel.textColor = .secondaryLabelColor
+        let fromLabel = NSTextField(labelWithString: "From:")
+        headerLabels.append(fromLabel)
+        headerLabels.append(replyLine.label)
         let identity = NSStackView(views: [
-            NSTextField(labelWithString: "From:"), identityControls.popup, identityControls.refreshButton,
+            fromLabel, identityControls.popup, identityControls.refreshButton,
         ])
         identity.spacing = 8
         identityControls.popup.setContentHuggingPriority(.defaultLow, for: .horizontal)
         sendButton.target = self
         sendButton.action = #selector(send)
         sendButton.setAccessibilityIdentifier("composeSend")
+        // A long account name truncates in the middle (spec/08 "Send as
+        // the account").
+        sendButton.cell?.lineBreakMode = .byTruncatingMiddle
+        sendButton.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        sendButton.widthAnchor.constraint(lessThanOrEqualToConstant: Self.sendMaximumWidth).isActive = true
         undoSendButton.target = self
         undoSendButton.action = #selector(undoSend)
         undoSendButton.setAccessibilityIdentifier("composeUndoSend")
@@ -329,7 +388,7 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
             abandonButton,
         ])
         controls.spacing = 8
-        let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 640, height: 340))
+        let scroll = editorScroll
         scroll.hasVerticalScroller = true
         scroll.autohidesScrollers = true
         scroll.borderType = .bezelBorder
@@ -349,7 +408,7 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
         textView.textContainer?.widthTracksTextView = true
         let stack = NSStackView(
             views: [crossAccountBannerView, externalEditBanner, identity as NSView] + recipientRows + [
-                subjectField, attachmentControls.list, controls, sendBar, scroll, statusLabel,
+                subjectField, replyLine, attachmentControls.list, controls, sendBar, scroll, statusLabel,
                 cueStatusLabel,
             ])
         stack.orientation = .vertical
@@ -357,12 +416,24 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
         stack.spacing = 10
         stack.translatesAutoresizingMaskIntoConstraints = false
         let content = NSView()
+        washView.translatesAutoresizingMaskIntoConstraints = false
+        washView.isHidden = true
+        content.addSubview(washView)
         content.addSubview(stack)
         window.contentView = content
+        // Halfway into the stack's spacing under the last header row.
+        washBelowSubject = washView.topAnchor.constraint(
+            equalTo: subjectField.bottomAnchor, constant: stack.spacing / 2)
+        washBelowReplyLine = washView.topAnchor.constraint(
+            equalTo: replyLine.bottomAnchor, constant: stack.spacing / 2)
+        washBelowSubject?.isActive = true
         guard let contentGuide = window.contentLayoutGuide else {
             preconditionFailure("a titled compose window must have a content layout guide")
         }
         NSLayoutConstraint.activate([
+            washView.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+            washView.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+            washView.bottomAnchor.constraint(equalTo: content.bottomAnchor),
             stack.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 16),
             stack.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -16),
             NSLayoutConstraint(
@@ -696,6 +767,10 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
             await identityControls.stopAndWait()
             model.stop()
             finished = true
+            replyAccountTask?.cancel()
+            if let displayOptionsObserver {
+                NSWorkspace.shared.notificationCenter.removeObserver(displayOptionsObserver)
+            }
             window?.close()
             onClosed?()
             return true
@@ -931,8 +1006,12 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
         guard let window else { return }
         let strip = identityStrip.strip
         strip.cueMode = cue?.mode
+        let options = displayOptions()
+        let rendered = ComposeCuePresentation.renderedMode(
+            cue?.mode, increaseContrast: options.increaseContrast,
+            reduceTransparency: options.reduceTransparency)
         let tint = ComposeCuePresentation.windowTint(
-            mode: cue?.mode, content: strip.content, appearance: strip.effectiveAppearance)
+            mode: rendered, content: strip.content, appearance: strip.effectiveAppearance)
         if let tint {
             if !window.styleMask.contains(.fullSizeContentView) {
                 window.styleMask.insert(.fullSizeContentView)
@@ -948,6 +1027,8 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
                 window.backgroundColor = .windowBackgroundColor
             }
         }
+        renderWash(rendered, content: strip.content, tinted: tint != nil)
+        renderSendAsAccount(rendered, content: strip.content)
         let message: String?
         if let error = cue?.lastError {
             message =
@@ -1002,6 +1083,110 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
         return !content.to.isEmpty || !content.cc.isEmpty || !content.bcc.isEmpty
     }
 
+    /// Color Wash's gradient under the header, with the editor, status
+    /// text and header labels on it; banners keep a plate of window
+    /// background in either tinted mode (spec/08 "Color Wash mode").
+    private func renderWash(_ mode: ComposeCueMode?, content: IdentityStripView.Content, tinted: Bool) {
+        let appearance = identityStrip.strip.effectiveAppearance
+        let stops = ComposeCuePresentation.wash(mode: mode, content: content, appearance: appearance)
+        washView.stops = stops
+        let onWash = stops != nil
+        if washView.isHidden == onWash { washView.isHidden = !onWash }
+        if editorScroll.drawsBackground == onWash { editorScroll.drawsBackground = !onWash }
+        if textView.drawsBackground == onWash { textView.drawsBackground = !onWash }
+        // The secondary label color is under 4.5:1 even on the plain
+        // background; on the wash status text takes the label color.
+        let status: NSColor = onWash ? .labelColor : .secondaryLabelColor
+        for label in [statusLabel, cueStatusLabel, sendStatusLabel] where label.textColor != status {
+            label.textColor = status
+        }
+        var headerInk = NSColor.labelColor
+        if onWash, case .identity(_, _, let tokens) = content {
+            let dark = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            headerInk = appearanceColor(dark ? tokens.dark.foregroundSrgb : tokens.light.foregroundSrgb)
+        }
+        for label in headerLabels where label.textColor != headerInk { label.textColor = headerInk }
+        var plate: CGColor?
+        if tinted {
+            appearance.performAsCurrentDrawingAppearance { plate = NSColor.windowBackgroundColor.cgColor }
+        }
+        for banner in [crossAccountBannerView, externalEditBanner] {
+            banner.wantsLayer = true
+            banner.layer?.backgroundColor = plate
+            banner.layer?.cornerRadius = plate == nil ? 0 : 6
+        }
+    }
+
+    /// Send names the account in Color Wash and Strong, filled with the
+    /// marker and labelled in its ink (spec/08 "Send as the account").
+    private func renderSendAsAccount(_ mode: ComposeCueMode?, content: IdentityStripView.Content) {
+        let named = ComposeCuePresentation.sendAsAccount(
+            mode: mode, content: content, identity: identityControls.model.selectedIdentity,
+            appearance: identityStrip.strip.effectiveAppearance)
+        guard named != sendAsAccount else { return }
+        sendAsAccount = named
+        guard let named else {
+            sendButton.bezelColor = nil
+            sendButton.title = "Send"
+            sendButton.setAccessibilityLabel(nil)
+            return
+        }
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.alignment = .center
+        paragraph.lineBreakMode = .byTruncatingMiddle
+        sendButton.bezelColor = named.fill
+        sendButton.attributedTitle = NSAttributedString(
+            string: named.title,
+            attributes: [
+                .foregroundColor: named.ink, .paragraphStyle: paragraph,
+                .font: sendButton.font ?? .systemFont(ofSize: NSFont.systemFontSize),
+            ])
+        sendButton.setAccessibilityLabel(named.accessibilityLabel)
+    }
+
+    /// The reply line shows for a reply or reply-all once its account's
+    /// name is read, whichever account that is (spec/08 "Reply line").
+    private func renderReplyLine() {
+        let accountId = model.draft?.replyAccountId
+        if accountId != replyAccountId {
+            replyAccountId = accountId
+            replyAccountName = nil
+            replyAccountTask?.cancel()
+            if let accountId, let source = replyAccountSource {
+                replyAccountTask = Task { [weak self] in
+                    let name: String
+                    do {
+                        let accounts = try await source.accounts()
+                        name = accounts.first { $0.accountId.utf8.elementsEqual(accountId.utf8) }?
+                            .displayName ?? "an account Sweetbriar can't find"
+                    } catch {
+                        name = "an account Sweetbriar couldn't read"
+                    }
+                    guard let self, !Task.isCancelled, !finished, replyAccountId == accountId else { return }
+                    replyAccountName = name
+                    renderReplyLine()
+                }
+            }
+        }
+        let shown: (id: String, name: String)? = accountId.flatMap { id in replyAccountName.map { (id, $0) } }
+        if let shown {
+            replyLine.show(accountId: shown.id, accountName: shown.name, appearance: appearance?.appearance)
+        }
+        guard replyLine.isHidden == (shown != nil) else { return }
+        // A hidden arranged view leaves the hierarchy: move the wash's
+        // anchor off the reply line before hiding it and onto it after
+        // showing it.
+        if shown == nil {
+            washBelowReplyLine?.isActive = false
+            replyLine.isHidden = true
+            washBelowSubject?.isActive = true
+        } else {
+            washBelowSubject?.isActive = false
+            replyLine.isHidden = false
+            washBelowReplyLine?.isActive = true
+        }
+    }
+
     private func renderSendChrome() {
         sendButton.isEnabled = canSendNow
         sendButton.toolTip =
@@ -1045,6 +1230,7 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
         attachmentControls.render()
         renderCrossAccountBanner()
         renderExternalEditBanner()
+        renderReplyLine()
         renderSendChrome()
         abandonButton.isEnabled = !isClosing && !finished && keepingBoth == nil
         keepBothButton.isHidden = model.conflict == nil || openCopy == nil
