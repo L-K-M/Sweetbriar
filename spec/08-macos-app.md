@@ -40,6 +40,34 @@ that is no longer `editing` or `queued`, an archive that can't open, or
 a quit or restore in progress restores no window and reports nothing:
 restoration is a convenience, not a promise.
 
+### Main window chrome
+
+The main window is laid out as Mail's on macOS 26:
+
+- **Full-height sidebar.** The content runs under a unified toolbar
+  (`.fullSizeContentView`), so the sidebar's glass reaches the top of
+  the window. The toolbar's sidebar button and a tracking separator sit
+  over the sidebar; the other items follow the message list.
+- **Title and subtitle.** The title names what the list shows (the
+  chosen mailbox or view, "Drafts (local)", "Out Box" or "Search"); the
+  subtitle gives its account and its count once exact, with the unread
+  count where the sidebar shows one ("Work · 240 messages, 3 unread"),
+  or a search's result count. The window keeps the accessibility
+  identifier `Sweetbriar` whatever its title.
+- **Toolbar.** New Message; Reply, Reply All and Forward; Archive, Move
+  to Trash and Move to…; a Labels menu with Add Label… and Remove
+  Label…; Mark as Read and Star; then the search field. Each item is a
+  command the menus also carry, under the same identifier, and is
+  enabled exactly when that command is: a group validates each of its
+  items. Read and Star show what a click does ("Mark as Unread",
+  "Unstar"). The toolbar is customizable, its configuration and the
+  window's frame and split positions are saved, and a narrow window
+  collapses the search field to a button and moves the items that don't
+  fit into the overflow menu.
+- **Integrity banner** sits under the toolbar as a titlebar accessory,
+  takes no height while there is nothing to report, and never sets the
+  window's width.
+
 ## Backups settings (M1.8j)
 
 Settings → Backups uses only the Service API through the hand-written
@@ -379,7 +407,13 @@ M4.4c. Choosing Out Box shows the Out Box in the list pane, as Drafts
 
 ## Search (M1.6)
 
-- The main window's search field uses the core parser/formatter (06, 07).
+- The main window's search field is the toolbar's search item; Edit →
+  Find → Search Mail (⌥⌘F) expands it and moves the keyboard into it.
+  The strip below the toolbar (scope, sort, Save as View…, chips and
+  the parse status) shows only while a search is under way. Escape
+  clears the field, closes the search and hands the keyboard back to
+  the list it returns to.
+- The search field uses the core parser/formatter (06, 07).
   Chips represent AST clauses; editing text or chips preserves grouping,
   negation, explicit timezone/clock and ids. Complex Boolean groups remain
   editable text, never flattened into a different query. No Swift parser.
@@ -1012,7 +1046,8 @@ and the undo toast offers **Undo** for 10 s.
   - **File:** New Message (⌘N), Close (⌘W), Save (⌘S), Attach Files…
     (⇧⌘A), Add Proton Account… and Import… (⇧⌘I);
   - **Edit:** the standard editing items, Paste as Markdown… (⌥⌘V),
-    Insert Image…, Edit in External Editor (⇧⌘E), and Find, Find and
+    Insert Image…, Edit in External Editor (⇧⌘E), and Find: Search Mail
+    (⌥⌘F) into the main window's search field, then Find, Find and
     Replace, Find Next and Previous through the focused text view's find
     bar (the composer, plain-text and Reading-view bodies);
   - **View:** Show or Hide Sidebar (⌃⌘S), Message Source (⌥⌘U), Reading

@@ -20,10 +20,15 @@ import SweetbriarBridge
 @MainActor
 final class MainWindowController: NSWindowController, NSWindowDelegate {
     static let defaultContentSize = NSSize(width: 1100, height: 700)
+    /// Room for the sidebar, a list and a narrow reader.
+    static let minimumContentSize = NSSize(width: 800, height: 420)
+    private static let frameAutosaveName = "MainWindow"
+    private static let splitAutosaveName = "MainWindowSplit"
     /// The window's title, also how UI tests find it.
     static let title = "Sweetbriar"
     private static let sidebarMinimumWidth: CGFloat = 180
     private static let listMinimumWidth: CGFloat = 320
+    private static let readerMinimumWidth: CGFloat = 280
     private static let toastMargin: CGFloat = 20
 
     private let session: CoreSession
@@ -83,29 +88,47 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     private let messageWindows = MessageWindows()
     private(set) var filing: FilingController?
     private var closed = false
+    /// The split of the installed content, for View → Show Sidebar.
+    private var split: NSSplitViewController?
+    /// The integrity banner, under the toolbar across the window.
+    private var banner: IntegrityBannerAccessory?
+    /// The toolbar's search item; its field is the installed list's.
+    private weak var searchItem: NSSearchToolbarItem?
+    /// The installed list's row count, for the subtitle.
+    private var shownCount: Int?
+    /// Targets New Message, Reply, Reply All and Forward in the toolbar:
+    /// the menu builder, so both take the same admission.
+    private weak var composeCommands: MainMenuBuilder?
 
 
     init(session: CoreSession, appearance: SharedAppearance, cues: SharedComposeCue? = nil,
          backups: SharedBackups, readingViewMemory: SharedReadingViewMemory,
          openBackups: @escaping @MainActor () -> Void = {},
-         openDraft: @escaping @MainActor (String) -> Void = { _ in }) {
+         openDraft: @escaping @MainActor (String) -> Void = { _ in },
+         composeCommands: MainMenuBuilder? = nil) {
         self.session = session
+        self.composeCommands = composeCommands
         self.appearance = appearance
         self.cues = cues
         self.backups = backups
         self.readingViewMemory = readingViewMemory
         self.openBackups = openBackups
         self.openDraft = openDraft
-        // Not full-size content: the panes start below the toolbar, and
-        // AppKit would blur a title bar's height of them as if they ran
-        // under it.
+        // Full-size content: the sidebar runs the window's height under
+        // the toolbar, as a Liquid Glass sidebar; the list and reader
+        // panes keep their content below it through the safe area.
         let window = NSWindow(
             contentRect: NSRect(origin: .zero, size: Self.defaultContentSize),
-            styleMask: [.titled, .closable, .miniaturizable, .resizable],
+            styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
             backing: .buffered,
             defer: false
         )
         window.title = Self.title
+        // UI tests and accessibility find the window by this identifier
+        // while its title follows the shown mailbox.
+        window.setAccessibilityIdentifier(Self.title)
+        window.toolbarStyle = .unified
+        window.contentMinSize = Self.minimumContentSize
         window.isReleasedWhenClosed = false
         let content = NSView(frame: NSRect(origin: .zero, size: Self.defaultContentSize))
         statusLabel.alignment = .center
@@ -123,8 +146,12 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         let toolbar = NSToolbar(identifier: "ch.lkmc.Sweetbriar.mainToolbar")
         toolbar.delegate = self
         toolbar.displayMode = .iconOnly
+        toolbar.allowsUserCustomization = true
+        toolbar.autosavesConfiguration = true
         window.toolbar = toolbar
         window.center()
+        // Restores the last frame, if one was saved.
+        window.setFrameAutosaveName(Self.frameAutosaveName)
     }
 
     required init?(coder: NSCoder) {
@@ -199,6 +226,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         self.reader = nil
         imports = nil
         signIn = nil
+        retireChrome()
         showArchiveStatus("Updating the archive…")
         let tasks = contentTasks
         let writes = self.writes
@@ -334,6 +362,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
             listPane?.show(.messages)
             messageList?.show(spec)
             if wasNonMessage, !closed { self.reader?.select(messageList?.list?.selectedIDs ?? []) }
+            self.updateTitle()
         }
         sidebar.onChooseDrafts = { [weak self, weak drafts, weak listPane] in
             guard let self, contentSerial == serial else { return }
@@ -341,6 +370,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
             self.reader?.select([])
             self.markRead?.show(nil)
             drafts?.reload()
+            self.updateTitle()
         }
         sidebar.onChooseOutBox = { [weak self, weak outBox, weak listPane] in
             guard let self, contentSerial == serial else { return }
@@ -348,6 +378,12 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
             self.reader?.select([])
             self.markRead?.show(nil)
             outBox?.reload()
+            self.updateTitle()
+        }
+        messageList.onCountChange = { [weak self] count in
+            guard let self, contentSerial == serial else { return }
+            shownCount = count
+            updateTitle()
         }
         messageList.onGeneration = { [weak self] generation in
             guard let self, contentSerial == serial else { return }
@@ -380,30 +416,31 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         let split = NSSplitViewController()
         let sidebarItem = NSSplitViewItem(sidebarWithViewController: sidebar)
         sidebarItem.minimumThickness = Self.sidebarMinimumWidth
+        sidebarItem.canCollapse = true
         let listItem = NSSplitViewItem(contentListWithViewController: listPane)
         listItem.minimumThickness = Self.listMinimumWidth
+        let readerItem = NSSplitViewItem(viewController: reader)
+        readerItem.minimumThickness = Self.readerMinimumWidth
         split.addSplitViewItem(sidebarItem)
         split.addSplitViewItem(listItem)
-        split.addSplitViewItem(NSSplitViewItem(viewController: reader))
+        split.addSplitViewItem(readerItem)
+        // Pane widths persist with the window's frame.
+        split.splitView.autosaveName = Self.splitAutosaveName
         let root = NSViewController()
         root.view = NSView()
         root.addChild(split)
-        let banner = NSHostingView(rootView: IntegrityBanner(model: backupsModel, openBackups: openBackups))
-        banner.sizingOptions = [.intrinsicContentSize]
-        banner.setContentHuggingPriority(.required, for: .vertical)
-        banner.translatesAutoresizingMaskIntoConstraints = false
         split.view.translatesAutoresizingMaskIntoConstraints = false
-        root.view.addSubview(banner)
         root.view.addSubview(split.view)
+        // The split fills the window, under the toolbar: the sidebar's
+        // glass runs its full height, and each pane's safe area keeps its
+        // content below the toolbar.
         NSLayoutConstraint.activate([
-            banner.topAnchor.constraint(equalTo: root.view.safeAreaLayoutGuide.topAnchor),
-            banner.leadingAnchor.constraint(equalTo: root.view.leadingAnchor),
-            banner.trailingAnchor.constraint(equalTo: root.view.trailingAnchor),
-            split.view.topAnchor.constraint(equalTo: banner.bottomAnchor),
+            split.view.topAnchor.constraint(equalTo: root.view.topAnchor),
             split.view.leadingAnchor.constraint(equalTo: root.view.leadingAnchor),
             split.view.trailingAnchor.constraint(equalTo: root.view.trailingAnchor),
             split.view.bottomAnchor.constraint(equalTo: root.view.bottomAnchor),
         ])
+        self.split = split
         let filing = FilingController(
             source: bridge, window: window, list: messageList, sidebar: sidebarModel,
             appearance: appearanceModel, writes: writes, canWrite: { policy.canWrite },
@@ -424,6 +461,15 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         let frame = window.frame
         window.contentViewController = root
         window.setFrame(frame, display: true)
+        // The integrity banner spans the window under the toolbar and
+        // collapses while there is nothing to say (spec/08 "Backups").
+        // Added once the content is in, so its first measure can't
+        // resize the window around the old status view.
+        let banner = IntegrityBannerAccessory(model: backupsModel, openBackups: openBackups)
+        self.banner?.removeFromParent()
+        window.addTitlebarAccessoryViewController(banner)
+        self.banner = banner
+        window.setFrame(frame, display: true)
 
         self.bridge = bridge
         markRead?.cancel()
@@ -437,10 +483,15 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         self.drafts = drafts
         self.outBox = outBox
         self.listPane = listPane
+        // The toolbar's search item edits this list's search.
+        searchItem?.searchField = messageList.searchField
+        messageList.searchField.isEnabled = true
+        messageList.onSearchCancel = { [weak self] in self?.searchItem?.endSearchInteraction() }
         contentTasks.run { [weak self] in
             await sidebarModel.reload()
             guard let self, !Task.isCancelled, contentSerial == serial else { return }
             sidebar.reloadSections()
+            updateTitle()
             await beforeDefaultChoice?()
             guard !Task.isCancelled, contentSerial == serial else { return }
             // A list chosen while the sidebar loaded stays chosen.
@@ -517,6 +568,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
             await sidebarModel.reload()
             guard let self, !Task.isCancelled, contentSerial == serial else { return }
             sidebar.reloadSections()
+            updateTitle()
         }
     }
 
@@ -529,7 +581,87 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
             await sidebarModel.noteGeneration(generation)
             guard let self, !Task.isCancelled, contentSerial == serial else { return }
             sidebar.reloadSections()
+            updateTitle()
         }
+    }
+}
+
+// MARK: - Title, banner and search field (spec/08 "Windows")
+
+extension MainWindowController {
+    /// The window's title names what the list pane shows, as Mail's
+    /// does, and its subtitle the shown list's size: the account and
+    /// the message and unread counts. The Window menu, Mission Control
+    /// and Stage Manager show them too.
+    func updateTitle() {
+        guard let window else { return }
+        let presentation = Self.titlePresentation(
+            pane: listPane?.pane, searching: messageList?.isShowingSearch == true,
+            entry: sidebar?.chosenEntry, account: sidebar?.chosenAccountTitle, count: shownCount)
+        if window.title != presentation.title { window.title = presentation.title }
+        if window.subtitle != presentation.subtitle { window.subtitle = presentation.subtitle }
+    }
+
+    /// The title and subtitle for what the list pane shows; free of the
+    /// window's state for tests.
+    static func titlePresentation(
+        pane: ListPaneController.Pane?, searching: Bool, entry: SidebarModel.Entry?,
+        account: String?, count: Int?
+    ) -> (title: String, subtitle: String) {
+        switch pane {
+        case .drafts: return ("Drafts (local)", "")
+        case .outBox: return ("Out Box", "")
+        case .messages, nil: break
+        }
+        if searching {
+            return ("Search", count.map { $0 == 1 ? "1 result" : "\($0.formatted()) results" } ?? "")
+        }
+        guard let entry else { return (Self.title, "") }
+        var parts: [String] = []
+        if let account { parts.append(account) }
+        if let count {
+            var counted = count == 1 ? "1 message" : "\(count.formatted()) messages"
+            if let unread = entry.unread, unread > 0 { counted += ", \(unread.formatted()) unread" }
+            parts.append(counted)
+        }
+        return (entry.title, parts.joined(separator: " · "))
+    }
+
+    /// Edit → Find → Search Mail (⌥⌘F): into the toolbar's search
+    /// field, expanding it if the toolbar collapsed it.
+    @objc func focusSearch(_ sender: Any?) {
+        guard let searchItem, messageList != nil, window?.toolbar?.isVisible == true else {
+            return NSSound.beep()
+        }
+        searchItem.beginSearchInteraction()
+    }
+
+    /// View → Show or Hide Sidebar, and the toolbar's sidebar button,
+    /// also while nothing in the window has the keyboard.
+    @objc func toggleSidebar(_ sender: Any?) {
+        guard let split else { return NSSound.beep() }
+        split.toggleSidebar(sender)
+    }
+
+    /// Drop what the retired content showed: its banner, its search
+    /// field and the title.
+    func retireChrome() {
+        banner?.removeFromParent()
+        banner = nil
+        split = nil
+        shownCount = nil
+        searchItem?.searchField = Self.placeholderSearchField()
+        window?.title = Self.title
+        window?.subtitle = ""
+    }
+
+    /// The toolbar's field before a list is installed: present, so the
+    /// toolbar keeps its shape, but not editable.
+    static func placeholderSearchField() -> NSSearchField {
+        let field = NSSearchField()
+        field.placeholderString = "Search"
+        field.isEnabled = false
+        return field
     }
 }
 
@@ -836,57 +968,42 @@ extension MainWindowController: NSMenuItemValidation, NSToolbarItemValidation {
 
     func validateToolbarItem(_ item: NSToolbarItem) -> Bool {
         if let action = item.action, let enabled = filingCommandEnabled(action) { return enabled }
+        if item.action == #selector(toggleSidebar(_:)) { return split != nil }
         guard let action = item.action, let state = flagCommandState(action) else { return true }
         item.label = state.title
         item.toolTip = state.title
+        // The symbol says what the click does, as the label does.
+        let symbol = MainToolbar.flagSymbol(for: state.title)
+        if let symbol, item.image?.accessibilityDescription != state.title {
+            item.image = NSImage(systemSymbolName: symbol, accessibilityDescription: state.title)
+        }
         return state.enabled
     }
 }
 
 extension MainWindowController: NSToolbarDelegate {
-    private static let readItem = NSToolbarItem.Identifier(MainMenuBuilder.ItemID.toggleRead.rawValue)
-    private static let starItem = NSToolbarItem.Identifier(MainMenuBuilder.ItemID.toggleStar.rawValue)
-    private static let archiveItem = NSToolbarItem.Identifier(MainMenuBuilder.ItemID.archive.rawValue)
-    private static let trashItem = NSToolbarItem.Identifier(MainMenuBuilder.ItemID.trash.rawValue)
-    private static let moveItem = NSToolbarItem.Identifier(MainMenuBuilder.ItemID.move.rawValue)
-    private static let addLabelItem = NSToolbarItem.Identifier(MainMenuBuilder.ItemID.addLabel.rawValue)
-    private static let removeLabelItem =
-        NSToolbarItem.Identifier(MainMenuBuilder.ItemID.removeLabel.rawValue)
-    private static var commandItems: [NSToolbarItem.Identifier] {
-        [readItem, starItem, archiveItem, trashItem, moveItem, addLabelItem, removeLabelItem]
-    }
-
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [.flexibleSpace] + Self.commandItems
+        MainToolbar.defaultItems
     }
 
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [.flexibleSpace, .space] + Self.commandItems
+        MainToolbar.allowedItems
     }
 
     func toolbar(
         _ toolbar: NSToolbar, itemForItemIdentifier itemIdentifier: NSToolbarItem.Identifier,
         willBeInsertedIntoToolbar flag: Bool
     ) -> NSToolbarItem? {
-        let spec: (title: String, symbol: String, action: Selector)
-        switch itemIdentifier {
-        case Self.readItem: spec = ("Mark as Read", "envelope.open", #selector(toggleRead(_:)))
-        case Self.starItem: spec = ("Star", "star", #selector(toggleStar(_:)))
-        case Self.archiveItem: spec = ("Archive", "archivebox", #selector(archiveMessages(_:)))
-        case Self.trashItem: spec = ("Move to Trash", "trash", #selector(trashMessages(_:)))
-        case Self.moveItem: spec = ("Move to…", "folder", #selector(moveMessages(_:)))
-        case Self.addLabelItem: spec = ("Add Label…", "tag", #selector(addLabel(_:)))
-        case Self.removeLabelItem: spec = ("Remove Label…", "tag.slash", #selector(removeLabel(_:)))
-        default: return nil
+        if itemIdentifier == MainToolbar.search {
+            let item = NSSearchToolbarItem(itemIdentifier: itemIdentifier)
+            item.label = "Search"
+            item.paletteLabel = "Search"
+            item.toolTip = "Search mail (⌥⌘F)"
+            item.preferredWidthForSearchField = MainToolbar.searchFieldWidth
+            item.searchField = messageList?.searchField ?? Self.placeholderSearchField()
+            if flag { searchItem = item }
+            return item
         }
-        let item = NSToolbarItem(itemIdentifier: itemIdentifier)
-        item.label = spec.title
-        item.paletteLabel = spec.title
-        item.toolTip = spec.title
-        item.image = NSImage(systemSymbolName: spec.symbol, accessibilityDescription: spec.title)
-        item.action = spec.action
-        item.target = nil
-        item.autovalidates = true
-        return item
+        return MainToolbar.item(itemIdentifier, composeTarget: composeCommands)
     }
 }

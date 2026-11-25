@@ -334,6 +334,7 @@ struct RecipientFenceComposeTests {
     @Test func aCheckThatIsNotReadyShowsItsNoteBlocksNothingAndMailArrivalRereadsIt() async throws {
         let source = FenceSource(ready: false, senders: [correspondent: ["home"]])
         try await withFenceWindow(source) { controller in
+            // The sending identity loads independently of the fence.
             let rendered = await fenceEventually {
                 !controller.recipientCheckNote.isHidden && controller.sendButton.isEnabled
             }

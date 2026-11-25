@@ -77,7 +77,25 @@ struct SearchFieldTests {
             defer: false
         )
         window.isReleasedWhenClosed = false
-        window.contentView = controller.view
+        // The field sits in the main window's toolbar; here it sits above
+        // the strip, in the same window.
+        let strip = controller.view
+        let field = controller.searchField
+        let content = NSView(frame: NSRect(x: 0, y: 0, width: 520, height: 140))
+        for view in [field, strip] {
+            view.translatesAutoresizingMaskIntoConstraints = false
+            content.addSubview(view)
+        }
+        NSLayoutConstraint.activate([
+            field.topAnchor.constraint(equalTo: content.topAnchor, constant: 8),
+            field.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 8),
+            field.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -8),
+            strip.topAnchor.constraint(equalTo: field.bottomAnchor, constant: 4),
+            strip.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+            strip.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+            strip.bottomAnchor.constraint(lessThanOrEqualTo: content.bottomAnchor),
+        ])
+        window.contentView = content
         window.makeKeyAndOrderFront(nil)
         return window
     }
@@ -115,7 +133,7 @@ struct SearchFieldTests {
         let controller = SearchFieldController(model: model, scopes: { [] })
         let window = hostedWindow(controller)
         defer { model.close(); window.close() }
-        let field = try #require(find(in: controller.view, identifier: "search.field") as? NSSearchField)
+        let field = controller.searchField
         try #require(window.makeFirstResponder(field))
         let editor = try #require(field.currentEditor() as? NSTextView)
 
@@ -147,7 +165,7 @@ struct SearchFieldTests {
         let controller = SearchFieldController(model: model, scopes: { [] })
         let window = hostedWindow(controller)
         defer { model.close(); window.close() }
-        let field = try #require(find(in: controller.view, identifier: "search.field") as? NSSearchField)
+        let field = controller.searchField
         try #require(window.makeFirstResponder(field))
         let editor = try #require(field.currentEditor() as? NSTextView)
 
@@ -202,7 +220,7 @@ struct SearchFieldTests {
         let controller = SearchFieldController(model: model, scopes: { scopeEntries.values })
         let window = hostedWindow(controller)
         defer { model.close(); window.close() }
-        let field = try #require(find(in: controller.view, identifier: "search.field") as? NSSearchField)
+        let field = controller.searchField
         try #require(window.makeFirstResponder(field))
         let editor = try #require(field.currentEditor() as? NSTextView)
         editor.insertText("in:9 hello", replacementRange: NSRange(location: 0, length: 0))
@@ -255,7 +273,7 @@ struct SearchFieldTests {
         let controller = SearchFieldController(model: model, scopes: { [] })
         let window = hostedWindow(controller)
         defer { model.close(); window.close() }
-        let field = try #require(find(in: controller.view, identifier: "search.field") as? NSSearchField)
+        let field = controller.searchField
         try #require(window.makeFirstResponder(field))
         let editor = try #require(field.currentEditor() as? NSTextView)
         editor.setMarkedText("に", selectedRange: NSRange(location: 1, length: 0),
@@ -285,7 +303,7 @@ struct SearchFieldTests {
         let controller = SearchFieldController(model: model, scopes: { [] })
         let window = hostedWindow(controller)
         defer { model.close(); window.close() }
-        let field = try #require(find(in: controller.view, identifier: "search.field") as? NSSearchField)
+        let field = controller.searchField
         try #require(window.makeFirstResponder(field))
         let editor = try #require(field.currentEditor() as? NSTextView)
         editor.insertText("in:9 hello", replacementRange: NSRange(location: 0, length: 0))
@@ -317,7 +335,7 @@ struct SearchFieldTests {
         let controller = SearchFieldController(model: model, scopes: { [] })
         let window = hostedWindow(controller)
         defer { model.close(); window.close() }
-        let field = try #require(find(in: controller.view, identifier: "search.field") as? NSSearchField)
+        let field = controller.searchField
         try #require(window.makeFirstResponder(field))
         let editor = try #require(field.currentEditor() as? NSTextView)
         let status = try #require(find(in: controller.view, identifier: "search.status") as? NSTextField)

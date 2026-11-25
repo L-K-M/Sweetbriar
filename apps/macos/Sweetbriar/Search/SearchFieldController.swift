@@ -1,5 +1,8 @@
 // Search entry and AST chips (spec/08). The native editor keeps live text
 // and composition; the bridge owns parsing and the parent owns windows.
+// The field itself sits in the main window's toolbar; this controller's
+// strip below it holds scope, sort, Save as View…, chips and status, and
+// shows only while a search is under way, as Mail's search bar does.
 
 import AppKit
 import Observation
@@ -21,6 +24,10 @@ final class SearchFieldController: NSViewController {
 
     private var chipTopSpace: NSLayoutConstraint!
     private var chipHeight: NSLayoutConstraint!
+    /// The strip's edges while it shows, and its zero height while no
+    /// search is under way.
+    private var expanded: [NSLayoutConstraint] = []
+    private var collapsed: NSLayoutConstraint!
     private var statusTopSpace: NSLayoutConstraint!
     private var statusHeight: NSLayoutConstraint!
     /// Display sync must not become user input.
@@ -57,6 +64,18 @@ final class SearchFieldController: NSViewController {
     /// The native field the keystroke benchmark types into (plan M1.6q2).
     var fieldForBenchmark: NSSearchField { field }
 
+    /// The field the main window's toolbar search item shows.
+    var searchField: NSSearchField { field }
+
+    /// Escape cleared the search: the parent returns focus to its list.
+    var onCancel: (@MainActor () -> Void)?
+
+    /// Whether a search is under way: text, a parse failure or a failed
+    /// save to show. The strip collapses otherwise.
+    var isSearching: Bool {
+        !model.text.isEmpty || model.isComposing || model.failure != nil || saveError != nil
+    }
+
     override func loadView() {
         let strip = NSView()
         field.placeholderString = "Search mail"
@@ -64,7 +83,6 @@ final class SearchFieldController: NSViewController {
         field.target = self
         field.action = #selector(submitField(_:))
         field.sendsWholeSearchString = true // The model owns incremental debounce.
-        field.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         field.setAccessibilityIdentifier("search.field")
         field.setAccessibilityLabel("Search mail")
 
@@ -107,28 +125,32 @@ final class SearchFieldController: NSViewController {
         statusLabel.setAccessibilityIdentifier("search.status")
         statusLabel.isHidden = true
 
-        for subview in [field, scopePopup, sortPopup, saveButton, chipScroll, statusLabel] {
+        scopePopup.setContentHuggingPriority(.defaultHigh, for: .horizontal)
+        sortPopup.setContentHuggingPriority(.defaultHigh, for: .horizontal)
+        for subview in [scopePopup, sortPopup, saveButton, chipScroll, statusLabel] {
             subview.translatesAutoresizingMaskIntoConstraints = false
             strip.addSubview(subview)
         }
         chipRow.translatesAutoresizingMaskIntoConstraints = false
-        chipTopSpace = chipScroll.topAnchor.constraint(equalTo: field.bottomAnchor)
+        chipTopSpace = chipScroll.topAnchor.constraint(equalTo: scopePopup.bottomAnchor)
         chipHeight = chipScroll.heightAnchor.constraint(equalToConstant: 0)
         statusTopSpace = statusLabel.topAnchor.constraint(equalTo: chipScroll.bottomAnchor)
         statusHeight = statusLabel.heightAnchor.constraint(equalToConstant: 0)
+        expanded = [
+            scopePopup.topAnchor.constraint(equalTo: strip.topAnchor, constant: 6),
+            statusLabel.bottomAnchor.constraint(equalTo: strip.bottomAnchor, constant: -6),
+        ]
+        collapsed = strip.heightAnchor.constraint(equalToConstant: 0)
         NSLayoutConstraint.activate([
-            field.topAnchor.constraint(equalTo: strip.topAnchor, constant: 8),
-            field.leadingAnchor.constraint(equalTo: strip.leadingAnchor, constant: 8),
-            field.widthAnchor.constraint(greaterThanOrEqualToConstant: 64),
+            scopePopup.leadingAnchor.constraint(equalTo: strip.leadingAnchor, constant: 8),
             scopePopup.widthAnchor.constraint(greaterThanOrEqualToConstant: 80),
-            scopePopup.widthAnchor.constraint(lessThanOrEqualToConstant: 120),
-            scopePopup.leadingAnchor.constraint(equalTo: field.trailingAnchor, constant: 8),
-            scopePopup.centerYAnchor.constraint(equalTo: field.centerYAnchor),
+            scopePopup.widthAnchor.constraint(lessThanOrEqualToConstant: 220),
             sortPopup.leadingAnchor.constraint(equalTo: scopePopup.trailingAnchor, constant: 8),
-            sortPopup.trailingAnchor.constraint(equalTo: saveButton.leadingAnchor, constant: -8),
-            sortPopup.centerYAnchor.constraint(equalTo: field.centerYAnchor),
+            sortPopup.centerYAnchor.constraint(equalTo: scopePopup.centerYAnchor),
+            saveButton.leadingAnchor.constraint(
+                greaterThanOrEqualTo: sortPopup.trailingAnchor, constant: 8),
             saveButton.trailingAnchor.constraint(equalTo: strip.trailingAnchor, constant: -8),
-            saveButton.centerYAnchor.constraint(equalTo: field.centerYAnchor),
+            saveButton.centerYAnchor.constraint(equalTo: scopePopup.centerYAnchor),
             chipTopSpace, chipHeight, statusTopSpace, statusHeight,
             chipScroll.leadingAnchor.constraint(equalTo: strip.leadingAnchor, constant: 8),
             chipScroll.trailingAnchor.constraint(equalTo: strip.trailingAnchor, constant: -8),
@@ -142,7 +164,6 @@ final class SearchFieldController: NSViewController {
             statusLabel.trailingAnchor.constraint(
                 lessThanOrEqualTo: strip.trailingAnchor, constant: -8
             ),
-            statusLabel.bottomAnchor.constraint(equalTo: strip.bottomAnchor, constant: -8),
         ])
         view = strip
         applyModel()
@@ -196,6 +217,22 @@ final class SearchFieldController: NSViewController {
         rebuildChips()
         refreshStatus()
         refreshErrorMarking()
+        refreshVisibility()
+    }
+
+    /// Show the strip while a search is under way; collapse it, and
+    /// hide its controls, otherwise.
+    private func refreshVisibility() {
+        guard isViewLoaded else { return }
+        let searching = isSearching
+        view.isHidden = !searching
+        if searching {
+            collapsed.isActive = false
+            NSLayoutConstraint.activate(expanded)
+        } else {
+            NSLayoutConstraint.deactivate(expanded)
+            collapsed.isActive = true
+        }
     }
 
     /// Compare live bytes before writing; rewriting equal text drops the caret.
@@ -364,6 +401,7 @@ final class SearchFieldController: NSViewController {
         statusLabel.isHidden = text.isEmpty
         statusTopSpace.constant = text.isEmpty ? 0 : 4
         statusHeight.isActive = text.isEmpty
+        refreshVisibility()
     }
 
     /// EOF errors stay visible in the label; ordinary errors do not move the caret.
@@ -481,6 +519,7 @@ extension SearchFieldController: NSSearchFieldDelegate {
             return true
         case #selector(NSResponder.cancelOperation(_:)):
             model.clear()
+            onCancel?()
             return true
         default:
             break

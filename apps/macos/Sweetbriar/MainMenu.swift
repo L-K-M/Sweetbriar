@@ -112,6 +112,8 @@ final class MainMenuBuilder: NSObject {
         static let messageSource = command("messageSource")
         /// View → Reading View.
         static let readingView = command("readingView")
+        /// Edit → Find → Search Mail: the main window's toolbar search.
+        static let searchMail = command("searchMail")
         /// Edit → Paste as Markdown… (spec/08 "Composer").
         static let pasteAsMarkdown = command("pasteAsMarkdown")
         /// Edit → Insert Image….
@@ -708,13 +710,13 @@ final class MainMenuBuilder: NSObject {
         onAddProtonAccount()
     }
 
-    @objc private func newMessage(_ sender: NSMenuItem) { onNewMessage() }
+    @objc func newMessage(_ sender: Any?) { onNewMessage() }
 
-    @objc private func reply(_ sender: NSMenuItem) { onReply() }
+    @objc func reply(_ sender: Any?) { onReply() }
 
-    @objc private func replyAll(_ sender: NSMenuItem) { onReplyAll() }
+    @objc func replyAll(_ sender: Any?) { onReplyAll() }
 
-    @objc private func forward(_ sender: NSMenuItem) { onForward() }
+    @objc func forward(_ sender: Any?) { onForward() }
 
     @objc
     private func importMail(_ sender: NSMenuItem) {
@@ -786,6 +788,19 @@ final class MainMenuBuilder: NSObject {
     }
 }
 
+extension MainMenuBuilder: NSToolbarItemValidation {
+    /// The main window's New Message, Reply, Reply All and Forward
+    /// items target the builder and take the menu's admission.
+    func validateToolbarItem(_ item: NSToolbarItem) -> Bool {
+        switch item.action {
+        case #selector(newMessage(_:)): isWriteEnabled() && isComposeEnabled()
+        case #selector(reply(_:)), #selector(replyAll(_:)), #selector(forward(_:)):
+            isWriteEnabled() && isComposeEnabled() && isReplyEnabled()
+        default: true
+        }
+    }
+}
+
 extension MainMenuBuilder: NSMenuItemValidation {
     /// Every Debug item is enabled except the benchmark while a run
     /// is in flight; the implementation pair re-checks itself against
@@ -845,6 +860,13 @@ extension MainMenuBuilder: NSMenuItemValidation {
 @objc protocol ReaderCommands {
     func toggleMessageSource(_ sender: Any?)
     func toggleReadingView(_ sender: Any?)
+}
+
+/// Edit → Find → Search Mail (⌥⌘F), answered by the key main window's
+/// toolbar search field.
+@MainActor
+@objc protocol MailSearchCommands {
+    func focusSearch(_ sender: Any?)
 }
 
 /// Mailbox → the unified mailboxes, answered by the key main window's
@@ -921,7 +943,11 @@ enum StandardTextMenus {
     /// Find, through the focused text view's find bar.
     private static func find() -> NSMenuItem {
         let action = #selector(NSTextView.performFindPanelAction(_:))
+        let search = item("Search Mail", #selector(MailSearchCommands.focusSearch(_:)), "f", [.option, .command])
+        search.identifier = MainMenuBuilder.ItemID.searchMail
         return submenu("Find", [
+            search,
+            .separator(),
             item("Find…", action, "f", tag: Int(NSFindPanelAction.showFindPanel.rawValue)),
             item("Find and Replace…", action,
                  tag: Int(NSTextFinder.Action.showReplaceInterface.rawValue)),
