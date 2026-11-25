@@ -85,8 +85,12 @@ public final class SidebarModel {
     public static let unifiedSectionID = "unified"
     /// The Unified Inbox entry's id: the main window's first choice.
     public static let unifiedInboxID = "\(unifiedSectionID)/inbox"
+    /// The unified Flagged entry's id.
+    public static let unifiedFlaggedID = "\(unifiedSectionID)/flagged"
     /// The Drafts (local) entry's id.
     public static let unifiedDraftsID = "\(unifiedSectionID)/drafts"
+    /// The Out Box entry's id.
+    public static let unifiedOutBoxID = "\(unifiedSectionID)/outbox"
     /// A saved view's entry id, stable across reloads.
     public static func savedViewEntryID(_ viewId: String) -> String {
         "\(unifiedSectionID)/view/\(viewId)"
@@ -286,7 +290,7 @@ public final class SidebarModel {
                 target: .window(.unified(.inbox))
             ),
             Entry(
-                id: "\(unifiedSectionID)/flagged",
+                id: unifiedFlaggedID,
                 title: "Flagged",
                 unread: nil,
                 target: .window(.flagged)
@@ -298,7 +302,7 @@ public final class SidebarModel {
                 target: .drafts
             ),
             Entry(
-                id: "\(unifiedSectionID)/outbox",
+                id: unifiedOutBoxID,
                 title: "Out Box",
                 unread: nil,
                 target: .outBox

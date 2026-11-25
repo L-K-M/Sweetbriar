@@ -148,6 +148,35 @@ final class MessageWindowController: NSWindowController, NSWindowDelegate {
     }
 }
 
+// MARK: - View commands (spec/08 "Reader")
+
+extension MessageWindowController: ReaderCommands, NSMenuItemValidation {
+    /// View → Message Source (⌥⌘U) for this window's message.
+    @objc func toggleMessageSource(_ sender: Any?) {
+        guard reader.canToggleSource else { return NSSound.beep() }
+        reader.toggleSourceFromMenu()
+    }
+
+    /// View → Reading View (⌥⌘R) for this window's message.
+    @objc func toggleReadingView(_ sender: Any?) {
+        guard reader.canToggleReadingView else { return NSSound.beep() }
+        reader.toggleReadingViewFromMenu()
+    }
+
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        switch menuItem.action {
+        case #selector(toggleMessageSource(_:)):
+            menuItem.state = reader.isShowingSource ? .on : .off
+            return reader.canToggleSource
+        case #selector(toggleReadingView(_:)):
+            menuItem.state = reader.isShowingReadingView ? .on : .off
+            return reader.canToggleReadingView
+        default:
+            return true
+        }
+    }
+}
+
 /// The open message windows, one per occurrence.
 @MainActor
 final class MessageWindows {
