@@ -308,10 +308,10 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
         loadTask = Task { [self] in
             await model.load()
             render()
-            // The To field can start editing only after the draft loads.
-            // Leave the focus alone if the user chose another control.
+            // The window can still own focus when the To field becomes
+            // editable. A control that already has focus keeps it.
             if focusNewMessageRecipients, window.isKeyWindow, toRecipients.control.isEditable,
-                window.firstResponder === window || window.firstResponder === textView
+                window.firstResponder === window
             {
                 window.makeFirstResponder(toRecipients.control)
             }

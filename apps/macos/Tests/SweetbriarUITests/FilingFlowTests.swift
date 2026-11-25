@@ -89,7 +89,9 @@ final class FilingFlowTests: XCTestCase {
         let open = window.menuItems["Open in New Window"]
         XCTAssertTrue(open.waitForExistence(timeout: Self.timeout))
         for title in ["Reply", "Reply All", "Forward"] {
-            XCTAssertTrue(window.menuItems[title].isEnabled)
+            let item = window.menuItems[title]
+            XCTAssertTrue(item.exists, "\(title) is missing")
+            XCTAssertTrue(item.isEnabled, "\(title) is disabled")
         }
         open.click()
         let message = app.windows["messageWindow"]

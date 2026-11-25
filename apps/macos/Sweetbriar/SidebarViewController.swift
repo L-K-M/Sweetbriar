@@ -806,9 +806,9 @@ private final class SidebarEntryCellView: NSTableCellView {
         unreadBadge.cornerRadius = 8
         unreadBadge.fillColor = .quaternaryLabelColor
         unreadBadge.setAccessibilityElement(false)
-        unread.setAccessibilityElement(false)
+        unread.setAccessibilityElement(true)
         addSubview(unreadBadge)
-        unreadBadge.addSubview(unread)
+        addSubview(unread)
         textField = title
         // The source list tints a cell's image view with the accent
         // color, as Mail's mailbox symbols are.
@@ -848,8 +848,10 @@ private final class SidebarEntryCellView: NSTableCellView {
         title.stringValue = entry.title
         symbol.image = NSImage(systemSymbolName: name, accessibilityDescription: nil)
         let count = entry.unread ?? 0
-        unread.stringValue = count > 0 ? count.formatted() : ""
-        unreadBadge.isHidden = count == 0
+        let hasUnread = count > 0
+        unread.stringValue = hasUnread ? count.formatted() : ""
+        unread.isHidden = !hasUnread
+        unreadBadge.isHidden = !hasUnread
         switch entry.target {
         case .window, .drafts, .outBox:
             title.textColor = .labelColor

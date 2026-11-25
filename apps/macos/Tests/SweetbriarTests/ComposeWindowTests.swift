@@ -27,6 +27,7 @@ private actor ComposeGate {
 private actor ComposeTestSource: ComposeSource {
     let bridge: CoreBridge
     private var createGate: ComposeGate?
+    private var draftGate: ComposeGate?
     private var answerGate: ComposeGate?
     private var publishGate: ComposeGate?
     private(set) var publishes = 0
@@ -42,10 +43,12 @@ private actor ComposeTestSource: ComposeSource {
     private(set) var preferredQueries: [String?] = []
     init(_ bridge: CoreBridge) { self.bridge = bridge }
     func holdCreate(_ gate: ComposeGate) { createGate = gate }
+    func holdDraft(_ gate: ComposeGate) { draftGate = gate }
     func holdAnswer(_ gate: ComposeGate) { answerGate = gate }
     func failSave(_ error: CoreFailure?) { failure = error }
     func release() async {
         await createGate?.open()
+        await draftGate?.open()
         await answerGate?.open()
         await publishGate?.open()
         if let parseHold { await parseHold.gate.open() }
@@ -58,7 +61,10 @@ private actor ComposeTestSource: ComposeSource {
         createdIds.append(created.draftId)
         return created
     }
-    func draft(id: String) async throws -> Draft { try await bridge.draft(id: id) }
+    func draft(id: String) async throws -> Draft {
+        await draftGate?.wait()
+        return try await bridge.draft(id: id)
+    }
     func composeCue() async throws -> ComposeCueMode { try await bridge.composeCue() }
     func setComposeCue(_ mode: ComposeCueMode) async throws -> Receipt {
         try await bridge.setComposeCue(mode)
@@ -298,6 +304,28 @@ private func firstComposeView<T: NSView>(
 
 @Suite(.serialized, .timeLimit(.minutes(1))) @MainActor
 struct ComposeWindowTests {
+    @Test func loadingANewDraftPreservesExplicitBodyFocus() async throws {
+        try await withComposeFixture { fixture in
+            let draft = try await fixture.source.createDraft(idempotencyKey: UUID().uuidString, source: .new)
+            let gate = ComposeGate()
+            await fixture.source.holdDraft(gate)
+            let controller = ComposeWindowController(
+                source: fixture.source, draftId: draft.draftId, focusNewMessageRecipients: true)
+            fixture.controllers.append(controller)
+            let window = try #require(controller.window)
+            NSApp.activate()
+            window.makeKeyAndOrderFront(nil)
+            try #require(await composeEventually { window.isKeyWindow })
+            try #require(window.makeFirstResponder(controller.textView))
+            try #require(controller.model.content == nil && window.firstResponder === controller.textView)
+
+            await gate.open()
+            await controller.waitForLoad()
+            #expect(controller.textView.isEditable)
+            #expect(window.firstResponder === controller.textView)
+        }
+    }
+
     @Test func newMessageCapturesAccountContextBeforeTheHeldCreate() async throws {
         try await withComposeFixture { f in
             let gate = ComposeGate()

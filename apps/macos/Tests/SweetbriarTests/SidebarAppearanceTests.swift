@@ -27,12 +27,34 @@ struct SidebarAppearanceTests {
         let reopened = SidebarViewController(model: model, appearance: appearance, defaults: defaults)
         let outline = try #require((reopened.view as? NSScrollView)?.documentView as? NSOutlineView)
         reopened.reloadSections()
-        #expect(!outline.isItemExpanded(outline.item(atRow: 0)))
+        let reopenedUnified = try #require(outline.item(atRow: 0))
+        #expect(!outline.isItemExpanded(reopenedUnified))
         reopened.choose(entryID: SidebarModel.unifiedInboxID, revealSection: false)
         #expect(outline.selectedRow == -1)
         reopened.choose(entryID: SidebarModel.unifiedInboxID)
-        #expect(outline.isItemExpanded(outline.item(atRow: 0)))
+        #expect(outline.isItemExpanded(reopenedUnified))
         #expect(outline.selectedRow == 1)
+    }
+
+    @Test func theUnreadBadgeKeepsItsCountAccessible() async throws {
+        let suite = "Sweetbriar.SidebarAppearance.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let mailbox = Mailbox(
+            mailboxId: 1, accountId: "account-1", name: "Projects", delimiter: nil,
+            role: nil, kind: .folder, selectable: true, total: 3, unread: 3)
+        let model = SidebarModel(source: SidebarAccounts(boxes: [mailbox]))
+        await model.reload()
+        let sidebar = SidebarViewController(
+            model: model, appearance: AppearanceModel(source: SidebarAppearanceSource()), defaults: defaults)
+        let outline = try #require((sidebar.view as? NSScrollView)?.documentView as? NSOutlineView)
+        sidebar.reloadSections()
+        let cells = (0..<outline.numberOfRows).compactMap { outline.view(atColumn: 0, row: $0, makeIfNecessary: true) }
+        let cell = try #require(cells.first { $0.accessibilityLabel() == "Projects, 3 unread" })
+        let labels = cell.subviews.compactMap { $0 as? NSTextField }
+        let count = try #require(labels.first { $0.stringValue == "3" })
+        #expect(count.isAccessibilityElement())
+        #expect(!count.isHidden)
     }
 
     @Test func duplicateNamesHaveStableDistinctLabels() {
@@ -235,11 +257,12 @@ struct SidebarAppearanceTests {
 }
 
 private struct SidebarAccounts: SidebarSource {
+    var boxes: [Mailbox] = []
     func accounts() async throws -> [Account] {
         [Account(accountId: "account-1", kind: .local, displayName: "Work", state: .active, stateReason: nil, sortOrder: 0)]
     }
     func mailboxes(accountId: String) async throws -> Mailboxes {
-        Mailboxes(generation: 0, mailboxes: [])
+        Mailboxes(generation: 0, mailboxes: boxes)
     }
     func savedViews() async throws -> [SavedView] { [] }
     func upsertSavedView(idempotencyKey: String, params: SavedViewParams) async throws -> Receipt { throw CoreFailure.unavailable(reason: "unused") }
