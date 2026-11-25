@@ -773,11 +773,61 @@ extension MainWindowController: MessageWindowCommands {
     }
 }
 
+// MARK: - View and Mailbox commands
+
+extension MainWindowController: ReaderCommands, MailboxCommands {
+    /// The reader, while the list pane shows messages: Drafts (local)
+    /// and the Out Box leave it empty (spec/08).
+    private var messageReader: ReaderViewController? {
+        listPane?.pane == .messages ? reader : nil
+    }
+
+    /// View → Message Source (⌥⌘U).
+    @objc func toggleMessageSource(_ sender: Any?) {
+        guard let reader = messageReader, reader.canToggleSource else { return NSSound.beep() }
+        reader.toggleSourceFromMenu()
+    }
+
+    /// View → Reading View (⌥⌘R).
+    @objc func toggleReadingView(_ sender: Any?) {
+        guard let reader = messageReader, reader.canToggleReadingView else { return NSSound.beep() }
+        reader.toggleReadingViewFromMenu()
+    }
+
+    /// Mailbox → Inbox, Flagged, Drafts (local) or Out Box (⌘1–⌘4):
+    /// chosen as a click in the sidebar would.
+    @objc func goToMailbox(_ sender: Any?) {
+        guard let id = (sender as? NSMenuItem)?.representedObject as? String, let sidebar,
+            sidebarModel?.entry(id: id) != nil
+        else { return NSSound.beep() }
+        sidebar.choose(entryID: id)
+    }
+
+    /// Whether a View or Mailbox command is live, checking the reader's
+    /// two renditions; nil for any other action.
+    private func viewCommandEnabled(_ menuItem: NSMenuItem) -> Bool? {
+        switch menuItem.action {
+        case #selector(toggleMessageSource(_:)):
+            menuItem.state = messageReader?.isShowingSource == true ? .on : .off
+            return messageReader?.canToggleSource == true
+        case #selector(toggleReadingView(_:)):
+            menuItem.state = messageReader?.isShowingReadingView == true ? .on : .off
+            return messageReader?.canToggleReadingView == true
+        case #selector(goToMailbox(_:)):
+            guard let id = menuItem.representedObject as? String else { return false }
+            return sidebar != nil && sidebarModel?.entry(id: id) != nil
+        default:
+            return nil
+        }
+    }
+}
+
 extension MainWindowController: NSMenuItemValidation, NSToolbarItemValidation {
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         if menuItem.action == #selector(MessageWindowCommands.openMessage(_:)) {
             return selectedOccurrenceId != nil
         }
+        if let enabled = viewCommandEnabled(menuItem) { return enabled }
         if let action = menuItem.action, let enabled = filingCommandEnabled(action) { return enabled }
         guard let action = menuItem.action, let state = flagCommandState(action) else { return true }
         menuItem.title = state.title

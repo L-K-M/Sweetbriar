@@ -5,6 +5,7 @@
 // B2b wires.
 
 import AppKit
+import SweetbriarBridge
 
 /// Which framework the prototype window lists with (spec/08 "Debug
 /// menu"), persisted in user defaults under one key; AppKit is the
@@ -99,6 +100,18 @@ final class MainMenuBuilder: NSObject {
         static let addProtonAccount = command("addProtonAccount")
         /// File → Import… (spec/09).
         static let importMail = command("importMail")
+        /// File → Save: the key compose window's draft (spec/08 "Saving").
+        static let saveDraft = command("saveDraft")
+        /// File → Attach Files… (spec/08 "Attachments").
+        static let attachFiles = command("attachFiles")
+        /// Message → Send (spec/08 "Sending").
+        static let sendMessage = command("sendMessage")
+        /// Format → Make Plain Text or Make Markdown.
+        static let toggleFormat = command("toggleFormat")
+        /// View → Message Source (spec/08 "Reader").
+        static let messageSource = command("messageSource")
+        /// View → Reading View.
+        static let readingView = command("readingView")
         /// Edit → Paste as Markdown… (spec/08 "Composer").
         static let pasteAsMarkdown = command("pasteAsMarkdown")
         /// Edit → Insert Image….
@@ -237,10 +250,13 @@ final class MainMenuBuilder: NSObject {
         menu.addItem(makeAppMenu())
         menu.addItem(makeFileMenu())
         menu.addItem(makeEditMenu())
+        menu.addItem(makeViewMenu())
+        menu.addItem(makeMailboxMenu())
         menu.addItem(makeMessageMenu())
         menu.addItem(makeFormatMenu())
         menu.addItem(makeWindowMenu())
         menu.addItem(makeDebugMenu())
+        menu.addItem(makeHelpMenu())
         return menu
     }
 
@@ -257,6 +273,11 @@ final class MainMenuBuilder: NSObject {
             "Settings…", action: #selector(showSettings(_:)), key: ",", id: ItemID.settings)
         settings.target = self
         menu.addItem(settings)
+        menu.addItem(.separator())
+        let services = NSMenuItem(title: "Services", action: nil, keyEquivalent: "")
+        services.submenu = NSMenu(title: "Services")
+        NSApplication.shared.servicesMenu = services.submenu
+        menu.addItem(services)
         menu.addItem(.separator())
         menu.addItem(Self.item(
             "Hide Sweetbriar",
@@ -288,13 +309,23 @@ final class MainMenuBuilder: NSObject {
     /// Window → Activity (spec/08 "Activity / account health").
     @objc private func showActivity(_ sender: NSMenuItem) { onShowActivity() }
 
-    /// File: local composition, account setup and import (spec/08–09).
+    /// File: local composition, the key window's Close and the draft's
+    /// Save and Attach Files…, then account setup and import (spec/08–09).
     private func makeFileMenu() -> NSMenuItem {
         let item = NSMenuItem()
         let menu = NSMenu(title: "File")
         menu.addItem(Self.item(
             "New Message", action: #selector(newMessage(_:)), key: "n", target: self,
             id: ItemID.newMessage))
+        menu.addItem(.separator())
+        menu.addItem(Self.item("Close", action: #selector(NSWindow.performClose(_:)), key: "w"))
+        // Nil-target: the key compose window answers (spec/08 "Saving").
+        menu.addItem(Self.item(
+            "Save", action: #selector(ComposeCommands.saveDraft(_:)), key: "s", id: ItemID.saveDraft))
+        menu.addItem(.separator())
+        menu.addItem(Self.item(
+            "Attach Files…", action: #selector(ComposeCommands.attachFiles(_:)), key: "A",
+            id: ItemID.attachFiles))
         menu.addItem(.separator())
         menu.addItem(Self.item(
             "Add Proton Account…",
@@ -336,6 +367,13 @@ final class MainMenuBuilder: NSObject {
             modifiers: [.option, .command],
             id: ItemID.pasteAsMarkdown
         ))
+        menu.addItem(Self.item("Delete", action: #selector(NSText.delete(_:))))
+        menu.addItem(Self.item(
+            "Select All",
+            action: #selector(NSText.selectAll(_:)),
+            key: "a"
+        ))
+        menu.addItem(.separator())
         menu.addItem(Self.item(
             "Insert Image…",
             action: #selector(ComposeWindowController.insertImage(_:)),
@@ -349,11 +387,63 @@ final class MainMenuBuilder: NSObject {
             id: ItemID.editInExternalEditor
         ))
         menu.addItem(.separator())
+        for submenu in StandardTextMenus.editSubmenus() { menu.addItem(submenu) }
+        item.submenu = menu
+        return item
+    }
+
+    /// View: the window's sidebar and toolbar, the reader's renditions
+    /// (spec/08 "Reader") and full screen. AppKit's own items retitle
+    /// themselves (Show or Hide Sidebar, Show or Hide Toolbar).
+    private func makeViewMenu() -> NSMenuItem {
+        let item = NSMenuItem()
+        let menu = NSMenu(title: "View")
         menu.addItem(Self.item(
-            "Select All",
-            action: #selector(NSText.selectAll(_:)),
-            key: "a"
-        ))
+            "Show Sidebar", action: #selector(NSSplitViewController.toggleSidebar(_:)), key: "s",
+            modifiers: [.control, .command]))
+        menu.addItem(.separator())
+        // Nil-target: the key main or message window's reader answers.
+        menu.addItem(Self.item(
+            "Message Source", action: #selector(ReaderCommands.toggleMessageSource(_:)), key: "u",
+            modifiers: [.option, .command], id: ItemID.messageSource))
+        menu.addItem(Self.item(
+            "Reading View", action: #selector(ReaderCommands.toggleReadingView(_:)), key: "r",
+            modifiers: [.option, .command], id: ItemID.readingView))
+        menu.addItem(.separator())
+        menu.addItem(Self.item(
+            "Show Toolbar", action: #selector(NSWindow.toggleToolbarShown(_:)), key: "t",
+            modifiers: [.option, .command]))
+        menu.addItem(Self.item(
+            "Customize Toolbar…", action: #selector(NSWindow.runToolbarCustomizationPalette(_:))))
+        menu.addItem(.separator())
+        menu.addItem(Self.item(
+            "Enter Full Screen", action: #selector(NSWindow.toggleFullScreen(_:)), key: "f",
+            modifiers: [.control, .command]))
+        item.submenu = menu
+        return item
+    }
+
+    /// Mailbox: go to the unified mailboxes with ⌘1–⌘4, as Mail's
+    /// favorites do; the key main window's sidebar answers.
+    private func makeMailboxMenu() -> NSMenuItem {
+        let item = NSMenuItem()
+        let menu = NSMenu(title: "Mailbox")
+        for (index, destination) in MailboxDestination.allCases.enumerated() {
+            let goTo = Self.item(
+                destination.title, action: #selector(MailboxCommands.goToMailbox(_:)),
+                key: "\(index + 1)", id: destination.identifier)
+            goTo.representedObject = destination.entryID
+            menu.addItem(goTo)
+        }
+        item.submenu = menu
+        return item
+    }
+
+    /// Help: AppKit adds its menu search field to the registered menu.
+    private func makeHelpMenu() -> NSMenuItem {
+        let item = NSMenuItem()
+        let menu = NSMenu(title: "Help")
+        NSApplication.shared.helpMenu = menu
         item.submenu = menu
         return item
     }
@@ -365,6 +455,11 @@ final class MainMenuBuilder: NSObject {
     private func makeMessageMenu() -> NSMenuItem {
         let item = NSMenuItem()
         let menu = NSMenu(title: "Message")
+        // ⇧⌘D, nil-target: the key compose window sends, as its Send
+        // button does (spec/08 "Sending").
+        menu.addItem(Self.item(
+            "Send", action: #selector(ComposeCommands.sendMessage(_:)), key: "D", id: ItemID.sendMessage))
+        menu.addItem(.separator())
         // ⌘O, nil-target: the main window opens its list's single
         // selection in its own window (spec/08 "Message window").
         let open = Self.item(
@@ -436,6 +531,12 @@ final class MainMenuBuilder: NSObject {
     private func makeFormatMenu() -> NSMenuItem {
         let item = NSMenuItem()
         let menu = NSMenu(title: "Format")
+        // ⇧⌘T, as Mail's Make Plain Text: the key compose window switches
+        // its draft's format and retitles the item for the other one.
+        menu.addItem(Self.item(
+            "Make Plain Text", action: #selector(ComposeCommands.toggleComposeFormat(_:)), key: "T",
+            id: ItemID.toggleFormat))
+        menu.addItem(.separator())
         menu.addItem(Self.item(
             "Bold",
             action: #selector(ComposerTextView.toggleBoldMarkdown(_:)),
@@ -452,8 +553,9 @@ final class MainMenuBuilder: NSObject {
         return item
     }
 
-    /// Window: Minimize and Close; registered as the app's
-    /// `windowsMenu` so window-management items join it.
+    /// Window: Minimize, Zoom, Activity and Bring All to Front;
+    /// registered as the app's `windowsMenu`, so AppKit adds its tiling
+    /// items and the window list. Close lives in File.
     private func makeWindowMenu() -> NSMenuItem {
         let item = NSMenuItem()
         let menu = NSMenu(title: "Window")
@@ -462,11 +564,8 @@ final class MainMenuBuilder: NSObject {
             action: #selector(NSWindow.performMiniaturize(_:)),
             key: "m"
         ))
-        menu.addItem(Self.item(
-            "Close",
-            action: #selector(NSWindow.performClose(_:)),
-            key: "w"
-        ))
+        menu.addItem(Self.item("Zoom", action: #selector(NSWindow.performZoom(_:))))
+        menu.addItem(.separator())
         menu.addItem(Self.item(
             "Activity",
             action: #selector(showActivity(_:)),
@@ -475,6 +574,9 @@ final class MainMenuBuilder: NSObject {
             target: self,
             id: ItemID.showActivity
         ))
+        menu.addItem(.separator())
+        menu.addItem(Self.item(
+            "Bring All to Front", action: #selector(NSApplication.arrangeInFront(_:))))
         NSApplication.shared.windowsMenu = menu
         item.submenu = menu
         return item
@@ -724,6 +826,153 @@ extension MainMenuBuilder: NSMenuItemValidation {
 @objc protocol EditUndoCommands {
     func undo(_ sender: Any?)
     func redo(_ sender: Any?)
+}
+
+/// The key compose window's draft commands, named here so the menu's
+/// nil-target items reach it down the responder chain (spec/08
+/// "Composer").
+@MainActor
+@objc protocol ComposeCommands {
+    func saveDraft(_ sender: Any?)
+    func attachFiles(_ sender: Any?)
+    func sendMessage(_ sender: Any?)
+    func toggleComposeFormat(_ sender: Any?)
+}
+
+/// The shown message's renditions, answered by the key main or message
+/// window for its reader (spec/08 "Reader").
+@MainActor
+@objc protocol ReaderCommands {
+    func toggleMessageSource(_ sender: Any?)
+    func toggleReadingView(_ sender: Any?)
+}
+
+/// Mailbox → the unified mailboxes, answered by the key main window's
+/// sidebar; the item's represented object is the entry's id.
+@MainActor
+@objc protocol MailboxCommands {
+    func goToMailbox(_ sender: Any?)
+}
+
+/// The unified mailboxes the Mailbox menu goes to with ⌘1–⌘4.
+@MainActor
+enum MailboxDestination: CaseIterable {
+    case inbox
+    case flagged
+    case drafts
+    case outBox
+
+    var title: String {
+        switch self {
+        case .inbox: "Inbox"
+        case .flagged: "Flagged"
+        case .drafts: "Drafts (local)"
+        case .outBox: "Out Box"
+        }
+    }
+
+    /// The sidebar entry it chooses (spec/08 "Sidebar").
+    var entryID: String {
+        switch self {
+        case .inbox: SidebarModel.unifiedInboxID
+        case .flagged: SidebarModel.unifiedFlaggedID
+        case .drafts: SidebarModel.unifiedDraftsID
+        case .outBox: SidebarModel.unifiedOutBoxID
+        }
+    }
+
+    var identifier: NSUserInterfaceItemIdentifier {
+        switch self {
+        case .inbox: MainMenuBuilder.ItemID.command("goToInbox")
+        case .flagged: MainMenuBuilder.ItemID.command("goToFlagged")
+        case .drafts: MainMenuBuilder.ItemID.command("goToDrafts")
+        case .outBox: MainMenuBuilder.ItemID.command("goToOutBox")
+        }
+    }
+}
+
+/// The Edit menu's standard text submenus. Every item is AppKit's own
+/// action, so it reaches the focused text view and is disabled where
+/// nothing answers it (the HTML reader, the message list).
+@MainActor
+enum StandardTextMenus {
+    static func editSubmenus() -> [NSMenuItem] {
+        [find(), spelling(), substitutions(), transformations(), speech()]
+    }
+
+    private static func submenu(_ title: String, _ items: [NSMenuItem]) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+        let menu = NSMenu(title: title)
+        for child in items { menu.addItem(child) }
+        item.submenu = menu
+        return item
+    }
+
+    private static func item(
+        _ title: String, _ action: Selector, _ key: String = "",
+        _ modifiers: NSEvent.ModifierFlags = [.command], tag: Int = 0
+    ) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: action, keyEquivalent: key)
+        if !key.isEmpty { item.keyEquivalentModifierMask = modifiers }
+        item.tag = tag
+        return item
+    }
+
+    /// Find, through the focused text view's find bar.
+    private static func find() -> NSMenuItem {
+        let action = #selector(NSTextView.performFindPanelAction(_:))
+        return submenu("Find", [
+            item("Find…", action, "f", tag: Int(NSFindPanelAction.showFindPanel.rawValue)),
+            item("Find and Replace…", action,
+                 tag: Int(NSTextFinder.Action.showReplaceInterface.rawValue)),
+            item("Find Next", action, "g", tag: Int(NSFindPanelAction.next.rawValue)),
+            item("Find Previous", action, "G", tag: Int(NSFindPanelAction.previous.rawValue)),
+            item("Use Selection for Find", action, "e",
+                 tag: Int(NSFindPanelAction.setFindString.rawValue)),
+            item("Jump to Selection", #selector(NSResponder.centerSelectionInVisibleArea(_:)), "j"),
+        ])
+    }
+
+    private static func spelling() -> NSMenuItem {
+        submenu("Spelling and Grammar", [
+            item("Show Spelling and Grammar", #selector(NSText.showGuessPanel(_:)), ":"),
+            item("Check Document Now", #selector(NSText.checkSpelling(_:)), ";"),
+            .separator(),
+            item("Check Spelling While Typing",
+                 #selector(NSTextView.toggleContinuousSpellChecking(_:))),
+            item("Check Grammar With Spelling", #selector(NSTextView.toggleGrammarChecking(_:))),
+            item("Correct Spelling Automatically",
+                 #selector(NSTextView.toggleAutomaticSpellingCorrection(_:))),
+        ])
+    }
+
+    private static func substitutions() -> NSMenuItem {
+        submenu("Substitutions", [
+            item("Show Substitutions", #selector(NSTextView.orderFrontSubstitutionsPanel(_:))),
+            .separator(),
+            item("Smart Copy/Paste", #selector(NSTextView.toggleSmartInsertDelete(_:))),
+            item("Smart Quotes", #selector(NSTextView.toggleAutomaticQuoteSubstitution(_:))),
+            item("Smart Dashes", #selector(NSTextView.toggleAutomaticDashSubstitution(_:))),
+            item("Smart Links", #selector(NSTextView.toggleAutomaticLinkDetection(_:))),
+            item("Data Detectors", #selector(NSTextView.toggleAutomaticDataDetection(_:))),
+            item("Text Replacement", #selector(NSTextView.toggleAutomaticTextReplacement(_:))),
+        ])
+    }
+
+    private static func transformations() -> NSMenuItem {
+        submenu("Transformations", [
+            item("Make Upper Case", #selector(NSResponder.uppercaseWord(_:))),
+            item("Make Lower Case", #selector(NSResponder.lowercaseWord(_:))),
+            item("Capitalize", #selector(NSResponder.capitalizeWord(_:))),
+        ])
+    }
+
+    private static func speech() -> NSMenuItem {
+        submenu("Speech", [
+            item("Start Speaking", #selector(NSTextView.startSpeaking(_:))),
+            item("Stop Speaking", #selector(NSTextView.stopSpeaking(_:))),
+        ])
+    }
 }
 
 /// The main window's Open in New Window, named here so the menu's

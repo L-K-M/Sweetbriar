@@ -302,6 +302,28 @@ final class ReaderViewController: NSViewController {
         }
     }
 
+    /// View → Message Source answers while a message is shown.
+    var canToggleSource: Bool { model.currentMessage != nil }
+    var isShowingSource: Bool { model.isShowingSource }
+    /// View → Reading View answers when the message has a reading
+    /// document, as the toggle does.
+    var canToggleReadingView: Bool { model.readingDocument != nil }
+    var isShowingReadingView: Bool { model.showsReadingView }
+
+    /// View → Message Source: the View Source button's switch.
+    func toggleSourceFromMenu() {
+        guard canToggleSource else { return }
+        toggleSource()
+    }
+
+    /// View → Reading View: the toggle's switch, for this message and,
+    /// as the toggle does, its sender.
+    func toggleReadingViewFromMenu() {
+        guard canToggleReadingView else { return }
+        let enabled = !model.showsReadingView
+        reads.run { await self.setReadingView(enabled) }
+    }
+
     @objc private func toggleSource() {
         reads.run { await self.setSource(!self.model.isShowingSource) }
     }

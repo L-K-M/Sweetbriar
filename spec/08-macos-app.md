@@ -999,9 +999,33 @@ and the undo toast offers **Undo** for 10 s.
   `ch.lkmc.Sweetbriar.cmd.*` namespace, wired to the menus and the responder
   chain. A command keeps its identifier in every menu that offers it,
   context menus included, and no two commands share one. AppKit's own
-  commands (About, Hide, Hide Others, Show All, Quit, Undo, Redo, Cut,
-  Copy, Paste, Select All, Minimize, Close) keep AppKit's actions and
-  carry no identifier.
+  commands (About, Services, Hide, Hide Others, Show All, Quit, Undo,
+  Redo, Cut, Copy, Paste, Delete, Select All, the Find, Spelling and
+  Grammar, Substitutions, Transformations and Speech items, Close, the
+  sidebar and toolbar items, Enter Full Screen, Minimize, Zoom and Bring
+  All to Front) keep AppKit's actions and carry no identifier.
+- **The menu bar** follows Mail's layout, so its commands and shortcuts
+  are where a Mac user looks for them:
+  - **File:** New Message (⌘N), Close (⌘W), Save (⌘S), Attach Files…
+    (⇧⌘A), Add Proton Account… and Import… (⇧⌘I);
+  - **Edit:** the standard editing items, Paste as Markdown… (⌥⌘V),
+    Insert Image…, Edit in External Editor (⇧⌘E), and Find, Find and
+    Replace, Find Next and Previous through the focused text view's find
+    bar (the composer, plain-text and Reading-view bodies);
+  - **View:** Show or Hide Sidebar (⌃⌘S), Message Source (⌥⌘U), Reading
+    View (⌥⌘R), the toolbar items and Enter Full Screen;
+  - **Mailbox:** Inbox, Flagged, Drafts (local) and Out Box (⌘1–⌘4),
+    chosen as a sidebar click chooses them;
+  - **Message:** Send (⇧⌘D), Open in New Window (⌘O), Reply (⌘R), Reply
+    All (⇧⌘R), Forward (⇧⌘F), then the flag and filing commands;
+  - **Format:** Make Plain Text or Make Markdown (⇧⌘T), Bold, Italic;
+  - **Window:** Minimize, Zoom, Activity (⌥⌘0), Bring All to Front and
+    AppKit's window list; then Debug and Help.
+
+  Save, Attach Files…, Send and the format command act on the key
+  compose window and are enabled exactly when its own controls are.
+  Message Source and Reading View act on the key main or message
+  window's reader, checked while that rendition shows.
 - **Versioning:** the persisted intent and query formats are versioned
   now (research debate/04, resolution change 15). The scripting surfaces (AppleScript, App Intents, a CLI) are
   *later* and will attach to these commands.

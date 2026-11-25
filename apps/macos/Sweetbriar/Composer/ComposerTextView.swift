@@ -108,6 +108,9 @@ final class ComposerTextView: NSTextView {
         contentStorage.delegate = self
         allowsUndo = true
         isRichText = false
+        // Edit → Find and Find and Replace use the scroll view's find bar.
+        usesFindBar = true
+        isIncrementalSearchingEnabled = true
         // Natural direction: right-to-left text is the composer's to
         // honor, never to force (spec/08).
         baseWritingDirection = .natural

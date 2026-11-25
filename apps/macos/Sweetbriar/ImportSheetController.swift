@@ -86,7 +86,9 @@ final class ImportSheetController: NSViewController {
         }
         confirmButton.keyEquivalent = "\r"
 
-        let buttons = NSStackView(views: [cancelButton, closeButton, showReportButton, confirmButton])
+        // The default button sits rightmost: Import before it starts,
+        // Done once it finished (Return), Close in between (Escape).
+        let buttons = NSStackView(views: [cancelButton, showReportButton, closeButton, confirmButton])
         buttons.orientation = .horizontal
         buttons.spacing = 8
         let report = NSStackView(views: [reportStatus, retryButton])
@@ -206,6 +208,9 @@ final class ImportSheetController: NSViewController {
         cancelButton.isHidden = finished || job == nil
         cancelButton.isEnabled = !session.cancelling
         closeButton.title = finished ? "Done" : "Close"
+        // Closing only detaches the sheet; the durable job continues
+        // (spec/08), so Escape may always take it.
+        closeButton.keyEquivalent = finished ? "\r" : "\u{1b}"
     }
 
     private static func headline(_ state: ImportJobState?) -> String {

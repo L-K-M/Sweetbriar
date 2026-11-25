@@ -66,8 +66,10 @@ final class ImportFlowTests: XCTestCase {
         )
         wait(for: [reportGone], timeout: Self.timeout)
 
-        // The sheet must be gone before the window takes a click.
-        app.buttons["importClose"].click()
+        // The sheet must be gone before the window takes a click. Done
+        // is its default button, so Return dismisses it.
+        XCTAssertEqual(app.buttons["importClose"].title, "Done")
+        app.sheets.firstMatch.typeKey(.return, modifierFlags: [])
         let sheetGone = expectation(
             for: NSPredicate(format: "exists == false"),
             evaluatedWith: app.sheets.firstMatch

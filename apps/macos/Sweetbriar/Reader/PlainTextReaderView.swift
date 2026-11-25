@@ -73,6 +73,9 @@ final class PlainTextReaderView: NSTextView {
         isEditable = false
         isSelectable = true
         isRichText = false
+        // Edit → Find searches the shown body in the scroll view's find bar.
+        usesFindBar = true
+        isIncrementalSearchingEnabled = true
         isAutomaticLinkDetectionEnabled = false
         isAutomaticDataDetectionEnabled = false
         font = QuoteDepth.bodyFont

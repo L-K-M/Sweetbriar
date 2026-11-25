@@ -353,6 +353,9 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
             headerLabels.append(label)
             let row = NSStackView(views: [label, field.control])
             row.spacing = 8
+            // Fill, not gravity areas: an empty token field's intrinsic
+            // width is a few points, so it must take the rest of the row.
+            row.distribution = .fill
             field.control.setContentHuggingPriority(.defaultLow, for: .horizontal)
             return row
         }
@@ -1561,6 +1564,37 @@ private final class ComposeSavePolicy: DraftStore {
     }
 }
 
+// MARK: Menu commands (File → Save and Attach Files…, Message → Send,
+// Format → Make Plain Text)
+
+extension ComposeWindowController: ComposeCommands {
+    /// File → Save (⌘S): the Save button's explicit save.
+    @objc func saveDraft(_ sender: Any?) {
+        guard saveButton.isEnabled else { return }
+        saveNow()
+    }
+
+    /// File → Attach Files… (⇧⌘A): the Attach… button's file sheet.
+    @objc func attachFiles(_ sender: Any?) {
+        guard attachmentControls.attachButton.isEnabled else { return }
+        attachmentControls.chooseFiles()
+    }
+
+    /// Message → Send (⇧⌘D): the Send button, with its admission.
+    @objc func sendMessage(_ sender: Any?) {
+        guard sendButton.isEnabled else { return }
+        send()
+    }
+
+    /// Format → Make Plain Text or Make Markdown (⇧⌘T): the format
+    /// control's other segment, as one edit of the draft.
+    @objc func toggleComposeFormat(_ sender: Any?) {
+        guard modeControl.isEnabled else { return }
+        modeControl.selectedSegment = modeControl.selectedSegment == 0 ? 1 : 0
+        modeChanged()
+    }
+}
+
 // MARK: Paste as Markdown (spec/08 "Paste")
 
 extension ComposeWindowController: NSMenuItemValidation {
@@ -1575,10 +1609,18 @@ extension ComposeWindowController: NSMenuItemValidation {
 
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         switch menuItem.action {
-        case #selector(pasteAsMarkdown(_:)): canPasteAsMarkdown
-        case #selector(insertImage(_:)): canInsertImage
-        case #selector(editInExternalEditor(_:)): canEditExternally
-        default: true
+        case #selector(pasteAsMarkdown(_:)): return canPasteAsMarkdown
+        case #selector(insertImage(_:)): return canInsertImage
+        case #selector(editInExternalEditor(_:)): return canEditExternally
+        // The menu admits exactly what the window's own controls admit.
+        case #selector(saveDraft(_:)): return saveButton.isEnabled && window?.attachedSheet == nil
+        case #selector(sendMessage(_:)): return sendButton.isEnabled && window?.attachedSheet == nil
+        case #selector(attachFiles(_:)):
+            return attachmentControls.attachButton.isEnabled && window?.attachedSheet == nil
+        case #selector(toggleComposeFormat(_:)):
+            menuItem.title = modeControl.selectedSegment == 0 ? "Make Markdown" : "Make Plain Text"
+            return modeControl.isEnabled && window?.attachedSheet == nil
+        default: return true
         }
     }
 
