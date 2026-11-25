@@ -39,7 +39,13 @@ final class SearchFlowTests: XCTestCase {
         let window = app.windows["Sweetbriar"]
         XCTAssertTrue(window.staticTexts["No messages"].waitForExistence(timeout: Self.timeout))
 
+        // The strip shows while a search is under way.
         let scope = window.popUpButtons["search.scope"]
+        XCTAssertFalse(scope.exists)
+        let field = window.searchFields["search.field"]
+        XCTAssertTrue(field.waitForExistence(timeout: Self.timeout))
+        field.click()
+        field.typeText("strip")
         XCTAssertTrue(scope.waitForExistence(timeout: Self.timeout))
         let range = try Self.luminanceRange(scope.screenshot())
 
