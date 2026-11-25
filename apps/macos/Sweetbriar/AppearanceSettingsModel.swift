@@ -7,11 +7,16 @@ import SweetbriarBridge
 @Observable
 final class AppearanceSettingsModel {
     let appearance: AppearanceModel
+    /// Writes logos; without it Settings can't change one.
+    private let logos: (any AccountLogoSource)?
     private(set) var saving = false
     private(set) var error: String?
     var appearanceFailure: String? { appearance.lastError?.localizedDescription }
 
-    init(appearance: AppearanceModel) { self.appearance = appearance }
+    init(appearance: AppearanceModel, logos: (any AccountLogoSource)? = nil) {
+        self.appearance = appearance
+        self.logos = logos
+    }
 
     func retryAppearance() async {
         await appearance.refresh()
@@ -51,6 +56,41 @@ final class AppearanceSettingsModel {
             _ = try await appearance.setIdentityAppearance(
                 identityId: identity.identityId, expectedRevision: identity.revision,
                 change: .init(colorOverrideSrgb: colorSrgb, symbolOverride: identity.symbolOverride))
+        }
+    }
+
+    /// The account's logo (spec/08 Settings → Appearance "Logo"): the image
+    /// file through the pipeline, then written at the logo row's observed
+    /// revision. A file the pipeline refuses writes nothing and says why.
+    func chooseLogo(at url: URL, account: AccountAppearance) async {
+        guard !saving, appearanceFailure == nil else { return }
+        let png: Data
+        do {
+            png = try await Task.detached(priority: .userInitiated) {
+                try AccountLogoPipeline.png(fromFileAt: url)
+            }.value
+        } catch {
+            self.error = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            return
+        }
+        await setLogo(png, account: account)
+    }
+
+    /// Write a logo PNG, or `nil` to remove the logo, at the observed
+    /// revision.
+    func setLogo(_ png: Data?, account: AccountAppearance) async {
+        guard png != nil || account.logoPng != nil else { return }
+        guard let logos else {
+            error = "Logos can't be changed in this window."
+            return
+        }
+        let shown = appearance.appearance?.accounts.first { $0.accountId == account.accountId }
+        await write(
+            current: shown?.logoRevision == account.logoRevision,
+            retry: "The logo changed in another window. Check it before changing it again."
+        ) {
+            _ = try await logos.setAccountLogo(
+                accountId: account.accountId, expectedRevision: account.logoRevision, png: png)
         }
     }
 

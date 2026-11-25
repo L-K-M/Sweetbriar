@@ -2,6 +2,7 @@ import AppKit
 import Observation
 import SwiftUI
 import SweetbriarBridge
+import UniformTypeIdentifiers
 
 enum SettingsTab: Hashable { case appearance, accounts, reading, sending, backups }
 
@@ -75,7 +76,7 @@ private struct AppearanceSettingsLoader: View {
                             ProgressView("Waiting for the restore outcome…")
                         } else if let cue = cues.model(source: bridge) {
                             AccountAppearanceSettings(
-                                bridge: bridge, model: AppearanceSettingsModel(appearance: shared.model(source: bridge)),
+                                bridge: bridge, model: AppearanceSettingsModel(appearance: shared.model(source: bridge), logos: bridge),
                                 cue: cue, backups: model, editor: editor, editorRevision: editor.revision
                             )
                             .id(editor.revision)
@@ -194,7 +195,8 @@ private struct AccountAppearanceSettings: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
                 ComposeCueSettingsView(
-                    cue: cue, editor: editor, revision: editorRevision, preview: cuePreview
+                    cue: cue, editor: editor, revision: editorRevision, preview: cuePreview,
+                    previewLogo: current.flatMap { AccountLogoImages.image(for: $0) }
                 ) {
                     backups.canWrite
                 }
@@ -258,10 +260,11 @@ private struct AccountAppearanceSettings: View {
                                 Text("Custom: \(current.colorSrgb)").foregroundStyle(.secondary)
                             }
                             letterControls(current)
+                            logoControls(current)
                             addressControls(current)
                             HStack(spacing: 12) {
-                                preview("Light", current.tokens.light, current.monogram)
-                                preview("Dark", current.tokens.dark, current.monogram)
+                                preview("Light", current.tokens.light, current.monogram, logo: AccountLogoImages.image(for: current))
+                                preview("Dark", current.tokens.dark, current.monogram, logo: AccountLogoImages.image(for: current))
                             }
                             Text("Stored on this device; included in export.").font(.footnote)
                                 .foregroundStyle(.secondary)
@@ -357,6 +360,33 @@ private struct AccountAppearanceSettings: View {
             .foregroundStyle(.secondary)
     }
 
+    /// The account's logo (spec/08 "Logo"): Choose Image… and Remove, and
+    /// a note when the stored logo can't be shown.
+    @ViewBuilder
+    private func logoControls(_ account: AccountAppearance) -> some View {
+        HStack {
+            Text("Logo")
+            Button("Choose Image…") { chooseLogo(for: account) }
+            if account.logoPng != nil {
+                Button("Remove") { run { await model.setLogo(nil, account: account) } }
+            }
+        }
+        .disabled(model.saving || model.appearanceFailure != nil)
+        if AccountLogoImages.isUndecodable(account) {
+            Text("The stored logo can't be shown, so the letter shows instead. Choose another image.")
+                .font(.footnote).foregroundStyle(.secondary)
+        }
+    }
+
+    private func chooseLogo(for account: AccountAppearance) {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.image]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        run { await model.chooseLogo(at: url, account: account) }
+    }
+
     /// Each of the account's addresses with the account color or its own
     /// (spec/08 "Addresses").
     @ViewBuilder
@@ -415,11 +445,16 @@ private struct AccountAppearanceSettings: View {
         return SidebarViewController.accountLabel(section, among: sections)
     }
 
-    private func preview(_ name: String, _ variant: AppearanceVariant, _ mark: String) -> some View {
+    private func preview(_ name: String, _ variant: AppearanceVariant, _ mark: String, logo: NSImage?) -> some View {
         VStack(alignment: .leading) {
             Text(name).font(.caption)
             HStack {
-                Text(mark).bold().foregroundStyle(color(variant.foregroundSrgb))
+                if let logo {
+                    AccountLogoMark(image: logo, ring: color(variant.markerSrgb), side: 18)
+                        .environment(\.colorScheme, name == "Dark" ? .dark : .light)
+                } else {
+                    Text(mark).bold().foregroundStyle(color(variant.foregroundSrgb))
+                }
                 Text("From: \(accounts.first { $0.accountId == selected }?.displayName ?? "Account")").foregroundStyle(color(variant.foregroundSrgb))
                 Spacer()
             }

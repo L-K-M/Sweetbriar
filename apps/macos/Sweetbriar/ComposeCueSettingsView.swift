@@ -1,3 +1,4 @@
+import AppKit
 import SweetbriarBridge
 import SwiftUI
 
@@ -7,13 +8,16 @@ struct ComposeCueSettingsView: View {
 
     @State private var control: ComposeCueSettingsControl
     private let preview: IdentityStripView.Content
+    private let previewLogo: NSImage?
 
     init(
         cue: ComposeCueModel, editor: ArchiveWriteTasks, revision: UInt64,
         preview: IdentityStripView.Content = ComposeCueSettingsView.noAccount,
+        previewLogo: NSImage? = nil,
         canWrite: @escaping @MainActor () -> Bool
     ) {
         self.preview = preview
+        self.previewLogo = previewLogo
         _control = State(
             initialValue: ComposeCueSettingsControl(
                 cue: cue, editor: editor, revision: revision, canWrite: canWrite))
@@ -28,7 +32,9 @@ struct ComposeCueSettingsView: View {
             .font(.footnote)
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
-            ComposeCuePicker(mode: control.cue.mode, enabled: control.canChoose, preview: preview) { mode in
+            ComposeCuePicker(
+                mode: control.cue.mode, enabled: control.canChoose, preview: preview, previewLogo: previewLogo
+            ) { mode in
                 control.choose(mode)
             }
             if control.cue.isStopped {
