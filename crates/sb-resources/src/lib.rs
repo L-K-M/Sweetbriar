@@ -230,6 +230,10 @@ pub use sb_store::query::{
     UnknownCount, counts, read_search_date_page, read_search_relevance_page, search_date_ids,
     search_relevance_ids,
 };
+pub use sb_store::recipients::{
+    StoredAllowance, StoredBlockedRecipient, StoredRecipientFence, account_senders_ready,
+    allow_recipient, recipient_allowances, recipient_fence, remove_recipient_allowance,
+};
 pub use sb_store::recovery::{
     MAX_RECOVERY_PAGE_ROWS, RecoveryAnchor, RecoveryKey, RecoveryPage, RecoveryState,
     StoredRecovery, recovery,
