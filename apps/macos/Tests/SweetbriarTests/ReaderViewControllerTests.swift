@@ -169,7 +169,8 @@ func readerHeaderChipAttachmentsAndSourceToggle() async throws {
     #expect(controller.model.currentLease == nil)
     #expect(controller.html.isHidden)
     await controller.show(selection: [])
-    #expect(controller.placeholder.stringValue == "No message selected" && controller.status.isHidden)
+    #expect(controller.placeholder.stringValue == "No message selected" && !controller.placeholder.isHidden)
+    #expect(controller.status.isHidden)
     controller.close()
 }
 

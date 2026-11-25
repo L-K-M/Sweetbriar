@@ -128,6 +128,7 @@ final class NoteEditorView: NSScrollView {
         textView.identifier = NSUserInterfaceItemIdentifier("readerNote")
         textView.setAccessibilityIdentifier("readerNote")
         textView.setAccessibilityLabel("Note")
+        textView.setAccessibilityPlaceholderValue(NoteTextView.placeholder)
         textView.drawsBackground = false
         textView.font = .systemFont(ofSize: NSFont.systemFontSize)
         documentView = textView

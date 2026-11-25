@@ -16,13 +16,16 @@ private func mailbox(role: MailboxRole?, kind: MailboxKind) -> Mailbox {
         selectable: true, total: 0, unread: 0)
 }
 
-private func message(subject: String?, cc: [ReaderAddress] = []) -> ReaderMessage {
+private func message(
+    subject: String?,
+    from: [ReaderAddress] = [ReaderAddress(name: "Ada Lovelace", address: "ada@example.test")],
+    to: [ReaderAddress] = [ReaderAddress(name: nil, address: "to@example.test")],
+    cc: [ReaderAddress] = []
+) -> ReaderMessage {
     ReaderMessage(
         messageId: 1,
         headers: ReaderHeaders(
-            from: [ReaderAddress(name: "Ada Lovelace", address: "ada@example.test")],
-            to: [ReaderAddress(name: nil, address: "to@example.test")],
-            cc: cc, date: 1_792_238_400_000, subject: subject, messageId: nil),
+            from: from, to: to, cc: cc, date: 1_792_238_400_000, subject: subject, messageId: nil),
         accountId: "a", accountDisplayName: "Work", occurrences: [], threadId: nil, tags: [],
         note: nil, bodyAvailability: .acquired)
 }
@@ -57,6 +60,9 @@ struct MailboxPresentationTests {
         #expect(SidebarSymbol.name(for: box, mailbox: mailbox(role: nil, kind: .folder)) == "folder")
         #expect(SidebarSymbol.name(for: box, mailbox: nil) == "folder")
         #expect(SidebarSymbol.name(for: entry(.unavailable(note: "n")), mailbox: nil) == "folder")
+        for symbol in ["flag", "tray.and.arrow.up", "folder.badge.gearshape", "tag", "folder"] {
+            #expect(NSImage(systemSymbolName: symbol, accessibilityDescription: nil) != nil)
+        }
     }
 
     @Test func theHeaderLeadsWithTheSubjectAndTheSendersName() throws {
@@ -68,16 +74,20 @@ struct MailboxPresentationTests {
             To: to@example.test
             \(date)
             """)
-        let font = { (text: String) throws -> NSFont in
+        func location(of text: String) throws -> Int {
             let range = (header.string as NSString).range(of: text)
-            return try #require(header.attribute(.font, at: range.location, effectiveRange: nil) as? NSFont)
+            return try #require(range.location == NSNotFound ? nil : range.location)
+        }
+        func font(_ text: String) throws -> NSFont {
+            let index = try location(of: text)
+            return try #require(header.attribute(.font, at: index, effectiveRange: nil) as? NSFont)
         }
         #expect(try font("Quarterly").fontDescriptor.symbolicTraits.contains(.bold))
         #expect(try font("Quarterly").pointSize > NSFont.systemFontSize)
         #expect(try font("Ada Lovelace").fontDescriptor.symbolicTraits.contains(.bold))
         #expect(try !font("ada@example").fontDescriptor.symbolicTraits.contains(.bold))
-        let label = (header.string as NSString).range(of: "To:")
-        #expect(header.attribute(.foregroundColor, at: label.location, effectiveRange: nil) as? NSColor
+        let label = try location(of: "To:")
+        #expect(header.attribute(.foregroundColor, at: label, effectiveRange: nil) as? NSColor
             == .secondaryLabelColor)
 
         let copied = ReaderViewController.headerText(
@@ -86,9 +96,13 @@ struct MailboxPresentationTests {
         #expect(copied.string.contains("\nCc: Cy <cy@example.test>\n"))
     }
 
-    /// Window → Message Viewer brings the main window back once it was
-    /// closed, as Mail's does.
-    @Test func theWindowMenuBringsTheViewerBack() throws {
+    @Test func theHeaderSkipsMissingAddressLines() {
+        let header = ReaderViewController.headerText(message(subject: "Notice", from: [], to: []))
+        let date = Date(timeIntervalSince1970: 1_792_238_400).formatted(date: .abbreviated, time: .shortened)
+        #expect(header.string == "Notice\n\(date)")
+    }
+
+    @Test func theWindowMenuInvokesTheViewerCommand() throws {
         let shown = Shown()
         // Kept: menu items hold their target weakly.
         let builder = MainMenuBuilder(
@@ -108,10 +122,11 @@ struct MailboxPresentationTests {
         withExtendedLifetime(builder) {}
     }
 
-    @Test func aTintedHeaderTakesTheTintsForeground() {
+    @Test func aTintedHeaderTakesTheTintsForeground() throws {
         let header = ReaderViewController.headerText(message(subject: "S"), primary: .white, secondary: .gray)
         #expect(header.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor == .white)
-        let label = (header.string as NSString).range(of: "From:")
-        #expect(header.attribute(.foregroundColor, at: label.location, effectiveRange: nil) as? NSColor == .gray)
+        let range = (header.string as NSString).range(of: "From:")
+        let label = try #require(range.location == NSNotFound ? nil : range.location)
+        #expect(header.attribute(.foregroundColor, at: label, effectiveRange: nil) as? NSColor == .gray)
     }
 }

@@ -544,6 +544,7 @@ final class ReaderViewController: NSViewController {
             text.append(NSAttributedString(string: string, attributes: [.font: font, .foregroundColor: color]))
         }
         func line(_ label: String, _ values: [ReaderAddress], names: NSFont) {
+            guard !values.isEmpty else { return }
             append("\n\(label) ", font, secondary)
             for (index, value) in values.enumerated() {
                 if index > 0 { append(", ", font, primary) }
@@ -561,7 +562,7 @@ final class ReaderViewController: NSViewController {
         append(subject.isEmpty ? "(No Subject)" : subject, title, primary)
         line("From:", message.headers.from, names: bold)
         line("To:", message.headers.to, names: font)
-        if !message.headers.cc.isEmpty { line("Cc:", message.headers.cc, names: font) }
+        line("Cc:", message.headers.cc, names: font)
         if let timestamp = message.headers.date {
             let seconds = Duration.milliseconds(timestamp) / .seconds(1)
             let date = Date(timeIntervalSince1970: seconds).formatted(date: .abbreviated, time: .shortened)
