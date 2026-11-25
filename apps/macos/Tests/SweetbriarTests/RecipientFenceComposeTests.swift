@@ -334,7 +334,8 @@ struct RecipientFenceComposeTests {
             #expect(!controller.recipientCheckNote.isHidden)
             #expect(controller.recipientCheckNote.stringValue == RecipientFencePresentation.notReady)
             #expect(banners(controller).isEmpty)
-            #expect(controller.sendButton.isEnabled)
+            // The sending identity loads independently of the fence.
+            #expect(await fenceEventually { controller.sendButton.isEnabled })
             #expect(controller.toRecipients.displayString(for: correspondent) == correspondent)
 
             await source.setReady(true)

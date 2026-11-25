@@ -56,6 +56,16 @@ final class SidebarViewController: NSViewController, NSMenuDelegate {
     /// The chosen entry's id, kept across reloads.
     private var chosenID: String?
     var selectedAccountId: String? { chosenID.flatMap { model.accountId(forEntry: $0) } }
+    /// The chosen entry, for the window's title.
+    var chosenEntry: SidebarModel.Entry? { chosenID.flatMap(model.entry(id:)) }
+    /// The chosen entry's account, as its heading names it; nil in the
+    /// unified section.
+    var chosenAccountTitle: String? {
+        guard let account = selectedAccountId,
+            let section = model.sections.first(where: { $0.id == account })
+        else { return nil }
+        return Self.accountLabel(section, among: model.sections)
+    }
 
     /// While the selection is set in code: the delegate then reports
     /// no choice.

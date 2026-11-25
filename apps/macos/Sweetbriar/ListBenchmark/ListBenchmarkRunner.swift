@@ -636,7 +636,12 @@ final class ListBenchmarkRunner {
                 }
                 guard emptied else { return false }
                 model.chooseScope(scope)
-                return window.makeFirstResponder(field) && field.currentEditor() is NSTextView
+                // Enter through the toolbar so AppKit keeps the search
+                // field active when the results change the window title.
+                controller.focusSearch(nil)
+                return await checkWithin(Self.openTimeout, context: context) {
+                    field.currentEditor() is NSTextView
+                }
             }
 
             /// Wait until the field's work is done and any list it

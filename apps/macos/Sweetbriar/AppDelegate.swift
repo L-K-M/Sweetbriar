@@ -122,7 +122,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                               backups: backups,
                                               readingViewMemory: readingViewMemory,
                                               openBackups: { [weak self] in self?.showSettings(tab: .backups) },
-                                              openDraft: { [weak self] in self?.composeWindows?.open(draftId: $0) })
+                                              openDraft: { [weak self] in self?.composeWindows?.open(draftId: $0) },
+                                              composeCommands: menuBuilder)
         composeWindows?.onWindowsChanged = { [weak mainWindow] in mainWindow?.draftsChanged() }
         self.mainWindow = mainWindow
         mainWindow.onOpenActivity = { [weak self] in self?.showActivity() }

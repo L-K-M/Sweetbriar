@@ -92,6 +92,23 @@ final class MessageListViewController: NSViewController {
     private(set) var firstPageAtForBenchmark: Double?
     private(set) var landedAtForBenchmark: Double?
     private(set) var openedAtForBenchmark: Double?
+    /// The search field the main window's toolbar shows.
+    var searchField: NSSearchField { search.searchField }
+
+    /// Whether the list shows Search results.
+    var isShowingSearch: Bool { shownSpec?.isSearch == true }
+
+    /// The shown list's row count once its exact index is in; nil while
+    /// it opens or after it failed. The window's subtitle follows it.
+    var onCountChange: (@MainActor (Int?) -> Void)?
+
+    /// Escape cleared Search; the window collapses its search item.
+    var onSearchCancel: (@MainActor () -> Void)?
+
+    /// Escape cleared Search while the list it returns to was still
+    /// opening: that list takes the keyboard once installed.
+    private var focusesListOnInstall = false
+
     /// Search's field and model, for the keystroke benchmark (plan M1.6q2).
     var searchFieldForBenchmark: NSSearchField { search.fieldForBenchmark }
     var searchModelForBenchmark: SearchFieldModel { searchModel }
@@ -147,6 +164,9 @@ final class MessageListViewController: NSViewController {
         search.onSaveAsView = { [weak self] name in
             try await self?.saveView(name: name) ?? ()
         }
+        // Escape in the search field clears it and hands the keyboard
+        // back to the list, as Mail does.
+        search.onCancel = { [weak self] in self?.searchCancelled() }
     }
 
     /// Save the search field's current query and sort as a view
@@ -239,6 +259,8 @@ final class MessageListViewController: NSViewController {
     /// List `spec`: close the current model, then open a fresh one in
     /// a fresh list. A search the field presented names its ticket.
     func show(_ spec: WindowSpec, searchTicket: UInt64? = nil) {
+        // A later choice than Escape's keeps the keyboard where it is.
+        focusesListOnInstall = false
         search.navigated(to: spec)
         shownSearchTicket = searchTicket
         standalone = false
@@ -256,6 +278,16 @@ final class MessageListViewController: NSViewController {
         // Take the ticket at the user/field choice, before scheduling can reorder it.
         openingTasks.run { [weak self] in
             await self?.install(spec, ticket: ticket)
+        }
+    }
+
+    private func searchCancelled() {
+        onSearchCancel?()
+        // Clearing returns to the list Search replaced, which opens anew.
+        if opening {
+            focusesListOnInstall = true
+        } else {
+            list?.focus()
         }
     }
 
@@ -321,6 +353,10 @@ final class MessageListViewController: NSViewController {
         self.model = model
         self.list = list
         onSelectionChange?([])
+        if focusesListOnInstall {
+            focusesListOnInstall = false
+            list.focus()
+        }
 
         observe(model)
         observeGeneration(model)
@@ -543,6 +579,9 @@ final class MessageListViewController: NSViewController {
         }
         statusLabel.stringValue = text ?? ""
         statusLabel.isHidden = text == nil
+        let counted = !standalone && openError == nil && model?.lastError == nil
+            && model?.hasExactIndex == true
+        onCountChange?(counted ? model?.count : nil)
     }
 
     /// Why Search can't open, from the index's own state (spec/08), or

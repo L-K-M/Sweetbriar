@@ -144,7 +144,7 @@ final class IndexControlFlowTests: XCTestCase {
     @MainActor
     private func search(_ window: XCUIElement, for query: String) {
         let field = window.searchFields["search.field"]
-        field.click()
+        revealSearchField(field)
         field.typeKey("a", modifierFlags: .command)
         field.typeText(query)
     }
