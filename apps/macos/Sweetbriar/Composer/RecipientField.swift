@@ -53,6 +53,16 @@ final class RecipientField: NSObject, NSTokenFieldDelegate {
     var inputDidChange: (() -> Void)?
     var editingDidEnd: (() -> Void)?
     var presentationDidChange: (() -> Void)?
+    /// The canonical addresses the recipient check blocks: their tokens
+    /// show a warning symbol, never an account color (spec/08).
+    var blockedAddresses: Set<String> = [] {
+        didSet {
+            guard blockedAddresses != oldValue, control.currentEditor() == nil else { return }
+            // AppKit asks for display strings again only on a new value.
+            let value = control.objectValue
+            control.objectValue = value
+        }
+    }
     private(set) var isPending = false
     private(set) var problem: String?
     private var values: [DraftRecipient] = []
@@ -198,7 +208,21 @@ final class RecipientField: NSObject, NSTokenFieldDelegate {
     func tokenField(_ tokenField: NSTokenField, displayStringForRepresentedObject representedObject: Any)
         -> String?
     {
-        (representedObject as? RecipientToken)?.text
+        guard let token = representedObject as? RecipientToken else { return nil }
+        if case .address(let recipient) = token.value,
+            blockedAddresses.contains(RecipientFencePresentation.canonical(recipient.address))
+        {
+            return "\u{26A0}\u{FE0E} " + token.text
+        }
+        return token.text
+    }
+
+    /// Whether a token for `address` shows the warning symbol; tests read
+    /// it through the delegate.
+    func displayString(for address: String) -> String? {
+        tokenField(
+            control,
+            displayStringForRepresentedObject: RecipientToken(.address(DraftRecipient(address: address, name: nil))))
     }
 
     func tokenField(_ tokenField: NSTokenField, editingStringForRepresentedObject representedObject: Any)

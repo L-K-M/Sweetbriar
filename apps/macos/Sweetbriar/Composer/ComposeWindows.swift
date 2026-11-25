@@ -207,7 +207,8 @@ final class ComposeWindows {
             externalEditor: (source as? any ExternalEditRootSource).map {
                 ExternalEditor(root: $0.externalEditRoot, opener: WorkspaceEditorOpener())
             },
-            replyAccountSource: source as? any ReplyAccountSource)
+            replyAccountSource: source as? any ReplyAccountSource,
+            fenceSource: source as? any RecipientFenceSource)
         windows[draftId] = controller
         controller.onClosed = { [weak self] in
             guard let self else { return }

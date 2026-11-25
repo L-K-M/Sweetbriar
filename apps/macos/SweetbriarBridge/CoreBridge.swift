@@ -1948,3 +1948,45 @@ extension ReadingImageReference {
         }
     }
 }
+
+// The recipient check (spec/07, M6.7a); in this file for `core`.
+extension CoreBridge: RecipientFenceSource {
+    /// `recipient_fence(draft_id, revision_id)`: a query, so the token
+    /// races every wait.
+    public func recipientFence(draftId: String, revisionId: String) async throws -> RecipientFence {
+        let token = SweetbriarCore.CancelToken()
+        let value = try await Self.withCancellation(token: token) {
+            try await self.core.recipientFence(token: token, draftId: draftId, revisionId: revisionId)
+        }
+        return RecipientFence(value)
+    }
+
+    /// `allow_recipient` under a fresh idempotency key.
+    public func allowRecipient(accountId: String, address: String) async throws -> Receipt {
+        let token = SweetbriarCore.CancelToken()
+        let receipt = try await Self.withCancellation(token: token) {
+            try await self.core.allowRecipient(
+                token: token, idempotencyKey: UUID().uuidString, accountId: accountId, address: address)
+        }
+        return Receipt(receipt)
+    }
+
+    /// `remove_recipient_allowance` under a fresh idempotency key.
+    public func removeRecipientAllowance(accountId: String, address: String) async throws -> Receipt {
+        let token = SweetbriarCore.CancelToken()
+        let receipt = try await Self.withCancellation(token: token) {
+            try await self.core.removeRecipientAllowance(
+                token: token, idempotencyKey: UUID().uuidString, accountId: accountId, address: address)
+        }
+        return Receipt(receipt)
+    }
+
+    /// `recipient_allowances()`, for Settings → Sending.
+    public func recipientAllowances() async throws -> [RecipientAllowance] {
+        let token = SweetbriarCore.CancelToken()
+        let value = try await Self.withCancellation(token: token) {
+            try await self.core.recipientAllowances(token: token)
+        }
+        return value.map(RecipientAllowance.init)
+    }
+}
