@@ -638,6 +638,11 @@ uint64_t uniffi_sb_ffi_fn_method_core_start_search_rebuild(uint64_t ptr, uint64_
 uint64_t uniffi_sb_ffi_fn_method_core_coverage(uint64_t ptr, uint64_t token, RustBuffer scope
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_ALLOW_RECIPIENT
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_ALLOW_RECIPIENT
+uint64_t uniffi_sb_ffi_fn_method_core_allow_recipient(uint64_t ptr, uint64_t token, RustBuffer idempotency_key, RustBuffer account_id, RustBuffer address
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_CANCEL_SEND
 #define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_CANCEL_SEND
 uint64_t uniffi_sb_ffi_fn_method_core_cancel_send(uint64_t ptr, uint64_t token, RustBuffer idempotency_key, RustBuffer attempt_id
@@ -656,6 +661,21 @@ uint64_t uniffi_sb_ffi_fn_method_core_cross_account_notice(uint64_t ptr, uint64_
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_OUT_BOX
 #define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_OUT_BOX
 uint64_t uniffi_sb_ffi_fn_method_core_out_box(uint64_t ptr, uint64_t token
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_RECIPIENT_ALLOWANCES
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_RECIPIENT_ALLOWANCES
+uint64_t uniffi_sb_ffi_fn_method_core_recipient_allowances(uint64_t ptr, uint64_t token
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_RECIPIENT_FENCE
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_RECIPIENT_FENCE
+uint64_t uniffi_sb_ffi_fn_method_core_recipient_fence(uint64_t ptr, uint64_t token, RustBuffer draft_id, RustBuffer revision_id
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_REMOVE_RECIPIENT_ALLOWANCE
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_REMOVE_RECIPIENT_ALLOWANCE
+uint64_t uniffi_sb_ffi_fn_method_core_remove_recipient_allowance(uint64_t ptr, uint64_t token, RustBuffer idempotency_key, RustBuffer account_id, RustBuffer address
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_RESOLVE_UNKNOWN_SEND
@@ -1605,6 +1625,12 @@ uint16_t uniffi_sb_ffi_checksum_method_core_coverage(void
     
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_ALLOW_RECIPIENT
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_ALLOW_RECIPIENT
+uint16_t uniffi_sb_ffi_checksum_method_core_allow_recipient(void
+    
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_CANCEL_SEND
 #define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_CANCEL_SEND
 uint16_t uniffi_sb_ffi_checksum_method_core_cancel_send(void
@@ -1626,6 +1652,24 @@ uint16_t uniffi_sb_ffi_checksum_method_core_cross_account_notice(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_OUT_BOX
 #define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_OUT_BOX
 uint16_t uniffi_sb_ffi_checksum_method_core_out_box(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_RECIPIENT_ALLOWANCES
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_RECIPIENT_ALLOWANCES
+uint16_t uniffi_sb_ffi_checksum_method_core_recipient_allowances(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_RECIPIENT_FENCE
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_RECIPIENT_FENCE
+uint16_t uniffi_sb_ffi_checksum_method_core_recipient_fence(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_REMOVE_RECIPIENT_ALLOWANCE
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_REMOVE_RECIPIENT_ALLOWANCE
+uint16_t uniffi_sb_ffi_checksum_method_core_remove_recipient_allowance(void
     
 );
 #endif
