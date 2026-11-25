@@ -196,6 +196,16 @@ fn replies_and_forwards_are_checked_like_new_messages() {
         answer.blocked,
         blocked(&[("them@example.test", &["acct-2"])])
     );
+    // The reply crosses accounts; its acknowledgement gets past that
+    // check, and the recipient check still refuses.
+    let notice = block_on(engine.cross_account_notice(&draft_id, &revision.revision_id))
+        .unwrap()
+        .expect("the reply sends from another account");
+    let acks = [notice.ack, "recipient_fence".to_owned()];
+    assert_refused(
+        send(&engine, &draft_id, &revision.revision_id, &acks),
+        "them@example.test",
+    );
 
     let (draft_id, revision_id) = draft_with(
         &engine,
@@ -237,7 +247,8 @@ fn a_check_that_isn_t_ready_blocks_nothing() {
 }
 
 /// `send_draft` refuses whatever the `acks`, and sends after an
-/// allowance, a route change or removing the recipient.
+/// allowance, a route change or removing the recipient. Revoking the
+/// allowance blocks again.
 #[test]
 fn send_refuses_until_allowed_rerouted_or_removed() {
     let (_scratch, engine) = scratch_engine("engine-fence-send");
@@ -280,6 +291,23 @@ fn send_refuses_until_allowed_rerouted_or_removed() {
         .unwrap();
     assert!(fence(&engine, &draft_id, &revision_id).blocked.is_empty());
     send(&engine, &draft_id, &revision_id, &[]).unwrap();
+
+    // Revoking the allowance.
+    block_on(engine.remove_recipient_allowance(
+        &engine.new_idempotency_key(),
+        "acct-1",
+        "them@example.test",
+    ))
+    .unwrap();
+    let (draft_id, revision_id) = draft_with(&engine, DraftSource::New, blocked_content());
+    assert_eq!(
+        fence(&engine, &draft_id, &revision_id).blocked,
+        blocked(&[("them@Example.Test", &["acct-2"])])
+    );
+    assert_refused(
+        send(&engine, &draft_id, &revision_id, &[]),
+        "them@Example.Test",
+    );
     block_on(engine.shutdown()).unwrap();
 }
 
