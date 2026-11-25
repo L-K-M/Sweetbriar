@@ -20,14 +20,14 @@ enum IdentitySwatch {
         let dark: Bool
 
         init(tokens: AppearanceTokens, monogram: String, appearance: NSAppearance, logo: String? = nil) {
-            let variant =
-                appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? tokens.dark : tokens.light
+            let dark = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            let variant = dark ? tokens.dark : tokens.light
             marker = variant.markerSrgb
             background = variant.stripSrgb
             outline = variant.outlineSrgb
             self.monogram = monogram
             self.logo = logo
-            dark = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            self.dark = dark
         }
     }
 

@@ -216,23 +216,28 @@ struct AccountLogoTests {
                 dataRoot: root.appendingPathComponent("data").path,
                 cacheRoot: root.appendingPathComponent("cache").path),
             snapshots: FrameBatcher<[Setting]>(clock: LogoClock()) { _ in })
-        let appearance = AppearanceModel(source: core)
-        await appearance.refresh()
-        let archive = try #require(appearance.appearance?.accounts.first)
-        #expect(archive.logoPng == nil && archive.logoRevision == nil)
-        let model = AppearanceSettingsModel(appearance: appearance, logos: core)
-        let url = try pngFile(image(width: 400, height: 300) { x, _ in x < 200 ? (200, 40, 40) : (40, 40, 200) })
-        defer { try? FileManager.default.removeItem(at: url) }
-        await model.chooseLogo(at: url, account: archive)
-        #expect(model.error == nil)
-        let stored = try #require(appearance.appearance?.accounts.first)
-        #expect(stored.logoPng != nil && stored.logoRevision != nil)
-        #expect(AccountLogoImages.image(for: stored) != nil)
-        await model.setLogo(nil, account: stored)
-        let cleared = try #require(appearance.appearance?.accounts.first)
-        #expect(cleared.logoPng == nil && cleared.logoRevision != nil)
-        #expect(model.error == nil)
-        await core.shutdown()
+        do {
+            let appearance = AppearanceModel(source: core)
+            await appearance.refresh()
+            let archive = try #require(appearance.appearance?.accounts.first)
+            #expect(archive.logoPng == nil && archive.logoRevision == nil)
+            let model = AppearanceSettingsModel(appearance: appearance, logos: core)
+            let url = try pngFile(image(width: 400, height: 300) { x, _ in x < 200 ? (200, 40, 40) : (40, 40, 200) })
+            defer { try? FileManager.default.removeItem(at: url) }
+            await model.chooseLogo(at: url, account: archive)
+            #expect(model.error == nil)
+            let stored = try #require(appearance.appearance?.accounts.first)
+            #expect(stored.logoPng != nil && stored.logoRevision != nil)
+            #expect(AccountLogoImages.image(for: stored) != nil)
+            await model.setLogo(nil, account: stored)
+            let cleared = try #require(appearance.appearance?.accounts.first)
+            #expect(cleared.logoPng == nil && cleared.logoRevision != nil)
+            #expect(model.error == nil)
+            await core.shutdown()
+        } catch {
+            await core.shutdown()
+            throw error
+        }
     }
 
     // MARK: Surfaces
@@ -287,10 +292,12 @@ struct AccountLogoTests {
             label: "Me", identityId: "work-1", accountId: "work", appearance: overridden, dark: false)
         #expect(own.logo == nil && own.monogram == "Q")
 
+        // Laying out exercises the logo's body. A test's NSHostingView
+        // builds no accessibility tree (no children, even in a window), so
+        // the single element is checked through the label above.
         let host = NSHostingView(
             rootView: AccountChip(label: "Received in Work", accountId: "work", appearance: snapshot))
         host.layoutSubtreeIfNeeded()
-        #expect(host.accessibilityChildren()?.count ?? 0 <= 1)
     }
 
     /// A stored logo the shell can't decode shows the monogram, and
