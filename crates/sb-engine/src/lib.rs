@@ -68,6 +68,7 @@ pub use sb_resources::proton_sync::ProtonListingState;
 pub use sb_resources::proton_sync::{MailboxCoverage, ProtonCoverage};
 mod rebuild;
 mod received;
+mod recipients;
 mod recovery;
 pub use recovery::{RecoveryAnchor, RecoveryPage};
 #[cfg(test)]
@@ -116,6 +117,7 @@ pub use import::{
 };
 pub use new_mail::NewMail;
 pub use rebuild::SearchRebuildStarted;
+pub use recipients::{BlockedRecipient, RecipientAllowance, RecipientFence};
 pub use sb_resources::ParseCode as SearchParseCode;
 pub use sb_resources::QualifiedStage;
 pub use sb_resources::UnknownResolution;
