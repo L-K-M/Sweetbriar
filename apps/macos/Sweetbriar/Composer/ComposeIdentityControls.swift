@@ -233,10 +233,14 @@ final class ComposeIdentityControls: NSObject {
             popup.lastItem?.representedObject = identity.identityId
             if let appearance = IdentityStripContent.matchingAppearance(for: identity, in: appearanceSnapshot)
             {
+                let logo = AccountLogoImages.image(for: appearance, in: appearanceSnapshot)
+                let account = appearanceSnapshot?.accounts.first { $0.accountId == appearance.accountId }
                 let key = IdentitySwatch.Key(
                     tokens: appearance.tokens, monogram: appearance.monogram,
-                    appearance: popup.effectiveAppearance)
-                let image = currentSwatches[key] ?? swatches[key] ?? IdentitySwatch.image(key: key)
+                    appearance: popup.effectiveAppearance,
+                    logo: logo == nil ? nil : "\(appearance.accountId)#\(account?.logoRevision ?? 0)")
+                let image =
+                    currentSwatches[key] ?? swatches[key] ?? IdentitySwatch.image(key: key, logo: logo)
                 currentSwatches[key] = image
                 popup.lastItem?.image = image
             }

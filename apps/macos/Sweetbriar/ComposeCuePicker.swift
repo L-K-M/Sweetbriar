@@ -33,6 +33,8 @@ struct ComposeCuePicker: NSViewRepresentable {
     let mode: ComposeCueMode?
     let enabled: Bool
     let preview: IdentityStripView.Content
+    /// The account's logo, which the previews draw in the monogram's place.
+    var previewLogo: NSImage? = nil
     let choose: @MainActor (ComposeCueMode) -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator() }
@@ -67,7 +69,10 @@ struct ComposeCuePicker: NSViewRepresentable {
         coordinator.mode = mode
         coordinator.choose = choose
         for radio in coordinator.radios.values { radio.isEnabled = enabled }
-        for picture in coordinator.previews.values { picture.content = preview }
+        for picture in coordinator.previews.values {
+            picture.content = preview
+            picture.strip.logo = previewLogo
+        }
         coordinator.showAcknowledgedMode()
     }
 

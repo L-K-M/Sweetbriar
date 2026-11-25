@@ -69,6 +69,14 @@ final class IdentityStripView: NSView {
         }
     }
     var appearanceDidChange: (() -> Void)?
+    /// The account's logo, drawn in the monogram's place (spec/08
+    /// "Logo"); nil draws the monogram.
+    var logo: NSImage? {
+        didSet {
+            guard logo !== oldValue else { return }
+            needsDisplay = true
+        }
+    }
     var contrastOptions: () -> (increase: Bool, differentiate: Bool) = {
         (
             NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast,
@@ -133,12 +141,19 @@ final class IdentityStripView: NSView {
                 let hasMonogram = !monogram.isEmpty
                 let text = minimal ? NSColor.labelColor : appearanceColor(variant.foregroundSrgb)
                 drawLabel(label, color: text, hasMonogram: hasMonogram)
-                if hasMonogram { drawMonogram(monogram, color: marker) }
                 let name = appearance?.name ?? effectiveAppearance.name
                 let options = contrastOptions()
+                if hasMonogram, let logo {
+                    AccountLogoImages.draw(
+                        logo, in: logoRect(), ring: marker,
+                        ringWidth: AccountLogoImages.ringWidth(
+                            increaseContrast: options.increase, differentiate: options.differentiate))
+                } else if hasMonogram {
+                    drawMonogram(monogram, color: marker)
+                }
                 let faintMarker =
                     minimal && ComposeCuePresentation.markerNeedsOutline(marker, on: surface)
-                if hasMonogram && (options.differentiate || faintMarker) {
+                if hasMonogram && logo == nil && (options.differentiate || faintMarker) {
                     // The outline token holds 3:1 against the strip; on
                     // Minimal's neutral surface the label color does.
                     let ring = minimal ? NSColor.labelColor : appearanceColor(variant.outlineSrgb)
@@ -165,6 +180,15 @@ final class IdentityStripView: NSView {
                 drawLabel(label, color: .labelColor, hasMonogram: false)
             }
         }
+    }
+
+    /// The logo's square, at the monogram's size, centered in the mark's
+    /// column.
+    func logoRect() -> NSRect {
+        let side = min(max(24, ceil(textFont.pointSize * 1.7)), max(0, bounds.height - 8))
+        let column = markWidth(for: bounds.width)
+        return NSRect(
+            x: padding + (column - side) / 2, y: (bounds.height - side) / 2, width: side, height: side)
     }
 
     private func markWidth(for width: CGFloat) -> CGFloat {

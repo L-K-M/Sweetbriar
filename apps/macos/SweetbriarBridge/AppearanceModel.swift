@@ -7,6 +7,7 @@
 // resubscribes at the new generation. Free of AppKit so the bridge's
 // tests exercise it.
 
+import Foundation
 import Observation
 import SweetbriarCore
 
@@ -58,6 +59,12 @@ public struct AccountAppearance: Sendable, Equatable {
     public var assignment: AppearanceAssignment
     /// The record's revision; the setter requires it.
     public var revision: Int64
+    /// The account's logo, a 128 x 128 PNG (spec/02 "Account logos");
+    /// absent without one or once cleared.
+    public var logoPng: Data?
+    /// The logo row's revision, which `setAccountLogo` expects; absent
+    /// only when no logo was ever set.
+    public var logoRevision: Int64?
 
     public init(
         accountId: String,
@@ -67,7 +74,9 @@ public struct AccountAppearance: Sendable, Equatable {
         monogram: String,
         collides: Bool,
         assignment: AppearanceAssignment,
-        revision: Int64
+        revision: Int64,
+        logoPng: Data? = nil,
+        logoRevision: Int64? = nil
     ) {
         self.accountId = accountId
         self.colorSrgb = colorSrgb
@@ -77,6 +86,8 @@ public struct AccountAppearance: Sendable, Equatable {
         self.collides = collides
         self.assignment = assignment
         self.revision = revision
+        self.logoPng = logoPng
+        self.logoRevision = logoRevision
     }
 
     /// Map the generated record field by field.
@@ -85,7 +96,8 @@ public struct AccountAppearance: Sendable, Equatable {
             accountId: value.accountId, colorSrgb: value.colorSrgb,
             tokens: AppearanceTokens(value.tokens), symbol: value.symbol,
             monogram: value.monogram, collides: value.collides,
-            assignment: AppearanceAssignment(value.assignment), revision: value.revision
+            assignment: AppearanceAssignment(value.assignment), revision: value.revision,
+            logoPng: value.logoPng, logoRevision: value.logoRevision
         )
     }
 }
@@ -317,11 +329,20 @@ public protocol AppearanceSource: AnyObject, Sendable {
     func palette() -> [PaletteColor]
 }
 
+/// Writes an account's logo (spec/07 `set_account_logo`): a 128 x 128
+/// PNG, or `nil` to clear it, against the logo row's observed revision
+/// (`nil` when none exists).
+public protocol AccountLogoSource: AnyObject, Sendable {
+    func setAccountLogo(accountId: String, expectedRevision: Int64?, png: Data?) async throws -> Receipt
+}
+
 /// The appearance stream as the model pulls it (spec/07): one
 /// `next` at a time.
 public protocol AppearanceEventSource: Sendable {
     func next() async throws -> AppearanceEvent
 }
+
+extension CoreBridge: AccountLogoSource {}
 
 extension CoreBridge: AppearanceSource {
     /// The appearance stream, marked at the caller's last

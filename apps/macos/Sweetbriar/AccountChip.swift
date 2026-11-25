@@ -15,6 +15,8 @@ struct AccountChipPresentation: Equatable {
     let label: String
     let monogram: String?
     let colors: Colors?
+    /// The account's logo, which replaces the monogram (spec/08 "Logo").
+    var logo: NSImage?
 
     @MainActor
     static func make(label: String, accountId: String, appearance: Appearance?, dark: Bool) -> Self {
@@ -23,7 +25,9 @@ struct AccountChipPresentation: Equatable {
         else {
             return Self(label: label, monogram: nil, colors: nil)
         }
-        return Self(label: label, monogram: account.monogram, tokens: account.tokens, dark: dark)
+        var chip = Self(label: label, monogram: account.monogram, tokens: account.tokens, dark: dark)
+        chip.logo = AccountLogoImages.image(for: account)
+        return chip
     }
 
     /// An identity chip: the identity's own monogram and colors, matched by
@@ -39,7 +43,9 @@ struct AccountChipPresentation: Equatable {
         else {
             return Self(label: label, monogram: nil, colors: nil)
         }
-        return Self(label: label, monogram: identity.monogram, tokens: identity.tokens, dark: dark)
+        var chip = Self(label: label, monogram: identity.monogram, tokens: identity.tokens, dark: dark)
+        chip.logo = AccountLogoImages.image(for: identity, in: appearance)
+        return chip
     }
 
     init(label: String, monogram: String?, colors: Colors?) {
@@ -106,7 +112,9 @@ struct AccountChip: View {
                     label: label, identityId: id, accountId: accountId, appearance: appearance, dark: dark)
             }
         HStack(spacing: 5) {
-            if let colors = chip.colors, let monogram = chip.monogram {
+            if let colors = chip.colors, let logo = chip.logo {
+                AccountLogoMark(image: logo, ring: Color(nsColor: appearanceColor(colors.marker)), side: 14)
+            } else if let colors = chip.colors, let monogram = chip.monogram {
                 Text(monogram).bold().foregroundStyle(Color(nsColor: appearanceColor(colors.marker)))
             }
             Text(chip.label)
