@@ -368,6 +368,11 @@ uint64_t uniffi_sb_ffi_fn_method_core_appearance(uint64_t ptr, uint64_t token
 uint64_t uniffi_sb_ffi_fn_method_core_set_account_appearance(uint64_t ptr, uint64_t token, RustBuffer idempotency_key, RustBuffer account_id, int64_t expected_revision, RustBuffer change
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_SET_ACCOUNT_LOGO
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_SET_ACCOUNT_LOGO
+uint64_t uniffi_sb_ffi_fn_method_core_set_account_logo(uint64_t ptr, uint64_t token, RustBuffer idempotency_key, RustBuffer account_id, RustBuffer expected_revision, RustBuffer png
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_SET_IDENTITY_APPEARANCE
 #define UNIFFI_FFIDEF_UNIFFI_SB_FFI_FN_METHOD_CORE_SET_IDENTITY_APPEARANCE
 uint64_t uniffi_sb_ffi_fn_method_core_set_identity_appearance(uint64_t ptr, uint64_t token, RustBuffer idempotency_key, RustBuffer identity_id, RustBuffer expected_revision, RustBuffer change
@@ -1273,6 +1278,12 @@ uint16_t uniffi_sb_ffi_checksum_method_core_appearance(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_SET_ACCOUNT_APPEARANCE
 #define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_SET_ACCOUNT_APPEARANCE
 uint16_t uniffi_sb_ffi_checksum_method_core_set_account_appearance(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_SET_ACCOUNT_LOGO
+#define UNIFFI_FFIDEF_UNIFFI_SB_FFI_CHECKSUM_METHOD_CORE_SET_ACCOUNT_LOGO
+uint16_t uniffi_sb_ffi_checksum_method_core_set_account_logo(void
     
 );
 #endif
