@@ -118,7 +118,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             })
         if let composeWindows { ComposeRestorer.shared.attach(composeWindows) }
-        let mainWindow = MainWindowController(session: session, appearance: appearance, backups: backups,
+        let mainWindow = MainWindowController(session: session, appearance: appearance, cues: composeCue,
+                                              backups: backups,
                                               readingViewMemory: readingViewMemory,
                                               openBackups: { [weak self] in self?.showSettings(tab: .backups) },
                                               openDraft: { [weak self] in self?.composeWindows?.open(draftId: $0) })
