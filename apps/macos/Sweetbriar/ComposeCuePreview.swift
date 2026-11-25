@@ -12,6 +12,13 @@ final class ComposeCuePreview: NSView {
     private static let editorHeight: CGFloat = 20
 
     let mode: ComposeCueMode
+    var renderedMode: ComposeCueMode {
+        didSet {
+            guard renderedMode != oldValue else { return }
+            strip.cueMode = renderedMode
+            needsDisplay = true
+        }
+    }
     let strip = IdentityStripView(
         frame: NSRect(x: 0, y: 0, width: ComposeCuePreview.width, height: 32))
 
@@ -24,17 +31,19 @@ final class ComposeCuePreview: NSView {
     }
     var windowTint: NSColor? {
         ComposeCuePresentation.windowTint(
-            mode: mode, content: strip.content, appearance: effectiveAppearance)
+            mode: renderedMode, content: strip.content, appearance: effectiveAppearance)
     }
     /// Color Wash's stops under the strip; nil shows the editor background.
     var wash: ComposeWashView.Stops? {
-        ComposeCuePresentation.wash(mode: mode, content: strip.content, appearance: effectiveAppearance)
+        ComposeCuePresentation.wash(
+            mode: renderedMode, content: strip.content, appearance: effectiveAppearance)
     }
 
     override var isFlipped: Bool { true }
 
     init(mode: ComposeCueMode) {
         self.mode = mode
+        renderedMode = mode
         super.init(
             frame: NSRect(
                 x: 0, y: 0, width: Self.width, height: Self.titlebarHeight + 32 + Self.editorHeight))

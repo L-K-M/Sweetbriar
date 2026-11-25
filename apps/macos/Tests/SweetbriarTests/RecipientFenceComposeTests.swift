@@ -41,6 +41,7 @@ private actor FenceSource: DraftStore, ComposeCatalogSource, RecipientSource, Re
     /// The sending accounts each address wrote to.
     private var senders: [String: [String]]
     private var allowed: [Allowance] = []
+    private var allowanceLoadFailure: CoreFailure?
     private(set) var sends = 0
     private(set) var allowCalls: [Allowance] = []
 
@@ -57,6 +58,7 @@ private actor FenceSource: DraftStore, ComposeCatalogSource, RecipientSource, Re
 
     func setReady(_ value: Bool) { ready = value }
     func setSenders(_ value: [String: [String]]) { senders = value }
+    func setAllowanceLoadFailure(_ value: CoreFailure?) { allowanceLoadFailure = value }
 
     func recipientFence(draftId: String, revisionId: String) async throws -> RecipientFence {
         guard ready else { return RecipientFence(ready: false, blocked: []) }
@@ -90,7 +92,8 @@ private actor FenceSource: DraftStore, ComposeCatalogSource, RecipientSource, Re
     }
 
     func recipientAllowances() async throws -> [RecipientAllowance] {
-        allowed.map { RecipientAllowance(accountId: $0.accountId, address: $0.address, createdAtMs: 1) }
+        if let allowanceLoadFailure { throw allowanceLoadFailure }
+        return allowed.map { RecipientAllowance(accountId: $0.accountId, address: $0.address, createdAtMs: 1) }
     }
 
     /// Send refuses the way the engine does when the check blocks.
@@ -331,10 +334,12 @@ struct RecipientFenceComposeTests {
     @Test func aCheckThatIsNotReadyShowsItsNoteBlocksNothingAndMailArrivalRereadsIt() async throws {
         let source = FenceSource(ready: false, senders: [correspondent: ["home"]])
         try await withFenceWindow(source) { controller in
-            #expect(!controller.recipientCheckNote.isHidden)
+            let rendered = await fenceEventually {
+                !controller.recipientCheckNote.isHidden && controller.sendButton.isEnabled
+            }
+            try #require(rendered)
             #expect(controller.recipientCheckNote.stringValue == RecipientFencePresentation.notReady)
             #expect(banners(controller).isEmpty)
-            #expect(controller.sendButton.isEnabled)
             #expect(controller.toRecipients.displayString(for: correspondent) == correspondent)
 
             await source.setReady(true)
@@ -449,12 +454,31 @@ struct RecipientFenceComposeTests {
         #expect(!settings.isLoading)
     }
 
+    @Test func aFailedAllowanceLoadDoesNotShowTheEmptyMessage() async {
+        let source = FenceSource(senders: [:])
+        let settings = RecipientAllowancesModel(source: source) { [:] }
+        #expect(!settings.showsEmptyState)
+
+        await source.setAllowanceLoadFailure(.unavailable(reason: "Synthetic failure"))
+        await settings.load()
+        #expect(!settings.showsEmptyState)
+        #expect(settings.error?.hasPrefix("Couldn't load the allowed addresses:") == true)
+
+        await source.setAllowanceLoadFailure(nil)
+        await settings.load()
+        #expect(settings.showsEmptyState)
+        #expect(settings.error == nil)
+    }
+
     @Test func removingAMissingAllowanceShowsTheErrorAndReloads() async throws {
         let source = FenceSource(senders: [:])
         let settings = RecipientAllowancesModel(source: source) { [:] }
         await settings.remove(.init(accountId: "work", address: correspondent, createdAtMs: 1))
         #expect(settings.error?.hasPrefix("Couldn't remove them@example.test:") == true)
-        #expect(settings.groups.isEmpty)
+        #expect(settings.showsEmptyState)
+        await source.setAllowanceLoadFailure(.unavailable(reason: "Synthetic failure"))
+        await settings.remove(.init(accountId: "work", address: correspondent, createdAtMs: 1))
+        #expect(!settings.showsEmptyState)
     }
 
     @Test func aRecipientFenceConflictFromSendShowsTheBanner() async throws {

@@ -68,7 +68,7 @@ struct SendingSettingsView: View {
             .font(.footnote)
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
-        if allowances.groups.isEmpty, !allowances.isLoading {
+        if allowances.showsEmptyState {
             Text("No allowed recipients.").foregroundStyle(.secondary)
         }
         ForEach(allowances.groups, id: \.accountId) { group in

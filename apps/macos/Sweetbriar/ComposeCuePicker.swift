@@ -35,6 +35,7 @@ struct ComposeCuePicker: NSViewRepresentable {
     let preview: IdentityStripView.Content
     /// The account's logo, which the previews draw in the monogram's place.
     var previewLogo: NSImage? = nil
+    var displayOptions = (increaseContrast: false, reduceTransparency: false)
     let choose: @MainActor (ComposeCueMode) -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator() }
@@ -46,7 +47,6 @@ struct ComposeCuePicker: NSViewRepresentable {
                 radioButtonWithTitle: mode.title, target: coordinator,
                 action: #selector(Coordinator.selected(_:)))
             radio.setAccessibilityIdentifier(mode.radioIdentifier)
-            radio.setAccessibilityLabel(mode.spokenLabel)
             let picture = ComposeCuePreview(mode: mode)
             coordinator.radios[mode] = radio
             coordinator.previews[mode] = picture
@@ -68,10 +68,19 @@ struct ComposeCuePicker: NSViewRepresentable {
         let coordinator = context.coordinator
         coordinator.mode = mode
         coordinator.choose = choose
-        for radio in coordinator.radios.values { radio.isEnabled = enabled }
-        for picture in coordinator.previews.values {
-            picture.content = preview
-            picture.strip.logo = previewLogo
+        for (candidate, radio) in coordinator.radios {
+            let rendered = ComposeCuePresentation.renderedMode(
+                candidate, increaseContrast: displayOptions.increaseContrast,
+                reduceTransparency: displayOptions.reduceTransparency) ?? candidate
+            radio.isEnabled = enabled
+            radio.setAccessibilityLabel(
+                rendered == candidate ? candidate.spokenLabel
+                    : "Color Wash, uses Strong with your display settings and colors the identity strip and the upper window")
+            if let picture = coordinator.previews[candidate] {
+                picture.content = preview
+                picture.strip.logo = previewLogo
+                picture.renderedMode = rendered
+            }
         }
         coordinator.showAcknowledgedMode()
     }

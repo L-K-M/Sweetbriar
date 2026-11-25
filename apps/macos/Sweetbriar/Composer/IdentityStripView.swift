@@ -74,6 +74,7 @@ final class IdentityStripView: NSView {
     var logo: NSImage? {
         didSet {
             guard logo !== oldValue else { return }
+            if (logo == nil) != (oldValue == nil) { invalidateIntrinsicContentSize() }
             needsDisplay = true
         }
     }
@@ -140,10 +141,10 @@ final class IdentityStripView: NSView {
                 bounds.fill()
                 let hasMonogram = !monogram.isEmpty
                 let text = minimal ? NSColor.labelColor : appearanceColor(variant.foregroundSrgb)
-                drawLabel(label, color: text, hasMonogram: hasMonogram)
+                drawLabel(label, color: text)
                 let name = appearance?.name ?? effectiveAppearance.name
                 let options = contrastOptions()
-                if hasMonogram, let logo {
+                if let logo {
                     AccountLogoImages.draw(
                         logo, in: logoRect(), ring: marker,
                         ringWidth: AccountLogoImages.ringWidth(
@@ -177,7 +178,7 @@ final class IdentityStripView: NSView {
             case .unavailable(let label):
                 NSColor.windowBackgroundColor.setFill()
                 bounds.fill()
-                drawLabel(label, color: .labelColor, hasMonogram: false)
+                drawLabel(label, color: .labelColor)
             }
         }
     }
@@ -192,31 +193,28 @@ final class IdentityStripView: NSView {
     }
 
     private func markWidth(for width: CGFloat) -> CGFloat {
-        guard case .identity(_, let monogram, _) = content, !monogram.isEmpty else { return 0 }
-        let natural = (monogram as NSString).size(withAttributes: markAttributes()).width
+        guard case .identity(_, let monogram, _) = content else { return 0 }
         let minimum = max(24, ceil(textFont.pointSize * 1.7))
+        if monogram.isEmpty { return logo == nil ? 0 : minimum }
+        let natural = (monogram as NSString).size(withAttributes: markAttributes()).width
         // Stored symbols can contain more than one character. Wrap them rather
         // than clipping them or allowing them to consume the whole address.
         return max(minimum, min(ceil(natural), max(minimum, (width - padding * 3) / 3)))
     }
-    private func labelWidth(for width: CGFloat, hasMonogram: Bool) -> CGFloat {
-        max(1, width - padding * 2 - (hasMonogram ? markWidth(for: width) + padding : 0))
+    private func labelInset(for width: CGFloat) -> CGFloat {
+        let column = markWidth(for: width)
+        return column > 0 ? padding * 2 + column : padding
     }
     private func height(for width: CGFloat) -> CGFloat {
         let width = width > 0 ? width : fallbackWidth
-        let hasMonogram: Bool
-        if case .identity(_, let monogram, _) = content {
-            hasMonogram = !monogram.isEmpty
-        } else {
-            hasMonogram = false
-        }
+        let labelWidth = max(1, width - padding - labelInset(for: width))
         let label = NSAttributedString(string: content.label, attributes: labelAttributes(color: .labelColor))
         let rect = label.boundingRect(
             with: NSSize(
-                width: labelWidth(for: width, hasMonogram: hasMonogram), height: .greatestFiniteMagnitude),
+                width: labelWidth, height: .greatestFiniteMagnitude),
             options: [.usesLineFragmentOrigin, .usesFontLeading])
         var markHeight: CGFloat = 0
-        if case .identity(_, let monogram, _) = content {
+        if case .identity(_, let monogram, _) = content, !monogram.isEmpty {
             let mark = NSAttributedString(string: monogram, attributes: markAttributes())
             markHeight =
                 mark.boundingRect(
@@ -241,10 +239,10 @@ final class IdentityStripView: NSView {
         paragraph.lineBreakMode = .byCharWrapping
         return [.font: textFont, .foregroundColor: color, .paragraphStyle: paragraph]
     }
-    private func drawLabel(_ label: String, color: NSColor, hasMonogram: Bool) {
-        let x = padding + (hasMonogram ? markWidth(for: bounds.width) + padding : 0)
+    private func drawLabel(_ label: String, color: NSColor) {
+        let x = labelInset(for: bounds.width)
         let text = NSAttributedString(string: label, attributes: labelAttributes(color: color))
-        let width = labelWidth(for: bounds.width, hasMonogram: hasMonogram)
+        let width = max(1, bounds.width - padding - x)
         let measured = text.boundingRect(
             with: NSSize(width: width, height: .greatestFiniteMagnitude),
             options: [.usesLineFragmentOrigin, .usesFontLeading])

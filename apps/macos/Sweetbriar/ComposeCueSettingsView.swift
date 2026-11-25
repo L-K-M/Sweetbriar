@@ -6,6 +6,8 @@ struct ComposeCueSettingsView: View {
     /// What the previews draw without a resolved account.
     static let noAccount = IdentityStripView.Content.unavailable(label: "Without a sending identity")
 
+    @Environment(\.colorSchemeContrast) private var contrast
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @State private var control: ComposeCueSettingsControl
     private let preview: IdentityStripView.Content
     private let previewLogo: NSImage?
@@ -27,13 +29,14 @@ struct ComposeCueSettingsView: View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Compose identity cue").font(.headline)
             Text(
-                "Standard colors the identity strip. Strong also tints the upper window. Minimal colors only the monogram. The editor stays neutral and the full From address shows in every mode."
+                "Standard colors the identity strip. Strong also tints the upper window. Color Wash extends that color behind the text and uses Strong when Increase Contrast or Reduce Transparency is on. Minimal colors only the monogram. The full From address shows in every mode."
             )
             .font(.footnote)
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
             ComposeCuePicker(
-                mode: control.cue.mode, enabled: control.canChoose, preview: preview, previewLogo: previewLogo
+                mode: control.cue.mode, enabled: control.canChoose, preview: preview, previewLogo: previewLogo,
+                displayOptions: (contrast == .increased, reduceTransparency)
             ) { mode in
                 control.choose(mode)
             }
