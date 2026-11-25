@@ -136,6 +136,11 @@ CREATE TABLE identity_appearance (
   revision             INTEGER NOT NULL DEFAULT 1
 ) STRICT;
 
+CREATE TABLE account_logos (                         -- migration 37 (M6.6b)
+  account_id  TEXT PRIMARY KEY REFERENCES accounts(account_id),
+  png         BLOB CHECK (png IS NULL OR length(png) BETWEEN 1 AND 65536), -- null: cleared
+  revision    INTEGER NOT NULL DEFAULT 1
+) STRICT;
 ```
 
 - The **local archive** is an account with `kind='local'`. Imported
@@ -213,17 +218,7 @@ in place of its monogram (08). A logo is never sent and never leaves
 the device except in backups.
 
 - **Migration 37** adds `account_logos`; it only adds a table, so it
-  takes no snapshot. Until M6.6b lands, its definition stays out of the
-  schema block above, which the schema drift test executes; M6.6b
-  moves it there:
-
-  ```text
-  CREATE TABLE account_logos (
-    account_id  TEXT PRIMARY KEY REFERENCES accounts(account_id),
-    png         BLOB CHECK (png IS NULL OR length(png) BETWEEN 1 AND 65536), -- null: cleared
-    revision    INTEGER NOT NULL DEFAULT 1
-  ) STRICT;
-  ```
+  takes no snapshot.
 - **Format:** the app normalizes a chosen image to a PNG of exactly
   128 × 128 pixels and at most 65,536 bytes. The core checks the bytes
   without decoding pixels: the 8-byte PNG signature; a first chunk that

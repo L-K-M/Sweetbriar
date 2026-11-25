@@ -1,15 +1,16 @@
 //! The appearance API (spec/07 `appearance()`, "Commands"; spec/02
 //! "Appearance storage"): the resolved snapshot every account and
-//! identity displays, and the two setter commands whose commits feed
+//! identity displays, and the setter commands whose commits feed
 //! `subscribe_appearance`.
 
 use std::collections::HashMap;
 
 use sb_resources::{
     ACCOUNT_PALETTE_V1, AccountColor, AppearanceAssignment, Receipt, StoreError, StoredAccount,
-    StoredAccountAppearance, StoredIdentityAppearance, Transaction, WritePriority,
-    account_appearance, accounts, appearance_generation, identity_appearances, run_once,
-    set_account_appearance, set_identity_appearance,
+    StoredAccountAppearance, StoredAccountLogo, StoredIdentityAppearance, Transaction,
+    WritePriority, account_appearance, account_logos, accounts, appearance_generation,
+    check_logo_png, identity_appearances, run_once, set_account_appearance, set_account_logo,
+    set_identity_appearance,
 };
 
 use super::{AppearanceTokens, SrgbColor};
@@ -19,6 +20,7 @@ use crate::{Engine, EngineError};
 /// The commands' names in `command_receipts` (spec/07).
 const SET_ACCOUNT_APPEARANCE: &str = "set_account_appearance";
 const SET_IDENTITY_APPEARANCE: &str = "set_identity_appearance";
+const SET_ACCOUNT_LOGO: &str = "set_account_logo";
 
 /// The shared byte bound on ids and symbols (spec/02 "Validation").
 const MAX_TEXT_BYTES: usize = 128;
@@ -51,8 +53,9 @@ impl Appearance {
 }
 
 /// An account's resolved appearance (spec/07 `appearance()`): stored
-/// color and monogram, rendering tokens, the collision flag and the
-/// optimistic-concurrency revision `set_account_appearance` expects.
+/// color and monogram, rendering tokens, the collision flag, the
+/// optimistic-concurrency revision `set_account_appearance` expects
+/// and its logo.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AccountAppearance {
     account_id: String,
@@ -63,6 +66,8 @@ pub struct AccountAppearance {
     collides: bool,
     assignment: AppearanceAssignment,
     revision: i64,
+    logo_png: Option<Vec<u8>>,
+    logo_revision: Option<i64>,
 }
 
 impl AccountAppearance {
@@ -103,6 +108,18 @@ impl AccountAppearance {
     /// The record's revision; `set_account_appearance` requires it.
     pub fn revision(&self) -> i64 {
         self.revision
+    }
+
+    /// The stored logo PNG, `None` without a row or once cleared
+    /// (spec/02 "Account logos").
+    pub fn logo_png(&self) -> Option<&[u8]> {
+        self.logo_png.as_deref()
+    }
+
+    /// The logo row's revision, `None` only without a row (spec/02
+    /// "Account logos").
+    pub fn logo_revision(&self) -> Option<i64> {
+        self.logo_revision
     }
 }
 
@@ -209,8 +226,9 @@ impl Engine {
                     records.push(account_appearance(tx, &account.account_id)?);
                 }
                 let identities = identity_appearances(tx)?;
+                let logos = account_logos(tx)?;
                 let generation = appearance_generation(tx)?;
-                resolve(&accounts, &records, &identities, generation)
+                resolve(&accounts, &records, &identities, &logos, generation)
             })
         })
         .await
@@ -236,6 +254,35 @@ impl Engine {
         self.appearance_command(idempotency_key, SET_ACCOUNT_APPEARANCE, move |tx| {
             set_account_appearance(tx, &id, expected_revision, &color, symbol.as_deref())
                 .map(|record| Some(record.revision()))
+        })
+        .await
+    }
+
+    /// `set_account_logo` (spec/07 "Commands", spec/02 "Account
+    /// logos"): the PNG check runs before the write, so a bad image is
+    /// `InvalidInput` on `png`; `expected_revision` absent names the
+    /// no-row state, a stale one is `Conflict`, and clearing (`png`
+    /// `None`) keeps the row with a null value and a new revision. A
+    /// changed write advances the committed appearance generation.
+    pub async fn set_account_logo(
+        &self,
+        idempotency_key: &str,
+        account_id: &str,
+        expected_revision: Option<i64>,
+        png: Option<Vec<u8>>,
+    ) -> Result<Receipt, EngineError> {
+        validate_idempotency_key(idempotency_key)?;
+        valid_key("account_id", account_id)?;
+        if let Some(revision) = expected_revision {
+            valid_revision(revision)?;
+        }
+        if let Some(bytes) = &png {
+            check_logo_png(bytes).map_err(|detail| EngineError::invalid_input("png", detail))?;
+        }
+        let id = account_id.to_owned();
+        self.appearance_command(idempotency_key, SET_ACCOUNT_LOGO, move |tx| {
+            set_account_logo(tx, &id, expected_revision, png.as_deref())
+                .map(|record| Some(record.revision))
         })
         .await
     }
@@ -312,11 +359,17 @@ fn resolve(
     accounts: &[StoredAccount],
     records: &[StoredAccountAppearance],
     identities: &[StoredIdentityAppearance],
+    logos: &[StoredAccountLogo],
     generation: u64,
 ) -> Result<Appearance, StoreError> {
+    let logos_by_id: HashMap<&str, &StoredAccountLogo> = logos
+        .iter()
+        .map(|logo| (logo.account_id.as_str(), logo))
+        .collect();
     let mut resolved = Vec::with_capacity(accounts.len());
     for (account, record) in accounts.iter().zip(records) {
         let color = stored_color(record.color_srgb())?;
+        let logo = logos_by_id.get(record.account_id()).copied();
         resolved.push(AccountAppearance {
             account_id: record.account_id().to_owned(),
             color,
@@ -326,6 +379,8 @@ fn resolve(
             collides: false,
             assignment: record.assignment(),
             revision: record.revision(),
+            logo_png: logo.and_then(|logo| logo.png.clone()),
+            logo_revision: logo.map(|logo| logo.revision),
         });
     }
 

@@ -11,6 +11,7 @@ mod identified_reads;
 mod imap;
 mod imap_cert;
 mod imap_profile;
+mod png;
 mod proton;
 mod secret;
 mod sim;
@@ -36,6 +37,10 @@ pub use fault::{FaultFs, FaultKind, FsOp};
 pub use imap::{Expect, FakeImapServer, ReceivedCommand, Reply, Script, Step};
 pub use imap_cert::{CERT_PEM, KEY_PEM, TlsIo, cert_der, client_stream, client_stream_with};
 pub use imap_profile::{Profile, RAW_UTF8_ENVELOPE};
+pub use png::{
+    LOGO_SIDE, MAX_LOGO_BYTES, PNG_SIGNATURE, ihdr_data, logo_png, logo_png_with, png_chunk,
+    png_crc, png_with,
+};
 pub use proton::{
     ATTACHMENT_PLAINTEXT, CLEAR_SCHEME, FakeAttachment, FakeLabel, FakeMessage, FakeProtonServer,
     Fault, INTERNAL_SCHEME, KeyFault, MESSAGE_PLAINTEXT, MODULUS_B64, ModulusSignatureVerifier,

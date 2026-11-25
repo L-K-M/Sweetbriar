@@ -2,7 +2,7 @@
 //! "Commands", "Subscriptions"; spec/02 "Appearance storage"): records
 //! mirroring `sb-service`'s appearance DTOs field by field — the
 //! resolved snapshot with its rendering tokens, the v1 palette, the
-//! two setters' change records — and the appearance subscription.
+//! setters' change records — and the appearance subscription.
 //! Queries race the token at every wait; the commands honour it only
 //! until the core begins them, so a committed write returns its
 //! receipt even when the caller dropped its future; the subscription
@@ -48,6 +48,14 @@ pub struct AccountAppearance {
     pub assignment: AppearanceAssignment,
     /// The record's revision; `set_account_appearance` requires it.
     pub revision: i64,
+    /// The stored logo PNG, absent without a row or once cleared
+    /// (spec/02 "Account logos").
+    #[uniffi(default = None)]
+    pub logo_png: Option<Vec<u8>>,
+    /// The logo row's revision, absent only without a row (spec/02
+    /// "Account logos").
+    #[uniffi(default = None)]
+    pub logo_revision: Option<i64>,
 }
 
 /// An identity's resolved appearance (spec/07): the effective color
@@ -253,6 +261,30 @@ impl Core {
         Ok(Receipt::from_service(&receipt))
     }
 
+    /// `set_account_logo` (spec/07 "Commands", spec/02 "Account
+    /// logos"): one command under an idempotency key the shell made. A
+    /// PNG that fails the structural check is `InvalidInput` on `png`;
+    /// `expected_revision` absent names the no-row state, a stale one is
+    /// `Conflict`, and an unknown account `NotFound`. `png` `None`
+    /// clears. Like every command it honours the token only until it
+    /// holds the core; once begun it runs to completion.
+    pub async fn set_account_logo(
+        &self,
+        token: Arc<CancelToken>,
+        idempotency_key: String,
+        account_id: String,
+        expected_revision: Option<i64>,
+        png: Option<Vec<u8>>,
+    ) -> Result<Receipt, CoreError> {
+        let receipt = self
+            .command(&token, async |core| {
+                core.set_account_logo(&idempotency_key, &account_id, expected_revision, png)
+                    .await
+            })
+            .await?;
+        Ok(Receipt::from_service(&receipt))
+    }
+
     /// `set_identity_appearance` (spec/07 "Commands", spec/02
     /// "Identity appearance"): one command under an idempotency key.
     /// `expected_revision` names the record it writes — `None` the
@@ -330,6 +362,8 @@ impl AccountAppearance {
             collides: record.collides,
             assignment: AppearanceAssignment::from_service(&record.assignment),
             revision: record.revision,
+            logo_png: record.logo_png.clone(),
+            logo_revision: record.logo_revision,
         }
     }
 }

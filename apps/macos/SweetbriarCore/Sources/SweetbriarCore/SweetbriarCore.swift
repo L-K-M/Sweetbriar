@@ -1400,6 +1400,17 @@ public protocol CoreProtocol: AnyObject, Sendable {
     func setAccountAppearance(token: CancelToken, idempotencyKey: String, accountId: String, expectedRevision: Int64, change: AccountAppearanceChange) async throws  -> Receipt
     
     /**
+     * `set_account_logo` (spec/07 "Commands", spec/02 "Account
+     * logos"): one command under an idempotency key the shell made. A
+     * PNG that fails the structural check is `InvalidInput` on `png`;
+     * `expected_revision` absent names the no-row state, a stale one is
+     * `Conflict`, and an unknown account `NotFound`. `png` `None`
+     * clears. Like every command it honours the token only until it
+     * holds the core; once begun it runs to completion.
+     */
+    func setAccountLogo(token: CancelToken, idempotencyKey: String, accountId: String, expectedRevision: Int64?, png: Data?) async throws  -> Receipt
+    
+    /**
      * `set_identity_appearance` (spec/07 "Commands", spec/02
      * "Identity appearance"): one command under an idempotency key.
      * `expected_revision` names the record it writes — `None` the
@@ -2434,6 +2445,31 @@ open func setAccountAppearance(token: CancelToken, idempotencyKey: String, accou
             rustFutureFunc: {
                 uniffi_sb_ffi_fn_method_core_set_account_appearance(
                         self.uniffiCloneHandle(),FfiConverterTypeCancelToken_lower(token),FfiConverterString.lower(idempotencyKey),FfiConverterString.lower(accountId),FfiConverterInt64.lower(expectedRevision),FfiConverterTypeAccountAppearanceChange_lower(change)
+                )
+            },
+            pollFunc: ffi_sb_ffi_rust_future_poll_rust_buffer,
+            completeFunc: ffi_sb_ffi_rust_future_complete_rust_buffer,
+            freeFunc: ffi_sb_ffi_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeReceipt_lift,
+            errorHandler: FfiConverterTypeCoreError_lift
+        )
+}
+    
+    /**
+     * `set_account_logo` (spec/07 "Commands", spec/02 "Account
+     * logos"): one command under an idempotency key the shell made. A
+     * PNG that fails the structural check is `InvalidInput` on `png`;
+     * `expected_revision` absent names the no-row state, a stale one is
+     * `Conflict`, and an unknown account `NotFound`. `png` `None`
+     * clears. Like every command it honours the token only until it
+     * holds the core; once begun it runs to completion.
+     */
+open func setAccountLogo(token: CancelToken, idempotencyKey: String, accountId: String, expectedRevision: Int64?, png: Data?)async throws  -> Receipt  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_sb_ffi_fn_method_core_set_account_logo(
+                        self.uniffiCloneHandle(),FfiConverterTypeCancelToken_lower(token),FfiConverterString.lower(idempotencyKey),FfiConverterString.lower(accountId),FfiConverterOptionInt64.lower(expectedRevision),FfiConverterOptionData.lower(png)
                 )
             },
             pollFunc: ffi_sb_ffi_rust_future_poll_rust_buffer,
@@ -4736,6 +4772,16 @@ public struct AccountAppearance: Equatable, Hashable {
      * The record's revision; `set_account_appearance` requires it.
      */
     public var revision: Int64
+    /**
+     * The stored logo PNG, absent without a row or once cleared
+     * (spec/02 "Account logos").
+     */
+    public var logoPng: Data?
+    /**
+     * The logo row's revision, absent only without a row (spec/02
+     * "Account logos").
+     */
+    public var logoRevision: Int64?
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
@@ -4760,7 +4806,15 @@ public struct AccountAppearance: Equatable, Hashable {
          */assignment: AppearanceAssignment, 
         /**
          * The record's revision; `set_account_appearance` requires it.
-         */revision: Int64) {
+         */revision: Int64, 
+        /**
+         * The stored logo PNG, absent without a row or once cleared
+         * (spec/02 "Account logos").
+         */logoPng: Data? = nil, 
+        /**
+         * The logo row's revision, absent only without a row (spec/02
+         * "Account logos").
+         */logoRevision: Int64? = nil) {
         self.accountId = accountId
         self.colorSrgb = colorSrgb
         self.tokens = tokens
@@ -4769,6 +4823,8 @@ public struct AccountAppearance: Equatable, Hashable {
         self.collides = collides
         self.assignment = assignment
         self.revision = revision
+        self.logoPng = logoPng
+        self.logoRevision = logoRevision
     }
 
     
@@ -4794,7 +4850,9 @@ public struct FfiConverterTypeAccountAppearance: FfiConverterRustBuffer {
                 monogram: FfiConverterString.read(from: &buf), 
                 collides: FfiConverterBool.read(from: &buf), 
                 assignment: FfiConverterTypeAppearanceAssignment.read(from: &buf), 
-                revision: FfiConverterInt64.read(from: &buf)
+                revision: FfiConverterInt64.read(from: &buf), 
+                logoPng: FfiConverterOptionData.read(from: &buf), 
+                logoRevision: FfiConverterOptionInt64.read(from: &buf)
         )
     }
 
@@ -4807,6 +4865,8 @@ public struct FfiConverterTypeAccountAppearance: FfiConverterRustBuffer {
         FfiConverterBool.write(value.collides, into: &buf)
         FfiConverterTypeAppearanceAssignment.write(value.assignment, into: &buf)
         FfiConverterInt64.write(value.revision, into: &buf)
+        FfiConverterOptionData.write(value.logoPng, into: &buf)
+        FfiConverterOptionInt64.write(value.logoRevision, into: &buf)
     }
 }
 
@@ -17382,6 +17442,30 @@ fileprivate struct FfiConverterOptionString: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterOptionData: FfiConverterRustBuffer {
+    typealias SwiftType = Data?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterData.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterData.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterOptionTypeBackupCopy: FfiConverterRustBuffer {
     typealias SwiftType = BackupCopy?
 
@@ -18957,6 +19041,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sb_ffi_checksum_method_core_set_account_appearance() != 2756) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_sb_ffi_checksum_method_core_set_account_logo() != 16820) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_sb_ffi_checksum_method_core_set_identity_appearance() != 18317) {

@@ -241,6 +241,7 @@ fn a_store_migrating_in_starts_due() {
          DROP TABLE proton_listed;
          DROP TABLE proton_accounts;
          DROP TABLE proton_body_failures;
+         DROP TABLE account_logos;
          DROP INDEX mailboxes_provider_key;
          ALTER TABLE mailboxes DROP COLUMN provider_key;
          ALTER TABLE mailboxes DROP COLUMN remote_total;

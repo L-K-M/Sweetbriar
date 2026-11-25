@@ -4,7 +4,7 @@
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
-use sb_test_support::{ScratchDir, block_on, execute_sql};
+use sb_test_support::{ScratchDir, block_on, execute_sql, logo_png, logo_png_with};
 
 use crate::{
     AccountAppearance, AccountAppearanceChange, AccountColor, BackupEnd, Core, CoreConfig,
@@ -312,5 +312,52 @@ fn account_and_identity_colors_survive_backup_and_restore() {
     // The restored file holds them, not only the handle restore returned.
     let core = open(&scratch);
     assert_eq!(colors(&core), saved);
+    block_on(core.shutdown());
+}
+
+/// The first account's logo bytes and revision.
+fn logo(core: &Core) -> (Option<Vec<u8>>, Option<i64>) {
+    let account = block_on(core.appearance()).unwrap().accounts.remove(0);
+    (account.logo_png, account.logo_revision)
+}
+
+#[test]
+fn an_account_logo_survives_backup_and_restore() {
+    let scratch = ScratchDir::new("service-restore-logo");
+    let core = open(&scratch);
+    let account = block_on(core.accounts()).unwrap()[0].account_id.clone();
+    let saved_png = logo_png();
+    block_on(core.set_account_logo(
+        "00000000-0000-4000-8000-0000000000d1",
+        &account,
+        None,
+        Some(saved_png.clone()),
+    ))
+    .unwrap();
+    let saved = logo(&core);
+    assert_eq!(saved, (Some(saved_png), Some(1)));
+    let id = back_up(&core, "00000000-0000-4000-8000-0000000000d2");
+    block_on(core.set_account_logo(
+        "00000000-0000-4000-8000-0000000000d3",
+        &account,
+        Some(1),
+        Some(logo_png_with(b"a later logo")),
+    ))
+    .unwrap();
+    assert_ne!(logo(&core), saved);
+
+    let prepared = block_on(core.prepare_restore(&id, unflagged())).unwrap();
+    let Restored { core, receipt } = block_on(core.restore(
+        "00000000-0000-4000-8000-0000000000d4",
+        prepared,
+        unflagged(),
+    ))
+    .unwrap();
+    receipt.unwrap();
+    assert_eq!(logo(&core), saved);
+    block_on(core.shutdown());
+
+    let core = open(&scratch);
+    assert_eq!(logo(&core), saved);
     block_on(core.shutdown());
 }
