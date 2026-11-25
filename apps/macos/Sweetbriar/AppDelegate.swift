@@ -127,6 +127,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         composeWindows?.onWindowsChanged = { [weak mainWindow] in mainWindow?.draftsChanged() }
         self.mainWindow = mainWindow
         mainWindow.onOpenActivity = { [weak self] in self?.showActivity() }
+        mainWindow.onComposeFromMessage = { [weak self] in self?.composeFromMessage($0) }
         mainWindow.showWindow(nil)
         mainWindow.start()
 
@@ -191,27 +192,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             },
             isComposeEnabled: { [weak self] in self?.backups?.canCompose == true },
             onReply: { [weak self] in
-                guard let self, !terminating,
-                    let occurrence = mainWindow?.replyOccurrenceId
-                else { return }
-                composeWindows?.compose(source: .reply(occurrenceId: occurrence))
+                guard let self, let occurrence = mainWindow?.replyOccurrenceId else { return }
+                composeFromMessage(.reply(occurrenceId: occurrence))
             },
             onReplyAll: { [weak self] in
-                guard let self, !terminating,
-                    let occurrence = mainWindow?.replyOccurrenceId
-                else { return }
-                composeWindows?.compose(source: .replyAll(occurrenceId: occurrence))
+                guard let self, let occurrence = mainWindow?.replyOccurrenceId else { return }
+                composeFromMessage(.replyAll(occurrenceId: occurrence))
             },
             onForward: { [weak self] in
-                guard let self, !terminating,
-                    let occurrence = mainWindow?.replyOccurrenceId
-                else { return }
-                composeWindows?.compose(source: .forward(occurrenceId: occurrence))
+                guard let self, let occurrence = mainWindow?.replyOccurrenceId else { return }
+                composeFromMessage(.forward(occurrenceId: occurrence))
             },
             isReplyEnabled: { [weak self] in self?.mainWindow?.replyOccurrenceId != nil }
         )
         NSApplication.shared.mainMenu = builder.makeMainMenu()
         menuBuilder = builder
+    }
+
+    private func composeFromMessage(_ source: DraftSource) {
+        guard !terminating else { return }
+        composeWindows?.compose(source: source)
     }
 
     /// Window → Activity: bring the shared window forward, else make

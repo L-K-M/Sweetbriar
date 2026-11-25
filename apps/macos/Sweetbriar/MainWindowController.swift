@@ -310,6 +310,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     /// The sidebar's health row asks for the Activity window (spec/08
     /// "Activity / account health").
     var onOpenActivity: (@MainActor () -> Void)?
+    var onComposeFromMessage: (@MainActor (DraftSource) -> Void)?
 
     /// Tests hold the default Unified Inbox choice here, after the
     /// sidebar's first reload, to order it against an explicit choice.
@@ -813,14 +814,17 @@ extension MainWindowController: MessageFlagCommands {
 // MARK: - The list's context menu (spec/08 "Selection")
 
 extension MainWindowController {
-    /// The flag and filing commands on the rows a context click
-    /// targets, under the menu's identifiers.
+    /// The commands on the rows a context click targets, under the
+    /// menu's identifiers. Single-message commands use the click target.
     func contextActions(for ids: Set<Int64>) -> [MessageContextAction] {
         typealias Item = MainMenuBuilder.ItemID
         let read = flagCommandState(#selector(toggleRead(_:)), ids: ids)
         let star = flagCommandState(#selector(toggleStar(_:)), ids: ids)
         let files = filing?.canAct(on: ids) == true
-        return [
+        let messageActions: [MessageContextAction] =
+            if ids.count == 1, let id = ids.first { singleMessageContextActions(for: id) }
+            else { [] }
+        return messageActions + [
             MessageContextAction(
                 title: read?.title ?? "Mark as Read", identifier: Item.toggleRead,
                 enabled: read?.enabled == true
@@ -845,6 +849,24 @@ extension MainWindowController {
                 [weak self] in self?.filing?.choose(.removeLabel, ids: ids)
             },
         ]
+    }
+
+    private func singleMessageContextActions(for id: Int64) -> [MessageContextAction] {
+        typealias Item = MainMenuBuilder.ItemID
+        let open = MessageContextAction(title: "Open in New Window", identifier: Item.openMessage, enabled: bridge != nil) {
+            [weak self] in self?.openMessageWindow(id)
+        }
+        let canCompose = backups.canCompose && onComposeFromMessage != nil
+        let draftCommands: [(String, NSUserInterfaceItemIdentifier, DraftSource)] = [
+            ("Reply", Item.reply, .reply(occurrenceId: id)),
+            ("Reply All", Item.replyAll, .replyAll(occurrenceId: id)),
+            ("Forward", Item.forward, .forward(occurrenceId: id)),
+        ]
+        return [open] + draftCommands.map { title, identifier, source in
+            MessageContextAction(title: title, identifier: identifier, enabled: canCompose) {
+                [weak self] in self?.onComposeFromMessage?(source)
+            }
+        }
     }
 }
 
