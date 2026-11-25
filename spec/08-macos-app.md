@@ -393,6 +393,8 @@ M4.4c. Choosing Out Box shows the Out Box in the list pane, as Drafts
     `SelectionToken`;
   - a context click on a selected row acts on the selection; on an
     unselected row it acts on that row alone and leaves the selection.
+    For a single message, the context menu also offers Open in New
+    Window, Reply, Reply All and Forward on that message.
 - **Keyboard:**
   - arrows, Return to open the message in its own window, Space to
     page the reader (Message window, below);
