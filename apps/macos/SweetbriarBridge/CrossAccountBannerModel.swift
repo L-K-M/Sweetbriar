@@ -90,7 +90,15 @@ public final class CrossAccountBannerModel {
     public static func useIdentity(
         for notice: CrossAccountNotice, in identities: [ComposeIdentity]
     ) -> ComposeIdentity? {
-        let account = identities.filter { $0.accountId == notice.sourceAccountId }
+        useIdentity(forAccount: notice.sourceAccountId, in: identities)
+    }
+
+    /// `accountId`'s identity to switch From to, chosen as for the
+    /// banner's Use; the recipient check's Use shares it (spec/08).
+    public static func useIdentity(
+        forAccount accountId: String, in identities: [ComposeIdentity]
+    ) -> ComposeIdentity? {
+        let account = identities.filter { $0.accountId == accountId }
         func sendable(_ identity: ComposeIdentity) -> Bool {
             (identity.accountKind == .imap || identity.accountKind == .proton)
                 && identity.sendable != .unavailable

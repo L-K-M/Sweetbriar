@@ -41,7 +41,6 @@ private actor FenceSource: DraftStore, ComposeCatalogSource, RecipientSource, Re
     /// The sending accounts each address wrote to.
     private var senders: [String: [String]]
     private var allowed: [Allowance] = []
-    private(set) var fenceQueries: [String] = []
     private(set) var sends = 0
     private(set) var allowCalls: [Allowance] = []
 
@@ -60,7 +59,6 @@ private actor FenceSource: DraftStore, ComposeCatalogSource, RecipientSource, Re
     func setSenders(_ value: [String: [String]]) { senders = value }
 
     func recipientFence(draftId: String, revisionId: String) async throws -> RecipientFence {
-        fenceQueries.append(revisionId)
         guard ready else { return RecipientFence(ready: false, blocked: []) }
         guard let revision = row.revision, revision.revisionId == revisionId, let account = revision.accountId else {
             throw CoreFailure.conflict(detail: "not the draft's current revision")
@@ -218,6 +216,52 @@ private func banners(_ controller: ComposeWindowController) -> [RecipientFenceBa
         ? [] : controller.recipientFenceBanners.arrangedSubviews.compactMap { $0 as? RecipientFenceBanner }
 }
 
+/// The strings the field's tokens show, as AppKit drew them.
+@MainActor
+private func shownTokens(_ field: RecipientField) -> [String] {
+    let text = field.control.attributedStringValue
+    var shown: [String] = []
+    text.enumerateAttribute(.attachment, in: NSRange(location: 0, length: text.length)) { value, _, _ in
+        if let cell = (value as? NSTextAttachment)?.attachmentCell as? NSCell { shown.append(cell.stringValue) }
+    }
+    return shown
+}
+
+/// Allowance lists in order; the first load waits until released.
+private actor HeldAllowances: RecipientFenceSource {
+    private var lists: [[RecipientAllowance]]
+    private var holdNext = true
+    private var held: CheckedContinuation<Void, Never>?
+
+    init(_ lists: [[RecipientAllowance]]) { self.lists = lists }
+
+    var isHolding: Bool { held != nil }
+
+    func release() {
+        held?.resume()
+        held = nil
+    }
+
+    func recipientAllowances() async throws -> [RecipientAllowance] {
+        let list = lists.removeFirst()
+        if holdNext {
+            holdNext = false
+            await withCheckedContinuation { held = $0 }
+        }
+        return list
+    }
+
+    func recipientFence(draftId: String, revisionId: String) async throws -> RecipientFence {
+        fatalError("Settings never reads the check")
+    }
+    func allowRecipient(accountId: String, address: String) async throws -> Receipt {
+        fatalError("Settings never allows")
+    }
+    func removeRecipientAllowance(accountId: String, address: String) async throws -> Receipt {
+        fatalError("this test only loads")
+    }
+}
+
 @MainActor
 @Suite(.serialized)
 struct RecipientFenceComposeTests {
@@ -252,10 +296,35 @@ struct RecipientFenceComposeTests {
             #expect(controller.sendButton.toolTip == reason)
             #expect(controller.sendButton.accessibilityHelp() == reason)
             #expect(controller.recipientCheckNote.isHidden)
-            // The menu and keyboard reach Send too; it stays refused.
-            controller.sendButton.performClick(nil)
-            try await Task.sleep(for: .milliseconds(50))
-            #expect(await source.sends == 0)
+            // The menu and keyboard reach Send's action past the disabled
+            // button; it stays refused.
+            let action = try #require(controller.sendButton.action)
+            #expect(NSApp.sendAction(action, to: controller.sendButton.target, from: controller.sendButton))
+            let sent = await fenceEventually(within: .milliseconds(250)) { await source.sends > 0 }
+            #expect(!sent)
+        }
+    }
+
+    @Test func aTokenBlockedDuringAnEditShowsItsWarningOnceTheEditEnds() async throws {
+        let source = FenceSource(senders: [:])
+        try await withFenceWindow(source) { controller in
+            let field = controller.toRecipients
+            try #require(shownTokens(field) == [correspondent])
+            let window = try #require(controller.window)
+            field.control.selectText(nil)
+            try #require(field.control.currentEditor() != nil)
+
+            // History arrives while the field is being edited.
+            await source.setSenders([correspondent: ["home"]])
+            NotificationCenter.default.post(name: .sweetbriarMailArrived, object: nil)
+            let shown = await fenceEventually { banners(controller).count == 1 }
+            try #require(shown)
+
+            try #require(window.makeFirstResponder(controller.textView))
+            let warned = await fenceEventually(within: .seconds(2)) {
+                shownTokens(field) == ["\u{26A0}\u{FE0E} " + correspondent]
+            }
+            #expect(warned)
         }
     }
 
@@ -271,7 +340,7 @@ struct RecipientFenceComposeTests {
             await source.setReady(true)
             NotificationCenter.default.post(name: .sweetbriarMailArrived, object: nil)
             let blocked = await fenceEventually { banners(controller).count == 1 }
-            #expect(blocked)
+            try #require(blocked)
             #expect(controller.recipientCheckNote.isHidden)
             #expect(!controller.sendButton.isEnabled)
         }
@@ -287,7 +356,7 @@ struct RecipientFenceComposeTests {
                 controller.identityControls.model.selectedIdentity?.identityId == "home-1"
                     && controller.recipientFence.revisionId != "r0" && banners(controller).isEmpty
             }
-            #expect(cleared)
+            try #require(cleared)
             #expect(controller.sendButton.isEnabled)
             #expect(controller.toRecipients.displayString(for: correspondent) == correspondent)
         }
@@ -329,9 +398,9 @@ struct RecipientFenceComposeTests {
             #expect(alert.buttons.map(\.title) == ["Allow", "Cancel"])
             controller.window?.endSheet(alert.window, returnCode: .alertSecondButtonReturn)
             let dismissed = await fenceEventually { controller.allowAlert == nil }
-            #expect(dismissed)
-            try await Task.sleep(for: .milliseconds(50))
-            #expect(await source.allowCalls.isEmpty)
+            try #require(dismissed)
+            let allowed = await fenceEventually(within: .milliseconds(250)) { !(await source.allowCalls.isEmpty) }
+            #expect(!allowed)
             #expect(banners(controller).count == 1)
 
             // Allow writes the allowance for the sending account.
@@ -340,7 +409,7 @@ struct RecipientFenceComposeTests {
             try #require(again)
             controller.window?.endSheet(try #require(controller.allowAlert).window, returnCode: .alertFirstButtonReturn)
             let cleared = await fenceEventually { banners(controller).isEmpty }
-            #expect(cleared)
+            try #require(cleared)
             #expect(await source.allowCalls == [.init(accountId: "work", address: correspondent)])
             #expect(controller.sendButton.isEnabled)
 
@@ -364,6 +433,22 @@ struct RecipientFenceComposeTests {
         }
     }
 
+    @Test func aSupersededAllowanceLoadNeverBringsBackARemovedRow() async throws {
+        let removed = RecipientAllowance(accountId: "work", address: correspondent, createdAtMs: 1)
+        let source = HeldAllowances([[removed], []])
+        let settings = RecipientAllowancesModel(source: source) { [:] }
+        let first = Task { await settings.load() }
+        let holding = await fenceEventually { await source.isHolding }
+        try #require(holding)
+        await settings.load()
+        #expect(settings.groups.isEmpty)
+
+        await source.release()
+        await first.value
+        #expect(settings.groups.isEmpty)
+        #expect(!settings.isLoading)
+    }
+
     @Test func removingAMissingAllowanceShowsTheErrorAndReloads() async throws {
         let source = FenceSource(senders: [:])
         let settings = RecipientAllowancesModel(source: source) { [:] }
@@ -383,7 +468,7 @@ struct RecipientFenceComposeTests {
             await source.setSenders([correspondent: ["home"]])
             controller.sendButton.performClick(nil)
             let shown = await fenceEventually { banners(controller).count == 1 }
-            #expect(shown)
+            try #require(shown)
             #expect(await source.sends == 1)
             #expect(!controller.sendButton.isEnabled)
         }
@@ -400,10 +485,16 @@ struct RecipientFenceComposeTests {
                 cacheRoot: root.appendingPathComponent("cache").path),
             snapshots: FrameBatcher<[Setting]>(clock: FenceClock()) { _ in })
         let fence: any RecipientFenceSource = core
-        #expect(try await fence.recipientAllowances().isEmpty)
-        await #expect(throws: CoreFailure.self) {
-            _ = try await fence.allowRecipient(accountId: "archive", address: correspondent)
+        do {
+            #expect(try await fence.recipientAllowances().isEmpty)
+            await #expect(throws: CoreFailure.self) {
+                _ = try await fence.allowRecipient(accountId: "archive", address: correspondent)
+            }
+        } catch {
+            await core.shutdown()
+            throw error
         }
+        await core.shutdown()
     }
 }
 

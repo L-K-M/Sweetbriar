@@ -469,6 +469,7 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
             stack.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -12),
             crossAccountBannerView.widthAnchor.constraint(equalTo: stack.widthAnchor),
             recipientFenceBanners.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            recipientCheckNote.widthAnchor.constraint(equalTo: stack.widthAnchor),
             externalEditBanner.widthAnchor.constraint(equalTo: stack.widthAnchor),
             identity.widthAnchor.constraint(equalTo: stack.widthAnchor),
             subjectField.widthAnchor.constraint(equalTo: stack.widthAnchor),

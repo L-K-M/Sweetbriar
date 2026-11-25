@@ -87,8 +87,10 @@ public final class RecipientFenceModel {
     /// Whether to show the not-ready note.
     public var isWaitingForHistory: Bool { fence?.ready == false }
 
-    /// Ask for `revisionId`'s check. A newer query wins; a failure shows
-    /// nothing, and Send's own refusal still holds (spec/05).
+    /// Ask for `revisionId`'s check. A newer query wins. A failed reread
+    /// keeps the revision's last answer, so a passing error never lifts a
+    /// block; with no answer yet a failure shows nothing, and Send's own
+    /// refusal still holds (spec/05).
     public func refresh(source: any RecipientFenceSource, draftId: String, revisionId: String) async {
         ticket &+= 1
         let mine = ticket
@@ -103,9 +105,8 @@ public final class RecipientFenceModel {
             fence = answer
             self.revisionId = revisionId
         } catch {
-            guard mine == ticket else { return }
-            fence = nil
-            self.revisionId = nil
+            // Keep what's shown: the prologue already dropped another
+            // revision's answer.
         }
     }
 

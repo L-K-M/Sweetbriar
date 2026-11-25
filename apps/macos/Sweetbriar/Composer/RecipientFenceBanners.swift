@@ -34,10 +34,7 @@ enum RecipientFencePresentation {
     /// to that can send, that account's default sendable identity, as the
     /// cross-account banner chooses it.
     static func useIdentities(for recipient: BlockedRecipient, in identities: [ComposeIdentity]) -> [ComposeIdentity] {
-        recipient.accountIds.compactMap { accountId in
-            CrossAccountBannerModel.useIdentity(
-                for: CrossAccountNotice(sourceAccountId: accountId, routeAccountId: "", ack: ""), in: identities)
-        }
+        recipient.accountIds.compactMap { CrossAccountBannerModel.useIdentity(forAccount: $0, in: identities) }
     }
 
     /// The canonical form the core matches by: the local part as

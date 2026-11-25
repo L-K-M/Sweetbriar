@@ -20,6 +20,9 @@ final class RecipientAllowancesModel {
     private(set) var isLoading = false
     private(set) var removing: RecipientAllowance?
     private(set) var error: String?
+    /// The newest load: an older one that finishes later is dropped, so
+    /// a removed row never comes back.
+    @ObservationIgnored private var loadTicket: UInt64 = 0
 
     init(source: any RecipientFenceSource, accountNames: @escaping @MainActor () async -> [String: String]) {
         self.source = source
@@ -27,11 +30,14 @@ final class RecipientAllowancesModel {
     }
 
     func load() async {
+        loadTicket &+= 1
+        let mine = loadTicket
         isLoading = true
-        defer { isLoading = false }
+        defer { if mine == loadTicket { isLoading = false } }
         do {
             let allowances = try await source.recipientAllowances()
             let names = await accountNames()
+            guard mine == loadTicket else { return }
             var order: [String] = []
             var byAccount: [String: [RecipientAllowance]] = [:]
             for allowance in allowances {
@@ -43,6 +49,7 @@ final class RecipientAllowancesModel {
             }
             error = nil
         } catch {
+            guard mine == loadTicket else { return }
             self.error = "Couldn't load the allowed addresses: \(error.localizedDescription)"
         }
     }
