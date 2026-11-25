@@ -45,7 +45,7 @@ final class FilingFlowTests: XCTestCase {
 
         // In the search field ⌘⌫ edits the text and files nothing.
         let field = window.searchFields["search.field"]
-        field.click()
+        revealSearchField(field)
         field.typeText("boarding")
         field.typeKey(.delete, modifierFlags: .command)
         waitUntil(field, "value == ''")

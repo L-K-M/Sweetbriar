@@ -43,8 +43,7 @@ final class SearchFlowTests: XCTestCase {
         let scope = window.popUpButtons["search.scope"]
         XCTAssertFalse(scope.exists)
         let field = window.searchFields["search.field"]
-        XCTAssertTrue(field.waitForExistence(timeout: Self.timeout))
-        field.click()
+        revealSearchField(field, timeout: Self.timeout)
         field.typeText("strip")
         XCTAssertTrue(scope.waitForExistence(timeout: Self.timeout))
         let range = try Self.luminanceRange(scope.screenshot())
@@ -165,7 +164,7 @@ final class SearchFlowTests: XCTestCase {
         waitUntil(details, "value CONTAINS %@", "Partly indexed: 1 of \(Self.messages)")
         waitUntil(details, "value CONTAINS %@", "Attachment contents are not searched; CJK word search is limited")
 
-        field.click()
+        revealSearchField(field)
         field.typeKey("a", modifierFlags: .command)
         field.typeKey(.delete, modifierFlags: [])
         waitUntil(rows, "count == %d", Self.messages)
@@ -175,7 +174,7 @@ final class SearchFlowTests: XCTestCase {
     /// Replace the field's text with `query`.
     @MainActor
     private func search(_ field: XCUIElement, for query: String) {
-        field.click()
+        revealSearchField(field)
         field.typeKey("a", modifierFlags: .command)
         field.typeText(query)
     }
