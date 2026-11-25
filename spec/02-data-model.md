@@ -724,8 +724,9 @@ CREATE TABLE recipient_allowances (               -- the user's decisions; kept 
   of that account's logical messages, unless the address is one of the
   account's own identity addresses (its sent mail). The local archive
   gets no rows. The received-address sweep ("Received-address
-  population") adds them: publishing an eligible source also records
-  its first From for its account, in the same transaction. Rows are
+  population") adds them: when a pass publishes a chunk, each eligible
+  source in it also records its first From for its account, in the
+  same transaction. Message arrival writes no row itself. Rows are
   never removed when an occurrence vanishes, deletion and purging
   included: having written once is the history. Addresses match by
   canonical form only, so a person's second address is a separate
@@ -739,10 +740,9 @@ CREATE TABLE recipient_allowances (               -- the user's decisions; kept 
   `account_senders_from` in `store_meta`; the check is ready once
   `seen_address_swept` reaches it, after the first pass has recorded
   the existing mail, and blocks nothing before then. Once ready, a
-  message newer than the last completed pass counts for no account
-  until a pass records it, so a sender's first message to A can
-  briefly be missing (05); one without a complete summary never
-  counts.
+  message no pass has reached yet counts for no account until one
+  does, so a sender's first message to A can briefly be missing (05);
+  one without a complete summary never counts.
 - **Allowances** are user data, not derived: they survive rebuilds,
   restore with backups and stay with disconnected accounts. Allowing an
   already allowed address writes nothing; removing one that isn't

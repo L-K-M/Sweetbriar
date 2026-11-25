@@ -97,8 +97,8 @@ and [raw/plan-proton-bridge/codex.md](../research/raw/plan-proton-bridge/codex.m
     first pass after the upgrade has recorded the existing mail, the
     check isn't ready and blocks nothing; a partial pass could
     otherwise block an address that wrote to A. Once ready, a first
-    message to A newer than the last completed pass may still be
-    missing for that pass; Allow covers it. An attempt already accepted
+    message to A that no pass has reached yet is still missing; Allow
+    covers it. An attempt already accepted
     for sending keeps its frozen route and isn't checked again.
 
 ## Composing
