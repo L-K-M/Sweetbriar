@@ -9,8 +9,8 @@ use std::sync::mpsc;
 use std::task::{Context, Poll, Waker};
 use std::time::{Duration, Instant};
 
-use sb_resources::{Receipt, StoreError, Transaction, WritePriority};
-use sb_test_support::{ScratchDir, block_on, execute_sql, with_sqlite_write_lock};
+use sb_resources::{MAX_LOGO_BYTES, Receipt, StoreError, Transaction, WritePriority};
+use sb_test_support::{ScratchDir, block_on, execute_sql, logo_png, with_sqlite_write_lock};
 
 use crate::{
     AccountAppearanceChange, AccountColor, AppearanceAssignment, Engine, EngineError,
@@ -108,6 +108,17 @@ fn set_account(
 ) -> Result<Receipt, EngineError> {
     let key = engine.new_idempotency_key();
     block_on(engine.set_account_appearance(&key, account, revision, change))
+}
+
+/// `set_account_logo` under a fresh idempotency key.
+fn set_logo(
+    engine: &Engine,
+    account: &str,
+    revision: Option<i64>,
+    png: Option<&[u8]>,
+) -> Result<Receipt, EngineError> {
+    let key = engine.new_idempotency_key();
+    block_on(engine.set_account_logo(&key, account, revision, png.map(<[u8]>::to_vec)))
 }
 
 /// `set_identity_appearance` under a fresh idempotency key.
@@ -708,6 +719,158 @@ fn shutdown_waits_for_a_dropped_callers_write() {
     let appearance = block_on(engine.appearance()).unwrap();
     assert_eq!(appearance.accounts()[0].color().to_hex(), CUSTOM);
     assert_eq!(appearance.generation(), 1);
+    block_on(engine.shutdown()).unwrap();
+}
+
+/// A valid logo round-trips through `set_account_logo` and
+/// `appearance()`: the receipt names its command, an account without a
+/// row carries neither value, and clearing keeps the row while leaving
+/// no PNG (spec/02 "Account logos", spec/07).
+#[test]
+fn logos_round_trip_and_clear() {
+    let (_scratch, engine, archive) = scratch_archive("appearance-logo-round-trip");
+    let png = logo_png();
+    let receipt = set_logo(&engine, &archive, None, Some(&png)).unwrap();
+    assert_eq!(receipt.command(), "set_account_logo");
+    assert_eq!(receipt.result_json(), "{\"revision\":1}");
+    assert!(receipt.created_at().as_millis() > 0);
+
+    let appearance = block_on(engine.appearance()).unwrap();
+    assert_eq!(appearance.generation(), 1);
+    let account = &appearance.accounts()[0];
+    assert_eq!(account.logo_png(), Some(png.as_slice()));
+    assert_eq!(account.logo_revision(), Some(1));
+
+    // A second account without a row carries neither value.
+    add_account(&engine, "work", "Laboratory", 1);
+    let appearance = block_on(engine.appearance()).unwrap();
+    let work = &appearance.accounts()[1];
+    assert_eq!(work.logo_png(), None);
+    assert_eq!(work.logo_revision(), None);
+
+    let cleared = set_logo(&engine, &archive, Some(1), None).unwrap();
+    assert_eq!(cleared.result_json(), "{\"revision\":2}");
+    let appearance = block_on(engine.appearance()).unwrap();
+    assert_eq!(appearance.generation(), 3, "creation, logo and clear");
+    let account = &appearance.accounts()[0];
+    assert_eq!(account.logo_png(), None, "clearing leaves no PNG");
+    assert_eq!(
+        account.logo_revision(),
+        Some(2),
+        "the row keeps its revision"
+    );
+    block_on(engine.shutdown()).unwrap();
+}
+
+/// Repeating a key returns the stored logo receipt and does nothing
+/// else, even aimed at another target or different values, while the
+/// same key on another appearance command is `Conflict` (spec/07
+/// "Commands").
+#[test]
+fn replaying_a_logo_key_returns_the_stored_receipt() {
+    let (_scratch, engine, archive) = scratch_archive("appearance-logo-replay");
+    let png = logo_png();
+    let key = engine.new_idempotency_key();
+    let first = block_on(engine.set_account_logo(&key, &archive, None, Some(png.clone()))).unwrap();
+    assert_eq!(first.command(), "set_account_logo");
+    assert_eq!(
+        block_on(engine.set_account_logo(&key, &archive, Some(9), None)).unwrap(),
+        first
+    );
+    assert_eq!(
+        block_on(engine.set_account_logo(&key, "missing", None, None)).unwrap(),
+        first,
+        "the stored receipt returns whatever the replay args are"
+    );
+    let appearance = block_on(engine.appearance()).unwrap();
+    assert_eq!(appearance.generation(), 1, "replay advanced nothing");
+    assert_eq!(appearance.accounts()[0].logo_png(), Some(png.as_slice()));
+    assert_eq!(appearance.accounts()[0].logo_revision(), Some(1));
+
+    assert!(matches!(
+        block_on(engine.set_account_appearance(&key, &archive, 1, &custom(CUSTOM))),
+        Err(EngineError::Conflict { .. })
+    ));
+    block_on(engine.shutdown()).unwrap();
+}
+
+/// Refused logo writes are `InvalidInput` naming the field — a
+/// malformed or oversized PNG, a bad revision, an empty id — `NotFound`
+/// for unknown targets, or `Conflict` on a stale revision, and `Some`
+/// against an absent row counts as stale. None of them commits
+/// (spec/02, spec/07).
+#[test]
+fn refused_logo_writes_are_invalid_input_not_found_or_conflict() {
+    let (_scratch, engine, archive) = scratch_archive("appearance-logo-refused");
+    for (bytes, field) in [
+        (Vec::new(), "png"),
+        (vec![0u8; MAX_LOGO_BYTES + 1], "png"),
+        (b"not a png".to_vec(), "png"),
+    ] {
+        match set_logo(&engine, &archive, None, Some(&bytes)) {
+            Err(EngineError::InvalidInput { field: named, .. }) => assert_eq!(named, field),
+            other => panic!("expected InvalidInput({field}), got {other:?}"),
+        }
+    }
+    assert!(matches!(
+        set_logo(&engine, &archive, Some(0), Some(&logo_png())),
+        Err(EngineError::InvalidInput { ref field, .. }) if field == "expected_revision"
+    ));
+    assert!(matches!(
+        set_logo(&engine, "", None, Some(&logo_png())),
+        Err(EngineError::InvalidInput { ref field, .. }) if field == "account_id"
+    ));
+    assert!(matches!(
+        set_logo(&engine, "missing", None, Some(&logo_png())),
+        Err(EngineError::NotFound { .. })
+    ));
+    assert!(
+        matches!(
+            set_logo(&engine, &archive, Some(1), None),
+            Err(EngineError::Conflict { .. })
+        ),
+        "`Some` against an absent row expects a row; it conflicts"
+    );
+    assert_eq!(
+        block_on(engine.appearance()).unwrap().generation(),
+        0,
+        "the refused calls committed nothing"
+    );
+    block_on(engine.shutdown()).unwrap();
+}
+
+/// A changed logo write advances the committed appearance generation
+/// once and wakes a pending subscription; an unchanged write and a
+/// replayed key invalidate nothing (spec/02, spec/07).
+#[test]
+fn a_committed_logo_change_wakes_a_pending_next() {
+    let (_scratch, engine, archive) = scratch_archive("appearance-logo-sub");
+    let subscription = engine.subscribe_appearance(0);
+    let mut next = pin!(subscription.next());
+    assert_quiet(next.as_mut());
+
+    let png = logo_png();
+    set_logo(&engine, &archive, None, Some(&png)).unwrap();
+    assert!(
+        matches!(
+            next.as_mut().poll(&mut Context::from_waker(Waker::noop())),
+            Poll::Ready(Ok(WindowEvent::Invalidated { generation: 1 }))
+        ),
+        "the commit did not wake the waiting next"
+    );
+
+    let key = engine.new_idempotency_key();
+    block_on(engine.set_account_logo(&key, &archive, Some(1), Some(png.clone()))).unwrap();
+    block_on(engine.set_account_logo(&key, &archive, Some(1), None)).unwrap();
+    set_logo(&engine, &archive, Some(1), Some(&png)).unwrap();
+    assert_quiet(pin!(subscription.next()).as_mut());
+    assert_eq!(block_on(engine.appearance()).unwrap().generation(), 1);
+
+    set_logo(&engine, &archive, Some(1), None).unwrap();
+    assert_eq!(
+        block_on(subscription.next()).unwrap(),
+        WindowEvent::Invalidated { generation: 2 }
+    );
     block_on(engine.shutdown()).unwrap();
 }
 

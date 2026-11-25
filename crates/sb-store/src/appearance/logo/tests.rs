@@ -1,55 +1,25 @@
 use rusqlite::params;
 
+use sb_test_support::{PNG_SIGNATURE, ihdr_data, logo_png, logo_png_with, png_with};
+
 use super::{
-    LOGO_SIDE_PIXELS, MAX_LOGO_BYTES, PNG_SIGNATURE, account_logo, account_logos, check_logo_png,
-    png_crc, set_account_logo,
+    LOGO_SIDE_PIXELS, MAX_LOGO_BYTES, account_logo, account_logos, check_logo_png, set_account_logo,
 };
 use crate::StoreError;
 use crate::appearance::appearance_generation;
 use crate::testing::fixtures::{archive_account, index_connection};
 
-const IDAT: &[u8] = b"arbitrary compressed bytes";
 const IHDR_TOTAL_BYTES: usize = 8 + 13 + 4;
 const IEND_TOTAL_BYTES: usize = 8 + 4;
 
-fn chunk(kind: &str, data: &[u8]) -> Vec<u8> {
-    let mut bytes = Vec::new();
-    bytes.extend_from_slice(&(data.len() as u32).to_be_bytes());
-    bytes.extend_from_slice(kind.as_bytes());
-    bytes.extend_from_slice(data);
-    bytes.extend_from_slice(&png_crc(kind.as_bytes(), data).to_be_bytes());
-    bytes
+/// An RGBA `IHDR` of the given size.
+fn rgba_ihdr(width: u32, height: u32) -> Vec<u8> {
+    ihdr_data(width, height, 8, 6)
 }
 
-fn ihdr(width: u32, height: u32, depth: u8, color_type: u8) -> Vec<u8> {
-    let mut data = Vec::with_capacity(13);
-    data.extend_from_slice(&width.to_be_bytes());
-    data.extend_from_slice(&height.to_be_bytes());
-    data.extend_from_slice(&[depth, color_type, 0, 0, 0]);
-    data
-}
-
+/// A logo-shaped PNG with `header` as its `IHDR`.
 fn png_with_ihdr(header: &[u8]) -> Vec<u8> {
-    let mut bytes = PNG_SIGNATURE.to_vec();
-    bytes.extend_from_slice(&chunk("IHDR", header));
-    bytes.extend_from_slice(&chunk("IDAT", IDAT));
-    bytes.extend_from_slice(&chunk("IEND", &[]));
-    bytes
-}
-
-fn png_with_idat(data: &[u8]) -> Vec<u8> {
-    let mut bytes = PNG_SIGNATURE.to_vec();
-    bytes.extend_from_slice(&chunk(
-        "IHDR",
-        &ihdr(LOGO_SIDE_PIXELS, LOGO_SIDE_PIXELS, 8, 6),
-    ));
-    bytes.extend_from_slice(&chunk("IDAT", data));
-    bytes.extend_from_slice(&chunk("IEND", &[]));
-    bytes
-}
-
-fn logo_png() -> Vec<u8> {
-    png_with_idat(IDAT)
+    png_with(header, b"arbitrary compressed bytes")
 }
 
 fn assert_rejects(bytes: &[u8], needle: &str) {
@@ -91,10 +61,10 @@ fn structural_failures_report_the_first_problem() {
         (wrong_signature, "signature"),
         (short_ihdr, "IHDR must be 13"),
         (bad_ihdr_crc, "IHDR has a bad CRC"),
-        (png_with_ihdr(&ihdr(127, LOGO_SIDE_PIXELS, 8, 6)), "pixels"),
-        (png_with_ihdr(&ihdr(LOGO_SIDE_PIXELS, 256, 8, 6)), "pixels"),
+        (png_with_ihdr(&rgba_ihdr(127, LOGO_SIDE_PIXELS)), "pixels"),
+        (png_with_ihdr(&rgba_ihdr(LOGO_SIDE_PIXELS, 256)), "pixels"),
         (
-            png_with_ihdr(&ihdr(LOGO_SIDE_PIXELS, LOGO_SIDE_PIXELS, 3, 2)),
+            png_with_ihdr(&ihdr_data(LOGO_SIDE_PIXELS, LOGO_SIDE_PIXELS, 3, 2)),
             "bit depth",
         ),
         (without_iend, "not IEND"),
@@ -194,8 +164,8 @@ fn each_changed_write_advances_the_generation_once() {
     let mut conn = index_connection();
     let archive = archive_account(&conn);
     let tx = conn.transaction().unwrap();
-    let first = png_with_idat(b"first");
-    let second = png_with_idat(b"second");
+    let first = logo_png_with(b"first");
+    let second = logo_png_with(b"second");
     assert_eq!(appearance_generation(&tx).unwrap(), 0);
     set_account_logo(&tx, &archive, None, Some(first.as_slice())).unwrap();
     assert_eq!(appearance_generation(&tx).unwrap(), 1);
