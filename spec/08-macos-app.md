@@ -536,7 +536,7 @@ M4.4c. Choosing Out Box shows the Out Box in the list pane, as Drafts
   pane, as Mail's does; loading and error notes stay above the body.
 - **Header area:**
   - the subject in bold, then from (the sender's name in bold), to, cc
-    when there is one, and the date, their labels and addresses in the
+    and the date where present, their labels and addresses in the
     secondary color; addresses always show beside names;
   - the "Received in <account>" account chip (Account chips), from
     the selected occurrence's account;
