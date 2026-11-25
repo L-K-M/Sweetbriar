@@ -249,6 +249,19 @@ public final class CoreBridge: Sendable {
         return Receipt(receipt)
     }
 
+    /// Commit an account logo, or clear it, against the logo row's
+    /// displayed revision (spec/07 `set_account_logo`).
+    public func setAccountLogo(accountId: String, expectedRevision: Int64?, png: Data?) async throws -> Receipt {
+        let token = SweetbriarCore.CancelToken()
+        let receipt = try await Self.withCancellation(token: token) {
+            try await self.core.setAccountLogo(
+                token: token, idempotencyKey: UUID().uuidString, accountId: accountId,
+                expectedRevision: expectedRevision, png: png
+            )
+        }
+        return Receipt(receipt)
+    }
+
     /// Commit identity overrides against the displayed revision, or absence.
     public func setIdentityAppearance(
         identityId: String, expectedRevision: Int64?, change: IdentityAppearanceChange

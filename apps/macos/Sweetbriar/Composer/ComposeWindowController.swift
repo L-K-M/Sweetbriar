@@ -1172,6 +1172,15 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
         }
     }
 
+    /// The selected identity's account logo, unless the identity has its
+    /// own symbol (spec/08 "Logo").
+    private func stripLogo(_ content: IdentityStripView.Content) -> NSImage? {
+        guard case .identity = content, let identity = identityControls.model.selectedIdentity,
+            let resolved = IdentityStripContent.matchingAppearance(for: identity, in: appearance?.appearance)
+        else { return nil }
+        return AccountLogoImages.image(for: resolved, in: appearance?.appearance)
+    }
+
     private func renderChrome() {
         guard let window else { return }
         let strip = identityStrip.strip
@@ -1452,6 +1461,7 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
                 label: model.failure == nil ? "Loading sending identity…" : "Sending identity unavailable")
         }
         identityStrip.setContent(stripContent, routeChanged: routeChanged)
+        identityStrip.strip.logo = stripLogo(stripContent)
         identityStrip.strip.colorName = stripColorName()
         renderChrome()
         window?.title = IdentityStripContent.windowTitle(

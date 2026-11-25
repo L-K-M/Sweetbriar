@@ -620,13 +620,20 @@ final class SidebarMonogramView: NSView {
         }
         let dark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
         let variant = dark ? account.tokens.dark : account.tokens.light
+        let options = contrastOptions()
+        if let logo = AccountLogoImages.image(for: account) {
+            AccountLogoImages.draw(
+                logo, in: bounds.insetBy(dx: 1, dy: 1), ring: Self.color(variant.markerSrgb),
+                ringWidth: AccountLogoImages.ringWidth(
+                    increaseContrast: options.increaseContrast, differentiate: options.differentiate))
+            return
+        }
         let shape = NSBezierPath(ovalIn: bounds.insetBy(dx: 1, dy: 1))
         Self.color(variant.stripSrgb).setFill()
         shape.fill()
         let appearanceName = appearance?.name ?? effectiveAppearance.name
         let highContrast = appearanceName == .accessibilityHighContrastAqua
             || appearanceName == .accessibilityHighContrastDarkAqua
-        let options = contrastOptions()
         if highContrast || options.increaseContrast || options.differentiate {
             Self.color(variant.outlineSrgb).setStroke()
             shape.lineWidth = 1.5
