@@ -419,8 +419,9 @@ struct ComposeCueSettingsTests {
         #expect(Set(shown.map(\.mode)) == Set(ComposeCueMode.allCases))
         for preview in shown {
             #expect(preview.strip.content == route && preview.strip.cueMode == preview.mode)
-            // Color Wash draws as Strong until its wash lands (plan M6.6c).
             #expect((preview.windowTint != nil) == [.strong, .wash].contains(preview.mode))
+            // Only Color Wash shows its gradient under the strip (M6.6c).
+            #expect((preview.wash != nil) == (preview.mode == .wash))
             #expect(!preview.acceptsFirstResponder && !preview.strip.acceptsFirstResponder)
             #expect(preview.hitTest(.zero) == nil && !preview.strip.isAccessibilityElement())
             #expect(preview.frame.width >= 300 && preview.strip.frame.height >= 32)

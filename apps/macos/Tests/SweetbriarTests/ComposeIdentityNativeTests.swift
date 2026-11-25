@@ -59,8 +59,12 @@ private actor NativeIdentitySource: DraftStore, ComposeCatalogSource, RecipientS
     private(set) var catalogReads = 0
     private(set) var parses: [String] = []
     private(set) var saves = 0
-    init(_ seed: Seed, defaultId: String?, catalogGate: NativeIdentityGate?, draftFailure: CoreFailure?) {
+    init(
+        _ seed: Seed, defaultId: String?, catalogGate: NativeIdentityGate?, draftFailure: CoreFailure?,
+        replyAccountId: String? = nil
+    ) {
         self.draftFailure = draftFailure
+        row.replyAccountId = replyAccountId
         catalog = .init(
             identities: [nativeIdentity("a"), nativeIdentity("b", sendable: .provisional)],
             defaultIdentityId: defaultId)
@@ -242,14 +246,20 @@ private func withNativeIdentity(
     _ seed: NativeIdentitySource.Seed = .saved(nativeContent()), defaultId: String? = nil,
     catalogGate: NativeIdentityGate? = nil, undoEvents: IdentityUndoEvents = .application,
     draftFailure: CoreFailure? = nil, appearance: AppearanceModel? = nil, cue: ComposeCueModel? = nil,
+    replyAccountId: String? = nil, replyAccounts: (any ReplyAccountSource)? = nil,
     announceRoute: @escaping @MainActor (String) -> Void = { _ in },
     body: @MainActor (ComposeWindowController, NativeIdentitySource) async throws -> Void
 ) async throws {
     let source = NativeIdentitySource(
-        seed, defaultId: defaultId, catalogGate: catalogGate, draftFailure: draftFailure)
+        seed, defaultId: defaultId, catalogGate: catalogGate, draftFailure: draftFailure,
+        replyAccountId: replyAccountId)
     let controller = ComposeWindowController(
         source: source, draftId: "native-identity", appearance: appearance, cue: cue,
-        announceRoute: announceRoute)
+        replyAccountSource: replyAccounts, announceRoute: announceRoute)
+    // The host's accessibility settings must not decide what a test
+    // sees: CI's macOS VM reports one of them on, which renders Color
+    // Wash as Strong. A test that checks the fallbacks injects them.
+    controller.displayOptions = { (increaseContrast: false, reduceTransparency: false) }
     controller.showWindow(nil)
     let result: Result<Void, any Error>
     do {
@@ -1270,5 +1280,339 @@ struct ComposeIdentityNativeTests {
             #expect(c.identityControls.popup.selectedItem?.title == "Unavailable identity: missing")
             #expect(c.textView.string == "User text")
         }
+    }
+}
+
+// MARK: - Color Wash, Send as the account and the reply line (M6.6c)
+
+/// Distinct tokens for identities a and b, so a From switch shows in
+/// every color the window draws.
+private let washTokens: [String: AppearanceTokens] = [
+    "a": AppearanceTokens(
+        light: AppearanceVariant(
+            markerSrgb: "#0072b2", stripSrgb: "#eaf3ff", foregroundSrgb: "#000000", outlineSrgb: "#000000",
+            washTopSrgb: "#daeeff", washBottomSrgb: "#f6fbff", markerInkSrgb: "#ffffff"),
+        dark: AppearanceVariant(
+            markerSrgb: "#56b4e9", stripSrgb: "#1c2530", foregroundSrgb: "#ffffff", outlineSrgb: "#ffffff",
+            washTopSrgb: "#142b3d", washBottomSrgb: "#151b21", markerInkSrgb: "#000000")),
+    "b": AppearanceTokens(
+        light: AppearanceVariant(
+            markerSrgb: "#d55e00", stripSrgb: "#fff0e6", foregroundSrgb: "#000000", outlineSrgb: "#000000",
+            washTopSrgb: "#ffe6d6", washBottomSrgb: "#fffaf6", markerInkSrgb: "#000000"),
+        dark: AppearanceVariant(
+            markerSrgb: "#e69f00", stripSrgb: "#302418", foregroundSrgb: "#ffffff", outlineSrgb: "#ffffff",
+            washTopSrgb: "#3d2a14", washBottomSrgb: "#211b15", markerInkSrgb: "#000000")),
+]
+
+private actor WashAppearanceSource: AppearanceSource {
+    func appearance() async throws -> Appearance {
+        Appearance(
+            generation: 1, accounts: [],
+            identities: ["a", "b"].map { id in
+                IdentityAppearance(
+                    identityId: id, accountId: "account-\(id)", colorSrgb: washTokens[id]!.light.markerSrgb,
+                    colorOverrideSrgb: nil, tokens: washTokens[id]!, symbolOverride: nil,
+                    monogram: id.uppercased(), revision: nil)
+            })
+    }
+    func appearanceEvents(generation: UInt64) async throws -> any AppearanceEventSource {
+        throw CoreFailure.unavailable(reason: "Not used by this fixture.")
+    }
+    func setAccountAppearance(
+        accountId: String, expectedRevision: Int64, change: AccountAppearanceChange
+    ) async throws -> Receipt { throw CoreFailure.unavailable(reason: "Not used by this fixture.") }
+    func setIdentityAppearance(
+        identityId: String, expectedRevision: Int64?, change: IdentityAppearanceChange
+    ) async throws -> Receipt { throw CoreFailure.unavailable(reason: "Not used by this fixture.") }
+    nonisolated func palette() -> [PaletteColor] { [] }
+}
+
+private actor WashReplyAccounts: ReplyAccountSource {
+    func accounts() async throws -> [Account] {
+        [
+            Account(
+                accountId: "account-b", kind: .imap, displayName: "Account b", state: .active,
+                stateReason: nil, sortOrder: 1),
+            Account(
+                accountId: "local-archive", kind: .local, displayName: "Local Archive", state: .active,
+                stateReason: nil, sortOrder: 0),
+        ]
+    }
+}
+
+private struct WashClock: FrameClock {
+    func nextFrame() async { await Task.yield() }
+}
+
+/// The appearance and a cue already in `mode`.
+@MainActor
+private func washFixtures(_ mode: ComposeCueMode) async throws -> (AppearanceModel, ComposeCueModel) {
+    let appearance = AppearanceModel(source: WashAppearanceSource())
+    await appearance.refresh()
+    let cue = ComposeCueModel(source: NativeCueSource())
+    await cue.reload()
+    try #require(await cue.setMode(mode))
+    return (appearance, cue)
+}
+
+private func washNear(_ color: NSColor?, _ hex: String) -> Bool {
+    guard let color = color?.usingColorSpace(.sRGB), let want = appearanceColor(hex).usingColorSpace(.sRGB)
+    else { return false }
+    return abs(color.redComponent - want.redComponent) < 0.01
+        && abs(color.greenComponent - want.greenComponent) < 0.01
+        && abs(color.blueComponent - want.blueComponent) < 0.01
+}
+
+/// The rendered top and bottom rows of a view, drawn into an sRGB
+/// bitmap and read as raw bytes: `colorAt` tags a device-RGB bitmap's
+/// pixels Generic RGB whatever its space, which shifts them on the way
+/// back to sRGB.
+@MainActor
+private func washPixels(_ view: NSView) throws -> (top: NSColor, bottom: NSColor) {
+    let width = Int(view.bounds.width.rounded()), height = Int(view.bounds.height.rounded())
+    try #require(width > 0 && height > 1, "The wash must have a laid-out surface")
+    let bitmap = try #require(
+        NSBitmapImageRep(
+            bitmapDataPlanes: nil, pixelsWide: width, pixelsHigh: height, bitsPerSample: 8,
+            samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB,
+            bytesPerRow: 0, bitsPerPixel: 0)?.retagging(with: .sRGB))
+    bitmap.size = view.bounds.size
+    view.cacheDisplay(in: view.bounds, to: bitmap)
+    func pixel(_ y: Int) -> NSColor {
+        var bytes = [Int](repeating: 0, count: 4)
+        bitmap.getPixel(&bytes, atX: bitmap.pixelsWide / 2, y: y)
+        return NSColor(
+            srgbRed: CGFloat(bytes[0]) / 255, green: CGFloat(bytes[1]) / 255, blue: CGFloat(bytes[2]) / 255,
+            alpha: CGFloat(bytes[3]) / 255)
+    }
+    return (pixel(0), pixel(bitmap.pixelsHigh - 1))
+}
+
+/// WCAG 2.2 contrast of a (possibly translucent) system color drawn on
+/// an opaque ground, resolved in `appearance`.
+@MainActor
+private func washContrast(_ text: NSColor, on ground: NSColor, in appearance: NSAppearance) -> Double {
+    var resolved: NSColor?
+    appearance.performAsCurrentDrawingAppearance { resolved = text.usingColorSpace(.sRGB) }
+    guard let ink = resolved, let ground = ground.usingColorSpace(.sRGB) else { return 0 }
+    func over(_ a: CGFloat, _ b: CGFloat) -> CGFloat { a * ink.alphaComponent + b * (1 - ink.alphaComponent) }
+    func linear(_ value: CGFloat) -> Double {
+        let value = Double(value)
+        return value <= 0.04045 ? value / 12.92 : pow((value + 0.055) / 1.055, 2.4)
+    }
+    func luminance(_ r: CGFloat, _ g: CGFloat, _ b: CGFloat) -> Double {
+        0.2126 * linear(r) + 0.7152 * linear(g) + 0.0722 * linear(b)
+    }
+    let fore = luminance(
+        over(ink.redComponent, ground.redComponent), over(ink.greenComponent, ground.greenComponent),
+        over(ink.blueComponent, ground.blueComponent))
+    let back = luminance(ground.redComponent, ground.greenComponent, ground.blueComponent)
+    return (max(fore, back) + 0.05) / (min(fore, back) + 0.05)
+}
+
+extension ComposeIdentityNativeTests {
+    @Test func colorWashFillsTheHeaderAndWashesBehindTheEditor() async throws {
+        let (appearance, cue) = try await washFixtures(.wash)
+        try await withNativeIdentity(appearance: appearance, cue: cue) { c, _ in
+            let window = try #require(c.window)
+            window.appearance = NSAppearance(named: .aqua)
+            let light = ComposeWashView.Stops(top: appearanceColor("#daeeff"), bottom: appearanceColor("#f6fbff"))
+            // The appearance change reaches the window on a later turn.
+            try #require(await identityEventually { c.washView.stops == light && !c.washView.isHidden })
+            window.contentView?.layoutSubtreeIfNeeded()
+            #expect(washNear(window.backgroundColor, "#eaf3ff"))
+            #expect(window.titlebarAppearsTransparent)
+            let pixels = try washPixels(c.washView)
+            #expect(
+                washNear(pixels.top, "#daeeff") && washNear(pixels.bottom, "#f6fbff"),
+                "top \(pixels.top), bottom \(pixels.bottom)")
+
+            // The wash starts under Subject and runs to the bottom edge,
+            // behind the editor, which draws no background of its own.
+            let content = try #require(window.contentView)
+            let subject = c.subjectField.convert(c.subjectField.bounds, to: content)
+            let editor = c.editorScroll.convert(c.editorScroll.bounds, to: content)
+            #expect(c.washView.frame.maxY <= subject.minY + 0.5)
+            #expect(c.washView.frame.minY == 0 && c.washView.frame.width == content.bounds.width)
+            #expect(c.washView.frame.contains(editor))
+            #expect(!c.textView.drawsBackground && !c.editorScroll.drawsBackground)
+
+            // Status text takes the label color; header labels the strip
+            // foreground; banners a plate of window background.
+            #expect(c.statusLabel.textColor == .labelColor && c.cueStatusLabel.textColor == .labelColor)
+            let from = try #require(
+                identityViews(content).compactMap { $0 as? NSTextField }.first { $0.stringValue == "From:" })
+            #expect(washNear(from.textColor, "#000000"))
+            var plate: CGColor?
+            window.effectiveAppearance.performAsCurrentDrawingAppearance {
+                plate = NSColor.windowBackgroundColor.cgColor
+            }
+            #expect(c.crossAccountBannerView.layer?.backgroundColor == plate)
+            #expect(c.externalEditBanner.layer?.backgroundColor == plate)
+
+            // Increase Contrast or Reduce Transparency render Strong.
+            for options in [
+                (increaseContrast: true, reduceTransparency: false),
+                (increaseContrast: false, reduceTransparency: true),
+            ] {
+                c.displayOptions = { options }
+                #expect(c.washView.isHidden && c.washView.stops == nil)
+                #expect(c.textView.drawsBackground && c.editorScroll.drawsBackground)
+                #expect(c.textView.backgroundColor == .textBackgroundColor)
+                #expect(washNear(window.backgroundColor, "#eaf3ff"))
+                #expect(c.statusLabel.textColor == .secondaryLabelColor)
+                #expect(c.sendAsAccount?.title == "Send as Account a")
+            }
+            c.displayOptions = { (increaseContrast: false, reduceTransparency: false) }
+            #expect(!c.washView.isHidden && !c.textView.drawsBackground)
+
+            // Dark Mode takes the dark stops.
+            window.appearance = NSAppearance(named: .darkAqua)
+            try #require(
+                await identityEventually {
+                    c.washView.stops == .init(top: appearanceColor("#142b3d"), bottom: appearanceColor("#151b21"))
+                })
+            #expect(washNear(window.backgroundColor, "#1c2530"))
+        }
+    }
+
+    @Test func sendNamesTheAccountOnlyInColorWashAndStrong() async throws {
+        let (appearance, cue) = try await washFixtures(.wash)
+        try await withNativeIdentity(appearance: appearance, cue: cue) { c, _ in
+            c.window?.appearance = NSAppearance(named: .aqua)
+            let content = try #require(c.window?.contentView)
+            let send = try #require(
+                identityViews(content).compactMap { $0 as? NSButton }.first {
+                    $0.accessibilityIdentifier() == "composeSend"
+                })
+            // The light appearance reaches the window on a later turn.
+            try #require(
+                await identityEventually {
+                    send.title == "Send as Account a" && washNear(send.bezelColor, "#0072b2")
+                })
+            #expect(send.accessibilityLabel() == "Send as Account a, a@EXAMPLE.test")
+            let ink = send.attributedTitle.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor
+            #expect(washNear(ink, "#ffffff"))
+            #expect(send.cell?.lineBreakMode == .byTruncatingMiddle)
+            #expect(await cue.setMode(.strong))
+            try #require(await identityEventually { c.washView.isHidden })
+            #expect(send.title == "Send as Account a")
+            for mode in [ComposeCueMode.standard, .minimal] {
+                #expect(await cue.setMode(mode))
+                try #require(await identityEventually { send.title == "Send" })
+                #expect(send.bezelColor == nil)
+                #expect(send.accessibilityLabel()?.hasPrefix("Send as") != true)
+            }
+        }
+        // Without a route Send is the plain, disabled Send.
+        let (routeless, washCue) = try await washFixtures(.wash)
+        try await withNativeIdentity(.saved(nativeContent(route: nil)), appearance: routeless, cue: washCue) { c, _ in
+            try #require(await identityEventually { washCue.mode == .wash && c.washView.isHidden })
+            let content = try #require(c.window?.contentView)
+            let send = try #require(
+                identityViews(content).compactMap { $0 as? NSButton }.first {
+                    $0.accessibilityIdentifier() == "composeSend"
+                })
+            #expect(send.title == "Send" && !send.isEnabled && c.sendAsAccount == nil)
+        }
+    }
+
+    @Test func switchingFromRecolorsTheFillWashAndSendTogether() async throws {
+        let (appearance, cue) = try await washFixtures(.wash)
+        try await withNativeIdentity(
+            .saved(nativeContent(body: "")), undoEvents: .explicitTestTransactions, appearance: appearance,
+            cue: cue
+        ) { c, _ in
+            c.window?.appearance = NSAppearance(named: .aqua)
+            try #require(
+                await identityEventually {
+                    c.sendAsAccount?.title == "Send as Account a" && washNear(c.sendAsAccount?.fill, "#0072b2")
+                        && c.identityControls.popup.itemArray.contains { ($0.representedObject as? String) == "b" }
+                })
+            try chooseNative("b", on: c)
+            // The strip, the fill, the wash and Send change in one render.
+            try #require(
+                await identityEventually {
+                    c.identityStrip.strip.accessibilityLabel()?.contains("b@EXAMPLE.test") == true
+                })
+            #expect(washNear(c.window?.backgroundColor, "#fff0e6"))
+            #expect(c.washView.stops == .init(top: appearanceColor("#ffe6d6"), bottom: appearanceColor("#fffaf6")))
+            #expect(c.sendAsAccount?.title == "Send as Account b")
+            #expect(washNear(c.sendAsAccount?.fill, "#d55e00") && washNear(c.sendAsAccount?.ink, "#000000"))
+        }
+    }
+
+    @Test func theReplyLineNamesTheAccountThatReceivedTheOriginal() async throws {
+        let accounts = WashReplyAccounts()
+        // A reply and a reply-all both carry the answered occurrence's
+        // account (spec/07 `draft()`); the line reads only that.
+        for (id, name) in [("account-b", "Account b"), ("local-archive", "Local Archive")] {
+            try await withNativeIdentity(replyAccountId: id, replyAccounts: accounts) { c, _ in
+                try #require(await identityEventually { !c.replyLine.isHidden })
+                #expect(c.replyLine.accessibilityLabel() == "Reply to a message received in \(name)")
+                #expect(c.replyLine.chip.rootView.label == name)
+                #expect(c.replyLine.isAccessibilityElement())
+                #expect(c.replyLine.accessibilityChildren()?.isEmpty == true)
+            }
+        }
+        // A forward or a new message has none.
+        try await withNativeIdentity(replyAccounts: accounts) { c, _ in
+            try await Task.sleep(for: .milliseconds(100))
+            #expect(c.replyLine.isHidden)
+        }
+        // In Color Wash the line sits on the fill, the wash under it.
+        let (appearance, cue) = try await washFixtures(.wash)
+        try await withNativeIdentity(
+            appearance: appearance, cue: cue, replyAccountId: "account-b", replyAccounts: accounts
+        ) { c, _ in
+            try #require(await identityEventually { !c.replyLine.isHidden && !c.washView.isHidden })
+            let content = try #require(c.window?.contentView)
+            content.layoutSubtreeIfNeeded()
+            let line = c.replyLine.convert(c.replyLine.bounds, to: content)
+            #expect(c.washView.frame.maxY <= line.minY + 0.5)
+        }
+    }
+
+    @Test func washTextReachesContrastOnEveryPaletteColor() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("sb-wash-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let core = try await CoreBridge.open(
+            config: CoreConfig(
+                dataRoot: root.appendingPathComponent("data").path,
+                cacheRoot: root.appendingPathComponent("cache").path),
+            snapshots: FrameBatcher<[Setting]>(clock: WashClock()) { _ in })
+        let result: Result<Void, any Error>
+        do {
+            var account = try #require(try await core.appearance().accounts.first)
+            let palette = core.palette()
+            try #require(!palette.isEmpty)
+            for color in palette {
+                _ = try await core.setAccountAppearance(
+                    accountId: account.accountId, expectedRevision: account.revision,
+                    change: AccountAppearanceChange(color: .paletteV1(slot: color.slot), symbol: nil))
+                account = try #require(
+                    try await core.appearance().accounts.first { $0.accountId == account.accountId })
+                for (look, variant) in [
+                    (NSAppearance.Name.aqua, account.tokens.light), (.darkAqua, account.tokens.dark),
+                ] {
+                    let appearance = try #require(NSAppearance(named: look))
+                    let view = ComposeWashView(frame: NSRect(x: 0, y: 0, width: 40, height: 400))
+                    view.appearance = appearance
+                    view.stops = .init(
+                        top: appearanceColor(variant.washTopSrgb), bottom: appearanceColor(variant.washBottomSrgb))
+                    let pixels = try washPixels(view)
+                    // Body text and, on the wash, status text.
+                    for ground in [pixels.top, pixels.bottom] {
+                        for text in [NSColor.textColor, .labelColor] {
+                            let ratio = washContrast(text, on: ground, in: appearance)
+                            #expect(ratio >= 4.5, "\(color.name) in \(look.rawValue): \(ratio)")
+                        }
+                    }
+                }
+            }
+            result = .success(())
+        } catch { result = .failure(error) }
+        await core.shutdown()
+        try result.get()
     }
 }
