@@ -79,23 +79,27 @@ and [raw/plan-proton-bridge/codex.md](../research/raw/plan-proton-bridge/codex.m
   written to another sending account but never to A, unless the user
   allowed that address for A.
   - "Has written to" an account means the address is the first From of
-    a message in that account (02 "Account senders"). The local archive
-    is never counted: imported mail doesn't say which sending account
-    received it.
+    a message in that account (02 "Account senders"), matched by
+    canonical address. The local archive is never counted: imported
+    mail doesn't say which sending account received it.
   - An address that has written to A, or to no account at all, passes.
   - It applies to new messages, replies, reply-alls and forwards alike,
     next to the cross-account check, which still covers replies.
   - **Blocking is enforced by the core:** `send_draft` refuses a
     revision with a blocked recipient with `Conflict` naming
-    `recipient_fence` and the addresses. No acknowledgement overrides
-    it. The ways through are changing From to an account the address
+    `recipient_fence` and the addresses. `acks` are not consulted for
+    it, so no acknowledgement overrides it. The ways through are changing From to an account the address
     has written to, removing the recipient, or `allow_recipient` for
     the route's account (07), a lasting decision listed in Settings and
     revocable there.
   - The check reads the account senders when Send is pressed, as far
-    as the received-address sweep has recorded them (02). An attempt
-    already accepted for sending keeps its frozen route and isn't
-    checked again.
+    as the received-address sweep has recorded them (02). Until the
+    first pass after the upgrade has recorded the existing mail, the
+    check isn't ready and blocks nothing; a partial pass could
+    otherwise block an address that wrote to A. Once ready, a first
+    message to A newer than the last completed pass may still be
+    missing for that pass; Allow covers it. An attempt already accepted
+    for sending keeps its frozen route and isn't checked again.
 
 ## Composing
 

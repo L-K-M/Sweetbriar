@@ -707,7 +707,7 @@ CREATE TABLE d_account_senders (                  -- derived: who has written to
   account_id     TEXT NOT NULL REFERENCES accounts(account_id),
   canonical      TEXT NOT NULL,                   -- the Contacts canonical form
   first_seen_at  INTEGER NOT NULL,
-  PRIMARY KEY (account_id, canonical)
+  PRIMARY KEY (canonical, account_id)             -- the check looks up by address
 ) STRICT, WITHOUT ROWID;
 
 CREATE TABLE recipient_allowances (               -- the user's decisions; kept in backups
@@ -726,17 +726,30 @@ CREATE TABLE recipient_allowances (               -- the user's decisions; kept 
   gets no rows. The received-address sweep ("Received-address
   population") adds them: publishing an eligible source also records
   its first From for its account, in the same transaction. Rows are
-  never removed when an occurrence vanishes: having written once is
-  the history. Migration 38 advances `seen_address_inputs`, so the next
-  sweep fills the table from the existing summaries; until it has, the
-  check can miss history, never invent it. The table is derived: a
-  rebuild recomputes it from summaries and identities and changes no
+  never removed when an occurrence vanishes, deletion and purging
+  included: having written once is the history. Addresses match by
+  canonical form only, so a person's second address is a separate
+  sender. The table is derived: a rebuild empties it, advances
+  `seen_address_inputs` and moves `account_senders_from` to that
+  revision, so the check waits for the rebuild's pass; it changes no
   other table.
+- **Readiness:** a pass walks every account's messages in one id
+  order, so a partial pass can hold B's history without A's. Migration
+  38 advances `seen_address_inputs` and stores that revision as
+  `account_senders_from` in `store_meta`; the check is ready once
+  `seen_address_swept` reaches it, after the first pass has recorded
+  the existing mail, and blocks nothing before then. Once ready, a
+  message newer than the last completed pass counts for no account
+  until a pass records it, so a sender's first message to A can
+  briefly be missing (05); one without a complete summary never
+  counts.
 - **Allowances** are user data, not derived: they survive rebuilds,
   restore with backups and stay with disconnected accounts. Allowing an
   already allowed address writes nothing; removing one that isn't
-  allowed is `NotFound`. The local archive can't send, so an allowance
-  for it is `InvalidInput`.
+  allowed is `NotFound`. The local archive can't send, so both
+  `allow_recipient` and `remove_recipient_allowance` refuse it with
+  `InvalidInput` before reading or writing allowances. Accounts are
+  never deleted (removal disconnects), so both foreign keys hold.
 
 ### Received-address population (M1.6)
 

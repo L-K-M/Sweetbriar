@@ -811,11 +811,12 @@ a receipt or file-export command; Service/FFI exposure remains M1.7e/f.
   - `drafts()` → local drafts with state, route, subject, recipients,
     update time and any live attempt's state (the sidebar's Drafts
     (local), 08);
-  - `recipient_fence(draft_id, revision_id)` (M6.7a) → each blocked
-    recipient of that revision (05 "Recipient check"): its address and
-    the sending accounts it has written to. Empty when nothing is
-    blocked or the revision has no route; a revision that isn't the
-    draft's current one is `Conflict`. `recipient_allowances()` lists
+  - `recipient_fence(draft_id, revision_id)` (M6.7a) → whether the
+    check is ready (02 "Readiness") and each blocked recipient of that
+    revision (05 "Recipient check"): its address and the sending
+    accounts it has written to. None is blocked before the check is
+    ready, when nothing is blocked or when the revision has no route;
+    a revision that isn't the draft's current one is `Conflict`. `recipient_allowances()` lists
     every allowance with its account, address and time, for Settings;
   - `draft(draft_id)`, `saved_views()`, `settings()`. A reply's or
     reply-all's draft also carries the account of the occurrence it

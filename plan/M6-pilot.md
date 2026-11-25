@@ -261,20 +261,22 @@ and the refusal.
   `remove_recipient_allowance`, `send_draft`).
 - **Depends on:** M4.3.
 - **Deliverables:** migration 38 with its backfill; account-sender rows
-  written as summaries complete; the query and commands with receipts
-  through `sb-engine`, `sb-service` and `sb-ffi`; `send_draft`'s
-  refusal; regenerated bindings. If the measured diff exceeds the
+  written by the received-address sweep; the query and commands with
+  receipts through `sb-engine`, `sb-service` and `sb-ffi`;
+  `send_draft`'s refusal; regenerated bindings. If the measured diff exceeds the
   limit, split the FFI export into its own step.
 - **Acceptance:**
   - an address that wrote only to B is blocked from A in To, Cc and
     Bcc, for a new message, a reply and a forward; one that wrote to A,
     or to no account, passes;
+  - before the first pass after migration 38 completes the check
+    reports not ready and blocks nothing, even with B's rows recorded;
   - the local archive's mail and A's own sent mail add no history;
   - `send_draft` refuses a blocked revision with `Conflict` naming
     `recipient_fence`, whatever the `acks`, and sends after
     `allow_recipient`, a route change or the recipient's removal;
   - allowances replay idempotently, survive a derived rebuild and
-    backup and restore, and are refused for the local archive;
+    backup and restore, and both commands refuse the local archive;
   - migration 38's backfill matches the incremental rows on a seeded
     archive, and a vanished occurrence keeps its row.
 
@@ -284,7 +286,8 @@ allowance flow and Settings → Sending's list.
 - **Depends on:** M6.7a, M6.6c.
 - **Acceptance (app-hosted tests):**
   - a blocked recipient shows its banner and warning token, and Send is
-    disabled with the reason;
+    disabled with the reason; a check that isn't ready shows its note
+    and blocks nothing;
   - Use <account> switches From and clears the banner;
   - Allow asks first; Cancel changes nothing; Allow clears the banner
     and the allowance appears in Settings, where Remove brings the

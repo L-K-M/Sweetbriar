@@ -871,6 +871,9 @@ Implements [15-account-colors](../research/15-account-colors.md):
   - The recipient's token shows a warning symbol, never an account
     color. Send stays disabled while any recipient is blocked, and its
     tooltip and accessibility help name the reason.
+  - Until the check is ready (02), the status line says "The recipient
+    check starts once Sweetbriar has read your existing mail." in the
+    label color.
   - The window rereads `recipient_fence` whenever the recipients or the
     route change, after an allowance, and when mail arrives. A
     `Conflict` from Send for `recipient_fence` shows the banner.
