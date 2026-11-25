@@ -21,7 +21,7 @@ import SweetbriarBridge
 final class MainWindowController: NSWindowController, NSWindowDelegate {
     static let defaultContentSize = NSSize(width: 1100, height: 700)
     /// Room for the sidebar, a list and a narrow reader.
-    static let minimumContentSize = NSSize(width: 760, height: 420)
+    static let minimumContentSize = NSSize(width: 800, height: 420)
     private static let frameAutosaveName = "MainWindow"
     private static let splitAutosaveName = "MainWindowSplit"
     /// The window's title, also how UI tests find it.
