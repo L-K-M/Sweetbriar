@@ -223,6 +223,32 @@ pub struct CrossAccountNotice {
     pub ack: String,
 }
 
+/// The recipient check for one draft revision (spec/05 "Recipient
+/// check", spec/07): whether the check is ready (spec/02 "Readiness")
+/// and each blocked recipient of that revision.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecipientFence {
+    pub ready: bool,
+    pub blocked: Vec<BlockedRecipient>,
+}
+
+/// One blocked recipient (spec/05 "Recipient check"): its address as
+/// the draft spells it and the sending accounts it has written to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BlockedRecipient {
+    pub address: String,
+    pub account_ids: Vec<String>,
+}
+
+/// One allowance, for Settings (spec/07): the account, the address as
+/// the user allowed it and when it was allowed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecipientAllowance {
+    pub account_id: String,
+    pub address: String,
+    pub created_at_ms: i64,
+}
+
 /// What `send_draft` answers: its receipt and the attempt id the
 /// receipt names, so a replayed key still names the first attempt.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -269,8 +295,10 @@ impl Core {
     /// `send_draft(draft_id, revision_id, acks)` (spec/07): queue the
     /// draft's current revision as a `held` attempt; a repeated key
     /// returns its receipt. A non-current revision, a `sent` or
-    /// `discarded` draft, and a live or already-sent attempt are
-    /// `Conflict`. `acks` carries the cross-account acknowledgement.
+    /// `discarded` draft, a live or already-sent attempt, and a
+    /// recipient the recipient check blocks are `Conflict`; the last
+    /// names `recipient_fence`, whatever the `acks`. `acks` carries the
+    /// cross-account acknowledgement.
     pub async fn send_draft(
         &self,
         idempotency_key: &str,
@@ -308,6 +336,82 @@ impl Core {
             route_account_id: notice.route_account_id,
             ack: notice.ack,
         }))
+    }
+
+    /// `recipient_fence(draft_id, revision_id)` (spec/07 "Other
+    /// queries", spec/05 "Recipient check"): which recipients of the
+    /// draft's current revision are blocked for its route's account,
+    /// each with the sending accounts it has written to. A revision
+    /// without a route blocks nothing yet; a revision that isn't the
+    /// draft's current one is `Conflict`, an unknown draft `NotFound`.
+    pub async fn recipient_fence(
+        &self,
+        draft_id: &str,
+        revision_id: &str,
+    ) -> Result<RecipientFence, CoreError> {
+        let fence = self.engine().recipient_fence(draft_id, revision_id).await?;
+        Ok(RecipientFence {
+            ready: fence.ready,
+            blocked: fence
+                .blocked
+                .into_iter()
+                .map(|recipient| BlockedRecipient {
+                    address: recipient.address,
+                    account_ids: recipient.account_ids,
+                })
+                .collect(),
+        })
+    }
+
+    /// `recipient_allowances()` (spec/07 "Other queries"): every
+    /// allowance, ordered by account then canonical address, for
+    /// Settings (spec/05 "Recipient check").
+    pub async fn recipient_allowances(&self) -> Result<Vec<RecipientAllowance>, CoreError> {
+        let allowances = self.engine().recipient_allowances().await?;
+        Ok(allowances
+            .into_iter()
+            .map(|allowance| RecipientAllowance {
+                account_id: allowance.account_id,
+                address: allowance.address,
+                created_at_ms: allowance.created_at.as_millis(),
+            })
+            .collect())
+    }
+
+    /// `allow_recipient(account_id, address)` (spec/07 "Commands",
+    /// spec/05 "Recipient check"): one command under an idempotency
+    /// key; a repeated key returns the stored receipt. Allowing an
+    /// allowed address writes nothing; the receipt says whether this
+    /// call changed anything. The local archive is `InvalidInput`, an
+    /// unknown account `NotFound`.
+    pub async fn allow_recipient(
+        &self,
+        idempotency_key: &str,
+        account_id: &str,
+        address: &str,
+    ) -> Result<Receipt, CoreError> {
+        let receipt = self
+            .engine()
+            .allow_recipient(idempotency_key, account_id, address)
+            .await?;
+        Ok(Receipt::from_engine(&receipt))
+    }
+
+    /// `remove_recipient_allowance(account_id, address)` (spec/07
+    /// "Commands", spec/05 "Recipient check"): revoke an allowance,
+    /// so the block applies again. An address that isn't allowed is
+    /// `NotFound`; the local archive `InvalidInput`.
+    pub async fn remove_recipient_allowance(
+        &self,
+        idempotency_key: &str,
+        account_id: &str,
+        address: &str,
+    ) -> Result<Receipt, CoreError> {
+        let receipt = self
+            .engine()
+            .remove_recipient_allowance(idempotency_key, account_id, address)
+            .await?;
+        Ok(Receipt::from_engine(&receipt))
     }
 
     /// `cancel_send(attempt_id)` (spec/07 "Commands"): a `held` or
@@ -386,3 +490,6 @@ impl Core {
         Ok(OutBox::from_engine(self.engine().out_box().await?))
     }
 }
+
+#[cfg(test)]
+mod tests;

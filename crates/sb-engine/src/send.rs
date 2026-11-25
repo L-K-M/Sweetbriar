@@ -22,6 +22,7 @@ use sb_resources::{
 use crate::drafts::{encode_receipt_id, receipt_id};
 use crate::engine::validate_idempotency_key;
 use crate::identity::{ComposeContext, CrossAccountDecision, cross_account_decision};
+use crate::recipients::refuse_blocked;
 use crate::settings::{Setting, UNDO_SECONDS_KEY};
 use crate::{Engine, EngineError};
 
@@ -98,7 +99,9 @@ impl Engine {
     /// non-current revision, a non-`editing` draft, a live or
     /// already-sent attempt are `Conflict`. `acks` must carry the
     /// cross-account acknowledgement for the reply's identity and
-    /// recipients; a missing one is `Conflict` naming it.
+    /// recipients; a missing one is `Conflict` naming it. A recipient
+    /// the recipient check blocks is `Conflict` naming
+    /// `recipient_fence`, whatever the `acks`.
     pub async fn send_draft(
         &self,
         idempotency_key: &str,
@@ -200,6 +203,15 @@ impl Engine {
                     .to_owned(),
             });
         }
+        // The recipient check (spec/05), before composing bytes nothing
+        // would reference; `acks` don't override it. The queuing
+        // transaction checks again, so an allowance removed meanwhile
+        // still refuses.
+        let fence_revision = revision.clone();
+        self.read_through(move |resources| {
+            resources.read(|tx| refuse_blocked(tx, &fence_revision))
+        })
+        .await?;
         let (in_reply_to, references) = self
             .read_through(move |resources| {
                 resources.read(|tx| {
@@ -242,10 +254,12 @@ impl Engine {
             bcc: revision.bcc.clone(),
         };
         let key = idempotency_key.to_owned();
+        let fenced = revision;
         let receipt = self
             .resources()
             .write(WritePriority::User, move |tx| {
                 let receipt = run_once(tx, &key, SEND_DRAFT, now, |tx| {
+                    refuse_blocked(tx, &fenced)?;
                     send_draft(tx, &attempt, &object, undo_seconds, now)?;
                     Ok(encode_receipt_id("attempt_id", &attempt.attempt_id))
                 })?;
