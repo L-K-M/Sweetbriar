@@ -50,6 +50,9 @@ struct Key {
 struct PreparedSource {
     source: Source,
     keys: Vec<Key>,
+    /// The canonical key of the source's first From, when it has one;
+    /// the account-sender history derives from this (spec/02).
+    sender: Option<String>,
 }
 
 /// Opaque local cursor. Kept ledger keys, not this cursor, survive interruption.
@@ -213,6 +216,12 @@ pub fn publish(tx: &Transaction, mut prepared: SeenPrepared) -> Result<SeenCommi
             keys += 1;
             prepared.scan.position += 1;
         }
+        crate::recipients::record_sender(
+            tx,
+            &pending.source.account,
+            pending.sender.as_deref(),
+            pending.source.observed,
+        )?;
         prepared.scan.after = pending.source.message;
         prepared.scan.pending = prepared.scan.queued.pop_front();
         prepared.scan.position = 0;
@@ -320,6 +329,16 @@ fn normalize(source: Source) -> Result<PreparedSource, StoreError> {
             *stored = value;
         }
     }
+    // The account-sender row comes from the first From alone, independent
+    // of the recipient keys above; an unparseable From records nothing.
+    let sender = if source.eligible {
+        source.headers[0]
+            .as_deref()
+            .and_then(|from| AddressOperand::parse_received(from).ok())
+            .map(|address| address.key().to_owned())
+    } else {
+        None
+    };
     let keys = unique
         .into_iter()
         .map(|(canonical, (email, name))| {
@@ -338,7 +357,11 @@ fn normalize(source: Source) -> Result<PreparedSource, StoreError> {
             }
         })
         .collect();
-    Ok(PreparedSource { source, keys })
+    Ok(PreparedSource {
+        source,
+        keys,
+        sender,
+    })
 }
 
 fn retained_cost(tx: &Transaction, key: &Key) -> Result<usize, StoreError> {
