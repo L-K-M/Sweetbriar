@@ -859,10 +859,12 @@ Implements [15-account-colors](../research/15-account-colors.md):
     color.
 - **Recipient check** (M6.7b; 05): a blocked recipient gets a banner
   for each, in the cross-account banner's warning style: "<address> has
-  written to <account chip> but never to <sending account>. Sweetbriar
-  won't send to it from <sending account>."
+  written to <account chips> but never to <sending account>. Sweetbriar
+  won't send to it from <sending account>." It shows one chip for each
+  account the address has written to.
   - **Use <account>** switches From to that account's default identity,
-    as the cross-account banner does, when that account can send.
+    as the cross-account banner does, when that account can send. With
+    several such accounts, it is a menu of them.
   - **Allow for <sending account>…** asks first, in a warning alert:
     "Allow sending to <address> from <sending account>? Sweetbriar
     stops blocking this address for <sending account>; Settings →
@@ -875,7 +877,9 @@ Implements [15-account-colors](../research/15-account-colors.md):
     check starts once Sweetbriar has read your existing mail." in the
     label color.
   - The window rereads `recipient_fence` whenever the recipients or the
-    route change, after an allowance, and when mail arrives. A
+    route change, after an allowance, when mail arrives, and every 30
+    seconds while it has recipients, since sender rows and readiness
+    change when a pass publishes (02), which no compose event marks. A
     `Conflict` from Send for `recipient_fence` shows the banner.
   - **Settings → Sending** lists the allowances by account, each with
     Remove, which calls `remove_recipient_allowance`.

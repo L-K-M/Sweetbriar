@@ -274,7 +274,8 @@ and the refusal.
   - the local archive's mail and A's own sent mail add no history;
   - `send_draft` refuses a blocked revision with `Conflict` naming
     `recipient_fence`, whatever the `acks`, and sends after
-    `allow_recipient`, a route change or the recipient's removal;
+    `allow_recipient`, a route change or removing the recipient from
+    the draft;
   - allowances replay idempotently, survive a derived rebuild and
     backup and restore, and both commands refuse the local archive;
   - migration 38's backfill matches the incremental rows on a seeded
@@ -288,7 +289,8 @@ allowance flow and Settings → Sending's list.
   - a blocked recipient shows its banner and warning token, and Send is
     disabled with the reason; a check that isn't ready shows its note
     and blocks nothing;
-  - Use <account> switches From and clears the banner;
+  - Use <account> switches From and clears the banner; an address that
+    wrote to two other accounts shows both chips and offers both;
   - Allow asks first; Cancel changes nothing; Allow clears the banner
     and the allowance appears in Settings, where Remove brings the
     block back;
