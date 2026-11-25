@@ -240,6 +240,7 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
         externalEditor: ExternalEditor? = nil,
         replyAccountSource: (any ReplyAccountSource)? = nil,
         fenceSource: (any RecipientFenceSource)? = nil,
+        focusNewMessageRecipients: Bool = false,
         announceRoute: @escaping @MainActor (String) -> Void = { message in
             NSAccessibility.post(
                 element: NSApp!, notification: .announcementRequested,
@@ -287,6 +288,7 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
             }
         }
         buildContent(window)
+        if focusNewMessageRecipients { window.initialFirstResponder = toRecipients.control }
         displayOptionsObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, object: nil, queue: .main
         ) { [weak self] _ in
@@ -306,6 +308,13 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
         loadTask = Task { [self] in
             await model.load()
             render()
+            // The To field can start editing only after the draft loads.
+            // Leave the focus alone if the user chose another control.
+            if focusNewMessageRecipients, window.isKeyWindow, toRecipients.control.isEditable,
+                window.firstResponder === window || window.firstResponder === textView
+            {
+                window.makeFirstResponder(toRecipients.control)
+            }
             if !isClosing, !finished { identityControls.startDiscovery() }
         }
         startFenceRereads()
@@ -343,23 +352,25 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
     }
 
     private func buildContent(_ window: NSWindow) {
+        func headerRow(_ title: String, field: NSControl) -> NSStackView {
+            let label = NSTextField(labelWithString: title)
+            label.alignment = .right
+            label.widthAnchor.constraint(equalToConstant: 52).isActive = true
+            headerLabels.append(label)
+            let row = NSStackView(views: [label, field])
+            row.spacing = 8
+            row.distribution = .fill
+            field.setContentHuggingPriority(.defaultLow, for: .horizontal)
+            return row
+        }
+
         let recipientRows = zip(["To:", "Cc:", "Bcc:"], recipientFields).map { title, field in
             field.inputDidChange = { [weak self] in self?.recipientInputDidChange() }
             field.editingDidEnd = { [weak self] in self?.saveNow() }
             field.presentationDidChange = { [weak self] in self?.render() }
-            let label = NSTextField(labelWithString: title)
-            label.alignment = .right
-            label.widthAnchor.constraint(equalToConstant: 32).isActive = true
-            headerLabels.append(label)
-            let row = NSStackView(views: [label, field.control])
-            row.spacing = 8
-            // Fill, not gravity areas: an empty token field's intrinsic
-            // width is a few points, so it must take the rest of the row.
-            row.distribution = .fill
-            field.control.setContentHuggingPriority(.defaultLow, for: .horizontal)
-            return row
+            return headerRow(title, field: field.control)
         }
-        subjectField.placeholderString = "Subject"
+        let subjectRow = headerRow("Subject:", field: subjectField)
         subjectField.setAccessibilityLabel("Subject")
         subjectField.setAccessibilityIdentifier("composeSubject")
         subjectField.delegate = self
@@ -430,7 +441,7 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
         let stack = NSStackView(
             views: [crossAccountBannerView, recipientFenceBanners, externalEditBanner, identity as NSView]
                 + recipientRows + [
-                subjectField, replyLine, attachmentControls.list, controls, sendBar, scroll, statusLabel,
+                subjectRow, replyLine, attachmentControls.list, controls, sendBar, scroll, statusLabel,
                 cueStatusLabel, recipientCheckNote,
             ])
         recipientFenceBanners.orientation = .vertical
@@ -453,7 +464,7 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
         window.contentView = content
         // Halfway into the stack's spacing under the last header row.
         washBelowSubject = washView.topAnchor.constraint(
-            equalTo: subjectField.bottomAnchor, constant: stack.spacing / 2)
+            equalTo: subjectRow.bottomAnchor, constant: stack.spacing / 2)
         washBelowReplyLine = washView.topAnchor.constraint(
             equalTo: replyLine.bottomAnchor, constant: stack.spacing / 2)
         washBelowSubject?.isActive = true
@@ -475,7 +486,7 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
             recipientCheckNote.widthAnchor.constraint(equalTo: stack.widthAnchor),
             externalEditBanner.widthAnchor.constraint(equalTo: stack.widthAnchor),
             identity.widthAnchor.constraint(equalTo: stack.widthAnchor),
-            subjectField.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            subjectRow.widthAnchor.constraint(equalTo: stack.widthAnchor),
             attachmentControls.list.widthAnchor.constraint(equalTo: stack.widthAnchor),
             sendBar.widthAnchor.constraint(equalTo: stack.widthAnchor),
             scroll.widthAnchor.constraint(equalTo: stack.widthAnchor),

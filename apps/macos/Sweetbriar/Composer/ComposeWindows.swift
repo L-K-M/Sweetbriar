@@ -84,7 +84,7 @@ final class ComposeWindows {
                     idempotencyKey: request.uuidString, source: source)
                 let controller = install(
                     created.draftId, source: core, cue: cue,
-                    preferredAccountId: preferredAccountId)
+                    preferredAccountId: preferredAccountId, focusNewMessageRecipients: source == .new)
                 if let span { measureOpen(span, of: controller) }
             } catch {
                 backups.endCompose()
@@ -186,7 +186,8 @@ final class ComposeWindows {
     /// way the caller's admission is settled exactly once.
     @discardableResult
     private func install(
-        _ draftId: String, source: any ComposeSource, cue: ComposeCueModel, preferredAccountId: String?
+        _ draftId: String, source: any ComposeSource, cue: ComposeCueModel, preferredAccountId: String?,
+        focusNewMessageRecipients: Bool = false
     ) -> ComposeWindowController {
         if let open = windows[draftId] {
             backups.endCompose()
@@ -208,7 +209,8 @@ final class ComposeWindows {
                 ExternalEditor(root: $0.externalEditRoot, opener: WorkspaceEditorOpener())
             },
             replyAccountSource: source as? any ReplyAccountSource,
-            fenceSource: source as? any RecipientFenceSource)
+            fenceSource: source as? any RecipientFenceSource,
+            focusNewMessageRecipients: focusNewMessageRecipients)
         windows[draftId] = controller
         controller.onClosed = { [weak self] in
             guard let self else { return }

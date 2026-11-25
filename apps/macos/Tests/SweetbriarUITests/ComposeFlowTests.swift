@@ -29,8 +29,11 @@ final class ComposeFlowTests: XCTestCase {
 
         let to = compose.descendants(matching: .any)["composeTo"]
         XCTAssertTrue(to.waitForExistence(timeout: Self.timeout))
-        to.click()
-        to.typeText(Self.recipient + "\t")
+        // Type into the active window so a click cannot mask the
+        // initial focus. Tab commits the recipient token.
+        app.typeText(Self.recipient + "\t")
+        XCTAssertTrue(to.textFields.matching(NSPredicate(format: "value == %@", Self.recipient))
+            .firstMatch.waitForExistence(timeout: Self.timeout))
         let subject = compose.textFields["composeSubject"]
         subject.click()
         subject.typeText(Self.subject)

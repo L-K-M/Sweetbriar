@@ -8,6 +8,33 @@ import Testing
 @Suite("Sidebar appearance")
 @MainActor
 struct SidebarAppearanceTests {
+    @Test func choosingAnEntryReopensItsPersistedCollapsedSection() async throws {
+        let suite = "Sweetbriar.SidebarAppearance.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let model = SidebarModel(source: SidebarAccounts())
+        await model.reload()
+        let appearance = AppearanceModel(source: SidebarAppearanceSource())
+        let first = SidebarViewController(model: model, appearance: appearance, defaults: defaults)
+        let firstOutline = try #require((first.view as? NSScrollView)?.documentView as? NSOutlineView)
+        first.reloadSections()
+        let unified = try #require(firstOutline.item(atRow: 0))
+        try #require(firstOutline.isItemExpanded(unified))
+        firstOutline.collapseItem(unified)
+        first.reloadSections()
+        #expect(!firstOutline.isItemExpanded(firstOutline.item(atRow: 0)))
+
+        let reopened = SidebarViewController(model: model, appearance: appearance, defaults: defaults)
+        let outline = try #require((reopened.view as? NSScrollView)?.documentView as? NSOutlineView)
+        reopened.reloadSections()
+        #expect(!outline.isItemExpanded(outline.item(atRow: 0)))
+        reopened.choose(entryID: SidebarModel.unifiedInboxID, revealSection: false)
+        #expect(outline.selectedRow == -1)
+        reopened.choose(entryID: SidebarModel.unifiedInboxID)
+        #expect(outline.isItemExpanded(outline.item(atRow: 0)))
+        #expect(outline.selectedRow == 1)
+    }
+
     @Test func duplicateNamesHaveStableDistinctLabels() {
         let first = SidebarModel.Section(id: "account-1", title: "Work", entries: [])
         let second = SidebarModel.Section(id: "account-2", title: "Work", entries: [])

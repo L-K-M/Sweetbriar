@@ -496,7 +496,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
             guard !Task.isCancelled, contentSerial == serial else { return }
             // A list chosen while the sidebar loaded stays chosen.
             if messageList.shownSpec == nil {
-                sidebar.choose(entryID: SidebarModel.unifiedInboxID)
+                sidebar.choose(entryID: SidebarModel.unifiedInboxID, revealSection: false)
             }
             await imports?.reattach()
         }
