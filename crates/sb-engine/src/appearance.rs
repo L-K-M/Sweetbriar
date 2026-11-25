@@ -30,6 +30,17 @@
 //! - `outline`: the Increase-Contrast edge and separator, hue-preserving
 //!   like the marker but pushed halfway from the 3:1 boundary to the
 //!   contrast extreme, so the boundary is visible, not just met.
+//! - `wash_top` and `wash_bottom`: the Color Wash gradient's stops
+//!   behind the compose editor (spec/08 "Color Wash mode", plan M6.6a),
+//!   pale in light and deep in dark, the top one deeper. Every color of
+//!   a per-channel gradient lies between its stops channel by channel,
+//!   so the appearance's text ink — black in light, white in dark — is
+//!   checked against the stops' channel-wise minimum (light) or maximum
+//!   (dark) and reaches **7:1** (SC 1.4.6). A hue that missed it would
+//!   fall back to neutral stops at the same lightness.
+//! - `marker_ink`: the label on a marker-filled control (Send as the
+//!   account), the better of black and white against `marker`. One of
+//!   them always reaches **4.5:1**: the two ratios multiply to 21.
 //!
 //! ## Derivation
 //!
@@ -84,6 +95,21 @@ const STRIP_LIGHT_C: f32 = 0.06;
 /// always admits a `TEXT_RATIO` light foreground.
 const STRIP_DARK_L: f32 = 0.30;
 const STRIP_DARK_C: f32 = 0.07;
+
+/// WCAG's enhanced minimum for ordinary text (SC 1.4.6): the editor's
+/// ink against the Color Wash stops.
+const ENHANCED_TEXT_RATIO: f64 = 7.0;
+
+/// The light wash's stops: pale tints, the top one deeper.
+const WASH_LIGHT_TOP_L: f32 = 0.94;
+const WASH_LIGHT_TOP_C: f32 = 0.04;
+const WASH_LIGHT_BOTTOM_L: f32 = 0.985;
+const WASH_LIGHT_BOTTOM_C: f32 = 0.012;
+/// The dark wash's stops: deep tints, the top one nearer the strip.
+const WASH_DARK_TOP_L: f32 = 0.28;
+const WASH_DARK_TOP_C: f32 = 0.045;
+const WASH_DARK_BOTTOM_L: f32 = 0.22;
+const WASH_DARK_BOTTOM_C: f32 = 0.015;
 
 /// The two inks the strip foreground is picked between.
 const INK_DARK: SrgbColor = SrgbColor::new(0x00, 0x00, 0x00);
@@ -173,6 +199,26 @@ impl SrgbColor {
         (high + WCAG_LUMINANCE_OFFSET) / (low + WCAG_LUMINANCE_OFFSET)
     }
 
+    /// The channel-wise minimum: the darkest color a per-channel
+    /// gradient between the two can draw is no darker than this.
+    fn channel_min(self, other: SrgbColor) -> SrgbColor {
+        SrgbColor::new(
+            self.red.min(other.red),
+            self.green.min(other.green),
+            self.blue.min(other.blue),
+        )
+    }
+
+    /// The channel-wise maximum: the lightest color a per-channel
+    /// gradient between the two can draw is no lighter than this.
+    fn channel_max(self, other: SrgbColor) -> SrgbColor {
+        SrgbColor::new(
+            self.red.max(other.red),
+            self.green.max(other.green),
+            self.blue.max(other.blue),
+        )
+    }
+
     /// The rendering tokens for both appearances (module docs "Token
     /// contract"). Pure and deterministic.
     pub fn derive_tokens(self) -> AppearanceTokens {
@@ -235,9 +281,47 @@ impl SrgbColor {
         let foreground_light = pick(strip_light);
         let foreground_dark = pick(strip_dark);
 
+        // The Color Wash stops, checked against the gradient's extreme.
+        let (wash_light_top, wash_light_bottom) = wash_stops(
+            hue,
+            chroma,
+            [
+                (WASH_LIGHT_TOP_L, WASH_LIGHT_TOP_C),
+                (WASH_LIGHT_BOTTOM_L, WASH_LIGHT_BOTTOM_C),
+            ],
+            INK_DARK,
+            SrgbColor::channel_min,
+        );
+        let (wash_dark_top, wash_dark_bottom) = wash_stops(
+            hue,
+            chroma,
+            [
+                (WASH_DARK_TOP_L, WASH_DARK_TOP_C),
+                (WASH_DARK_BOTTOM_L, WASH_DARK_BOTTOM_C),
+            ],
+            INK_LIGHT,
+            SrgbColor::channel_max,
+        );
+
         let tokens = AppearanceTokens::new(
-            AppearanceVariant::new(marker_light, strip_light, foreground_light, outline_light),
-            AppearanceVariant::new(marker_dark, strip_dark, foreground_dark, outline_dark),
+            AppearanceVariant {
+                marker: marker_light,
+                strip: strip_light,
+                foreground: foreground_light,
+                outline: outline_light,
+                wash_top: wash_light_top,
+                wash_bottom: wash_light_bottom,
+                marker_ink: pick(marker_light),
+            },
+            AppearanceVariant {
+                marker: marker_dark,
+                strip: strip_dark,
+                foreground: foreground_dark,
+                outline: outline_dark,
+                wash_top: wash_dark_top,
+                wash_bottom: wash_dark_bottom,
+                marker_ink: pick(marker_dark),
+            },
         );
         debug_assert!(tokens.light().foreground().contrast(strip_light) >= TEXT_RATIO);
         debug_assert!(tokens.dark().foreground().contrast(strip_dark) >= TEXT_RATIO);
@@ -245,6 +329,9 @@ impl SrgbColor {
         debug_assert!(marker_dark.contrast(strip_dark) >= GRAPHIC_RATIO);
         debug_assert!(outline_light.contrast(strip_light) >= GRAPHIC_RATIO);
         debug_assert!(outline_dark.contrast(strip_dark) >= GRAPHIC_RATIO);
+        for variant in [tokens.light(), tokens.dark()] {
+            debug_assert!(variant.marker_ink().contrast(variant.marker()) >= TEXT_RATIO);
+        }
         tokens
     }
 }
@@ -360,18 +447,12 @@ pub struct AppearanceVariant {
     strip: SrgbColor,
     foreground: SrgbColor,
     outline: SrgbColor,
+    wash_top: SrgbColor,
+    wash_bottom: SrgbColor,
+    marker_ink: SrgbColor,
 }
 
 impl AppearanceVariant {
-    fn new(marker: SrgbColor, strip: SrgbColor, foreground: SrgbColor, outline: SrgbColor) -> Self {
-        Self {
-            marker,
-            strip,
-            foreground,
-            outline,
-        }
-    }
-
     /// The saturated accent: the 4 pt list rail and the monograms.
     /// ≥ 3:1 against `strip`.
     pub const fn marker(&self) -> SrgbColor {
@@ -391,6 +472,22 @@ impl AppearanceVariant {
     /// The Increase-Contrast edge and separator. ≥ 3:1 against `strip`.
     pub const fn outline(&self) -> SrgbColor {
         self.outline
+    }
+
+    /// The Color Wash gradient's top stop, below the header.
+    pub const fn wash_top(&self) -> SrgbColor {
+        self.wash_top
+    }
+
+    /// The Color Wash gradient's bottom stop. The appearance's text ink
+    /// reaches 7:1 against every color between the two stops.
+    pub const fn wash_bottom(&self) -> SrgbColor {
+        self.wash_bottom
+    }
+
+    /// The label on a marker-filled control. ≥ 4.5:1 against `marker`.
+    pub const fn marker_ink(&self) -> SrgbColor {
+        self.marker_ink
     }
 }
 
@@ -497,6 +594,31 @@ fn min_l_at_luminance(hue: OklabHue<f32>, chroma: f32, bound: f64) -> f32 {
         }
     }
     high
+}
+
+/// The Color Wash stops `[top, bottom]` as `(lightness, chroma cap)`
+/// in the stored hue, checked so `ink` reaches `ENHANCED_TEXT_RATIO`
+/// against `extreme` of the two — the gradient's worst color. A hue
+/// that misses it gets neutral stops at the same lightness instead,
+/// which the fixed lightness always clears.
+fn wash_stops(
+    hue: OklabHue<f32>,
+    chroma: f32,
+    stops: [(f32, f32); 2],
+    ink: SrgbColor,
+    extreme: fn(SrgbColor, SrgbColor) -> SrgbColor,
+) -> (SrgbColor, SrgbColor) {
+    let [(top_l, top_c), (bottom_l, bottom_c)] = stops;
+    let tinted = (
+        render(top_l, chroma.min(top_c), hue),
+        render(bottom_l, chroma.min(bottom_c), hue),
+    );
+    if ink.contrast(extreme(tinted.0, tinted.1)) >= ENHANCED_TEXT_RATIO + SOLVE_MARGIN {
+        return tinted;
+    }
+    let neutral = (render(top_l, 0.0, hue), render(bottom_l, 0.0, hue));
+    debug_assert!(ink.contrast(extreme(neutral.0, neutral.1)) >= ENHANCED_TEXT_RATIO);
+    neutral
 }
 
 mod api;

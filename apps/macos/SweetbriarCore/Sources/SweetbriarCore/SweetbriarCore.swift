@@ -5205,8 +5205,8 @@ public func FfiConverterTypeAppearanceTokens_lower(_ value: AppearanceTokens) ->
 
 
 /**
- * One appearance's tokens: the accent, its strip fill, text ink and
- * edge, each `#rrggbb`.
+ * One appearance's tokens: the accent, its strip fill, text ink, edge,
+ * Color Wash stops and the accent's label ink, each `#rrggbb`.
  */
 public struct AppearanceVariant: Equatable, Hashable {
     /**
@@ -5225,6 +5225,18 @@ public struct AppearanceVariant: Equatable, Hashable {
      * The Increase-Contrast edge and separator.
      */
     public var outlineSrgb: String
+    /**
+     * The Color Wash gradient's top stop (spec/08 "Color Wash mode").
+     */
+    public var washTopSrgb: String
+    /**
+     * The Color Wash gradient's bottom stop.
+     */
+    public var washBottomSrgb: String
+    /**
+     * The label on a marker-filled control, such as Send as the account.
+     */
+    public var markerInkSrgb: String
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
@@ -5240,11 +5252,23 @@ public struct AppearanceVariant: Equatable, Hashable {
          */foregroundSrgb: String, 
         /**
          * The Increase-Contrast edge and separator.
-         */outlineSrgb: String) {
+         */outlineSrgb: String, 
+        /**
+         * The Color Wash gradient's top stop (spec/08 "Color Wash mode").
+         */washTopSrgb: String, 
+        /**
+         * The Color Wash gradient's bottom stop.
+         */washBottomSrgb: String, 
+        /**
+         * The label on a marker-filled control, such as Send as the account.
+         */markerInkSrgb: String) {
         self.markerSrgb = markerSrgb
         self.stripSrgb = stripSrgb
         self.foregroundSrgb = foregroundSrgb
         self.outlineSrgb = outlineSrgb
+        self.washTopSrgb = washTopSrgb
+        self.washBottomSrgb = washBottomSrgb
+        self.markerInkSrgb = markerInkSrgb
     }
 
     
@@ -5266,7 +5290,10 @@ public struct FfiConverterTypeAppearanceVariant: FfiConverterRustBuffer {
                 markerSrgb: FfiConverterString.read(from: &buf), 
                 stripSrgb: FfiConverterString.read(from: &buf), 
                 foregroundSrgb: FfiConverterString.read(from: &buf), 
-                outlineSrgb: FfiConverterString.read(from: &buf)
+                outlineSrgb: FfiConverterString.read(from: &buf), 
+                washTopSrgb: FfiConverterString.read(from: &buf), 
+                washBottomSrgb: FfiConverterString.read(from: &buf), 
+                markerInkSrgb: FfiConverterString.read(from: &buf)
         )
     }
 
@@ -5275,6 +5302,9 @@ public struct FfiConverterTypeAppearanceVariant: FfiConverterRustBuffer {
         FfiConverterString.write(value.stripSrgb, into: &buf)
         FfiConverterString.write(value.foregroundSrgb, into: &buf)
         FfiConverterString.write(value.outlineSrgb, into: &buf)
+        FfiConverterString.write(value.washTopSrgb, into: &buf)
+        FfiConverterString.write(value.washBottomSrgb, into: &buf)
+        FfiConverterString.write(value.markerInkSrgb, into: &buf)
     }
 }
 
@@ -6252,6 +6282,11 @@ public struct Draft: Equatable, Hashable {
     public var draftId: String
     public var state: DraftState
     public var replyToOccurrenceId: Int64?
+    /**
+     * The account that received the answered occurrence (spec/07
+     * `reply_account_id`); `None` for new messages and forwards.
+     */
+    public var replyAccountId: String?
     public var forwardOfMessageId: Int64?
     public var revision: DraftRevision?
     public var attempt: LiveAttempt?
@@ -6260,10 +6295,15 @@ public struct Draft: Equatable, Hashable {
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(draftId: String, state: DraftState, replyToOccurrenceId: Int64?, forwardOfMessageId: Int64?, revision: DraftRevision?, attempt: LiveAttempt?, createdAtMs: Int64, updatedAtMs: Int64) {
+    public init(draftId: String, state: DraftState, replyToOccurrenceId: Int64?, 
+        /**
+         * The account that received the answered occurrence (spec/07
+         * `reply_account_id`); `None` for new messages and forwards.
+         */replyAccountId: String? = nil, forwardOfMessageId: Int64?, revision: DraftRevision?, attempt: LiveAttempt?, createdAtMs: Int64, updatedAtMs: Int64) {
         self.draftId = draftId
         self.state = state
         self.replyToOccurrenceId = replyToOccurrenceId
+        self.replyAccountId = replyAccountId
         self.forwardOfMessageId = forwardOfMessageId
         self.revision = revision
         self.attempt = attempt
@@ -6290,6 +6330,7 @@ public struct FfiConverterTypeDraft: FfiConverterRustBuffer {
                 draftId: FfiConverterString.read(from: &buf), 
                 state: FfiConverterTypeDraftState.read(from: &buf), 
                 replyToOccurrenceId: FfiConverterOptionInt64.read(from: &buf), 
+                replyAccountId: FfiConverterOptionString.read(from: &buf), 
                 forwardOfMessageId: FfiConverterOptionInt64.read(from: &buf), 
                 revision: FfiConverterOptionTypeDraftRevision.read(from: &buf), 
                 attempt: FfiConverterOptionTypeLiveAttempt.read(from: &buf), 
@@ -6302,6 +6343,7 @@ public struct FfiConverterTypeDraft: FfiConverterRustBuffer {
         FfiConverterString.write(value.draftId, into: &buf)
         FfiConverterTypeDraftState.write(value.state, into: &buf)
         FfiConverterOptionInt64.write(value.replyToOccurrenceId, into: &buf)
+        FfiConverterOptionString.write(value.replyAccountId, into: &buf)
         FfiConverterOptionInt64.write(value.forwardOfMessageId, into: &buf)
         FfiConverterOptionTypeDraftRevision.write(value.revision, into: &buf)
         FfiConverterOptionTypeLiveAttempt.write(value.attempt, into: &buf)

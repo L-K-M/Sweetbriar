@@ -8,13 +8,20 @@ enum ComposeCuePresentation {
     /// WCAG 2.2 SC 1.4.11, for the monogram against its surface.
     private static let graphicRatio = 3.0
 
-    /// Only Strong tints the window, and only for a resolved identity.
+    /// Only Strong and Color Wash tint the window, and only for a resolved
+    /// identity. Color Wash draws as Strong until its wash lands (plan
+    /// M6.6c).
     static func windowTint(
         mode: ComposeCueMode?, content: IdentityStripView.Content, appearance: NSAppearance
     ) -> NSColor? {
-        guard mode == .strong, case .identity(_, _, let tokens) = content else { return nil }
+        guard tintsWindow(mode), case .identity(_, _, let tokens) = content else { return nil }
         let dark = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
         return appearanceColor(dark ? tokens.dark.stripSrgb : tokens.light.stripSrgb)
+    }
+
+    /// The modes that tint the window behind the strip.
+    static func tintsWindow(_ mode: ComposeCueMode?) -> Bool {
+        mode == .strong || mode == .wash
     }
 
     /// The core solves a marker against its strip. On another surface the

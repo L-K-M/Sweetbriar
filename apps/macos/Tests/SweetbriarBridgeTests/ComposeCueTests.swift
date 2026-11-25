@@ -86,7 +86,7 @@ struct ComposeCueTests {
             ]
             #expect(try ComposeCueMode.decode(settings) == mode)
         }
-        #expect(ComposeCueMode.allCases.map(\.rawValue) == ["standard", "strong", "minimal"])
+        #expect(ComposeCueMode.allCases.map(\.rawValue) == ["wash", "standard", "strong", "minimal"])
         let valid = Setting(key: "appearance.compose_cue", value: "strong", isDefault: false)
         #expect(throws: CoreFailure.self) { try ComposeCueMode.decode([]) }
         #expect(throws: CoreFailure.self) { try ComposeCueMode.decode([valid, valid]) }
@@ -270,7 +270,7 @@ struct ComposeCueTests {
         var core = try await CoreBridge.open(
             config: config, snapshots: sinkBatcher(clock: ManualFrameClock()))
         do {
-            #expect(try await core.composeCue() == .standard)
+            #expect(try await core.composeCue() == .wash)
             let initial = try await core.settings().first { $0.key == "appearance.compose_cue" }
             #expect(initial?.isDefault == true)
             let receipt = try await core.setComposeCue(.strong)

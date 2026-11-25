@@ -956,11 +956,11 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
             message = "Compose appearance is unavailable. Quit and reopen Sweetbriar to retry."
         } else if cue?.mode == nil {
             message = "Loading compose appearance…"
-        } else if cue?.mode == .strong && tint == nil && !(model.content == nil && model.failure != nil) {
+        } else if ComposeCuePresentation.tintsWindow(cue?.mode) && tint == nil && !(model.content == nil && model.failure != nil) {
             message =
                 identityAppearanceIsLoading
                 ? "Loading compose appearance…"
-                : "Strong appearance is unavailable for this sending identity."
+                : "\(cue?.mode == .wash ? "Color Wash" : "Strong") appearance is unavailable for this sending identity."
         } else {
             message = nil
         }

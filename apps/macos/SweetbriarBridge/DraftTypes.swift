@@ -203,6 +203,9 @@ public struct Draft: Sendable, Equatable {
     public var draftId: String
     public var state: DraftState
     public var replyToOccurrenceId: Int64?
+    /// The account that received the answered occurrence (spec/07
+    /// `reply_account_id`): the reply line's account; nil without a reply.
+    public var replyAccountId: String?
     public var forwardOfMessageId: Int64?
     public var revision: DraftRevision?
     public var attempt: LiveAttempt?
@@ -211,12 +214,14 @@ public struct Draft: Sendable, Equatable {
 
     public init(
         draftId: String, state: DraftState, replyToOccurrenceId: Int64?,
+        replyAccountId: String? = nil,
         forwardOfMessageId: Int64?, revision: DraftRevision?,
         attempt: LiveAttempt?, createdAtMs: Int64, updatedAtMs: Int64
     ) {
         self.draftId = draftId
         self.state = state
         self.replyToOccurrenceId = replyToOccurrenceId
+        self.replyAccountId = replyAccountId
         self.forwardOfMessageId = forwardOfMessageId
         self.revision = revision
         self.attempt = attempt
@@ -229,6 +234,7 @@ public struct Draft: Sendable, Equatable {
         draftId = g.draftId
         state = DraftState(g.state)
         replyToOccurrenceId = g.replyToOccurrenceId
+        replyAccountId = g.replyAccountId
         forwardOfMessageId = g.forwardOfMessageId
         revision = g.revision.map(DraftRevision.init)
         attempt = g.attempt.map(LiveAttempt.init)

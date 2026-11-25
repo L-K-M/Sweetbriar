@@ -276,7 +276,14 @@ fn a_reply_or_forward_context_resolves_through_the_engine() {
             (reply, forward),
             "{draft_id}"
         );
+        // The reply line's account (spec/07 `reply_account_id`): the
+        // answered occurrence's, for replies only.
+        let expected_account = reply.map(|_| "acct-1".to_owned());
+        assert_eq!(draft.reply_account_id, expected_account, "{draft_id}");
     }
+    let fresh = create(&engine, DraftSource::New);
+    let fresh = block_on(engine.draft(fresh.draft_id())).unwrap();
+    assert_eq!(fresh.reply_account_id, None);
     for source in [
         DraftSource::Reply { occurrence_id: 404 },
         DraftSource::ReplyAll { occurrence_id: 404 },

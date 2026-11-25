@@ -79,8 +79,8 @@ pub struct AppearanceTokens {
     pub dark: AppearanceVariant,
 }
 
-/// One appearance's tokens: the accent, its strip fill, text ink and
-/// edge, each `#rrggbb`.
+/// One appearance's tokens: the accent, its strip fill, text ink, edge,
+/// Color Wash stops and the accent's label ink, each `#rrggbb`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AppearanceVariant {
     /// The saturated accent: the list rail and monograms.
@@ -91,6 +91,12 @@ pub struct AppearanceVariant {
     pub foreground_srgb: String,
     /// The Increase-Contrast edge and separator.
     pub outline_srgb: String,
+    /// The Color Wash gradient's top stop (spec/08 "Color Wash mode").
+    pub wash_top_srgb: String,
+    /// The Color Wash gradient's bottom stop.
+    pub wash_bottom_srgb: String,
+    /// The label on a marker-filled control, such as Send as the account.
+    pub marker_ink_srgb: String,
 }
 
 /// Where an account's color came from (spec/02 `assignment`): a
@@ -303,6 +309,9 @@ impl AppearanceVariant {
             strip_srgb: variant.strip().to_hex(),
             foreground_srgb: variant.foreground().to_hex(),
             outline_srgb: variant.outline().to_hex(),
+            wash_top_srgb: variant.wash_top().to_hex(),
+            wash_bottom_srgb: variant.wash_bottom().to_hex(),
+            marker_ink_srgb: variant.marker_ink().to_hex(),
         }
     }
 }
@@ -537,12 +546,18 @@ mod tests {
                         strip_srgb: "#b7ddfd".to_owned(),
                         foreground_srgb: "#000000".to_owned(),
                         outline_srgb: "#005b90".to_owned(),
+                        wash_top_srgb: "#daeeff".to_owned(),
+                        wash_bottom_srgb: "#f6fbff".to_owned(),
+                        marker_ink_srgb: "#ffffff".to_owned(),
                     },
                     dark: AppearanceVariant {
                         marker_srgb: "#1a7ebe".to_owned(),
                         strip_srgb: "#04314e".to_owned(),
                         foreground_srgb: "#ffffff".to_owned(),
                         outline_srgb: "#98d1ff".to_owned(),
+                        wash_top_srgb: "#142b3d".to_owned(),
+                        wash_bottom_srgb: "#151b21".to_owned(),
+                        marker_ink_srgb: "#000000".to_owned(),
                     },
                 },
                 symbol: None,

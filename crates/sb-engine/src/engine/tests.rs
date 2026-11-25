@@ -23,7 +23,7 @@ fn settings_default_to_the_registry() {
     let settings = sb_test_support::block_on(engine.settings()).unwrap();
     assert_eq!(settings.len(), 8, "the registry holds eight keys");
     assert_eq!(settings[0].key(), "appearance.compose_cue");
-    assert_eq!(settings[0].value(), "standard");
+    assert_eq!(settings[0].value(), "wash");
     assert!(settings[0].is_default());
     assert_eq!(settings[1].key(), "sending.undo_seconds");
     assert_eq!(settings[1].value(), "7");
@@ -89,7 +89,7 @@ fn set_then_settings_shows_it_and_revision_increments() {
     let second = sb_test_support::block_on(engine.set_setting(
         &engine.new_idempotency_key(),
         "appearance.compose_cue",
-        "standard",
+        "wash",
     ))
     .unwrap();
     assert_eq!(
@@ -97,17 +97,34 @@ fn set_then_settings_shows_it_and_revision_increments() {
         "{\"key\":\"appearance.compose_cue\",\"revision\":2}"
     );
     let settings = sb_test_support::block_on(engine.settings()).unwrap();
-    assert_eq!(settings[0].value(), "standard");
+    assert_eq!(settings[0].value(), "wash");
     // Set back to the default by an explicit write: the effective
     // value is the default again.
     assert!(settings[0].is_default());
+}
+
+/// Moving the default to Color Wash (spec/02, owner decision
+/// 2026-11-24) keeps a stored choice: an explicit `standard` stays
+/// `standard` and is no longer the default.
+#[test]
+fn a_stored_standard_outlives_the_wash_default() {
+    let (_scratch, engine) = scratch_engine("engine-cue-stored-standard");
+    sb_test_support::block_on(engine.set_setting(
+        &engine.new_idempotency_key(),
+        "appearance.compose_cue",
+        "standard",
+    ))
+    .unwrap();
+    let settings = sb_test_support::block_on(engine.settings()).unwrap();
+    assert_eq!(settings[0].value(), "standard");
+    assert!(!settings[0].is_default());
 }
 
 /// Every mode spec/02 lists for the compose cue is accepted.
 #[test]
 fn the_compose_cue_takes_each_of_its_modes() {
     let (_scratch, engine) = scratch_engine("engine-cue-modes");
-    for mode in ["strong", "minimal", "standard"] {
+    for mode in ["strong", "minimal", "standard", "wash"] {
         sb_test_support::block_on(engine.set_setting(
             &engine.new_idempotency_key(),
             "appearance.compose_cue",

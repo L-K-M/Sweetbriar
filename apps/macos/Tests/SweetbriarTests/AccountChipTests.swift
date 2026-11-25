@@ -58,7 +58,7 @@ struct AccountChipTests {
     @Test func anIdentityChipTakesTheIdentitysOwnTokens() {
         let tokens = AppearanceTokens(
             light: AppearanceVariant(
-                markerSrgb: "#d55e00", stripSrgb: "#fff4ec", foregroundSrgb: "#111111", outlineSrgb: "#222222"),
+                markerSrgb: "#d55e00", stripSrgb: "#fff4ec", foregroundSrgb: "#111111", outlineSrgb: "#222222", washTopSrgb: "#eef2f6", washBottomSrgb: "#fafbfc", markerInkSrgb: "#ffffff"),
             dark: sampleAccount.tokens.dark)
         let appearance = Appearance(
             generation: 1, accounts: [sampleAccount],

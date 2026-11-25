@@ -283,7 +283,7 @@ struct SharedComposeCueTests {
             await model.refresh()
             try await sharedCueEventually { backups.canWrite }
             let old = try #require(owner.model(source: core))
-            try await sharedCueEventually { old.mode == .standard }
+            try await sharedCueEventually { old.mode == .wash }
             try #require(await old.setMode(.strong))
             model.backUpNow()
             try await sharedCueEventually { !model.isBusy }

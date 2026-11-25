@@ -106,7 +106,7 @@ struct ComposeRestoredAppearanceTests {
                 }
             ).tokens
             let cue = try #require(cues.model(source: core))
-            try #require(await restoreAppearanceEventually { cue.mode == .standard })
+            try #require(await restoreAppearanceEventually { cue.mode == .wash })
             try #require(await cue.setMode(.strong))
             owner.newMessage(preferredAccountId: "restore-account")
             owner.newMessage(preferredAccountId: "restore-account")

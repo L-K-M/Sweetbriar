@@ -379,7 +379,7 @@ mod tests {
 
         let settings = sb_test_support::block_on(core.settings(fresh_token())).expect("settings");
         let setting = compose_cue(&settings);
-        assert_eq!(setting.value, "standard");
+        assert_eq!(setting.value, "wash");
         assert!(setting.is_default, "the cancelled command ran");
 
         sb_test_support::block_on(core.shutdown());

@@ -125,21 +125,21 @@ actor FakeAppearanceEvents: AppearanceEventSource {
 private let archiveTokens = AppearanceTokens(
     light: AppearanceVariant(
         markerSrgb: "#0072b2", stripSrgb: "#b7ddfd",
-        foregroundSrgb: "#000000", outlineSrgb: "#005b90"
+        foregroundSrgb: "#000000", outlineSrgb: "#005b90", washTopSrgb: "#daeeff", washBottomSrgb: "#f6fbff", markerInkSrgb: "#ffffff"
     ),
     dark: AppearanceVariant(
         markerSrgb: "#1a7ebe", stripSrgb: "#04314e",
-        foregroundSrgb: "#ffffff", outlineSrgb: "#98d1ff"
+        foregroundSrgb: "#ffffff", outlineSrgb: "#98d1ff", washTopSrgb: "#142b3d", washBottomSrgb: "#151b21", markerInkSrgb: "#000000"
     )
 )
 
 /// Tokens whose strings are all empty — an edge the codec must carry.
 private let emptyTokens = AppearanceTokens(
     light: AppearanceVariant(
-        markerSrgb: "", stripSrgb: "", foregroundSrgb: "", outlineSrgb: ""
+        markerSrgb: "", stripSrgb: "", foregroundSrgb: "", outlineSrgb: "", washTopSrgb: "", washBottomSrgb: "", markerInkSrgb: ""
     ),
     dark: AppearanceVariant(
-        markerSrgb: "", stripSrgb: "", foregroundSrgb: "", outlineSrgb: ""
+        markerSrgb: "", stripSrgb: "", foregroundSrgb: "", outlineSrgb: "", washTopSrgb: "", washBottomSrgb: "", markerInkSrgb: ""
     )
 )
 
@@ -172,11 +172,11 @@ func appearanceMappingKeepsEveryField() {
                 tokens: .init(
                     light: .init(
                         markerSrgb: "#0072b2", stripSrgb: "#b7ddfd",
-                        foregroundSrgb: "#000000", outlineSrgb: "#005b90"
+                        foregroundSrgb: "#000000", outlineSrgb: "#005b90", washTopSrgb: "#daeeff", washBottomSrgb: "#f6fbff", markerInkSrgb: "#ffffff"
                     ),
                     dark: .init(
                         markerSrgb: "#1a7ebe", stripSrgb: "#04314e",
-                        foregroundSrgb: "#ffffff", outlineSrgb: "#98d1ff"
+                        foregroundSrgb: "#ffffff", outlineSrgb: "#98d1ff", washTopSrgb: "#142b3d", washBottomSrgb: "#151b21", markerInkSrgb: "#000000"
                     )
                 ),
                 symbol: "Lé", monogram: "Lé", collides: true,
@@ -185,8 +185,8 @@ func appearanceMappingKeepsEveryField() {
             .init(
                 accountId: "home", colorSrgb: "#e69f00",
                 tokens: .init(
-                    light: .init(markerSrgb: "", stripSrgb: "", foregroundSrgb: "", outlineSrgb: ""),
-                    dark: .init(markerSrgb: "", stripSrgb: "", foregroundSrgb: "", outlineSrgb: "")
+                    light: .init(markerSrgb: "", stripSrgb: "", foregroundSrgb: "", outlineSrgb: "", washTopSrgb: "", washBottomSrgb: "", markerInkSrgb: ""),
+                    dark: .init(markerSrgb: "", stripSrgb: "", foregroundSrgb: "", outlineSrgb: "", washTopSrgb: "", washBottomSrgb: "", markerInkSrgb: "")
                 ),
                 symbol: nil, monogram: "H", collides: false,
                 assignment: .paletteV1(slot: .max), revision: 1
@@ -199,11 +199,11 @@ func appearanceMappingKeepsEveryField() {
                 tokens: .init(
                     light: .init(
                         markerSrgb: "#0072b2", stripSrgb: "#b7ddfd",
-                        foregroundSrgb: "#000000", outlineSrgb: "#005b90"
+                        foregroundSrgb: "#000000", outlineSrgb: "#005b90", washTopSrgb: "#daeeff", washBottomSrgb: "#f6fbff", markerInkSrgb: "#ffffff"
                     ),
                     dark: .init(
                         markerSrgb: "#1a7ebe", stripSrgb: "#04314e",
-                        foregroundSrgb: "#ffffff", outlineSrgb: "#98d1ff"
+                        foregroundSrgb: "#ffffff", outlineSrgb: "#98d1ff", washTopSrgb: "#142b3d", washBottomSrgb: "#151b21", markerInkSrgb: "#000000"
                     )
                 ),
                 symbolOverride: "AB", monogram: "AB", revision: 7
@@ -212,8 +212,8 @@ func appearanceMappingKeepsEveryField() {
                 identityId: "zéd", accountId: "home", colorSrgb: "#0072b2",
                 colorOverrideSrgb: nil,
                 tokens: .init(
-                    light: .init(markerSrgb: "", stripSrgb: "", foregroundSrgb: "", outlineSrgb: ""),
-                    dark: .init(markerSrgb: "", stripSrgb: "", foregroundSrgb: "", outlineSrgb: "")
+                    light: .init(markerSrgb: "", stripSrgb: "", foregroundSrgb: "", outlineSrgb: "", washTopSrgb: "", washBottomSrgb: "", markerInkSrgb: ""),
+                    dark: .init(markerSrgb: "", stripSrgb: "", foregroundSrgb: "", outlineSrgb: "", washTopSrgb: "", washBottomSrgb: "", markerInkSrgb: "")
                 ),
                 symbolOverride: nil, monogram: "Z", revision: nil
             ),

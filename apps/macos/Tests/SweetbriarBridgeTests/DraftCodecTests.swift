@@ -39,7 +39,8 @@ import Testing
         attachments: [reference], createdAtMs: 17
     )
     let mapped = Draft(.init(
-        draftId: "draft", state: .queued, replyToOccurrenceId: 11, forwardOfMessageId: 12,
+        draftId: "draft", state: .queued, replyToOccurrenceId: 11, replyAccountId: "received-in",
+        forwardOfMessageId: 12,
         revision: .init(
             revisionId: "r", seq: 9, baseRevisionId: "base", accountId: "account", identityId: "identity",
             format: .markdown, plainFlowed: false, subject: "Subject",
@@ -53,7 +54,7 @@ import Testing
         ), attempt: .init(attemptId: "attempt", state: .outcomeUnknown), createdAtMs: 19, updatedAtMs: 23
     ))
     #expect(mapped == Draft(draftId: "draft", state: .queued, replyToOccurrenceId: 11,
-        forwardOfMessageId: 12, revision: revision,
+        replyAccountId: "received-in", forwardOfMessageId: 12, revision: revision,
         attempt: .init(attemptId: "attempt", state: .outcomeUnknown), createdAtMs: 19, updatedAtMs: 23))
     let absent = Draft(.init(draftId: "empty", state: .editing, replyToOccurrenceId: nil,
         forwardOfMessageId: nil, revision: nil, attempt: nil, createdAtMs: 1, updatedAtMs: 2))

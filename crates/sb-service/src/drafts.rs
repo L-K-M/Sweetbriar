@@ -256,6 +256,9 @@ pub struct Draft {
     pub state: DraftState,
     /// `Some` when created as a reply or reply-all (spec/07 `context`).
     pub reply_to_occurrence_id: Option<i64>,
+    /// The account that received the answered occurrence (spec/07
+    /// `reply_account_id`): `Some` exactly when this is a reply.
+    pub reply_account_id: Option<String>,
     /// `Some` when created as a forward.
     pub forward_of_message_id: Option<i64>,
     /// The current revision; `None` until the first save.
@@ -272,6 +275,7 @@ impl Draft {
             draft_id: draft.draft_id.clone(),
             state: DraftState::from_engine(draft.state),
             reply_to_occurrence_id: draft.reply_to_occurrence_id,
+            reply_account_id: draft.reply_account_id.clone(),
             forward_of_message_id: draft.forward_of_message_id,
             revision: draft.revision.as_ref().map(DraftRevision::from_engine),
             attempt: draft.attempt.as_ref().map(LiveAttempt::from_engine),
