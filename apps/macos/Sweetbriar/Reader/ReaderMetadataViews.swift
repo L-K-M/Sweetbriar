@@ -128,10 +128,16 @@ final class NoteEditorView: NSScrollView {
         textView.identifier = NSUserInterfaceItemIdentifier("readerNote")
         textView.setAccessibilityIdentifier("readerNote")
         textView.setAccessibilityLabel("Note")
+        textView.setAccessibilityPlaceholderValue(NoteTextView.placeholder)
+        textView.drawsBackground = false
+        textView.font = .systemFont(ofSize: NSFont.systemFontSize)
         documentView = textView
         hasVerticalScroller = true
         autohidesScrollers = true
-        borderType = .bezelBorder
+        // Borderless, as the header's other text: the placeholder says
+        // it can be edited.
+        borderType = .noBorder
+        drawsBackground = false
         focusRingType = .none
         setAccessibilityIdentifier("readerNote")
     }
@@ -142,7 +148,10 @@ final class NoteEditorView: NSScrollView {
 
     var text: String {
         get { textView.string }
-        set { textView.string = newValue }
+        set {
+            textView.string = newValue
+            textView.needsDisplay = true
+        }
     }
 
 }
@@ -152,6 +161,25 @@ final class NoteEditorView: NSScrollView {
 final class NoteTextView: NSTextView {
     var onResign: (() -> Void)?
     private(set) var isEditingNote = false
+    /// Drawn while the note is empty, as a text field's placeholder.
+    static let placeholder = "Add a note"
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        guard string.isEmpty else { return }
+        let origin = NSPoint(
+            x: textContainerInset.width + (textContainer?.lineFragmentPadding ?? 0),
+            y: textContainerInset.height)
+        (Self.placeholder as NSString).draw(at: origin, withAttributes: [
+            .font: font ?? .systemFont(ofSize: NSFont.systemFontSize),
+            .foregroundColor: NSColor.placeholderTextColor,
+        ])
+    }
+
+    override func didChangeText() {
+        super.didChangeText()
+        needsDisplay = true
+    }
 
     override func becomeFirstResponder() -> Bool {
         let accepted = super.becomeFirstResponder()

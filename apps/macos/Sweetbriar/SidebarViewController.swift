@@ -483,7 +483,7 @@ extension SidebarViewController: NSOutlineViewDataSource, NSOutlineViewDelegate 
         }
         let cell = outlineView.makeView(withIdentifier: Self.entryCellID, owner: nil)
             as? SidebarEntryCellView ?? SidebarEntryCellView(identifier: Self.entryCellID)
-        cell.configure(node.entry)
+        cell.configure(node.entry, symbol: SidebarSymbol.name(for: node.entry, mailbox: model.mailbox(forEntry: node.entry.id)))
         return cell
     }
 
@@ -713,12 +713,52 @@ private final class EntryNode: NSObject {
     }
 }
 
-/// An entry's row: its title, and its unread count when it has one.
-/// An entry that opens nothing is dimmed, with its note as tooltip.
+/// The symbol a sidebar entry shows, as Mail's sidebar does: the
+/// mailbox's role, else its kind.
+enum SidebarSymbol {
+    static func name(for entry: SidebarModel.Entry, mailbox: Mailbox?) -> String {
+        switch entry.target {
+        case .drafts: return "doc"
+        case .outBox: return "tray.and.arrow.up"
+        case .window(.flagged): return "flag"
+        case .window(.unified(let role)): return name(for: role)
+        case .window(.view): return "folder.badge.gearshape"
+        case .window(.search): return "magnifyingglass"
+        case .window(.thread): return "bubble.left.and.bubble.right"
+        case .window(.debugSynthetic): return "hammer"
+        case .window(.mailbox), .unavailable: break
+        }
+        guard let mailbox else { return "folder" }
+        if let role = mailbox.role { return name(for: role) }
+        switch mailbox.kind {
+        case .label: return "tag"
+        case .folder: return "folder"
+        case .virtual: return "tray.full"
+        }
+    }
+
+    static func name(for role: MailboxRole) -> String {
+        switch role {
+        case .inbox: "tray"
+        case .sent: "paperplane"
+        case .drafts: "doc"
+        case .trash: "trash"
+        case .junk: "xmark.bin"
+        case .archive: "archivebox"
+        case .all: "tray.full"
+        case .flagged: "star"
+        }
+    }
+}
+
+/// An entry's row: its symbol, its title, and its unread count when it
+/// has one. An entry that opens nothing is dimmed, with its note as
+/// tooltip.
 @MainActor
 private final class SidebarEntryCellView: NSTableCellView {
     private let title = NSTextField(labelWithString: "")
     private let unread = NSTextField(labelWithString: "")
+    private let symbol = NSImageView()
 
     init(identifier: NSUserInterfaceItemIdentifier) {
         super.init(frame: .zero)
@@ -729,12 +769,22 @@ private final class SidebarEntryCellView: NSTableCellView {
             addSubview(field)
         }
         textField = title
+        // The source list tints a cell's image view with the accent
+        // color, as Mail's mailbox symbols are.
+        symbol.translatesAutoresizingMaskIntoConstraints = false
+        symbol.symbolConfiguration = NSImage.SymbolConfiguration(scale: .medium)
+        symbol.setContentHuggingPriority(.required, for: .horizontal)
+        addSubview(symbol)
+        imageView = symbol
         unread.textColor = .secondaryLabelColor
         unread.alignment = .right
         unread.setContentCompressionResistancePriority(.required, for: .horizontal)
         title.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         NSLayoutConstraint.activate([
-            title.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 2),
+            symbol.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 2),
+            symbol.centerYAnchor.constraint(equalTo: centerYAnchor),
+            symbol.widthAnchor.constraint(equalToConstant: 20),
+            title.leadingAnchor.constraint(equalTo: symbol.trailingAnchor, constant: 6),
             title.centerYAnchor.constraint(equalTo: centerYAnchor),
             unread.leadingAnchor.constraint(
                 greaterThanOrEqualTo: title.trailingAnchor, constant: 6
@@ -748,17 +798,20 @@ private final class SidebarEntryCellView: NSTableCellView {
         fatalError("SidebarEntryCellView is built in code")
     }
 
-    func configure(_ entry: SidebarModel.Entry) {
+    func configure(_ entry: SidebarModel.Entry, symbol name: String) {
         title.stringValue = entry.title
+        symbol.image = NSImage(systemSymbolName: name, accessibilityDescription: nil)
         let count = entry.unread ?? 0
         unread.stringValue = count > 0 ? "\(count)" : ""
         unread.isHidden = count == 0
         switch entry.target {
         case .window, .drafts, .outBox:
             title.textColor = .labelColor
+            symbol.alphaValue = 1
             toolTip = nil
         case .unavailable(let note):
             title.textColor = .tertiaryLabelColor
+            symbol.alphaValue = 0.4
             toolTip = note
         }
         setAccessibilityLabel(count > 0 ? "\(entry.title), \(count) unread" : entry.title)

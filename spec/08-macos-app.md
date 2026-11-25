@@ -208,7 +208,14 @@ conversation; the Bridge account sheet is no longer offered.
   "Identity strip and account colors") and name; its
   mailboxes are below: system folders, then folders (nested), then
   labels, as 04-sync-proton maps them.
-- **Built with** an `NSOutlineView`, source-list style.
+- **Built with** an `NSOutlineView`, source-list style. Each entry
+  leads with an SF Symbol in the accent color, as Mail's: its role's
+  (Inbox `tray`, Sent `paperplane`, Drafts `doc`, Trash `trash`, Junk
+  `xmark.bin`, Archive `archivebox`, All Mail `tray.full`, Starred
+  `star`), else its kind's (folder `folder`, label `tag`); Flagged
+  `flag`, Out Box `tray.and.arrow.up`, a saved view
+  `folder.badge.gearshape`. An entry that opens nothing is dimmed,
+  symbol included.
 - **Mailboxes** come from `mailboxes(account_id)` (07), with unread
   counts. Imported mailboxes are flat, named after their sources; no
   role or hierarchy is read into a file name. IMAP hierarchy uses the
@@ -524,11 +531,17 @@ M4.4c. Choosing Out Box shows the Out Box in the list pane, as Drafts
   message unread cancels a pending mark. A message marked unread while
   it is shown stays unread until it is shown again. Settings → Reading chooses the setting:
   Immediately, After 2, 5 or 10 seconds, or Manually.
+- **Empty pane:** with no message or several selected, the reader
+  shows "No message selected" or "N messages selected" centered in the
+  pane, as Mail's does; loading and error notes stay above the body.
 - **Header area:**
-  - from, to and date;
+  - the subject in bold, then from (the sender's name in bold), to, cc
+    and the date where present, their labels and addresses in the
+    secondary color; addresses always show beside names;
   - the "Received in <account>" account chip (Account chips), from
     the selected occurrence's account;
-  - a tag picker and a multi-line note editor. The picker applies and
+  - a tag picker and a multi-line note editor, borderless with an
+    "Add a note" placeholder while empty. The picker applies and
     removes the message's tags through `add_tag`/`remove_tag` on the
     selected occurrence; typing a new name creates the tag, within
     spec/02's name bound. The note is saved on end-editing through
@@ -1054,8 +1067,9 @@ and the undo toast offers **Undo** for 10 s.
   - **Message:** Send (⇧⌘D), Open in New Window (⌘O), Reply (⌘R), Reply
     All (⇧⌘R), Forward (⇧⌘F), then the flag and filing commands;
   - **Format:** Make Plain Text or Make Markdown (⇧⌘T), Bold, Italic;
-  - **Window:** Minimize, Zoom, Activity (⌥⌘0), Bring All to Front and
-    AppKit's window list; then Debug and Help.
+  - **Window:** Minimize, Zoom, Message Viewer (⌘0, the main window
+    again once it was closed, as Mail's), Activity (⌥⌘0), Bring All to
+    Front and AppKit's window list; then Debug and Help.
 
   Save, Attach Files…, Send and the format command act on the key
   compose window and are enabled exactly when its own controls are.

@@ -193,6 +193,7 @@ final class MessageListViewController: NSViewController {
         search.view.translatesAutoresizingMaskIntoConstraints = false
         content.addSubview(search.view)
         statusLabel.alignment = .center
+        statusLabel.font = .preferredFont(forTextStyle: .title3)
         statusLabel.textColor = .secondaryLabelColor
         statusLabel.isHidden = true
         statusLabel.translatesAutoresizingMaskIntoConstraints = false

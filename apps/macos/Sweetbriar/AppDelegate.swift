@@ -183,6 +183,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             },
             onSettings: { [weak self] in self?.showSettings() },
             onShowActivity: { [weak self] in self?.showActivity() },
+            onShowViewer: { [weak self] in self?.mainWindow?.showWindow(nil) },
             isWriteEnabled: { [weak self] in self?.backups?.canWrite == true },
             onNewMessage: { [weak self] in
                 guard let self, !terminating else { return }

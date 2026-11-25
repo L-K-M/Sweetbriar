@@ -165,11 +165,12 @@ func readerHeaderChipAttachmentsAndSourceToggle() async throws {
     #expect(controller.sourceButton.title == "View Source")
     #expect(!controller.html.isHidden)
     await controller.show(selection: [1, 2])
-    #expect(controller.status.stringValue == "2 messages selected")
+    #expect(controller.placeholder.stringValue == "2 messages selected" && !controller.placeholder.isHidden)
     #expect(controller.model.currentLease == nil)
     #expect(controller.html.isHidden)
     await controller.show(selection: [])
-    #expect(controller.status.stringValue == "No message selected")
+    #expect(controller.placeholder.stringValue == "No message selected" && !controller.placeholder.isHidden)
+    #expect(controller.status.isHidden)
     controller.close()
 }
 
@@ -267,7 +268,7 @@ func readerSelectionRevokesLinksSynchronouslyAndDropsQueuedSelection() async thr
     // Let the old selection's queued task run; it must not open its body.
     await queued.value
     #expect(controller.model.occurrenceID == nil)
-    #expect(controller.status.stringValue == "2 messages selected")
+    #expect(controller.placeholder.stringValue == "2 messages selected" && !controller.placeholder.isHidden)
     controller.close()
 }
 

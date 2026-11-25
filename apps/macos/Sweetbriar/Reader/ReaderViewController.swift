@@ -22,7 +22,11 @@ final class ReaderViewController: NSViewController {
     private var noteSent: (messageID: Int64, text: String)?
     /// The message the note editor was filled for, and its note then.
     private var noteDraft: (messageId: Int64, note: String?)?
-    let status = NSTextField(wrappingLabelWithString: "No message selected")
+    /// Loading and error notes, above the body.
+    let status = NSTextField(wrappingLabelWithString: "")
+    /// The pane without a message, centered as Mail's: none or several
+    /// selected.
+    let placeholder = NSTextField(wrappingLabelWithString: "No message selected")
     let remoteContent = NSTextField(labelWithString: "")
     let sourceButton = NSButton(title: "View Source", target: nil, action: nil)
     let readingViewToggle = NSButton(checkboxWithTitle: "Reading View", target: nil, action: nil)
@@ -134,17 +138,22 @@ final class ReaderViewController: NSViewController {
         details.alignment = .leading
         details.spacing = 6
         header.isSelectable = true
+        // Keeps the header's fonts and colors while text is selected.
+        header.allowsEditingTextAttributes = true
         details.addArrangedSubview(header)
         details.addArrangedSubview(accountChip)
         details.addArrangedSubview(tagPicker)
         details.addArrangedSubview(noteEditor)
         sourceButton.target = self
         sourceButton.action = #selector(toggleSource)
-        details.addArrangedSubview(sourceButton)
         readingViewToggle.setAccessibilityIdentifier("readingViewToggle")
         readingViewToggle.target = self
         readingViewToggle.action = #selector(toggleReadingView(_:))
-        details.addArrangedSubview(readingViewToggle)
+        // The renditions side by side, each one click away (spec/08).
+        let renditions = NSStackView(views: [sourceButton, readingViewToggle])
+        renditions.orientation = .horizontal
+        renditions.spacing = 12
+        details.addArrangedSubview(renditions)
         remoteContent.textColor = .secondaryLabelColor
         remoteContent.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
         details.addArrangedSubview(remoteContent)
@@ -158,6 +167,18 @@ final class ReaderViewController: NSViewController {
         stack.addArrangedSubview(details)
         stack.addArrangedSubview(status)
         stack.addArrangedSubview(body)
+        placeholder.font = .preferredFont(forTextStyle: .title2)
+        placeholder.textColor = .tertiaryLabelColor
+        placeholder.alignment = .center
+        placeholder.isSelectable = false
+        placeholder.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(placeholder)
+        NSLayoutConstraint.activate([
+            placeholder.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            placeholder.centerYAnchor.constraint(equalTo: view.safeAreaLayoutGuide.centerYAnchor),
+            placeholder.leadingAnchor.constraint(greaterThanOrEqualTo: view.leadingAnchor, constant: 20),
+            placeholder.trailingAnchor.constraint(lessThanOrEqualTo: view.trailingAnchor, constant: -20),
+        ])
         textScroll.hasVerticalScroller = true
         plainText.setAccessibilityIdentifier("readerBody")
         textScroll.documentView = plainText
@@ -187,10 +208,11 @@ final class ReaderViewController: NSViewController {
             details.widthAnchor.constraint(equalTo: stack.widthAnchor),
             tagPicker.widthAnchor.constraint(equalTo: details.widthAnchor),
             noteEditor.widthAnchor.constraint(equalTo: details.widthAnchor),
-            noteEditor.heightAnchor.constraint(equalToConstant: 72),
+            noteEditor.heightAnchor.constraint(equalToConstant: 40),
         ])
         body.setContentHuggingPriority(.defaultLow, for: .vertical)
         details.isHidden = true
+        status.isHidden = true
         textScroll.isHidden = true
         readingScroll.isHidden = true
         html.isHidden = true
@@ -208,6 +230,7 @@ final class ReaderViewController: NSViewController {
         headerTint = tint
         backdrop.tint = tint
         header.textColor = tint?.foreground ?? .labelColor
+        if let message = model.currentMessage { renderHeader(message) }
         for label in [remoteContent, readingNote] {
             label.textColor = tint?.foreground ?? .secondaryLabelColor
         }
@@ -249,9 +272,12 @@ final class ReaderViewController: NSViewController {
         readingScroll.isHidden = true
         html.isHidden = true
         status.isHidden = false
+        placeholder.isHidden = true
         guard selection.count == 1, let id = selection.first else {
             latency.cancel(.openMessage)
-            status.stringValue = selection.isEmpty ? "No message selected" : "\(selection.count) messages selected"
+            status.isHidden = true
+            placeholder.stringValue = selection.isEmpty ? "No message selected" : "\(selection.count) messages selected"
+            placeholder.isHidden = false
             return
         }
         latency.begin(.openMessage, replacing: id)
@@ -415,7 +441,7 @@ final class ReaderViewController: NSViewController {
         status.isHidden = true
         details.isHidden = model.currentMessage == nil
         if let message = model.currentMessage {
-            header.stringValue = Self.headerText(message)
+            renderHeader(message)
             renderAccountChip(message)
             sourceButton.title = model.isShowingSource ? "Sender Layout" : "View Source"
             let blocked = model.currentLease?.remoteContentBlocked ?? 0
@@ -496,23 +522,56 @@ final class ReaderViewController: NSViewController {
         }
     }
 
-    static func headerText(_ message: ReaderMessage) -> String {
-        func addresses(_ values: [ReaderAddress]) -> String {
-            values.map { value in
-                switch (value.name, value.address) {
-                case (let name?, let address?): "\(name) <\(address)>"
-                case (let name?, nil): name
-                case (nil, let address?): address
-                case (nil, nil): "Unknown"
-                }
-            }.joined(separator: ", ")
+    private func renderHeader(_ message: ReaderMessage) {
+        header.attributedStringValue = Self.headerText(
+            message, primary: headerTint?.foreground ?? .labelColor,
+            secondary: headerTint?.foreground.withAlphaComponent(0.75) ?? .secondaryLabelColor)
+    }
+
+    /// The header as Mail lays it out: the subject in bold, then From
+    /// with the sender's name in bold, To, Cc when there is one, and the
+    /// date, their labels and addresses muted. Addresses stay visible:
+    /// a name alone could pass for anyone.
+    static func headerText(
+        _ message: ReaderMessage, primary: NSColor = .labelColor,
+        secondary: NSColor = .secondaryLabelColor
+    ) -> NSAttributedString {
+        let font = NSFont.systemFont(ofSize: NSFont.systemFontSize)
+        let bold = NSFont.boldSystemFont(ofSize: NSFont.systemFontSize)
+        let title = NSFont.boldSystemFont(ofSize: NSFont.preferredFont(forTextStyle: .title3).pointSize)
+        let text = NSMutableAttributedString()
+        func append(_ string: String, _ font: NSFont, _ color: NSColor) {
+            text.append(NSAttributedString(string: string, attributes: [.font: font, .foregroundColor: color]))
         }
-        var lines = ["From: \(addresses(message.headers.from))", "To: \(addresses(message.headers.to))"]
+        func line(_ label: String, _ values: [ReaderAddress], names: NSFont) {
+            guard !values.isEmpty else { return }
+            append("\n\(label) ", font, secondary)
+            for (index, value) in values.enumerated() {
+                if index > 0 { append(", ", font, primary) }
+                switch (value.name, value.address) {
+                case (let name?, let address?):
+                    append(name, names, primary)
+                    append(" <\(address)>", font, secondary)
+                case (let name?, nil): append(name, names, primary)
+                case (nil, let address?): append(address, names, primary)
+                case (nil, nil): append("Unknown", names, primary)
+                }
+            }
+        }
+        let subject = message.headers.subject?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        append(subject.isEmpty ? "(No Subject)" : subject, title, primary)
+        line("From:", message.headers.from, names: bold)
+        line("To:", message.headers.to, names: font)
+        line("Cc:", message.headers.cc, names: font)
         if let timestamp = message.headers.date {
             let seconds = Duration.milliseconds(timestamp) / .seconds(1)
-            lines.append(Date(timeIntervalSince1970: seconds).formatted(date: .abbreviated, time: .shortened))
+            let date = Date(timeIntervalSince1970: seconds).formatted(date: .abbreviated, time: .shortened)
+            append("\n\(date)", font, secondary)
         }
-        return lines.joined(separator: "\n")
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.paragraphSpacing = 2
+        text.addAttribute(.paragraphStyle, value: paragraph, range: NSRange(location: 0, length: text.length))
+        return text
     }
 
     /// Show the message's tags and note; the editor keeps the user's
