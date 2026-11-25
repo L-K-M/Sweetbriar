@@ -256,6 +256,10 @@ private func withNativeIdentity(
     let controller = ComposeWindowController(
         source: source, draftId: "native-identity", appearance: appearance, cue: cue,
         replyAccountSource: replyAccounts, announceRoute: announceRoute)
+    // The host's accessibility settings must not decide what a test
+    // sees: CI's macOS VM reports one of them on, which renders Color
+    // Wash as Strong. A test that checks the fallbacks injects them.
+    controller.displayOptions = { (increaseContrast: false, reduceTransparency: false) }
     controller.showWindow(nil)
     let result: Result<Void, any Error>
     do {
