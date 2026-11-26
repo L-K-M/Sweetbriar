@@ -44,6 +44,11 @@ changes are PRs #573, #582, #583, #584, #587, #591, #595, #596 and #597.
   Sending keeps a failed allowance removal apart from a failed list
   load and reports the removal failure when both happen, instead of
   overwriting one with the other.
+- **Row date column** (further pass, PR #590). Message rows reserve the
+  measured width of their formatted trailing date (clamped 32-84 pt)
+  instead of a fixed 84 pt, returning roughly 50 pt to the subject and
+  snippet on today's time-only rows while long dates keep the old
+  maximum.
 
 ## Submitted patches
 
@@ -57,11 +62,6 @@ changes are PRs #573, #582, #583, #584, #587, #591, #595, #596 and #597.
   about a hypothetical replaced web view was answered with an explicit
   one-web-view invariant and a test comment about the SDK's lack of
   rule-list read-back.
-- **Row date column** (further pass, PR #590). Message rows reserve the
-  measured width of their formatted trailing date (clamped 32-84 pt)
-  instead of a fixed 84 pt, returning roughly 50 pt to the subject and
-  snippet on today's time-only rows while long dates keep the old
-  maximum.
 - **Message-row tag collapse** (fourth pass, PR #572). Rows drew at
   most three tag chips and silently dropped the rest, so a row
   under-reported its state and disagreed with the SwiftUI prototype.
