@@ -41,6 +41,26 @@ struct ListAppearanceTests {
         #expect(fullDate <= 84)
     }
 
+    /// The appearance subscription answers after a window's list has
+    /// opened, so the first cells a mixed-account window makes are
+    /// configured without an account. A later reuse of the same cell
+    /// has to bring the rail and the monogram back (spec/08 "Rows").
+    @Test func aReusedCellBringsItsAccountMarkerBack() {
+        let cell = MessageRowCellView(showsAccountMarker: true)
+        cell.frame = NSRect(x: 0, y: 0, width: 300, height: 56)
+        cell.configure(content: content, account: nil, accountLabel: nil, usesAppearance: true)
+        #expect(!cell.showsMarker)
+        cell.configure(content: content, account: sampleAccount,
+                       accountLabel: "1 · Work", usesAppearance: true)
+        #expect(cell.showsMarker)
+        // A single-account window never shows the marker at all.
+        let plain = MessageRowCellView(showsAccountMarker: false)
+        plain.frame = NSRect(x: 0, y: 0, width: 300, height: 56)
+        plain.configure(content: content, account: sampleAccount,
+                        accountLabel: "Work", usesAppearance: true)
+        #expect(!plain.showsMarker)
+    }
+
     @Test func flaggedControllerShowsBothAccountsAndSurvivesAppearanceReset() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }

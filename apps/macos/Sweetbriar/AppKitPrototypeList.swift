@@ -568,6 +568,11 @@ final class MessageRowCellView: NSTableCellView {
     /// starts at the leading edge.
     private let showsAccountMarker: Bool
 
+    /// Whether the rail and the monogram are drawn, as `configure`
+    /// last decided. Read by tests, which otherwise have to walk
+    /// `subviews` by an index nothing guarantees.
+    private(set) var showsMarker = false
+
     /// Everything but the placeholder — hidden together when the row
     /// is out.
     private var contentSubviews: [NSView] {
@@ -668,10 +673,14 @@ final class MessageRowCellView: NSTableCellView {
         for subview in contentSubviews {
             subview.isHidden = content == nil
         }
-        if !showsAccountMarker || (usesAppearance && account == nil) {
-            rail.isHidden = true
-            monogram.isHidden = true
-        }
+        // A reused cell must not keep a marker hidden from a row whose
+        // account had no appearance yet: the subscription that fills
+        // `AppearanceModel.appearance` answers after the list has
+        // opened, so the first cells a window makes are configured
+        // without one and a later reuse has to bring the marker back.
+        showsMarker = showsAccountMarker && !(usesAppearance && account == nil)
+        rail.isHidden = !showsMarker
+        monogram.isHidden = !showsMarker
         guard let content else {
             setAccessibilityElement(false)
             setAccessibilityLabel(nil)
