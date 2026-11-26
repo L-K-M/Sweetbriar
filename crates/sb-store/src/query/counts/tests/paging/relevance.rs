@@ -107,7 +107,7 @@ fn three_fifty_hit_pages_keep_native_bits_ties_reverse_and_around_order() {
         assert_eq!(current.has_more_after(), number < 2);
         for hit in current.rows() {
             assert_eq!(
-                bits(hit.cursor()),
+                bits(&hit.cursor(current.binding())),
                 native(&conn, hit.row().message_id, ALL, "alpha").to_bits()
             );
         }
@@ -170,7 +170,7 @@ fn weights_native_tokens_column_sets_and_first_encounter_polarity_are_exact() {
     let all = page(&conn, json!({"text":"alpha"}), SearchAnchor::Top, 50);
     for hit in all.rows() {
         assert_eq!(
-            bits(hit.cursor()),
+            bits(&hit.cursor(all.binding())),
             native(&conn, hit.row().message_id, ALL, "alpha").to_bits()
         );
     }
@@ -197,7 +197,7 @@ fn weights_native_tokens_column_sets_and_first_encounter_polarity_are_exact() {
         assert_eq!(found, ids.into_iter().collect());
         for hit in scoped.rows() {
             assert_eq!(
-                bits(hit.cursor()),
+                bits(&hit.cursor(scoped.binding())),
                 native(&conn, hit.row().message_id, columns, "alpha").to_bits()
             );
         }
@@ -223,7 +223,7 @@ fn weights_native_tokens_column_sets_and_first_encounter_polarity_are_exact() {
             .iter()
             .find(|hit| hit.row().message_id == 1)
             .unwrap();
-        assert_eq!(bits(hit.cursor()), alpha.to_bits());
+        assert_eq!(bits(&hit.cursor(result.binding())), alpha.to_bits());
     }
     let subject = native(&conn, 1, "subject", "alpha");
     let combined = page(
@@ -378,7 +378,8 @@ fn scopes_choose_rows_before_limit_without_changing_corpus_or_display() {
     assert_eq!(display.snippet.as_deref(), Some("Snippet"));
     assert!(display.unread && display.has_attachments);
     assert_eq!(display.tags, ["Alpha", "Zulu"]);
-    let (row, token) = chosen.clone().into_rows().pop().unwrap().into_parts();
+    let token = chosen.rows().last().unwrap().cursor(chosen.binding());
+    let row = chosen.clone().into_rows().pop().unwrap().into_row();
     assert_eq!(&row, display);
     assert_eq!(bits(&token), native(&conn, 1, ALL, "alpha").to_bits());
     let onward = ready(read(
@@ -676,7 +677,10 @@ fn native_rebuild_and_out_of_scope_wal_writes_preserve_snapshot_scores() {
         .iter()
         .find(|hit| hit.row().message_id == 1)
         .unwrap();
-    assert_eq!(bits(whole.cursor()), bits(&cursor(&before, 0)));
+    assert_eq!(
+        bits(&whole.cursor(all.binding())),
+        bits(&cursor(&before, 0))
+    );
     let state_counts = |conn: &Connection| -> Vec<(String, i64)> {
         conn.prepare("SELECT state,count(*) FROM d_search_docs GROUP BY state ORDER BY state")
             .unwrap()
@@ -816,7 +820,7 @@ fn native_rebuild_and_out_of_scope_wal_writes_preserve_snapshot_scores() {
         (fresh.generation(), expected_ids)
     );
     for (hit, (_, score)) in fresh.rows().iter().zip(expected) {
-        assert_eq!(bits(hit.cursor()), score.to_bits());
+        assert_eq!(bits(&hit.cursor(fresh.binding())), score.to_bits());
     }
     assert_eq!(
         read(

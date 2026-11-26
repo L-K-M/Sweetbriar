@@ -99,8 +99,9 @@ struct SearchRead {
 impl SearchRead {
     fn window(self, window_id: WindowId) -> Window {
         let page = self.page;
-        let before = page.rows().first().map(|row| Cursor(row.cursor().into()));
-        let after = page.rows().last().map(|row| Cursor(row.cursor().into()));
+        let (before, after) = page.edge_cursors();
+        let before = before.map(Cursor);
+        let after = after.map(Cursor);
         let has_more_before = page.has_more_before();
         let has_more_after = page.has_more_after();
         let shown = page.rows().len() as u64;
@@ -125,7 +126,7 @@ impl SearchRead {
             rows: page
                 .into_rows()
                 .into_iter()
-                .map(|hit| list_row(hit.into_parts().0))
+                .map(|hit| list_row(hit.into_row()))
                 .collect(),
         }
     }

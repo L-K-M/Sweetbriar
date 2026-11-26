@@ -183,13 +183,13 @@ pub(super) fn same(tx: &Transaction, node: &Json, scope: &SearchScope, coverage:
         let Some(last) = first.rows().last() else {
             continue;
         };
-        let after = SearchAnchor::After(last.cursor().to_owned());
+        let after = SearchAnchor::After(last.cursor(first.binding()));
         assert_eq!(
             page(tx, node, scope, order, after.clone(), proven).unwrap(),
             page(tx, node, scope, order, after, Kept::default()).unwrap(),
             "{context} after"
         );
-        let before = SearchAnchor::Before(last.cursor().to_owned());
+        let before = SearchAnchor::Before(last.cursor(first.binding()));
         assert_eq!(
             page(tx, node, scope, order, before.clone(), proven).unwrap(),
             page(tx, node, scope, order, before, Kept::default()).unwrap(),

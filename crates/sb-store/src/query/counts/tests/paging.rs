@@ -39,7 +39,7 @@ fn row_ids(page: &SearchPage) -> Vec<i64> {
 }
 
 fn cursor(page: &SearchPage, index: usize) -> String {
-    page.rows()[index].cursor().to_owned()
+    page.rows()[index].cursor(page.binding())
 }
 
 fn forged(value: &str, edit: impl FnOnce(&mut Json)) -> String {
@@ -725,7 +725,8 @@ fn display_fields_tags_and_owned_accessors_share_the_page() {
     assert!(row.flagged && row.has_attachments);
     assert_eq!(row.tags, ["Alpha", "Zulu"]);
     let expected = row.clone();
-    let (row, cursor) = page.into_rows().pop().unwrap().into_parts();
+    let cursor = page.rows().last().unwrap().cursor(page.binding());
+    let row = page.into_rows().pop().unwrap().into_row();
     assert_eq!(row, expected);
     assert_eq!(
         serde_json::from_str::<Json>(&cursor).unwrap()["occurrence_id"],
