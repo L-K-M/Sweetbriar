@@ -14,6 +14,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var session: CoreSession?
     private var settingsWindow: AppearanceSettingsWindow?
     private var activityWindow: ActivityWindowController?
+    private var shortcutHelpWindow: ShortcutHelpWindowController?
     private let appearance = SharedAppearance()
     private let readingViewMemory = SharedReadingViewMemory()
     private var backups: SharedBackups?
@@ -184,6 +185,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             },
             onSettings: { [weak self] in self?.showSettings() },
             onShowActivity: { [weak self] in self?.showActivity() },
+            onShowShortcuts: { [weak self] in self?.showShortcutHelp() },
             onShowViewer: { [weak self] in self?.mainWindow?.showWindow(nil) },
             isWriteEnabled: { [weak self] in self?.backups?.canWrite == true },
             onNewMessage: { [weak self] in
@@ -233,6 +235,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         activityWindow?.showWindow(nil)
         activityWindow?.window?.makeKeyAndOrderFront(nil)
+    }
+
+    /// Help → Keyboard Shortcuts…: one shared reference window, made
+    /// on first use and brought forward after that.
+    private func showShortcutHelp() {
+        guard !terminating else { return }
+        if shortcutHelpWindow == nil {
+            shortcutHelpWindow = ShortcutHelpWindowController()
+        }
+        shortcutHelpWindow?.showWindow(nil)
+        shortcutHelpWindow?.window?.makeKeyAndOrderFront(nil)
     }
 
     /// The Activity window holds the old core's model and bridge, so a
