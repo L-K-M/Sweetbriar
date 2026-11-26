@@ -340,7 +340,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         let policy = backups
         sidebar.canWrite = { policy.canWrite }
         let messageList = MessageListViewController(bridge: bridge, sidebar: sidebarModel, appearance: appearanceModel,
-                                                     writes: writes, canWrite: { policy.canWrite })
+                                                     writes: writes, canWrite: { policy.canWrite },
+                                                     onAddAccount: { [weak self] in self?.beginProtonSignIn() },
+                                                     onImport: { [weak self] in self?.beginImport() })
         let reader = ReaderViewController(
             model: ReaderModel(source: bridge, preferred: .sanitizedHtml),
             memory: readingViewMemory.model(source: bridge),

@@ -124,6 +124,15 @@ public final class SidebarModel {
     /// the first reload.
     public private(set) var generation: UInt64 = 0
 
+    /// True until the archive holds anything beyond the implicit local
+    /// archive: no other account and no imported mailboxes yet. The
+    /// shell shows its first-run welcome over an empty Unified Inbox.
+    public var isFreshArchive: Bool {
+        sections.dropFirst().allSatisfy { section in
+            section.account?.kind == .local && section.entries.isEmpty
+        }
+    }
+
     /// The saved views the unified section lists, in `saved_views()`
     /// order.
     public private(set) var savedViews: [SavedView] = []
