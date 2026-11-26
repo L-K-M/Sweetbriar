@@ -89,7 +89,7 @@ public struct ActivityPresentation: Sendable {
 
     /// An open breaker event's line: the user reviews what disappeared.
     public func breakerEvent(_ event: AccountBreakerEvent) -> String {
-        "Review \(event.disappeared) disappeared "
+        "Review \(count(event.disappeared)) disappeared "
             + (event.disappeared == 1 ? "message" : "messages")
     }
 

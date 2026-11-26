@@ -132,6 +132,13 @@ final class SidebarViewController: NSViewController, NSMenuDelegate {
         fatalError("SidebarViewController is built in code")
     }
 
+    /// A restore drops this controller while it is still registered
+    /// for the accessibility notification it exists to observe, so a
+    /// later Increase Contrast change would post to a dead object.
+    deinit {
+        NSWorkspace.shared.notificationCenter.removeObserver(self)
+    }
+
     override func loadView() {
         NSWorkspace.shared.notificationCenter.addObserver(
             self, selector: #selector(accessibilityOptionsChanged),
@@ -226,11 +233,17 @@ final class SidebarViewController: NSViewController, NSMenuDelegate {
     /// for a healthy account with no events.
     private func healthText(for accountId: String?) -> String? {
         guard let accountId, let activity,
-              let row = activity.accounts.first(where: { $0.accountId == accountId })
+              let row = activity.accounts.first(where: { Self.sameId($0.accountId, accountId) })
         else { return nil }
         return Self.healthRowText(
             condition: row.condition, breakerEvents: row.breakerEvents,
             presentation: presentation, now: Date())
+    }
+
+    /// Account ids match by their bytes, as the chips match them: a
+    /// canonically equivalent spelling is another account.
+    private static func sameId(_ lhs: String, _ rhs: String) -> Bool {
+        lhs.utf8.elementsEqual(rhs.utf8)
     }
 
     /// The row text itself, free of the sidebar's state: one line per
@@ -390,6 +403,10 @@ final class SidebarViewController: NSViewController, NSMenuDelegate {
         let row = outlineView.row(forItem: node)
         guard row >= 0 else { return }
         outlineView.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+        // The section may have been expanded just now, so the row can
+        // sit below the fold: Mailbox → <name> (⌘1–⌘4) has to show
+        // what it chose, not only select it.
+        outlineView.scrollRowToVisible(row)
     }
 
     private func entryNode(id: String) -> (SectionNode, EntryNode)? {
@@ -498,7 +515,9 @@ extension SidebarViewController: NSOutlineViewDataSource, NSOutlineViewDelegate 
         if let section = item as? SectionNode {
             let cell = outlineView.makeView(withIdentifier: Self.headerCellID, owner: nil)
                 as? SidebarHeaderCell ?? SidebarHeaderCell(identifier: Self.headerCellID)
-            let account = appearance.appearance?.accounts.first { $0.accountId == section.section.id }
+            let account = appearance.appearance?.accounts.first {
+                Self.sameId($0.accountId, section.section.id)
+            }
             let label = Self.accountLabel(section.section, among: model.sections)
             cell.configure(title: label, account: account, isAccount: section.section.id != SidebarModel.unifiedSectionID)
             return cell
