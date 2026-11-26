@@ -398,6 +398,26 @@ fn invalid_list_numbering_attributes_use_defaults() {
 }
 
 #[test]
+fn reversed_lists_default_to_their_item_count() {
+    for source in [
+        "<ol reversed><li>a</li><li>b</li><li>c</li></ol>",
+        "<ol reversed start=\"x\"><li>a</li><li>b</li><li>c</li></ol>",
+    ] {
+        let document = supported(&html(source));
+        let list = block!(document.blocks(), 0, List);
+        assert!(list.ordered());
+        assert!(list.reversed());
+        assert_eq!(list.start(), 3, "{source}");
+    }
+
+    let document = supported(&html(
+        "<ol reversed start=\"8\"><li>a</li><li>b</li><li>c</li></ol>",
+    ));
+    let list = block!(document.blocks(), 0, List);
+    assert_eq!(list.start(), 8);
+}
+
+#[test]
 fn empty_bodies_are_unsupported() {
     for raw in [
         "From: sender@example.invalid\r\nContent-Type: text/plain\r\n\r\n",

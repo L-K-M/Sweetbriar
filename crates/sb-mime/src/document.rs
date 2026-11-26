@@ -28,7 +28,7 @@ use self::html::RawNode;
 
 /// Bump when the document semantics change; the reader caches the
 /// normalized form with this stamp and rebuilds on upgrade.
-pub const DOCUMENT_VERSION: u32 = 1;
+pub const DOCUMENT_VERSION: u32 = 2;
 
 /// A positive structure check: a document exists only for supported
 /// structures. Unsupported means sender layout, never a lossy guess.
@@ -537,10 +537,9 @@ fn build_list(
 ) -> Option<List> {
     let ordered = tag == "ol";
     // An invalid numbering attribute is ignored, as HTML does; the default
-    // numbering stands.
-    let start = attr(attrs, "start")
-        .and_then(|value| parse_number(value))
-        .unwrap_or(1);
+    // numbering stands. A reversed list without a valid start counts down
+    // from its item count.
+    let start = attr(attrs, "start").and_then(|value| parse_number(value));
     let reversed = attr(attrs, "reversed").is_some();
     let mut items = Vec::new();
     for child in children {
@@ -564,6 +563,13 @@ fn build_list(
     if items.is_empty() {
         return None;
     }
+    let start = start.unwrap_or_else(|| {
+        if reversed {
+            i64::try_from(items.len()).unwrap_or(i64::MAX)
+        } else {
+            1
+        }
+    });
     Some(List {
         part: part.clone(),
         ordered,

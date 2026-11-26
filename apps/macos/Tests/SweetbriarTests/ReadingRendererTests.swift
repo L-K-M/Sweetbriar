@@ -106,6 +106,35 @@ struct ReadingRendererTests {
             text([.list(partID: "p", ordered: false, start: 1, reversed: false, items: [item])]) == "• One\n")
     }
 
+    @Test func explicitListNumbersResetTheFollowingSequence() {
+        func item(_ text: String, number: Int64? = nil) -> ReadingListItem {
+            ReadingListItem(partID: "p", number: number, blocks: [paragraph([literal(text)])])
+        }
+        let forward: ReadingBlock = .list(
+            partID: "p", ordered: true, start: 4, reversed: false,
+            items: [item("four"), item("nine", number: 9), item("ten")])
+        #expect(text([forward]) == "4. four\n9. nine\n10. ten\n")
+
+        let backward: ReadingBlock = .list(
+            partID: "p", ordered: true, start: 3, reversed: true,
+            items: [item("three"), item("ten", number: 10), item("nine")])
+        #expect(text([backward]) == "3. three\n10. ten\n9. nine\n")
+    }
+
+    @Test func listNumberingSaturatesAtIntegerLimits() {
+        func item(_ text: String) -> ReadingListItem {
+            ReadingListItem(partID: "p", number: nil, blocks: [paragraph([literal(text)])])
+        }
+        let high: ReadingBlock = .list(
+            partID: "p", ordered: true, start: Int64.max, reversed: false,
+            items: [item("first"), item("second")])
+        #expect(text([high]) == "\(Int64.max). first\n\(Int64.max). second\n")
+        let low: ReadingBlock = .list(
+            partID: "p", ordered: true, start: Int64.min, reversed: true,
+            items: [item("first"), item("second")])
+        #expect(text([low]) == "\(Int64.min). first\n\(Int64.min). second\n")
+    }
+
     @Test func listItemsIndentOnTopOfTheirContent() throws {
         func list(_ blocks: [ReadingBlock]) -> ReadingBlock {
             .list(

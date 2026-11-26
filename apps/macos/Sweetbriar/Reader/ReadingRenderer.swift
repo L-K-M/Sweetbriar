@@ -73,19 +73,31 @@ enum ReadingRenderer {
         _ items: [ReadingListItem], ordered: Bool, start: Int64, reversed: Bool,
         into text: NSMutableAttributedString
     ) {
-        for (index, item) in items.enumerated() {
-            let fallback = reversed ? start - Int64(index) : start + Int64(index)
+        var next = start
+        for item in items {
+            let number = item.number ?? next
             let content = NSMutableAttributedString()
             for block in item.blocks { render(block, depth: 0, into: content) }
             while content.length > 0, content.string.hasSuffix("\n") {
                 content.deleteCharacters(in: NSRange(location: content.length - 1, length: 1))
             }
             let itemStart = text.length
-            text.append(NSAttributedString(string: ordered ? "\(item.number ?? fallback). " : "• "))
+            text.append(NSAttributedString(string: ordered ? "\(number). " : "• "))
             text.append(content)
             text.append(NSAttributedString(string: "\n"))
             indent(NSRange(location: itemStart, length: text.length - itemStart), by: 24, in: text)
+            next = advance(number, reversed: reversed)
         }
+    }
+
+    /// The following implicit number. HTML ordinal values are conceptually
+    /// unbounded; the document model carries Int64, so pinning at its edge
+    /// keeps hostile input from trapping while ordinary sequences count on.
+    private static func advance(_ number: Int64, reversed: Bool) -> Int64 {
+        let (value, overflow) = reversed
+            ? number.subtractingReportingOverflow(1)
+            : number.addingReportingOverflow(1)
+        return overflow ? (reversed ? Int64.min : Int64.max) : value
     }
 
     /// A quote's color and indent at `depth` (spec/08, shared with the
