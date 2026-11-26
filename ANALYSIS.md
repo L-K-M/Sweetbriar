@@ -859,6 +859,8 @@ way to keep a message unread after reading it.
 
 Nothing in the composer or the settings writes a signature per identity.
 For a daily driver this is a hard blocker.
+Separately consider reusable draft templates after specifying how identity,
+recipients, attachments and private source text are retained.
 
 ## F14. No spell-check / grammar indicator control in the composer
 
@@ -1358,9 +1360,13 @@ Each was reported by a helper and not confirmed by reading every caller.
 - `crates/sb-store/src/maintenance.rs:135`: `finish` updates whichever
   run of a job is open; a second run started before the first finishes
   would take the first outcome.
-- `crates/sb-store/src/gc.rs:139`: `object_seen` runs
-  `attachments_json LIKE '%sha%'` once per object inside one read
-  transaction. Time a pass over a large `draft_revisions`.
+- `crates/sb-store/src/gc.rs:139`: `object_seen` can run
+  `attachments_json LIKE '%sha%'` per candidate inside one read
+  transaction. The unindexed send-MIME and draft-attachment arms are
+  reached only when earlier reference checks do not match, so archive
+  size alone overstates the impact. Time a pass with many retained sends
+  and draft revisions; consider an index for sent MIME and a keyed
+  attachment projection in a future migration.
 - `crates/sb-store/src/backups/staging.rs:151`: a data root at a
   filesystem root reaches `expect("a data root has a parent")`;
   `restore_pending::root_name` refuses the same case.
@@ -1699,6 +1705,15 @@ concerns the toolbar item, not the separately verified search strip.
 [Toolbar](apps/macos/Sweetbriar/MainToolbar.swift)
 
 ## Performance and protocol follow-up
+
+### Reduce statement preparation in batch writes
+
+Header sync and message import execute stable one-row SQL repeatedly
+within batches of up to 250. Profile those transactions and, if useful,
+prepare or cache statements across each batch as the list writer does.
+Preserve transaction boundaries, rollback, ordering and failure tests.
+[Header writes](crates/sb-store/src/sync/headers.rs),
+[Import writes](crates/sb-store/src/imports/messages.rs)
 
 ### Avoid repeated full-window checks during command validation
 
