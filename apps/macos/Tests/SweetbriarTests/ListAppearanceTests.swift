@@ -554,10 +554,17 @@ struct ListAppearanceTests {
         )
         let cell = MessageRowCellView(showsAccountMarker: true)
         cell.configure(content: content)
+        var chipCounts: [CGFloat: Int] = [:]
         for width in [CGFloat(120), 200, 320, 480] {
             cell.setFrameSize(NSSize(width: width, height: MessageRowMetrics.pitch))
             cell.layoutSubtreeIfNeeded()
             let laidOut = cell.subviews.filter { !$0.isHidden && $0.frame.width > 0 }
+            // The tag and overflow chips are the 15 pt badges on the
+            // snippet line (y = 40); the wide row shows three tags plus
+            // the +N chip.
+            chipCounts[width] = laidOut.filter {
+                $0.frame.height == 15 && $0.frame.minY == 40
+            }.count
             for view in laidOut {
                 #expect(
                     view.frame.minX >= -0.5,
@@ -569,6 +576,22 @@ struct ListAppearanceTests {
                 )
             }
         }
+        #expect(chipCounts[480] == 4, "a wide row shows three tags and +1")
+        #expect(chipCounts[120] ?? 0 >= 3, "the visible tags stay put")
+
+        // A window that widens brings the collapsed count back: the
+        // chip's visibility is layout's decision, not a stale flag.
+        cell.setFrameSize(NSSize(width: 120, height: MessageRowMetrics.pitch))
+        cell.layoutSubtreeIfNeeded()
+        let narrowChips = cell.subviews.filter {
+            !$0.isHidden && $0.frame.height == 15 && $0.frame.minY == 40
+        }.count
+        cell.setFrameSize(NSSize(width: 480, height: MessageRowMetrics.pitch))
+        cell.layoutSubtreeIfNeeded()
+        let wideChips = cell.subviews.filter {
+            !$0.isHidden && $0.frame.height == 15 && $0.frame.minY == 40
+        }.count
+        #expect(wideChips > narrowChips, "widening restores the collapsed count")
 
     }
 
