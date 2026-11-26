@@ -9,31 +9,38 @@ import SweetbriarBridge
 /// marker square when there is no monogram.
 @MainActor
 enum IdentitySwatch {
+    /// Retain the decoded image so its identity cannot be reused while
+    /// a swatch keyed by it is still cached.
+    fileprivate struct LogoIdentity: Hashable {
+        let image: NSImage
+
+        static func == (lhs: Self, rhs: Self) -> Bool { lhs.image === rhs.image }
+        func hash(into hasher: inout Hasher) { hasher.combine(ObjectIdentifier(image)) }
+    }
+
     struct Key: Hashable {
         let marker: String
         let background: String
         let outline: String
         let monogram: String
-        /// The logo shown in the monogram's place, by account and logo
-        /// revision (spec/08 "Logo"); nil for the monogram.
-        let logo: String?
+        fileprivate let logo: LogoIdentity?
         let dark: Bool
 
-        init(tokens: AppearanceTokens, monogram: String, appearance: NSAppearance, logo: String? = nil) {
+        init(tokens: AppearanceTokens, monogram: String, appearance: NSAppearance, logo: NSImage? = nil) {
             let dark = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
             let variant = dark ? tokens.dark : tokens.light
             marker = variant.markerSrgb
             background = variant.stripSrgb
             outline = variant.outlineSrgb
             self.monogram = monogram
-            self.logo = logo
+            self.logo = logo.map(LogoIdentity.init)
             self.dark = dark
         }
     }
 
-    /// `logo` replaces the monogram on an opaque plate of the window
+    /// The logo replaces the monogram on an opaque plate of the window
     /// background, ringed in the marker color.
-    static func image(key: Key, logo: NSImage? = nil) -> NSImage {
+    static func image(key: Key) -> NSImage {
         let line = key.monogram.isEmpty ? nil : monogramLine(key.monogram)
         var plate = NSColor.windowBackgroundColor.cgColor
         NSAppearance(named: key.dark ? .darkAqua : .aqua)?.performAsCurrentDrawingAppearance {
@@ -44,7 +51,9 @@ enum IdentitySwatch {
             background: appearanceColor(key.background).cgColor,
             outline: appearanceColor(key.outline).cgColor,
             monogram: line.map(Monogram.init),
-            logo: logo?.cgImage(forProposedRect: nil, context: nil, hints: nil).map { Logo(image: $0, plate: plate) })
+            logo: key.logo?.image.cgImage(forProposedRect: nil, context: nil, hints: nil).map {
+                Logo(image: $0, plate: plate)
+            })
         // A template image would be recolored when AppKit highlights a row.
         image.isTemplate = false
         return image

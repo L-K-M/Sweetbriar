@@ -282,8 +282,8 @@ struct AccountLogoTests {
 
         let logo = try #require(NSImage(data: try redLogo()))
         let key = IdentitySwatch.Key(
-            tokens: logoTokens, monogram: "W", appearance: NSAppearance(named: .aqua)!, logo: "work#1")
-        let swatch = IdentitySwatch.image(key: key, logo: logo)
+            tokens: logoTokens, monogram: "W", appearance: NSAppearance(named: .aqua)!, logo: logo)
+        let swatch = IdentitySwatch.image(key: key)
         let view = NSImageView(frame: NSRect(x: 0, y: 0, width: 18, height: 18))
         view.imageScaling = .scaleAxesIndependently
         view.image = swatch
@@ -328,6 +328,24 @@ struct AccountLogoTests {
             appearance: Appearance(generation: 1, accounts: [broken], identities: []), dark: false)
         #expect(chip.logo == nil && chip.monogram == "W")
         #expect(!AccountLogoImages.isUndecodable(account(logo: nil, id: "plain")))
+    }
+
+    @Test func restoredArchiveCanReuseALogoRevisionWithDifferentBytes() throws {
+        // Restoring an earlier generation and changing the logo again
+        // can produce the same revision as the pre-restore logo.
+        let id = "restored-logo"
+        let original = account(logo: try redLogo(), revision: 2, id: id)
+        let cached = try #require(AccountLogoImages.image(for: original))
+        let blue = try AccountLogoPipeline.png(from: image(width: 128, height: 128) { _, _ in (0, 0, 255) })
+        let replacement = account(logo: blue, revision: 2, id: id)
+        let decoded = try #require(AccountLogoImages.image(for: replacement))
+        #expect(decoded !== cached)
+        #expect(AccountLogoImages.image(for: replacement) === decoded)
+
+        let aqua = try #require(NSAppearance(named: .aqua))
+        let previous = IdentitySwatch.Key(tokens: logoTokens, monogram: "W", appearance: aqua, logo: cached)
+        let current = IdentitySwatch.Key(tokens: logoTokens, monogram: "W", appearance: aqua, logo: decoded)
+        #expect(previous != current)
     }
 
     /// A new logo revision decodes again; the same one comes from the cache.
