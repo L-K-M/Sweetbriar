@@ -91,6 +91,21 @@ private func heldRow(_ attemptId: String) -> OutBoxRow {
 }
 
 #if canImport(Sweetbriar)
+    @MainActor
+    @Test func outBoxAttemptRowsUseTheFullHeightAroundTheHistoryHeader() async throws {
+        let fake = FakeOutBoxSource()
+        await fake.set(OutBox(live: [heldRow("live")], history: [heldRow("history")]))
+        let model = OutBoxModel(source: fake)
+        let pane = OutBoxViewController(model: model)
+        _ = pane.view
+        await model.reload()
+        pane.render()
+
+        #expect(pane.tableView(pane.tableView, heightOfRow: 0) == 74)
+        #expect(pane.tableView(pane.tableView, heightOfRow: 1) == 24)
+        #expect(pane.tableView(pane.tableView, heightOfRow: 2) == 74)
+    }
+
     /// A recipient Proton was asked to send in clear says so; one sent
     /// to its Proton keys, and one whose scheme isn't known yet, don't.
     @MainActor
