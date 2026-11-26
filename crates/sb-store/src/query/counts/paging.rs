@@ -65,7 +65,9 @@ impl StoredSearchRow {
         self.row
     }
     /// This row's cursor, minted against `binding`. Only a caller that
-    /// pages from this row needs one, and the store's tests do.
+    /// pages from this row needs one, and today that is the store's own
+    /// tests: production reads the two edges through `edge_cursors`.
+    #[cfg(test)]
     pub(crate) fn cursor(&self, binding: &Binding) -> String {
         binding.mint(self.key)
     }
@@ -109,7 +111,9 @@ impl SearchPage {
     pub fn into_rows(self) -> Vec<StoredSearchRow> {
         self.rows
     }
-    /// What this page's cursors mint and decode against.
+    /// What this page's cursors mint and decode against, for a test
+    /// minting a cursor from a row it already holds.
+    #[cfg(test)]
     pub(crate) fn binding(&self) -> &Binding {
         &self.binding
     }
