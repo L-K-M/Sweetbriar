@@ -538,9 +538,7 @@ fn build_list(
     let ordered = tag == "ol";
     // An invalid numbering attribute is ignored, as HTML does; the default
     // numbering stands.
-    let start = attr(attrs, "start")
-        .and_then(|value| parse_number(value))
-        .unwrap_or(1);
+    let start = attr(attrs, "start").and_then(|value| parse_number(value));
     let reversed = attr(attrs, "reversed").is_some();
     let mut items = Vec::new();
     for child in children {
@@ -564,10 +562,15 @@ fn build_list(
     if items.is_empty() {
         return None;
     }
+    let default_start = if reversed {
+        i64::try_from(items.len()).unwrap_or(i64::MAX)
+    } else {
+        1
+    };
     Some(List {
         part: part.clone(),
         ordered,
-        start,
+        start: start.unwrap_or(default_start),
         reversed,
         items,
     })
