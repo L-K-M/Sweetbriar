@@ -82,8 +82,8 @@ final class ReaderViewController: NSViewController {
         }
         html.ruleListUnavailable = { [weak self] ticket in
             self?.reads.run { [weak self] in
-                guard let self else { return }
-                await model.ruleListUnavailable(ticket: ticket)
+                guard let self, !model.showsReadingView,
+                      await model.ruleListUnavailable(ticket: ticket) else { return }
                 await render()
             }
         }
@@ -286,7 +286,7 @@ final class ReaderViewController: NSViewController {
 
     private func loadSelection(_ selection: Set<Int64>) async {
         guard selection.count == 1, let id = selection.first else { return }
-        await model.show(occurrenceID: id)
+        guard await model.show(occurrenceID: id) else { return }
         updateReadingToggle()
         clearReadingNote()
         await render()
@@ -364,7 +364,7 @@ final class ReaderViewController: NSViewController {
     func setSource(_ enabled: Bool) async {
         // Revoke WebKit's frame before requesting another rendition.
         html.isHidden = true
-        await model.showSource(enabled)
+        guard await model.showSource(enabled) else { return }
         await render()
     }
 
@@ -438,6 +438,7 @@ final class ReaderViewController: NSViewController {
         html.clear(ticket: ticket)
         html.isHidden = true
         textScroll.isHidden = true
+        readingScroll.isHidden = true
         status.isHidden = true
         details.isHidden = model.currentMessage == nil
         if let message = model.currentMessage {
@@ -452,21 +453,24 @@ final class ReaderViewController: NSViewController {
         }
         // The Reading view replaces the body rendition while both are
         // kept; source always wins, and a failed load has no message.
-        let showReading =
-            model.showsReadingView && model.readingDocument != nil && !model.isShowingSource
-            && model.currentMessage != nil
+        if model.showsReadingView, !model.isShowingSource, model.currentMessage != nil,
+           let document = model.readingDocument {
+            readingView.show(document)
+            readingScroll.isHidden = false
+            noteOpen(showingReading: true)
+            return
+        }
         switch model.state {
         case .html(_, let rendition):
-            if !showReading {
-                html.isHidden = false
-                await html.show(rendition, ticket: ticket)
-            }
+            html.isHidden = false
+            noteOpen(showingReading: false)
+            // The navigation (or its replacement) owns the pane after this await.
+            await html.show(rendition, ticket: ticket)
+            return
         case .plainText(_, let text):
-            if !showReading {
-                plainText.mode = .text
-                plainText.text = text
-                textScroll.isHidden = false
-            }
+            plainText.mode = .text
+            plainText.text = text
+            textScroll.isHidden = false
         case .source(_, let text):
             plainText.mode = .source
             plainText.text = text
@@ -478,13 +482,7 @@ final class ReaderViewController: NSViewController {
             status.isHidden = false
         case .empty: break
         }
-        if showReading, let document = model.readingDocument {
-            readingView.show(document)
-            readingScroll.isHidden = false
-        } else {
-            readingScroll.isHidden = true
-        }
-        noteOpen(showingReading: showReading)
+        noteOpen(showingReading: false)
     }
 
     /// spec/08 "Latency log": the body a selection opened is on screen,
