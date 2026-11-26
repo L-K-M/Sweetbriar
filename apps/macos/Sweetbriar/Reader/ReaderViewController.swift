@@ -27,6 +27,11 @@ final class ReaderViewController: NSViewController {
     let noteEditor = NoteEditorView(frame: .zero)
     /// The note last sent: the shown note may lag a write in flight.
     private var noteSent: (messageID: Int64, text: String)?
+    /// A note save `close` started, awaited by `closeAndWait`.
+    private var closingNote: Task<Void, Never>?
+    /// Which commit owns `closingNote`: a commit made while one is in
+    /// flight must not be cleared by the older task finishing.
+    private var closingGeneration: UInt = 0
     /// The message the note editor was filled for, and its note then.
     private var noteDraft: (messageId: Int64, note: String?)?
     /// Loading and error notes, above the body.
@@ -449,6 +454,7 @@ final class ReaderViewController: NSViewController {
     }
 
     func close() {
+        commitNoteDraft()
         reads.retire()
         model.close()
         if isViewLoaded {
@@ -458,7 +464,61 @@ final class ReaderViewController: NSViewController {
         }
     }
 
+    /// Save a note the user typed but has not finished editing. The
+    /// only save trigger is `resignFirstResponder`, and AppKit does not
+    /// promise to resign the first responder when a pane or a message
+    /// window goes away — so without this a note typed into the reader
+    /// and then closed is lost. The compose window commits the same way
+    /// in `closeAndWait`.
+    ///
+    /// The save runs outside `reads`: that collection is retired as
+    /// this close proceeds, and a cancelled task would drop it.
+    /// `closeAndWait` commits and awaits the save before the teardown,
+    /// because a task created inside `close` does not start until
+    /// `close` has already closed the model.
+    private func commitNoteDraft() {
+        guard let noteDraft, noteEditor.isEditing else { return }
+        let messageID = noteDraft.messageId
+        let text = noteEditor.text
+        let confirmed = noteDraft.note ?? ""
+        guard text != confirmed else { return }
+        // Captured before the task: `close` tears the model down as this
+        // close proceeds, and reaching through `self` afterwards would
+        // write to a closed model.
+        let model = self.model
+        noteSent = (messageID, text)
+        // The editor's own end-editing saves through `saveNote`; this
+        // covers a first responder that does not resign at all, and is
+        // idempotent so a second call — `closeAndWait` commits before it
+        // tears down, `close` commits again — writes nothing.
+        self.noteDraft?.note = text
+        closingGeneration &+= 1
+        let generation = closingGeneration
+        closingNote = Task { @MainActor [weak self] in
+            do {
+                try await model.setNote(text, messageID: messageID)
+            } catch {
+                // The pane is on its way out; put the last note the
+                // store confirmed back, so a later open does not show
+                // text the store never took. Only for the message this
+                // task was about: a newer commit owns the state now.
+                guard let self, self.noteDraft?.messageId == messageID else { return }
+                self.noteSent = (messageID, confirmed)
+                self.noteDraft?.note = confirmed
+            }
+            // A commit made while this one was in flight owns the slot.
+            if let self, self.closingGeneration == generation {
+                self.closingNote = nil
+            }
+        }
+    }
+
     func closeAndWait() async {
+        // Commit and await the save before the teardown below: a task
+        // created in `close` does not start until this returns, by
+        // which time `model.close()` has already run.
+        commitNoteDraft()
+        await closingNote?.value
         close()
         await reads.waitForRetirement()
     }
