@@ -393,7 +393,7 @@ final class OutBoxViewController: NSViewController, NSTableViewDataSource, NSTab
     }
 
     func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat {
-        row == groupRow ? 24 : 54
+        row == groupRow ? 24 : tableView.rowHeight
     }
 
     func tableView(_ tableView: NSTableView, shouldSelectRow row: Int) -> Bool {
