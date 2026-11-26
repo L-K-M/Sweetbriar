@@ -17,6 +17,8 @@ import SweetbriarBridge
 @MainActor
 final class AppKitPrototypeList: NSView {
     /// The reuse identifier the cells are made and found under.
+    /// The row views' identifier, so AppKit recycles them like cells.
+    private static let rowViewIdentifier = NSUserInterfaceItemIdentifier("SweetbriarHoverRow")
     private static let cellIdentifier = NSUserInterfaceItemIdentifier(
         "MessageRow"
     )
@@ -416,10 +418,19 @@ extension AppKitPrototypeList: NSTableViewDataSource, NSTableViewDelegate {
     }
 
     /// A row view of our own, so a row answers the pointer the way
-    /// Mail's message list does: a subtle fill on hover, with AppKit's
-    /// own selection highlight on top of it.
+    /// Mail's message list does: a subtle fill on hover. Dequeued like
+    /// a cell, so a scroll that brings new rows into view recycles the
+    /// row views it already made instead of allocating a fresh layer
+    /// and tracking area per row.
     func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
-        HoverRowView()
+        if let reused = tableView.makeView(
+            withIdentifier: Self.rowViewIdentifier, owner: nil
+        ) as? HoverRowView {
+            return reused
+        }
+        let rowView = HoverRowView()
+        rowView.identifier = Self.rowViewIdentifier
+        return rowView
     }
 
     /// Keep the id-held selection in sync with the table's indexes —
@@ -935,8 +946,9 @@ extension AppKitPrototypeList {
 
 /// The list's row view: a subtle fill while the pointer is over the
 /// row, the way Mail's message list answers a hover. The fill sits
-/// under the cell the table adds afterwards, and AppKit's own
-/// selection highlight draws over both.
+/// under the cell the table adds afterwards. The row's own selection
+/// highlight draws beneath both, so the fill is hidden — not drawn
+/// over — whenever the row is selected.
 @MainActor
 final class HoverRowView: NSTableRowView {
     /// The hover fill. Insets keep it off the row's edges, so the
@@ -945,10 +957,14 @@ final class HoverRowView: NSTableRowView {
     private var trackingArea: NSTrackingArea?
     private var hovering = false
 
+    /// The fill's corner radius: a rounded rectangle of its own, not
+    /// the placeholder's — the two visuals are unrelated.
+    private static let cornerRadius: CGFloat = 6
+
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         hoverFill.wantsLayer = true
-        hoverFill.layer?.cornerRadius = MessageRowMetrics.placeholderCornerRadius
+        hoverFill.layer?.cornerRadius = Self.cornerRadius
         hoverFill.alphaValue = 0
         addSubview(hoverFill)
     }
@@ -959,11 +975,16 @@ final class HoverRowView: NSTableRowView {
 
     /// Resolve the fill for the appearance it is in, so a Dark Mode
     /// switch and Increase Contrast both take effect without a reload.
+    /// The color is resolved inside the appearance: `cgColor` on a
+    /// dynamic color otherwise resolves against whatever appearance
+    /// happens to be current rather than this view's.
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
-        hoverFill.layer?.backgroundColor = NSColor.labelColor
-            .withAlphaComponent(0.05)
-            .cgColor
+        var fill: CGColor?
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            fill = NSColor.labelColor.withAlphaComponent(0.05).cgColor
+        }
+        hoverFill.layer?.backgroundColor = fill
     }
 
     override func layout() {
@@ -986,6 +1007,13 @@ final class HoverRowView: NSTableRowView {
         )
         addTrackingArea(area)
         trackingArea = area
+        // A row can appear under a stationary pointer — a reload, or a
+        // row scrolled in beneath the cursor. AppKit sends no
+        // `mouseEntered` until the pointer moves, so the state is
+        // primed here or the highlight pops in a beat late.
+        hovering = window.map {
+            bounds.contains(convert($0.mouseLocationOutsideOfEventStream, from: nil))
+        } ?? false
     }
 
     override func mouseEntered(with event: NSEvent) {
