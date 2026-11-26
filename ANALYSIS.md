@@ -13,8 +13,20 @@ welcome island (PR #577) are recorded under their original entries.
 A further pass (`friendly-wasp`) added the small correctness, layout,
 hygiene and product entries below; its four fixes are PRs #578, #581,
 #585 and #590.
+A further independent review, by opencode, added Part 8; its nine
+changes are PRs #573, #582, #583, #584, #587, #591, #595, #596 and #597.
 
 ## Completed on main
+
+- **Second review (opencode), landed.** `scripts/build.sh` finds rustup's
+  tools outside `CARGO_HOME` (#573); the unit-test host opens a private
+  archive, never the user's (#582); the Reading view memory resets after
+  a restore (#583); `Info.plist` matches `project.yml` (#584); long
+  recipient lists collapse behind **Show All Recipients** (#587);
+  `scripts/bundle-notices.sh` is shellchecked in CI (#591); the Proton
+  events cursor gets the same path check as every other id (#596); a
+  backup reference that is not a hash fails `Corrupt` before it names a
+  directory (#597). Details and what remains are in Part 8.
 
 - **Help menu content.** Help → Keyboard Shortcuts… now opens a shared
   reference window with the app's keyboard commands. [Menu entry](apps/macos/Sweetbriar/MainMenu.swift#L458), [Shortcut reference](apps/macos/Sweetbriar/KeyboardShortcutHelp.swift)
@@ -34,6 +46,10 @@ hygiene and product entries below; its four fixes are PRs #578, #581,
   overwriting one with the other.
 
 ## Submitted patches
+
+- **Second review (opencode), submitted.** A panicking writer observer no
+  longer hangs its write or ends the writer ([PR](https://github.com/L-K-M/Sweetbriar/pull/595));
+  its local gate is green and only the macOS job is pending.
 
 - **Reader rule-list install** (further pass, PR #581). `HTMLReaderView`
   installs its shared `WKContentRuleList` once per web view instead of
@@ -1126,6 +1142,8 @@ Medium priority. Membership is checked before the settings write returns. A togg
 
 High priority. In the live Dark Mode reader, the tag field and empty note occupied two rows before the rendition controls and body. The header also stacks full addresses, account, attachments and status above the scrolling body. The horizontal tag list also has a width cap without dedicated overflow. Keep subject, sender address and account visible first. Put long recipient lists, numerous attachments, and optional tags and notes behind accessible disclosure. Test 20 attachments, 12 tags and long addresses at the minimum pane width. Require a readable first body screen, a reachable attachment action, and VoiceOver access to every disclosed detail. [Reader layout](apps/macos/Sweetbriar/Reader/ReaderViewController.swift#L132)
 
+Long recipient lists collapse behind Show All Recipients since PR #587 (Part 8); the attachments, tags and notes remain.
+
 ### Establish shared density and typography for the three-pane window
 
 Medium priority. Keep native sidebar selection and visible account cues. Prototype a consistent subject/sender hierarchy, alignment and control sizing, and a readable maximum line length in native reader renditions. Compare the same synthetic messages in light and dark appearance and at narrow and wide sizes. Test Increase Contrast, Full Keyboard Access, long names and scan speed. Use measured text extents before changing table row height. [Reader layout](apps/macos/Sweetbriar/Reader/ReaderViewController.swift#L132), [Message-list contract](spec/08-macos-app.md#message-list)
@@ -1185,3 +1203,333 @@ Medium priority. Document the direct Proton workflow, local archive behavior, an
 ### Copy a passage as a Markdown citation
 
 Exploratory. Add a reader context action that copies the selected passage as a Markdown block quote with its source subject and date. Let the user include the sender address when they need it. Start with native reader text selection and the standard clipboard. Support nested quotes, Unicode and multiline headers, and ensure the metadata cannot change the Markdown structure. Prototype internal links only after choosing a reference that survives restore and provides a useful missing-message state. This gives researchers and writers a quick way to collect quotations in their existing notes app.
+---
+
+# Part 8 — Second review (2026-11-26, opencode)
+
+A second pass over `19fde48e`, independent of Parts 1 to 7: the Rust
+crates (store, engine, service, FFI, MIME, Proton, resources), the Swift
+app and bridge, and the build and CI tooling. It ran the Debug app on a
+synthetic archive of six mailboxes (dark mode, 1280 x 840), read the
+app's Accessibility tree, and used thirteen read-only helper reviews
+(LongCat, StepFun, Devin, Nemotron) whose findings were checked against
+the code before one was recorded. Line numbers are those of `19fde48e`.
+
+Entries that duplicate Parts 1 to 7 name the entry they extend instead of
+repeating it.
+
+## Changes from this review
+
+| Change | PR | State |
+|---|---|---|
+| `scripts/build.sh` finds rustup's tools outside `CARGO_HOME` | #573 | merged |
+| The unit-test host opens a private archive, never the user's | #582 | merged |
+| The Reading view memory resets after a restore | #583 | merged |
+| `Info.plist` regenerated from `project.yml` | #584 | merged |
+| Long recipient lists collapse behind **Show All Recipients** | #587 | merged |
+| `scripts/bundle-notices.sh` is shellchecked in CI | #591 | merged |
+| A panicking writer observer no longer hangs its write | #595 | open |
+| The Proton events cursor is checked like every other id | #596 | merged |
+| A backup reference that is not a hash fails `Corrupt` | #597 | merged |
+
+Tried and dropped: hiding the sidebar's symbols from VoiceOver with
+`setAccessibilityElement(false)`. The symbol stayed in the Accessibility
+tree, read back from a running build. The row's cell has to become one
+element without children (next section).
+
+## Correctness and interaction
+
+### Make each sidebar and list row one VoiceOver stop
+
+Medium priority. In the Accessibility tree a sidebar row is a cell with
+its label ("Inbox, 1 unread") and then three children: the title, the
+unread badge, and the symbol as an image whose description is the
+symbol's default name ("move" for every folder, "Document page" for
+Drafts). A message row likewise exposes its three text fields and its
+markers after the row's label. VoiceOver stops on each. Make the cell a
+single element with no children and keep its label complete; the badge
+is an element on purpose for the UI tests
+(`SidebarAppearanceTests.theUnreadBadgeKeepsItsCountAccessible`), so
+check which XCUITests read it before changing it, and verify with a
+VoiceOver pass. [Sidebar cell](apps/macos/Sweetbriar/SidebarViewController.swift#L789),
+[Row cell](apps/macos/Sweetbriar/AppKitPrototypeList.swift#L524)
+
+### Keep Mark Read and Star enabled for a selection whose rows are not cached
+
+Medium priority. `flagTargets` and `flagWindowSelection` validate against
+`ListWindowModel.row(at:)`, which answers only for the three cached
+pages. A range across pages, or Select All followed by scrolling, leaves
+selected ids uncached, both commands disable with no explanation, and
+the whole-window path needs `row(at: 0)`, which is gone once page 0 is
+evicted. Decide enablement from the selection's ids or its window token,
+not from cached rows. Test a shift-click across two pages, Select All in
+a long mailbox, then scroll. [Flag targets](apps/macos/Sweetbriar/MainWindowController.swift#L681)
+
+### Invalidate the list's display link when the list closes
+
+Low priority. `MessageListViewController.close()` never calls
+`clock?.invalidate()`, and a `CADisplayLink` retains its target, so each
+window rebuild leaks a paused link for the life of the process.
+`ListPrototypeWindowController.windowWillClose` does invalidate its own.
+[Test seam to copy](apps/macos/Tests/SweetbriarTests/PrototypeWindowTests.swift#L54)
+
+### A double-click below the drafts opens the selected draft
+
+Low priority. `DraftsListViewController.openClicked` falls back to
+`selectedRow` when `clickedRow` is -1. `MessageTableView` guards the
+clicked row; do the same. [Drafts list](apps/macos/Sweetbriar/DraftsListViewController.swift#L143)
+
+### Helper-reported defects to confirm before fixing
+
+Each was reported by a helper and not confirmed by reading every caller.
+
+- `crates/sb-ffi/src/drafts.rs:382`: two equal unpublished attachments
+  in one save compare equal, so `into_service` clones one publication
+  and the second spend of its reservation fails the save with
+  `Conflict`. Confirm with a draft holding the same file twice.
+- `crates/sb-mime/src/search_document/html.rs:351`: one HTML token over
+  16 KiB (a `data:` image URI, a long comment) trips `PendingToken`, and
+  `search_document.rs:149` drops the whole body from the index.
+  `paste/dom.rs:456` accepts the same shape by counting separators
+  too; port that rule and cover a newsletter with inline images.
+- `crates/sb-proton/src/client.rs:174`: `clamp_retry_after` reads only
+  delta-seconds. An HTTP-date falls to the 1 s floor, the most
+  aggressive reading, under a 429 (read). Parse the date, and answer a
+  longer wait, not the floor, to a header that cannot be read.
+- `crates/sb-proton/src/client.rs:362`: a human-verification token is
+  taken before the request is sent, so a request that never reached
+  Proton spends it and the user solves a verification again.
+- `crates/sb-proton/src/client.rs:762`: `read_body` buffers a JSON
+  reply with no byte bound; `collect_download` has one.
+- `crates/sb-proton/src/reconstruct.rs:268`: the decrypted body's
+  entity headers are appended unfiltered, so a forged
+  `X-Pm-Internal-Id` precedes the real one (line 323).
+- `crates/sb-proton/src/send_transport.rs:627`: `send_packages` does
+  not check the returned `Sent.id` against the draft id, unlike
+  `message()` and `read_draft()`.
+- `crates/sb-proton/src/send_transport.rs:713`: attachment file names,
+  media types and content ids go into the multipart body verbatim; a
+  name with CR or LF corrupts the upload.
+- `crates/sb-proton/src/keys.rs:584`: `restore_session` maps
+  `KeyUnlock` to `Unavailable`, so a password changed elsewhere looks
+  like a network failure.
+- `crates/sb-store/src/maintenance.rs:135`: `finish` updates whichever
+  run of a job is open; a second run started before the first finishes
+  would take the first outcome.
+- `crates/sb-store/src/gc.rs:139`: `object_seen` runs
+  `attachments_json LIKE '%sha%'` once per object inside one read
+  transaction. Time a pass over a large `draft_revisions`.
+- `crates/sb-store/src/backups/staging.rs:151`: a data root at a
+  filesystem root reaches `expect("a data root has a parent")`;
+  `restore_pending::root_name` refuses the same case.
+- `crates/sb-store/src/backups/stage_quarantine.rs:225`: when the
+  quarantine work and its close both fail, the close error hides the
+  first.
+- `apps/macos/Sweetbriar/OutBoxViewController.swift:396`: rows are 54 pt
+  and hold four stacked lines; check at a larger text size.
+- `apps/macos/Sweetbriar/Composer/ComposeAttachmentControls.swift:260`:
+  the attachment list is rebuilt on every keystroke; diff first, as
+  `renderRecipientFence` does.
+
+- `crates/sb-engine/src/settings.rs:249` and `crates/sb-engine/src/identity.rs`:
+  `set_setting` and the identity commands write through
+  `resources().write(..)` directly, not through a counted worker, so a
+  restore's quiesce may not wait for them (spec/03 "Integrity", spec/08
+  "Backups settings"). The most serious lead in this list: confirm
+  which writes `blocking.start()` counts and whether one of these can be
+  in flight across the swap.
+- `crates/sb-proton/src/client.rs`: the human-verification token is a
+  client-wide slot shared by every account, so a token obtained for one
+  account can ride another account's next authenticated request.
+- `crates/sb-store/src/recipients.rs`: the recipient fence is specified
+  for To, Cc and Bcc together; the code is reported to gate it on To
+  being non-empty (spec/05 "Recipient check").
+- `apps/macos/SweetbriarBridge/ListWindowModel.swift`: `filingSelection`
+  computes and sorts ranks for a `.window` selection token that needs
+  none of them.
+
+### Spec and code disagree in two places
+
+`identities(account_id)` (spec/07 "Other queries") is implemented
+nowhere; `compose_catalog` serves the app. The selection snapshots of
+spec/07 (`open_selection`, `selection_ids`) are not exported, so
+`ExportScopeInput::Selection` has no caller. Decide for each whether the
+spec or the code changes.
+
+## Performance
+
+### Do not rebuild the sidebar on every list generation
+
+Medium priority. `MainWindowController.listSaw` sends each list
+generation to `SidebarModel.noteGeneration`, then
+`SidebarViewController.reloadSections` rebuilds every row object and
+calls `reloadData()`. A sync landing fifty changes reloads it fifty
+times. This is the other half of Part 1's B1, which reads the
+consequence in the list. Reload the counts in place, or debounce to one
+reload per burst. [Sidebar reload](apps/macos/Sweetbriar/SidebarViewController.swift#L179)
+
+### Keep a table view and a model per mailbox
+
+Medium priority. `MessageListViewController.install` builds a new
+`NSTableView` and a new `ListWindowModel` for every mailbox choice
+(`:295-353`), which is why no mailbox remembers its scroll position or
+selection (Part 8, missing features). Part 1's B10 asks for the table to
+survive a Search change; keeping one table per mailbox also lets a
+mailbox return to where the user left it.
+
+### Cache the calendar the row formatter uses
+
+Low priority. `MessageRowFormatter.dateString` resolves
+`Calendar.current` and makes two comparisons per presented row, on the
+list's hot path. One autoupdating calendar beside the cached
+`DateFormatter` does. Related: Part 2's P14, on the same function.
+[Row formatter](apps/macos/Sweetbriar/MessageRowPresentation.swift#L215)
+
+### Show the header while the body loads
+
+Medium priority. `resetSelection` hides the whole header and shows
+"Loading message…" until `model.show` returns. For a body Proton still
+has to fetch, the pane shows neither subject nor sender, which the row
+already knows. Show them at once, and a progress indicator beside the
+note. [Reader load](apps/macos/Sweetbriar/Reader/ReaderViewController.swift#L262)
+
+### Give HTML mail a dark canvas when it sets no colors
+
+Medium priority. In Dark Mode an HTML message renders as a white
+rectangle across the reader (seen). The sanitizer parses every
+declaration, so it can report whether the message sets a text color or
+a background. For one that sets neither, inject `color-scheme: dark`
+and the system canvas colors; for one that sets either, leave it as it
+is. Needs a spec line in 08 "Reader". [Sanitizer](crates/sb-mime/src/render.rs#L286)
+
+## Visual and layout
+
+### Make the tag field and the note quiet until they are used
+
+Medium priority. Above every body the reader stacks a full-width
+bordered tag field, a note placeholder and then the rendition controls
+(`ReaderViewController.loadView`, `:128`), about 220 pt before the body.
+A row of tag chips with a small add button, and a note that is a single
+line until clicked, would give the body most of that back. The spec
+requires both to be present, not to be large. [Reader layout](apps/macos/Sweetbriar/Reader/ReaderViewController.swift#L128)
+
+### Use one style for the two rendition controls
+
+Low priority. "View Source" is a bordered push button and "Reading
+View" a checkbox, greyed out for mail with no reading document (seen).
+Two small toggle buttons of one style; keep the
+`readingViewToggle` identifier, which tests use. [Rendition controls](apps/macos/Sweetbriar/Reader/ReaderViewController.swift#L153)
+
+### Keep an inline image out of the attachment list
+
+Low priority. The reader's attachment rows are typed since PR #580. An
+inline image that the body already shows is still listed as a row, named
+"attachment" when the part has no file name (seen), because the
+manifest's attachments include the parts with a content id. Mark those
+as inline and leave them out, or show them behind a disclosure. Extends
+Part 3's F4. [Attachments](apps/macos/Sweetbriar/Reader/ReaderViewController.swift#L638)
+
+### Give the unread dot a fixed gutter
+
+Low priority. An unread row indents its sender past the dot while its
+subject and snippet keep the column (Accessibility frames: sender at
+x 269, subject at x 257), so the three lines of every unread row are
+out of step. Reserve the dot's width for all rows. [Row layout](apps/macos/Sweetbriar/AppKitPrototypeList.swift#L802)
+
+### Use the solved foreground for the tinted header's secondary text
+
+Low priority, accessibility. `renderHeader` passes
+`tint.foreground.withAlphaComponent(0.75)` as the secondary color in a
+tinted message window. The core solves the foreground for 4.5:1 at full
+opacity; blended it no longer meets it. Pass the solved foreground for
+both. [Header tint](apps/macos/Sweetbriar/Reader/ReaderViewController.swift#L525)
+
+## Missing features
+
+- **A Dock badge for unread mail.** Nothing sets `NSApp.dockTile`.
+  Count the Inbox only, with a setting to turn it off. Needs a spec
+  line in 08.
+- **A mailbox remembers where you was.** Coming back to a mailbox shows
+  the top with nothing selected. Keep the scroll offset and the
+  selected id per mailbox for the session; restore once the first page
+  lands. Depends on the table-view entry under Performance.
+- **Read and star for the local archive.** Both commands are disabled
+  for local-archive rows ("The local archive's flags are later",
+  spec/07 "Flags"), so imported mail can never be marked unread. A core
+  step: a local flags table and the same `set_flags` path.
+- **Role hints for imported mailboxes.** Roles are not read from file
+  names (spec/08 "Sidebar", by decision), so after an Apple Mail export
+  import the Unified Inbox is empty while "Local Archive > Inbox" holds
+  everything (seen). Offer "Treat as Inbox" for a mailbox named Inbox,
+  Sent, Drafts, Trash, Archive or Junk at import, and store the role.
+- **A sort order for a mailbox.** The pilot's only list sort is newest
+  first and `date_asc` is reserved (spec/07). If wanted: View -> Sort
+  By, newest or oldest first, kept per mailbox.
+- **Skip a snippet that repeats the subject.** A message whose first
+  body line equals its subject shows it twice ("Your receipt from
+  Harbor Coffee Co.", seen). In `sb-mime`'s summary, drop that line and
+  take the next. Needs a spec line in 07 for the snippet's rule.
+- **Actions in the reader.** Reply, Reply All, Forward, Archive and
+  Trash act from the toolbar, the menu or the context menu only; a
+  small action row under the header would save the trip.
+
+## Ideas
+
+- **A palette over every command.** Extends "Jump to a mailbox or saved
+  view by typing" and Part 5's D4: every command already has a stable
+  identifier (`ch.lkmc.Sweetbriar.cmd.*`), so one fuzzy palette over the
+  enabled ones, keyboard only, is cheap.
+- **Move all from this sender.** A row's context menu offers it, with
+  the filing toast's Undo; the selection token path already exists.
+- **Sender monograms.** In the reader header and the list, colored by
+  the sender's domain and never by an account color; the account colors
+  keep their meaning.
+- **Send later.** Beside Undo Send, which exists: a date and time the
+  Out Box holds the attempt until.
+- **Hover actions on rows.** Part 3's F8 asks for swipe actions; actions
+  that appear under the pointer need no gesture.
+
+## Build and developer experience
+
+- **`xcodebuild test` on a Mac with a development team.** The commands
+  in AGENTS.md work on CI because CI passes `CODE_SIGN_IDENTITY=-`. On a
+  Mac signed into a development team the test action fails looking for
+  a "Mac Development" certificate (seen). Add the flag to the documented
+  commands.
+- **Say where the tools live.** `cargo` need not be on an agent's
+  `PATH`; the pinned toolchain's `bin` under `rustup`'s home has it, and
+  `cargo-deny` and `cargo-about` live in `~/.cargo/bin`. One line in
+  AGENTS.md on both saves every new agent ten minutes.
+- **`scripts/bundle-notices.sh` names a script that is not there.**
+  Line 51 runs `scripts/swiftpm-notices.py`; no such file exists. The
+  branch would fail the build the day a remote SwiftPM package appears.
+  Commit the recipe or remove the branch.
+- **`bundle-notices.sh` runs on macOS only.** It is shellchecked on
+  Linux now (PR 591) and never executed in CI. A `bash -n` under
+  `/bin/bash` 3.2 in the macOS job, as `build.sh` gets, would catch a
+  bash 4 construct.
+- **PR and release builds use different Xcodes.** `release.yml:24` pins
+  `Xcode_26.6.app` and `macos.yml` sets no `DEVELOPER_DIR`. Pin both or
+  neither, and keep spec/11's claim true.
+- **A plain `xcodebuild` needs `rustc` on `PATH`.** The "Bundle licence
+  notices" build phase runs `scripts/bundle-notices.sh`, which calls
+  `rustc --print sysroot`; without the toolchain on `PATH` the build
+  fails with `rustc: command not found` (seen). `scripts/build.sh` finds
+  the tools first; the AGENTS.md `xcodebuild` commands do not.
+- **A test host that is killed leaves its private archive behind.**
+  The host removes it at quit (PR 582), but `xcodebuild` usually ends
+  the host without a quit, so `SweetbriarTests-*` directories collect
+  in the temporary directory until the system purges it (six after this
+  review's runs). Removing stale ones at the next host launch would do.
+- **One test is timing-sensitive under load.**
+  `sb-service`'s
+  `a_breaker_event_is_listed_and_its_resolution_wakes_the_subscription`
+  failed once in three full local gates on a loaded Mac (the condition
+  had already left `NotAnswering`) and passed alone each time.
+- **Reported by a helper, not confirmed:** CI passes no `--locked`, so a
+  `Cargo.lock` drift is invisible; tool binaries are downloaded without
+  checksums; the tag and version are compared only after the full Rust
+  gate; `check-ffi` prints its success wording when its Swift
+  type-check was skipped; the derived app icon has no drift check;
+  Dependabot skips `fuzz/` and `ci/go-proton-api`; spec/11 describes
+  caches CI does not have; the layering check runs twice per leg.
