@@ -4,14 +4,37 @@ Consolidated on 2026-11-26 from the full review of `origin/main` at
 `19fde48e` (Rust ~298k lines, Swift ~60k lines) plus a second pass over
 the reader and list hot paths. This file is the shovel-ready backlog:
 every open item names the file and line that carries it, and each entry
-is written so an LLM can pick it up cold. Items already shipped live
-under "Done" below — do not re-pick them.
+is written so an LLM can pick it up cold. Completed work and submitted patches are recorded below.
 
-## Done (shipped)
+## Completed on main
 
+- **Help menu content.** Help → Keyboard Shortcuts… now opens a shared
+  reference window with the app's keyboard commands. [Menu entry](apps/macos/Sweetbriar/MainMenu.swift#L458), [Shortcut reference](apps/macos/Sweetbriar/KeyboardShortcutHelp.swift)
+
+## Submitted patches
+
+- **Reader rendition interleaving.** Parked HTML preparation hid the
+  current Reading view on navigation or restarted WebKit after a
+  rendition toggle. The regression tests cover a late selection load,
+  a parked HTML preparation across navigation, and a toggle within
+  the same selection. Independent preparation and selection checks
+  reject stale completions, including when a message is reselected.
+  [Reader rendition PR](https://github.com/L-K-M/Sweetbriar/pull/588)
+- **Reading view list numbering.** Reversed lists now default to
+  the item count, explicit numbers reset the sequence, and the
+  renderer handles the integer bounds without trapping. Rust and
+  native renderer tests cover defaults and explicit numbering in both
+  directions. Existing nested-list indentation coverage remains
+  relevant to the rendered layout.
+  [Ordered-list numbering PR](https://github.com/L-K-M/Sweetbriar/pull/593)
+- **Account logos after restore.** The logo cache checks the stored
+  PNG when an archive reuses a revision. The From menu redraws its
+  swatch when the decoded image changes. The regression uses two
+  different PNGs under the same account ID and revision.
+  [Logo cache PR](https://github.com/L-K-M/Sweetbriar/pull/589)
 - **Tag draft followed the selection to another message.** The reader's
   tag field never cleared on selection change, so an unsubmitted draft
-  typed on message A would land on message B. Fixed in PR #576
+  typed on message A would land on message B. Tracked in PR #576
   (`mac/reader-tag-draft-20261126`): `ReaderViewController` tracks the
   message the draft belongs to, clears on selection change
   (occurrence-keyed, eagerly in `resetSelection`) and when the shown
@@ -19,13 +42,10 @@ under "Done" below — do not re-pick them.
   it. Regression test `tagPickerDraftStaysWithItsMessage`.
 - **`setVisible` re-ran all visibility work on every scroll
   notification, including retrying failed pages on no-op reports**
-  (old B6). Fixed in PR #586 (`mac/list-visible-guard-20261126`):
+  (old B6). Tracked in PR #586 (`mac/list-visible-guard-20261126`):
   `ListWindowModel.setVisible` returns early when the range is
   unchanged, so `failedPages` survives until the range actually moves.
   Test `aRepeatedVisibleRangeDoesNotRetryAFailedPage`.
-- **"Scope the tag input to one message"** (listed in the parallel
-  curated pass below): same defect and same fix as the first entry —
-  shipped in PR #576.
 
 ## Verified non-bugs (do not re-report)
 
@@ -43,8 +63,12 @@ under "Done" below — do not re-pick them.
 - Ran four bounded read-only helper passes (LongCat 2.5) over the store
   query layer, the list/bridge, `sb-mime`/reader and search, then
   verified each reported finding against the source before recording it.
-- Every claim below was checked against the code at the stated line.
-  Nothing is inferred from naming alone.
+- A Dark Mode walkthrough at `241250fb` covered fresh roots, import
+  of a two-message synthetic mbox, reader selection and a local
+  draft. Narrow panes, other appearances and real-account qualification
+  remain open.
+- The findings cite source locations and distinguish observations
+  from proposals.
 
 ---
 
@@ -209,33 +233,6 @@ window does two `reloadData()` calls and two selection restores.
 whole query and then **one call per AST node**, plus a
 `JSONSerialization` encode per node on the main actor, before chips and
 canonical text appear. Each of those is a separate engine hop.
-
-## B13. The Help menu is empty
-
-`MainMenu.swift` `makeHelpMenu()` registers an `NSMenu` with no items.
-AppKit adds its menu-search field to the registered menu, so the user
-sees a "Help" menu whose only content is an empty search box.
-
-## B14. Audit the reader's stale-render interleaving
-
-`ReaderViewController.render()` (ReaderViewController.swift:437) clears
-the pane and re-renders synchronously while body loads complete
-asynchronously into `HTMLReaderView.show(_:ticket:)`
-(HTMLReaderView.swift:181). The ticket guards (`clear(ticket:)` at
-:170, `currentTicket()`) look correct, but a fast A→B→A navigation
-where A's slow load lands last deserves a targeted test: confirm the
-last `show` wins and no intermediate content flashes. Low priority —
-verify before changing.
-
-## B15. Verify Reading-view ordered-list numbering
-
-`crates/sb-mime/src/document.rs:531` (`build_list`) parses `start`,
-`reversed` and per-`li` `value`; `ReadingRenderer.swift:72-85` computes
-`fallback = reversed ? start - index : start + index` and prefers
-`item.number`. A second review pass flagged wrong numbering in the
-Reading view for lists with `start`/`reversed`/`value`. Confirm with a
-fixture (nested and reversed lists) before changing; the Rust side has
-`ReadingRendererTests`/`document` tests to extend.
 
 ---
 
@@ -451,12 +448,7 @@ jump, and selection rings re-draw.
 `chip.fittingWidth()` at `:825`). A window resize therefore re-measures
 every visible row twice.
 
-## V3. The Help menu has no content (see B13)
-
-A "Help" menu containing only AppKit's empty menu-search field looks
-unfinished in an otherwise complete menu bar.
-
-## V4. Empty states are plain secondary-label text
+## V4. Make first-run and empty states actionable
 
 `ReaderViewController.swift` `placeholder` is a centred
 `NSTextField(labelWithString:)` with `.secondaryLabelColor` and
@@ -466,6 +458,19 @@ states, the sidebar's empty states and `AccountsSettingsView`'s
 (`ContentUnavailableView`) is already used in `AppearanceSettingsWindow`
 for the closed-archive cases, so the app has the vocabulary but not the
 coverage.
+
+Medium priority. The live first-launch window showed both "No messages" and "No
+message selected," with neither import nor sign-in available in either pane. Put
+Import Mail or Add Proton Account in the empty archive flow. Distinguish an
+empty mailbox, a reader without a selection, and a zero-result query with
+incomplete coverage. Use one primary action and concise text. Test clean roots,
+an empty mailbox beside a populated mailbox, and an incomplete zero-hit search.
+[Current list
+states](apps/macos/Sweetbriar/MessageListViewController.swift#L565)
+
+A short first-run checklist could also link the keyboard reference and
+guide the user to a completed import. Keep those links secondary to
+the primary action.
 
 ## V5. The app icon set is thin
 
@@ -520,14 +525,28 @@ account carrying thousands of unread messages has no fast path.
 ## F3. No thread/conversation view
 
 `WindowSpec` has a `.thread` case and `MessageRowPresentation` knows
-about it, but there is no UI to expand a conversation. Mail's
-conversation view is what most people live in.
+about it, but the main window has no way to expand a conversation.
 
-## F4. No Quick Look for attachments
+Exploratory. Use the existing thread window type and reader message's thread ID
+to show a compact read-only trail across Inbox, Sent and archive mail. Expose
+unread state, account and whether a link is inferred. Keep header-linked replies
+distinguishable from subject-only matches. Start with duplicate copies, missing
+parents, unrelated same-subject mail and multiple accounts. Treat a threaded
+message list as a separate decision. [Window
+types](apps/macos/SweetbriarBridge/Types.swift#L392)
+
+## F4. Attachment saving and preview controls
 
 `ReaderViewController` lists attachments and `openAttachment` hands back
 a file URL, but pressing Space on an attachment does not open Quick
 Look, and there is no "Reveal in Finder" or "Save As…".
+
+Medium priority. Reuse checked attachment acquisition and copy to a destination
+the user chooses. Surface unavailable or damaged parts in the reader. Test
+cancellation, destination collisions, long Unicode names, and navigation while
+acquiring a file. Evaluate Quick Look separately for safe behavior across
+supported attachment types. [Attachment
+handling](apps/macos/Sweetbriar/Reader/ReaderViewController.swift#L638)
 
 ## F5. No drag-and-drop of messages out of the app
 
@@ -642,13 +661,6 @@ Instead of a vertical list of attachment rows, a horizontal strip of
 thumbnail tiles under the subject, with the count. Images already have
 bytes in the manifest; `NSImage` thumbnails are cheap.
 
-## D8. A first-run checklist that ends in a real import
-
-File → Import… exists and works, but a new user lands on an empty
-Unified Inbox with a centred "No message selected". A one-screen
-checklist ("Add your Proton account", "Import an Apple Mail export",
-"Learn the keyboard") would make the first five minutes land.
-
 ## D9. Signpost-free latency surfacing
 
 The app already records a latency log behind Debug. Surfacing a
@@ -674,7 +686,7 @@ Ranked by (user-visible impact × confidence) / diff size.
 | 2 | B2 — HashMap cid resolution | clear quadratic bug, small diff, existing test surface |
 | 3 | P1 — render the body once | 2x on every message open, spec/08's 100 ms budget |
 | 4 | B3 — cache the body lease | removes re-render on re-selection and source toggling |
-| 5 | B7 — visible-only page reload | removes off-screen cell churn (`setVisible` guard shipped in PR #586) |
+| 5 | B7 — visible-only page reload | removes off-screen cell churn (`setVisible` guard tracked in PR #586) |
 | 6 | B4 + B5 + P7 — search hot path | the 100 ms search budget |
 | 7 | B8 + B9 — reverse index and dropped-selection lookups | removes main-thread stalls |
 | 8 | B10 + B12 — search field round trips | per-keystroke latency |
@@ -686,22 +698,15 @@ Ranked by (user-visible impact × confidence) / diff size.
 Entries deliberately left out of the implementation pass: everything in
 Part 4 that needs a spec change first (F2, F3, F6, F9, F15), everything
 that needs a design decision from the owner (D2, D3, D10), and the
-benchmark-only items (P11, `windows.rs` synthetic fill). Already
-shipped and therefore absent from the table: the reader tag-draft fix
-(PR #576) and the `setVisible` no-op guard (PR #586).
+benchmark-only items (P11, `windows.rs` synthetic fill). The tag-draft
+fix and `setVisible` no-op guard have separate submitted patches.
 
 ---
 
-# Part 7 — Parallel curated pass (kept from the earlier ANALYSIS.md)
+# Part 7 — Parallel curated pass
 
-A second, independently curated pass over the same baseline
-(`19fde48e`) recorded the entries below in a shorter format. They are
-kept here verbatim (deduplicated against Parts 1–6; the tag-input entry
-shipped as PR #576 and is listed under "Done" above). Overlaps:
-"Give the reader body a consistent share of the window" is the detailed
-form of V8 and the reader-header note; "Make the first-run and empty
-states actionable" is the detailed form of V4; "Jump to a mailbox or
-saved view by typing" and "Add a visible Save As action" extend F15/F4.
+A second pass over `19fde48e` recorded the additional entries below.
+See V4 for first run, F3 for conversation trails, and F4 for attachments.
 
 ## Correctness and interaction
 
@@ -722,10 +727,6 @@ Medium priority. Membership is checked before the settings write returns. A togg
 ### Give the reader body a consistent share of the window
 
 High priority. In the live Dark Mode reader, the tag field and empty note occupied two rows before the rendition controls and body. The header also stacks full addresses, account, attachments and status above the scrolling body. The horizontal tag list also has a width cap without dedicated overflow. Keep subject, sender address and account visible first. Put long recipient lists, numerous attachments, and optional tags and notes behind accessible disclosure. Test 20 attachments, 12 tags and long addresses at the minimum pane width. Require a readable first body screen, a reachable attachment action, and VoiceOver access to every disclosed detail. [Reader layout](apps/macos/Sweetbriar/Reader/ReaderViewController.swift#L132)
-
-### Make the first-run and empty states actionable
-
-Medium priority. The live first-launch window showed both "No messages" and "No message selected," with neither import nor sign-in available in either pane. Put Import Mail or Add Proton Account in the empty archive flow. Distinguish an empty mailbox, a reader without a selection, and a zero-result query with incomplete coverage. Use one primary action and concise text. Test clean roots, an empty mailbox beside a populated mailbox, and an incomplete zero-hit search. [Current list states](apps/macos/Sweetbriar/MessageListViewController.swift#L565)
 
 ### Establish shared density and typography for the three-pane window
 
@@ -775,17 +776,9 @@ Medium priority. Prototype a Preview command using the core's outbound renderer 
 
 Medium priority. Offer Reply with Selection for the native reader renditions. Capture message and selected text together and quote only that passage, using the existing reply target, identity checks and quote handling. Test plain and Markdown quotes, Unicode, the standalone reader window, and ordinary Reply. [Reader view](apps/macos/Sweetbriar/Reader/ReaderViewController.swift), [Composer contract](spec/08-macos-app.md#composer)
 
-### Show a local conversation trail on demand
-
-Exploratory. Use the existing thread window type and reader message's thread ID to show a compact read-only trail across Inbox, Sent and archive mail. Expose unread state, account and whether a link is inferred. Keep header-linked replies distinguishable from subject-only matches. Start with duplicate copies, missing parents, unrelated same-subject mail and multiple accounts. Treat a threaded message list as a separate decision. [Window types](apps/macos/SweetbriarBridge/Types.swift#L392)
-
 ### Show saved-view scope before saving
 
 Medium priority. A scoped search saved to a view currently runs over all accounts. Show this resulting scope in the sheet when it differs from the active search. If users want persistent scope, revise the contract and retain the meaning of the older saved views. Test a query with hits in two accounts, a missing mailbox, rename, and backup or restore. [Search and saved-view contract](spec/08-macos-app.md#search-m16)
-
-### Add a visible Save As action for attachments
-
-Medium priority. Reuse checked attachment acquisition and copy to a destination the user chooses. Surface unavailable or damaged parts in the reader. Test cancellation, destination collisions, long Unicode names, and navigation while acquiring a file. Evaluate Quick Look separately for safe behavior across supported attachment types. [Attachment handling](apps/macos/Sweetbriar/Reader/ReaderViewController.swift#L638)
 
 ### Explain compatibility before account setup
 
@@ -794,5 +787,3 @@ Medium priority. Document the direct Proton workflow, local archive behavior, an
 ### Copy a passage as a Markdown citation
 
 Exploratory. Add a reader context action that copies the selected passage as a Markdown block quote with its source subject and date. Let the user include the sender address when they need it. Start with native reader text selection and the standard clipboard. Support nested quotes, Unicode and multiline headers, and ensure the metadata cannot change the Markdown structure. Prototype internal links only after choosing a reference that survives restore and provides a useful missing-message state. This gives researchers and writers a quick way to collect quotations in their existing notes app.
-
-Related fixes already opened as pull requests: reader rendition #588, Reading view numbering #593, account logo cache #589.
