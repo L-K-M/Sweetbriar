@@ -269,6 +269,80 @@ async fn a_refused_refresh_offers_signing_in_again() {
     h.core.shutdown().await;
 }
 
+/// spec/04 "Account states and health": offline is `active`, retrying.
+/// A launch while Proton is unreachable can't restore the session, so
+/// the worker restores it itself once the network is back, instead of
+/// ending and leaving a healthy-looking account that never syncs.
+#[tokio::test]
+async fn a_start_while_offline_retries_and_syncs_once_proton_answers() {
+    let h = setup(vec![TestAccount::new(USER, PASSWORD)]).await;
+    let (id, _) = synced(&h, "offline-start").await;
+    h.core.shutdown().await;
+    h.server.set_fault(Some(Fault::Drop));
+    let core = reopen(&h.scratch, &h.secrets, &h.server, &h.clock).await;
+    core.engine().proton_restore_settled().await;
+    let h = Harness { core, ..h };
+
+    until_condition(&h, &id, |condition| {
+        matches!(condition, crate::AccountCondition::Offline { .. })
+    })
+    .await;
+    assert_eq!(fetch(&h, &id).await.state, AccountState::Active);
+
+    h.server.set_fault(None);
+    h.server.add_message(
+        USER,
+        FakeMessage::new("after-offline")
+            .with_time(300)
+            .with_labels(&["0", "5"]),
+    );
+    until(
+        &h,
+        "logical_messages WHERE provider_key = 'after-offline'",
+        1,
+    )
+    .await;
+    assert!(h.core.engine().proton_session(&id).await.is_some());
+    h.core.shutdown().await;
+}
+
+/// The same for a session lost mid-run: a 401 whose refresh can't
+/// reach Proton leaves no session behind. The worker keeps retrying
+/// and picks up new mail once Proton answers again.
+#[tokio::test]
+async fn a_refresh_that_cannot_reach_proton_keeps_the_worker_retrying() {
+    let h = setup(vec![TestAccount::new(USER, PASSWORD)]).await;
+    let (id, _) = synced(&h, "offline-refresh").await;
+
+    // The next request (the event poll) is refused as an expired
+    // token, and the refresh it triggers finds Proton unreachable.
+    h.server.set_fault(Some(Fault::Then(
+        Box::new(Fault::Once(Box::new(Fault::Code {
+            status: 401,
+            code: 401,
+        }))),
+        Box::new(Fault::OnceAt {
+            path: "/auth/v4/refresh".to_owned(),
+            fault: Box::new(Fault::Drop),
+        }),
+    )));
+    h.server.add_message(
+        USER,
+        FakeMessage::new("after-refresh")
+            .with_time(300)
+            .with_labels(&["0", "5"]),
+    );
+    until(
+        &h,
+        "logical_messages WHERE provider_key = 'after-refresh'",
+        1,
+    )
+    .await;
+    assert_eq!(fetch(&h, &id).await.state, AccountState::Active);
+    assert!(h.core.engine().proton_session(&id).await.is_some());
+    h.core.shutdown().await;
+}
+
 #[tokio::test]
 async fn a_secret_store_pause_shows_the_stored_reason() {
     let h = setup(vec![TestAccount::new(USER, PASSWORD)]).await;
