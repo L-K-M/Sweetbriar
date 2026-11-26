@@ -76,21 +76,21 @@ enum AccountLogoPipeline {
     }
 }
 
-/// Decoded account logos, kept per account and logo revision so each
-/// surface decodes a stored PNG once (spec/08 "Logo").
+/// Decoded account logos, shared across surfaces (spec/08 "Logo").
 @MainActor
 enum AccountLogoImages {
-    private static var cache: [String: (revision: Int64?, image: NSImage?)] = [:]
+    private static var cache: [String: (revision: Int64?, png: Data, image: NSImage?)] = [:]
 
     /// The account's logo, or nil without one or when the stored PNG
     /// can't be decoded: the monogram shows instead.
     static func image(for account: AccountAppearance?) -> NSImage? {
         guard let account, let png = account.logoPng else { return nil }
-        if let cached = cache[account.accountId], cached.revision == account.logoRevision {
+        // A restored archive can reuse a revision for different pixels.
+        if let cached = cache[account.accountId], cached.revision == account.logoRevision, cached.png == png {
             return cached.image
         }
         let image = NSImage(data: png).flatMap { $0.isValid ? $0 : nil }
-        cache[account.accountId] = (account.logoRevision, image)
+        cache[account.accountId] = (account.logoRevision, png, image)
         return image
     }
 
