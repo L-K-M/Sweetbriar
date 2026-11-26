@@ -41,6 +41,12 @@ actor FakeSidebarSource: SidebarSource {
         return list
     }
 
+    /// Store a list under an arbitrary key, bypassing the account set:
+    /// the tests use it to put one under the unified section's id.
+    func store(_ list: Mailboxes, forKey key: String) {
+        lists[key] = list
+    }
+
     func savedViews() async throws -> [SavedView] { [] }
 
     func upsertSavedView(idempotencyKey: String, params: SavedViewParams) async throws -> Receipt {
@@ -108,6 +114,86 @@ func theSidebarListsUnifiedThenEachAccount() async throws {
     #expect(mailboxes[1].target == .unavailable(note: SidebarModel.notSelectableNote))
     #expect(model.entry(id: mailboxes[0].id) == mailboxes[0])
     #expect(model.generation == 7)
+}
+
+/// The Dock badge total counts every account's Inbox mailbox once and
+/// no other role, before and after a reload changes the counts.
+@MainActor
+@Test(.timeLimit(.minutes(1)))
+func inboxUnreadCountsEveryAccountInboxOnce() async throws {
+    let fake = FakeSidebarSource()
+    let second = Account(
+        accountId: "a2", kind: .proton, displayName: "Second", state: .active,
+        stateReason: nil, sortOrder: 1
+    )
+    func inbox(_ id: Int64, _ account: String, unread: UInt64) -> Mailbox {
+        Mailbox(
+            mailboxId: id, accountId: account, name: "Inbox", delimiter: nil,
+            role: .inbox, kind: .folder, selectable: true,
+            total: unread + 1, unread: unread
+        )
+    }
+    func other(_ id: Int64, _ account: String, role: MailboxRole?, unread: UInt64) -> Mailbox {
+        Mailbox(
+            mailboxId: id, accountId: account, name: "Other", delimiter: nil,
+            role: role, kind: .folder, selectable: true,
+            total: unread + 1, unread: unread
+        )
+    }
+    await fake.set(archive, [
+        inbox(1, archive.accountId, unread: 3),
+        other(2, archive.accountId, role: .archive, unread: 8),
+        other(3, archive.accountId, role: nil, unread: 5),
+    ], generation: 1)
+    await fake.set(second, [inbox(4, second.accountId, unread: 4)], generation: 2)
+
+    let model = SidebarModel(source: fake)
+    #expect(model.inboxUnread == 0)
+    await model.reload()
+    #expect(model.inboxUnread == 7)
+
+    await fake.set(archive, [
+        inbox(1, archive.accountId, unread: 0),
+        other(2, archive.accountId, role: .archive, unread: 8),
+        other(3, archive.accountId, role: nil, unread: 5),
+    ], generation: 3)
+    await model.noteGeneration(3)
+    #expect(model.inboxUnread == 4)
+}
+
+/// The badge counts the per-account mailbox lists, so a list stored
+/// under the unified section's id is never added on top of the
+/// account's own copy.
+@MainActor
+@Test(.timeLimit(.minutes(1)))
+func inboxUnreadIgnoresAListStoredUnderTheUnifiedSection() async throws {
+    let fake = FakeSidebarSource()
+    await fake.set(archive, [
+        Mailbox(
+            mailboxId: 1, accountId: archive.accountId, name: "Inbox", delimiter: nil,
+            role: .inbox, kind: .folder, selectable: true, total: 9, unread: 3
+        )
+    ], generation: 1)
+
+    let model = SidebarModel(source: fake)
+    await model.reload()
+    #expect(model.inboxUnread == 3)
+
+    // A core that ever keyed the unified section would otherwise be
+    // counted a second time.
+    let unified = Mailboxes(
+        generation: 1,
+        mailboxes: [
+            Mailbox(
+                mailboxId: 99, accountId: SidebarModel.unifiedSectionID, name: "Inbox",
+                delimiter: nil, role: .inbox, kind: .folder, selectable: true,
+                total: 3, unread: 3
+            )
+        ]
+    )
+    await fake.store(unified, forKey: SidebarModel.unifiedSectionID)
+    await model.noteGeneration(1)
+    #expect(model.inboxUnread == 3)
 }
 
 @MainActor

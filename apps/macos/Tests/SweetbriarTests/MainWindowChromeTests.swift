@@ -48,6 +48,12 @@ struct MainWindowChromeTests {
         #expect(title(nil, false, nil, nil, nil) == ("Sweetbriar", ""))
     }
 
+    @Test func theDockBadgeShowsOnlyANonZeroInboxUnreadCount() {
+        #expect(MainWindowController.dockBadgeLabel(for: 0) == "")
+        #expect(MainWindowController.dockBadgeLabel(for: 1) == "1")
+        #expect(MainWindowController.dockBadgeLabel(for: 1_234) == "1234")
+    }
+
     @Test func theToolbarCarriesTheMessageCommandsInGroups() throws {
         #expect(MainToolbar.defaultItems == [
             .toggleSidebar, .sidebarTrackingSeparator, .flexibleSpace, MainToolbar.newMessage,
