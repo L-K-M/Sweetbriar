@@ -180,9 +180,13 @@ build_app() {
   if [[ -z "$missing" ]]; then
     rust_bin="$home_bin"
   elif have rustup; then
-    tool="$(rustup which cargo 2>/dev/null)"
+    # `rustup which` resolves the toolchain of the directory it runs
+    # in, so the repository's pin applies because of the cd to ROOT above.
+    tool="$(rustup which cargo 2>/dev/null || true)"
     if [[ -n "$tool" && -x "${tool%/*}/cargo" && -x "${tool%/*}/rustc" ]]; then
       rust_bin="${tool%/*}"
+    else
+      skip_or_fail app "rustup's $missing not found at $home_bin/$missing, and the rustup on PATH names no toolchain holding cargo and rustc (see https://rustup.rs)"; return
     fi
   fi
   if [[ -z "$rust_bin" ]]; then

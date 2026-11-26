@@ -275,6 +275,7 @@ done
 # toolchain that `rustup which` names then provides Cargo and rustc.
 toolchain="$work/toolchain/bin"
 mkdir -p "$toolchain"
+mv "$rust_bin/rustup" "$toolchain/rustup.saved"
 mv "$rust_bin/cargo" "$toolchain/cargo"
 mv "$rust_bin/rustc" "$toolchain/rustc"
 fake rustup 'echo "rustup $*" >> "$log"; echo "$TOOLCHAIN/$2"'
@@ -285,8 +286,24 @@ expect_call "cargo xtask ffi"
 expect_call "rustc --version"
 expect_no_call "unmanaged cargo"
 expect_no_call "unmanaged rustc"
+
+mv "$toolchain/rustup.saved" "$rust_bin/rustup"
 mv "$toolchain/cargo" "$rust_bin/cargo"
 mv "$toolchain/rustc" "$rust_bin/rustc"
+
+# A rustup that names no toolchain is refused, and the reason says so.
+fake rustup 'exit 1'
+for tool in rustup cargo rustc; do
+  mv "$rust_bin/$tool" "$toolchain/$tool.saved"
+done
+run "is refused when rustup names no toolchain" -- app --install
+expect_status 1
+expect_out "rustup's rustup not found"
+expect_out "names no toolchain holding cargo and rustc"
+expect_no_call "cargo"
+for tool in rustup cargo rustc; do
+  mv "$toolchain/$tool.saved" "$rust_bin/$tool"
+done
 fake rustup 'echo "unmanaged rustup" >> "$log"; exit 1'
 
 # The Xcode build phase must bundle the same toolchain's standard-library
