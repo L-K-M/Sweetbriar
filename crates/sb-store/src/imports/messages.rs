@@ -22,22 +22,27 @@ use crate::{StoreError, Timestamp, list_rows, threads};
 /// The special-use role an imported mailbox's name implies, or `None`
 /// when it implies nothing (spec/02 `mailboxes.role`).
 ///
-/// An Apple Mail export names its mailboxes after the roles, so the
+/// An import names its mailbox after the source's file or package stem
+/// (spec/09), so a well-known mailbox name arrives here intact, and the
 /// unified windows, which page `d_list_rows` by `mailbox_role`
-/// (spec/02), would otherwise stay empty for a local archive forever.
-/// The match is exact and case-insensitive, so a mailbox the owner
-/// named something else keeps a `NULL` role rather than being guessed
-/// into a unified view it does not belong to.
+/// (spec/02), have rows to show for a local archive. Any other name
+/// keeps a `NULL` role rather than being guessed into a unified view it
+/// does not belong to.
+///
+/// Clients spell some of these differently from the role itself, so each
+/// role takes the spellings in use rather than only its own name. A
+/// renamed mailbox is out of reach by design: the match is a known
+/// spelling, never a substring of one.
 fn imported_role(name: &str) -> Option<MailboxRole> {
     match name.trim().to_ascii_lowercase().as_str() {
         "inbox" => Some(MailboxRole::Inbox),
-        "sent" => Some(MailboxRole::Sent),
+        "sent" | "sent messages" | "sent mail" => Some(MailboxRole::Sent),
         "drafts" => Some(MailboxRole::Drafts),
-        "trash" => Some(MailboxRole::Trash),
-        "junk" => Some(MailboxRole::Junk),
-        "archive" => Some(MailboxRole::Archive),
+        "trash" | "deleted messages" | "deleted mail" => Some(MailboxRole::Trash),
+        "junk" | "junk mail" | "junk e-mail" => Some(MailboxRole::Junk),
+        "archive" | "archives" => Some(MailboxRole::Archive),
         "all mail" => Some(MailboxRole::All),
-        "starred" => Some(MailboxRole::Flagged),
+        "starred" | "flagged" => Some(MailboxRole::Flagged),
         _ => None,
     }
 }

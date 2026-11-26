@@ -979,3 +979,48 @@ fn imported_mailbox_names_take_their_special_use_role() {
     assert_eq!(count(&store, "mailboxes WHERE role = 'inbox'"), 1);
     store.close().unwrap();
 }
+
+/// The names clients actually put on their special-use mailboxes reach
+/// `local_mailbox` as the source's stem, so each role takes the
+/// spellings in use and not only its own name. A name that spells
+/// nothing keeps `NULL`, so a renamed mailbox is never guessed into a
+/// unified view.
+#[test]
+fn imported_mailbox_roles_cover_the_names_clients_use() {
+    let (_scratch, _paths, store, revision) = setup();
+    let cases: [(&str, Option<&str>); 13] = [
+        ("Inbox", Some("inbox")),
+        ("Sent Messages", Some("sent")),
+        ("Sent Mail", Some("sent")),
+        ("Drafts", Some("drafts")),
+        ("Deleted Messages", Some("trash")),
+        ("Junk Mail", Some("junk")),
+        ("Archive", Some("archive")),
+        ("All Mail", Some("all")),
+        ("Starred", Some("flagged")),
+        ("  inbox  ", Some("inbox")),
+        ("Trip receipts 2024", None),
+        ("Work archive folder", None),
+        ("Receipts", None),
+    ];
+    let mut revision = revision;
+    for (index, (name, _)) in cases.iter().enumerate() {
+        let first = message(&store, "/synthetic/Source.mbox", index as u64, ORIGINAL);
+        commit(&store, revision, name, vec![first]).unwrap();
+        revision = reading(&store, |tx| Ok(import_job(tx, JOB)?.revision()));
+    }
+    reading(&store, |tx| {
+        for (name, role) in cases {
+            let stored: Option<String> = tx
+                .query_row(
+                    "SELECT role FROM mailboxes WHERE remote_name = ?1",
+                    params![name],
+                    |row| row.get(0),
+                )
+                .map_err(sql_error)?;
+            assert_eq!(stored.as_deref(), role, "{name} should map to {role:?}");
+        }
+        Ok(())
+    });
+    store.close().unwrap();
+}
