@@ -565,6 +565,54 @@ struct ListAppearanceTests {
         #expect(!controller.isShowingWelcome)
     }
 
+    @Test func narrowRowsKeepEveryChipInsideTheRow() {
+        let content = MessageRowFormatter().present(
+            sender: "Sender", subject: "Subject", snippet: "Snippet",
+            dateMilliseconds: 0, unread: false, flagged: false,
+            hasAttachments: false, tags: ["one", "two", "three", "four"],
+            accountID: "synthetic-a"
+        )
+        let cell = MessageRowCellView(showsAccountMarker: true)
+        cell.configure(content: content)
+        // The tag and overflow chips are the 15 pt badges on the
+        // snippet line (y = 40); the wide row shows three tags plus
+        // the +N chip.
+        let chipCount = { (view: NSView) in
+            view.subviews.filter {
+                !$0.isHidden && $0.frame.height == 15 && $0.frame.minY == 40
+            }.count
+        }
+        var chipCounts: [CGFloat: Int] = [:]
+        for width in [CGFloat(120), 200, 320, 480] {
+            cell.setFrameSize(NSSize(width: width, height: MessageRowMetrics.pitch))
+            cell.layoutSubtreeIfNeeded()
+            let laidOut = cell.subviews.filter { !$0.isHidden && $0.frame.width > 0 }
+            chipCounts[width] = chipCount(cell)
+            for view in laidOut {
+                #expect(
+                    view.frame.minX >= -0.5,
+                    "\(width) pt row: \(view) starts at \(view.frame.minX)"
+                )
+                #expect(
+                    view.frame.maxX <= width + 0.5,
+                    "\(width) pt row: \(view) ends at \(view.frame.maxX)"
+                )
+            }
+        }
+        #expect(chipCounts[480] == 4, "a wide row shows three tags and +1")
+        #expect(chipCounts[120] ?? 0 >= 3, "the visible tags stay put")
+
+        // A window that widens brings the collapsed count back: the
+        // chip's visibility is layout's decision, not a stale flag.
+        cell.setFrameSize(NSSize(width: 120, height: MessageRowMetrics.pitch))
+        cell.layoutSubtreeIfNeeded()
+        let narrowChips = chipCount(cell)
+        cell.setFrameSize(NSSize(width: 480, height: MessageRowMetrics.pitch))
+        cell.layoutSubtreeIfNeeded()
+        let wideChips = chipCount(cell)
+        #expect(wideChips > narrowChips, "widening restores the collapsed count")
+    }
+
     private func renderSRGB(_ view: NSView) throws -> NSBitmapImageRep {
         // A window-backed default cache uses the display profile. Its cached
         // bytes are not sRGB-tagged; use an explicit sRGB target before

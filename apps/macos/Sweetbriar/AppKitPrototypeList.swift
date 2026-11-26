@@ -537,10 +537,6 @@ final class MessageRowCellView: NSTableCellView {
     /// This row's reserved date width, set from its formatted date.
     private var reservedDateWidth: CGFloat = 84
 
-    /// The tag chip pool: synthetic rows carry at most two; extras
-    /// stay hidden.
-    private static let tagChipCount = 3
-
     private let rail = NSView()
     private let railMarker = NSView()
     private let railLeftEdge = NSView()
@@ -554,9 +550,15 @@ final class MessageRowCellView: NSTableCellView {
     private let snippetField = NSTextField(labelWithString: "")
     private let flagMarker = NSImageView()
     private let attachmentMarker = NSImageView()
-    private let tagChips = (0 ..< MessageRowCellView.tagChipCount).map {
+    private let tagChips = (0 ..< MessageRowMetrics.visibleTagCount).map {
         _ in BadgeView()
     }
+    /// Draws `+N` when a row carries more tags than the chips show.
+    private let overflowChip = BadgeView()
+    /// The current row's collapsed-tag count, so layout can decide the
+    /// chip's visibility afresh on every pass (a window that widens
+    /// brings it back; one that narrows drops it).
+    private var overflowCount = 0
     private let placeholderFill = NSView()
 
     /// The row's account color, kept so the layer colors can be
@@ -577,7 +579,7 @@ final class MessageRowCellView: NSTableCellView {
     /// is out.
     private var contentSubviews: [NSView] {
         [rail, monogram, unreadDot, senderField, dateField, accountField, subjectField,
-         snippetField, flagMarker, attachmentMarker] + tagChips
+         snippetField, flagMarker, attachmentMarker] + tagChips + [overflowChip]
     }
 
     init(showsAccountMarker: Bool) {
@@ -640,6 +642,10 @@ final class MessageRowCellView: NSTableCellView {
             chip.font = .systemFont(ofSize: 10)
             addSubview(chip)
         }
+        overflowChip.fillColor = .quaternaryLabelColor
+        overflowChip.titleColor = .secondaryLabelColor
+        overflowChip.font = .systemFont(ofSize: 10)
+        addSubview(overflowChip)
 
         placeholderFill.wantsLayer = true
         placeholderFill.layer?.cornerRadius =
@@ -682,6 +688,7 @@ final class MessageRowCellView: NSTableCellView {
         rail.isHidden = !showsMarker
         monogram.isHidden = !showsMarker
         guard let content else {
+            overflowCount = 0
             setAccessibilityElement(false)
             setAccessibilityLabel(nil)
             return
@@ -708,18 +715,26 @@ final class MessageRowCellView: NSTableCellView {
         unreadDot.isHidden = !content.unread
         flagMarker.isHidden = !content.flagged
         attachmentMarker.isHidden = !content.hasAttachments
+        assert(
+            tagChips.count == MessageRowMetrics.visibleTagCount,
+            "Add or remove tag chip views to match MessageRowMetrics.visibleTagCount"
+        )
+        let visibleTags = content.visibleTags
         for (index, chip) in tagChips.enumerated() {
-            if index < content.tags.count {
-                chip.title = content.tags[index]
+            if index < visibleTags.count {
+                chip.title = visibleTags[index]
                 chip.isHidden = false
             } else {
                 chip.isHidden = true
             }
         }
+        overflowCount = content.hiddenTagCount
+        overflowChip.title = overflowCount > 0 ? "+\(overflowCount)" : ""
+        overflowChip.isHidden = overflowCount == 0
 
         setAccessibilityElement(true)
         let label = showsAccountMarker && account != nil ? ", account \(accountLabel ?? "")" : ""
-        setAccessibilityLabel(content.accessibilityLabel + label)
+        setAccessibilityLabel(content.accessibilityLabel + content.accessibilityOverflowSuffix + label)
         needsLayout = true
     }
 
@@ -846,6 +861,24 @@ final class MessageRowCellView: NSTableCellView {
                 width: chipWidth, height: 15
             )
             chipTrail = chip.frame.minX - metrics.markerSpacing
+        }
+        // Layout owns the chip's visibility: hide it when there is no
+        // overflow, show it only while it fits beside the visible tags.
+        overflowChip.isHidden = true
+        if overflowCount > 0 {
+            let chipWidth = overflowChip.fittingWidth()
+            if chipTrail - chipWidth >= contentX {
+                overflowChip.frame = NSRect(
+                    x: chipTrail - chipWidth, y: 40,
+                    width: chipWidth, height: 15
+                )
+                overflowChip.isHidden = false
+                chipTrail = overflowChip.frame.minX - metrics.markerSpacing
+            } else {
+                // Too narrow for the chip beside the visible tags:
+                // show the tags alone rather than overlap them.
+                overflowChip.isHidden = true
+            }
         }
         snippetField.frame = NSRect(
             x: contentX, y: 41,

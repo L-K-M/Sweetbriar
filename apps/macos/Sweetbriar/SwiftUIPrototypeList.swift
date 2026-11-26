@@ -395,8 +395,18 @@ struct RenderedMessageRow: View {
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                     Spacer(minLength: 4)
-                    ForEach(content.tags, id: \.self) { tag in
+                    ForEach(content.visibleTags, id: \.self) { tag in
                         Text(tag)
+                            .font(.system(size: 10))
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, MessageRowMetrics.tagChipPadding)
+                            .padding(.vertical, 1)
+                            .background(
+                                Capsule().fill(Color.secondary.opacity(0.15))
+                            )
+                    }
+                    if content.hiddenTagCount > 0 {
+                        Text("+\(content.hiddenTagCount)")
                             .font(.system(size: 10))
                             .foregroundStyle(.secondary)
                             .padding(.horizontal, MessageRowMetrics.tagChipPadding)
@@ -418,6 +428,7 @@ struct RenderedMessageRow: View {
         // (sender, subject, date, unread, flagged).
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(Text(verbatim: content.accessibilityLabel
+            + content.accessibilityOverflowSuffix
             + (showMarker && account != nil ? ", account \(accountLabel)" : "")))
     }
 
