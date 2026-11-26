@@ -366,6 +366,35 @@ extension AppKitPrototypeList: NSTableViewDataSource, NSTableViewDelegate {
         return MessageListDrag.item()
     }
 
+    /// The trackpad swipe commands for one row (spec/08 "Selection"):
+    /// trailing files the row, leading flags it. Titles, admission and
+    /// the click target come from the same `contextActions` as the
+    /// context menu, so a disabled command is never offered and a
+    /// selected row acts on the whole selection.
+    func tableView(
+        _ tableView: NSTableView, rowActionsForRow row: Int, edge: NSTableView.RowActionEdge
+    ) -> [NSTableViewRowAction] {
+        guard let clickedID = model.occurrenceID(at: row), let contextActions else { return [] }
+        let targets = ContextClickTarget.targets(
+            clickedID: clickedID, selection: selectedOccurrenceIDs
+        )
+        let wanted: Set<NSUserInterfaceItemIdentifier> = edge == .trailing
+            ? [MainMenuBuilder.ItemID.archive, MainMenuBuilder.ItemID.trash]
+            : [MainMenuBuilder.ItemID.toggleRead, MainMenuBuilder.ItemID.toggleStar]
+        var actions: [NSTableViewRowAction] = []
+        for action in contextActions(targets) where wanted.contains(action.identifier) {
+            guard action.enabled else { continue }
+            let style: NSTableViewRowAction.Style =
+                action.identifier == MainMenuBuilder.ItemID.trash ? .destructive : .regular
+            actions.append(
+                NSTableViewRowAction(style: style, title: action.title) { _, _ in
+                    action.run()
+                }
+            )
+        }
+        return actions
+    }
+
     /// The rows are captured as the drag begins: the list may change
     /// under it.
     func tableView(
