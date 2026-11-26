@@ -32,13 +32,13 @@ struct ListAppearanceTests {
 
     @Test func theTrailingDateReservesOnlyItsOwnWidth() {
         let font = NSFont.systemFont(ofSize: 12)
-        let timeOnly = MessageRowCellView.dateColumnWidth(for: "12:34", font: font)
-        let dayAndMonth = MessageRowCellView.dateColumnWidth(for: "26 Nov", font: font)
+        let shortest = MessageRowCellView.dateColumnWidth(for: "1", font: font)
+        let time = MessageRowCellView.dateColumnWidth(for: "12:34", font: font)
         let fullDate = MessageRowCellView.dateColumnWidth(for: "2024-11-26", font: font)
-        #expect(timeOnly < dayAndMonth)
-        #expect(dayAndMonth <= fullDate)
+        #expect(shortest >= 32)
+        #expect(time >= 32)
+        #expect(time < fullDate)
         #expect(fullDate <= 84)
-        #expect(timeOnly >= 32)
     }
 
     @Test func flaggedControllerShowsBothAccountsAndSurvivesAppearanceReset() async throws {
