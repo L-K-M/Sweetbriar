@@ -450,6 +450,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         prototypeController = nil
         await mainWindow?.retireContent()
         await appearance.reset()
+        readingViewMemory.reset()
         if !terminating { await mainWindow?.rebuildAfterRestore() }
     }
 
@@ -464,6 +465,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         prototypeController = nil
         await mainWindow?.archiveClosed()
         await appearance.reset()
+        readingViewMemory.reset()
     }
 
     /// Debug failures surface as an alert — a sheet when a window can
