@@ -1027,6 +1027,22 @@ fn empty_generation_completes_and_store_closes_cleanly() {
     );
 }
 
+/// A reference the store does not hold as a hash is corrupt data, not a
+/// path: the backup fails `Corrupt` before it names a directory after it.
+#[test]
+fn a_reference_that_is_not_a_hash_fails_the_backup_as_corrupt() {
+    let (_scratch, _paths, store) = open("backup-reference-not-a-hash");
+    let (id, sha) = object(&store, PAYLOAD);
+    reference(&store, &id, "published");
+    let mut snapshot = store.backup_snapshot(BackupDestination::DataRoot).unwrap();
+    snapshot.referenced = vec![sha, "x".to_owned()].into();
+    let result = store.complete_backup(snapshot);
+    assert!(
+        matches!(result, Err(StoreError::Corrupt { .. })),
+        "{result:?}"
+    );
+}
+
 #[test]
 fn backup_reader_does_not_quarantine_a_repaired_object() {
     let (_scratch, _paths, store) = open("backup-repair-race");

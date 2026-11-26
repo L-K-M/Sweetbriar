@@ -344,6 +344,12 @@ impl Backups {
         snapshot: &BackupSnapshot,
         cancelled: &AtomicBool,
     ) -> Result<Vec<Entry>, StoreError> {
+        // Each reference names a path below. One the store does not hold
+        // as a hash is corrupt data: refuse it before any directory takes
+        // its name.
+        for sha in snapshot.referenced.iter() {
+            crate::objects::ObjectId::from_hex(sha, 0)?;
+        }
         let root = snapshot.location.join("objects");
         let sha_root = root.join("sha256");
         self.fs.create_dir(&root).map_err(io_error)?;
