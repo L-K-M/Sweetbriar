@@ -233,7 +233,10 @@ mod tests {
                 account_id: archive,
                 name: "Inbox".to_owned(),
                 delimiter: None,
-                role: None,
+                // An imported mailbox named after a role takes it
+                // (spec/09 "Mailbox role"), so the unified windows have
+                // rows to page over.
+                role: Some(MailboxRole::Inbox),
                 kind: MailboxKind::Folder,
                 selectable: true,
                 total: 2,
