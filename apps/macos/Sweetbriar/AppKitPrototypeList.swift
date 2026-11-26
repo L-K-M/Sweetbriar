@@ -415,6 +415,13 @@ extension AppKitPrototypeList: NSTableViewDataSource, NSTableViewDelegate {
         return cell
     }
 
+    /// A row view of our own, so a row answers the pointer the way
+    /// Mail's message list does: a subtle fill on hover, with AppKit's
+    /// own selection highlight on top of it.
+    func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
+        HoverRowView()
+    }
+
     /// Keep the id-held selection in sync with the table's indexes —
     /// through `occurrenceID`, so no row is ever fetched for it — and
     /// hand it to the model, which keeps it across new indexes.
@@ -921,6 +928,96 @@ extension AppKitPrototypeList {
     /// The palette slot's color.
     static func accountColor(at index: Int) -> NSColor {
         accountPalette[index % accountPalette.count]
+    }
+}
+
+// MARK: - Row view
+
+/// The list's row view: a subtle fill while the pointer is over the
+/// row, the way Mail's message list answers a hover. The fill sits
+/// under the cell the table adds afterwards, and AppKit's own
+/// selection highlight draws over both.
+@MainActor
+final class HoverRowView: NSTableRowView {
+    /// The hover fill. Insets keep it off the row's edges, so the
+    /// rail and the list's separator stay readable.
+    private let hoverFill = NSView()
+    private var trackingArea: NSTrackingArea?
+    private var hovering = false
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        hoverFill.wantsLayer = true
+        hoverFill.layer?.cornerRadius = MessageRowMetrics.placeholderCornerRadius
+        hoverFill.alphaValue = 0
+        addSubview(hoverFill)
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("HoverRowView is built in code")
+    }
+
+    /// Resolve the fill for the appearance it is in, so a Dark Mode
+    /// switch and Increase Contrast both take effect without a reload.
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        hoverFill.layer?.backgroundColor = NSColor.labelColor
+            .withAlphaComponent(0.05)
+            .cgColor
+    }
+
+    override func layout() {
+        super.layout()
+        // One point of inset vertically keeps the fill inside the row
+        // pitch, so it never bleeds into the gap between rows.
+        hoverFill.frame = bounds.insetBy(dx: 3, dy: 1)
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let trackingArea {
+            removeTrackingArea(trackingArea)
+        }
+        let area = NSTrackingArea(
+            rect: .zero,
+            options: [.mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(area)
+        trackingArea = area
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        hovering = true
+        animateHover()
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        hovering = false
+        animateHover()
+    }
+
+    /// The selection hides the hover fill: two fills on one row read
+    /// as a bug, and AppKit's highlight is the stronger signal.
+    override var isSelected: Bool {
+        didSet {
+            if oldValue != isSelected { animateHover() }
+        }
+    }
+
+    private func animateHover() {
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.12
+            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            hoverFill.animator().alphaValue = Self.hoverAlpha(hovering: hovering, selected: isSelected)
+        }
+    }
+
+    /// The hover fill's target alpha. Pure, so the rule is testable
+    /// without driving the pointer.
+    static func hoverAlpha(hovering: Bool, selected: Bool) -> CGFloat {
+        hovering && !selected ? 1 : 0
     }
 }
 
