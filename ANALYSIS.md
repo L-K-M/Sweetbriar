@@ -46,6 +46,17 @@ is written so an LLM can pick it up cold. Completed work and submitted patches a
   `ListWindowModel.setVisible` returns early when the range is
   unchanged, so `failedPages` survives until the range actually moves.
   Test `aRepeatedVisibleRangeDoesNotRetryAFailedPage`.
+- **Dock unread badge** (second pass, PR #575). `SidebarModel.inboxUnread`
+  sums every account's Inbox mailbox once; `MainWindowController` mirrors
+  it on `NSApp.dockTile`, refreshes after generation-driven sidebar
+  reloads, and clears it when content retires. Tests cover the sum, the
+  role filter, reload updates and the badge text.
+- **Trackpad swipe actions** (second pass, PR #579). Trailing swipe
+  offers Archive and Move to Trash; leading swipe offers Mark as
+  Read/Unread and Star/Unstar. It reuses the context menu's titles,
+  admission and click-target rule, so a selected row acts on the whole
+  selection. The list-appearance suite covers command set, order, style
+  and target.
 
 ## Verified non-bugs (do not re-report)
 
@@ -233,6 +244,16 @@ window does two `reloadData()` calls and two selection restores.
 whole query and then **one call per AST node**, plus a
 `JSONSerialization` encode per node on the main actor, before chips and
 canonical text appear. Each of those is a separate engine hop.
+
+## B13. Message rows silently drop tags past three
+
+`AppKitPrototypeList.swift` caps the row cell at `tagChipCount = 3` and
+hides any further chips without an overflow indicator, and
+`MessageRowContent.accessibilityLabel` omits tags entirely. A message
+with four or more tags therefore reads as three in the list and none to
+VoiceOver, while the reader shows them all. Draw a trailing `+N` chip
+after the visible chips (keeping the fixed-size pool so the hand layout
+is unchanged) and add the remaining count to the accessibility label.
 
 ---
 
@@ -610,6 +631,38 @@ the reader, IDN/homoglyph warnings on link hover, per-tab window
 swatches, "Save As…" for attachments (see F4), and a jump-to-mailbox
 command palette. Each needs a spec line before implementation.
 
+## F16. Notification clicks do nothing and there are no actions
+
+`NewMailNotifier` sets no `UNUserNotificationCenterDelegate` and
+registers no categories, so clicking a new-mail notification does
+nothing, and there are no Mark Read/Reply actions. Set a delegate that
+opens the account's Inbox (the message when one is named) and consider a
+small action set. Keep the redaction rules: no content beyond the text
+already approved by `NewMailNotificationText`.
+
+## F17. Find does not work in an HTML message
+
+`Edit → Find → Find…` reaches the focused text view, so while the
+sanitized HTML web view is first responder the command is inert, which
+is how most mail is read. Drive `WKWebView.find(_:configuration:)` from
+a small find bar or a reader-level Find handler. Plain-text and Reading
+views already work through their scroll views' find bars.
+
+## F18. No unified inbox total or progress treatment
+
+The Unified section has no header total, so the aggregate unread count
+lives only on each account's Inbox row; sync and filing surface through
+the integrity banner and transient toasts. A visible unified total and
+a subtle toolbar/sidebar progress treatment would make the shell
+scannable. Check secondary-text contrast in Color Wash first.
+
+## F19. Send Later and Snooze
+
+Larger, post-pilot. Both fit the durable-intent architecture: a scheduled
+send is an Out Box attempt with a `not_before` time; snooze is a durable
+flag plus later re-insertion. The existing Undo Send hold shows the
+outbox state machine can carry a delay. Write the spec before any UI.
+
 ---
 
 # Part 5 — Novel, delightful and quirky ideas
@@ -673,6 +726,15 @@ regression without opening a report.
 The app posts no sounds at all. Mail's send "whoosh" and the new-mail
 alert are part of why it feels finished. A single, quiet, optional send
 confirmation sound (and nothing else) would be enough.
+
+## D11. Hover quick actions on message rows
+
+Rows have no hover affordance. A tracking-area overlay offering Reply,
+Archive and Flag would fit the fast, keyboard-heavy personality; filing
+already handles one call per account and the row actions from PR #579
+provide the same command set. Keep it clear of selection, drag,
+context-click targeting and the row's hand layout, and keep every action
+reachable from the context menu, swipe and keyboard.
 
 ---
 
