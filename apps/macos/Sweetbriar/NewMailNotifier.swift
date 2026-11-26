@@ -33,7 +33,7 @@ enum NewMailNotificationText {
         accountName: String, mail: NewMail, preview: MessagePreview?
     ) -> NewMailNotification {
         let userInfo = [
-            "accountId": mail.accountId,
+            NewMailNotificationTarget.accountIDKey: mail.accountId,
             "count": String(mail.count),
         ]
         guard let preview, mail.count == 1 else {

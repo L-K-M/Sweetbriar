@@ -198,3 +198,36 @@ extension FakeSidebarSource {
         lists[accountId] = nil
     }
 }
+
+/// A notification tap lands on the account's Inbox role when it has
+/// one, else its first selectable mailbox; an account with no listed
+/// destination names none.
+@MainActor
+@Test(.timeLimit(.minutes(1)))
+func inboxEntryIDFallsBackToTheFirstSelectableMailbox() async throws {
+    let inbox = Mailbox(
+        mailboxId: 5, accountId: archive.accountId, name: "Inbox", delimiter: nil,
+        role: .inbox, kind: .folder, selectable: true, total: 3, unread: 1)
+
+    let fake = FakeSidebarSource()
+    await fake.set(archive, [mailbox(9, "Notes", unread: 0), inbox], generation: 4)
+    let model = SidebarModel(source: fake)
+    await model.reload()
+    #expect(model.inboxEntryID(accountId: archive.accountId) == "\(archive.accountId)/5")
+
+    let withoutInbox = FakeSidebarSource()
+    await withoutInbox.set(
+        archive,
+        [mailbox(9, "Notes", unread: 0), mailbox(10, "Later", unread: 0, selectable: false)],
+        generation: 4)
+    let fallback = SidebarModel(source: withoutInbox)
+    await fallback.reload()
+    #expect(fallback.inboxEntryID(accountId: archive.accountId) == "\(archive.accountId)/9")
+    #expect(fallback.inboxEntryID(accountId: "missing") == nil)
+
+    let empty = FakeSidebarSource()
+    await empty.set(archive, [mailbox(10, "Later", unread: 0, selectable: false)], generation: 4)
+    let noDestination = SidebarModel(source: empty)
+    await noDestination.reload()
+    #expect(noDestination.inboxEntryID(accountId: archive.accountId) == nil)
+}

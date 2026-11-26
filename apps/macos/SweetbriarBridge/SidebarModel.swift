@@ -173,6 +173,27 @@ public final class SidebarModel {
         }
     }
 
+    /// The entry id of an account's Inbox, falling back to its first
+    /// selectable mailbox; nil when the account or no listed destination
+    /// is present. A notification tap uses this to land where its
+    /// messages live (spec/10 "Notifications").
+    public func inboxEntryID(accountId: String) -> String? {
+        guard let section = sections.first(where: { $0.id == accountId }) else { return nil }
+        func entryID(for mailbox: Mailbox) -> String? {
+            let id = Self.mailboxEntryID(account: accountId, mailbox: mailbox.mailboxId)
+            return section.entries.contains { $0.id == id } ? id : nil
+        }
+        let mailboxes = mailboxes[accountId] ?? []
+        if let inbox = mailboxes.first(where: { $0.role == .inbox }),
+            let id = entryID(for: inbox) {
+            return id
+        }
+        for mailbox in mailboxes where mailbox.selectable {
+            if let id = entryID(for: mailbox) { return id }
+        }
+        return nil
+    }
+
     private static func mailboxEntryID(account: String, mailbox: Int64) -> String {
         "\(account)/\(mailbox)"
     }
