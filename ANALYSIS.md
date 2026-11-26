@@ -11,8 +11,8 @@ Extended again from a fourth pass focused on row presentation and the
 first-run surface: message-row tag collapse (PR #572) and the first-run
 welcome island (PR #577) are recorded under their original entries.
 A further pass (`friendly-wasp`) added the small correctness, layout,
-hygiene and product entries below; its four fixes are PRs #578, #581,
-#585 and #590.
+hygiene and product entries below; its four fixes (PRs #578, #581,
+#585 and #590) are merged.
 A further independent review, by opencode, added Part 8; its nine
 changes, PRs #573, #582, #583, #584, #587, #591, #595, #596 and #597,
 are merged.
@@ -51,15 +51,15 @@ are merged.
   instead of a fixed 84 pt, returning roughly 50 pt to the subject and
   snippet on today's time-only rows while long dates keep the old
   maximum.
-
-## Submitted patches
-
 - **Reader rule-list install** (further pass, PR #581). `HTMLReaderView`
   installs its shared `WKContentRuleList` once per web view instead of
   once per message. GLM found no actionable issues; its one minor note
   about a hypothetical replaced web view was answered with an explicit
   one-web-view invariant and a test comment about the SDK's lack of
   rule-list read-back.
+
+## Submitted patches
+
 - **Message-row tag collapse** (fourth pass, PR #572). Rows drew at
   most three tag chips and silently dropped the rest, so a row
   under-reported its state and disagreed with the SwiftUI prototype.
