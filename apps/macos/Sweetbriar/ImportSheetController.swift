@@ -277,7 +277,9 @@ final class ImportSheetController: NSViewController {
         choices.addArrangedSubview(note)
         for source in sources {
             let label = NSTextField(labelWithString: source.mailbox)
-            label.toolTip = source.path
+            label.toolTip = "\(source.mailbox)\n\(source.path)"
+            label.lineBreakMode = .byTruncatingMiddle
+            label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
             let popup = NSPopUpButton(frame: .zero, pullsDown: false)
             popup.addItems(withTitles: [
                 "Choose…",
@@ -288,9 +290,12 @@ final class ImportSheetController: NSViewController {
             popup.target = self
             popup.action = #selector(variantChosen(_:))
             popup.setAccessibilityIdentifier("importVariant-\(source.ordinal)")
+            popup.setAccessibilityLabel("Variant for \(source.mailbox)")
             let row = NSStackView(views: [label, popup])
             row.orientation = .horizontal
+            row.translatesAutoresizingMaskIntoConstraints = false
             choices.addArrangedSubview(row)
+            row.widthAnchor.constraint(equalTo: choices.widthAnchor).isActive = true
         }
     }
 
