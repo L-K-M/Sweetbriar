@@ -344,6 +344,15 @@ impl Backups {
         snapshot: &BackupSnapshot,
         cancelled: &AtomicBool,
     ) -> Result<Vec<Entry>, StoreError> {
+        // Each reference becomes a directory name under `objects`, so one
+        // that is not a hash is refused before any directory is created.
+        // `from_hex` checks the shape only: the byte length is not known
+        // yet, and the parsed id is dropped.
+        for sha in snapshot.referenced.iter() {
+            crate::objects::ObjectId::from_hex(sha, 0).map_err(|_| {
+                StoreError::corrupt(format!("a backup reference is not a hash: {sha:?}"))
+            })?;
+        }
         let root = snapshot.location.join("objects");
         let sha_root = root.join("sha256");
         self.fs.create_dir(&root).map_err(io_error)?;
