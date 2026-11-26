@@ -11,7 +11,11 @@ struct IntegrityBanner: View {
 
     var body: some View {
         if model.isClosed {
+            // The other states pad their notice; without it this one
+            // touches both window edges and its button sits on the rim.
             notice("Archive closed", detail: "Quit and reopen Sweetbriar to settle the restore.")
+                .padding(12)
+                .frame(maxWidth: .infinity, alignment: .leading)
         } else if case .readOnly(let detail, let detectedAt, let copyPath) = model.health?.integrity {
             VStack(alignment: .leading, spacing: 6) {
                 notice("Archive is read-only", detail: detail)

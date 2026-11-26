@@ -53,4 +53,23 @@ struct SidebarHealthRowTests {
             presentation: presentation, now: now)
         #expect(text == "Review 1 disappeared message")
     }
+
+    /// The summed count goes through a number formatter rather than
+    /// being interpolated, so the row reads the way the rest of the
+    /// presentation does. Both the presentation and the expectation are
+    /// pinned to `en_US`, so the test does not follow the host's region
+    /// settings either way.
+    @Test func aGroupedCountIsFormattedForTheLocale() {
+        let events = [
+            AccountBreakerEvent(eventId: "a", mailboxId: nil, disappeared: 1234, detectedAt: now),
+        ]
+        let text = SidebarViewController.healthRowText(
+            condition: .healthy, breakerEvents: events,
+            presentation: presentation, now: now)
+        let grouped = NumberFormatter()
+        grouped.locale = Locale(identifier: "en_US")
+        grouped.numberStyle = .decimal
+        let expected = grouped.string(from: 1234) ?? "1234"
+        #expect(text == "Review \(expected) disappeared messages")
+    }
 }
