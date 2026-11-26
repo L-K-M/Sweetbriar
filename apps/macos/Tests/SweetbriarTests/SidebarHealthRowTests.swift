@@ -56,9 +56,9 @@ struct SidebarHealthRowTests {
 
     /// The summed count goes through a number formatter rather than
     /// being interpolated, so the row reads the way the rest of the
-    /// presentation does. The expectation is built from the same
-    /// locale's formatter, so the test does not depend on the host's
-    /// region settings.
+    /// presentation does. Both the presentation and the expectation are
+    /// pinned to `en_US`, so the test does not follow the host's region
+    /// settings either way.
     @Test func aGroupedCountIsFormattedForTheLocale() {
         let events = [
             AccountBreakerEvent(eventId: "a", mailboxId: nil, disappeared: 1234, detectedAt: now),
