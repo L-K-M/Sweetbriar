@@ -563,6 +563,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func removePrivateRoots() {
         guard let roots = privateRoots else { return }
         privateRoots = nil
-        try? FileManager.default.removeItem(at: TestHostRoots.parent(of: roots))
+        guard let parent = TestHostRoots.parent(of: roots) else { return }
+        do {
+            try FileManager.default.removeItem(at: parent)
+        } catch {
+            print("couldn't remove the test host's private archive at \(parent.path): \(error.localizedDescription)")
+        }
     }
 }

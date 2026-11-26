@@ -15,17 +15,19 @@ struct TestHostRootsTests {
         #expect(!TestHostRoots.isTestHost(["HOME": "/Users/example", "PATH": "/usr/bin"]))
     }
 
-    @Test func privateRootsAreFreshSiblingsUnderTheirDirectory() {
+    @Test func privateRootsAreFreshSiblingsUnderTheirDirectory() throws {
         let directory = URL(fileURLWithPath: "/tmp/hosts", isDirectory: true)
         let first = TestHostRoots.make(in: directory)
         let second = TestHostRoots.make(in: directory)
-        let parent = TestHostRoots.parent(of: first)
+        let parent = try #require(TestHostRoots.parent(of: first))
         #expect(first != second)
         #expect(parent != TestHostRoots.parent(of: second))
         #expect(parent.deletingLastPathComponent() == directory)
         #expect(URL(fileURLWithPath: first.dataRoot).deletingLastPathComponent() == parent)
         #expect(URL(fileURLWithPath: first.cacheRoot).deletingLastPathComponent() == parent)
-        #expect(parent.lastPathComponent.hasPrefix("SweetbriarTests-"))
+        #expect(parent.lastPathComponent.hasPrefix(TestHostRoots.directoryPrefix))
+        // Roots of any other layout name no directory to remove.
+        #expect(TestHostRoots.parent(of: CoreConfig(dataRoot: "/tmp/elsewhere/data", cacheRoot: "/tmp/elsewhere/cache")) == nil)
     }
 
     /// This bundle runs inside the app (plan M0.10), so the running
@@ -36,7 +38,8 @@ struct TestHostRootsTests {
         let delegate = try #require(NSApp.delegate as? AppDelegate)
         let roots = try #require(delegate.archiveRoots)
         let temporary = FileManager.default.temporaryDirectory
-        #expect(TestHostRoots.parent(of: roots).deletingLastPathComponent() == temporary)
+        let parent = try #require(TestHostRoots.parent(of: roots))
+        #expect(parent.deletingLastPathComponent() == temporary)
         #expect(roots.dataRoot.hasPrefix(temporary.path))
         #expect(roots.cacheRoot.hasPrefix(temporary.path))
     }

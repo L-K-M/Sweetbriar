@@ -19,16 +19,21 @@ enum TestHostRoots {
         markers.contains { environment[$0] != nil }
     }
 
+    /// What a private root's directory is called before the unique part.
+    static let directoryPrefix = "SweetbriarTests-"
+
     /// A fresh private pair of roots under `directory`.
     static func make(in directory: URL = FileManager.default.temporaryDirectory) -> CoreConfig {
-        let root = directory.appendingPathComponent("SweetbriarTests-\(UUID().uuidString)", isDirectory: true)
+        let root = directory.appendingPathComponent("\(directoryPrefix)\(UUID().uuidString)", isDirectory: true)
         return CoreConfig(
             dataRoot: root.appendingPathComponent("data", isDirectory: true).path,
             cacheRoot: root.appendingPathComponent("cache", isDirectory: true).path)
     }
 
-    /// The directory holding both of `roots`, which the host removes when it quits.
-    static func parent(of roots: CoreConfig) -> URL {
-        URL(fileURLWithPath: roots.dataRoot, isDirectory: true).deletingLastPathComponent()
+    /// The directory holding both of `roots`, which the host removes when
+    /// it quits. Nil for any other layout, so nothing wider is removed.
+    static func parent(of roots: CoreConfig) -> URL? {
+        let parent = URL(fileURLWithPath: roots.dataRoot, isDirectory: true).deletingLastPathComponent()
+        return parent.lastPathComponent.hasPrefix(directoryPrefix) ? parent : nil
     }
 }
