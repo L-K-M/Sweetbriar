@@ -155,7 +155,9 @@ func readerHeaderChipAttachmentsAndSourceToggle() async throws {
     // must not collapse inside the leading-aligned stack.
     controller.view.frame = NSRect(x: 0, y: 0, width: 480, height: 600)
     controller.view.layoutSubtreeIfNeeded()
-    #expect(rows.allSatisfy { $0.frame.width > 100 })
+    let stackWidth = try #require(rows.first?.superview?.frame.width)
+    #expect(stackWidth > 100)
+    #expect(rows.allSatisfy { abs($0.frame.width - stackWidth) < 1 })
     #expect(rows[0].acceptsFirstResponder)
     #expect(opened.isEmpty)
     #expect(rows[0].accessibilityPerformPress())

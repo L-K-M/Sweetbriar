@@ -62,6 +62,7 @@ final class AttachmentRowView: NSView {
     private let size = NSTextField(labelWithString: "")
     private var tracking: NSTrackingArea?
     private var hovered = false
+    private var isFocused = false
     /// The row's accessibility label, also the tests' readable value.
     private(set) var labelText = ""
     /// The attachment part this row opens.
@@ -127,7 +128,8 @@ final class AttachmentRowView: NSView {
     /// VoiceOver's press action: the row advertises a button role, so it
     /// must do what a press would.
     override func accessibilityPerformPress() -> Bool {
-        onOpen?()
+        guard let onOpen else { return false }
+        onOpen()
         return true
     }
 
@@ -143,13 +145,19 @@ final class AttachmentRowView: NSView {
 
     override func becomeFirstResponder() -> Bool {
         let became = super.becomeFirstResponder()
-        applyFocusRing()
+        if became {
+            isFocused = true
+            applyFocusRing()
+        }
         return became
     }
 
     override func resignFirstResponder() -> Bool {
         let resigned = super.resignFirstResponder()
-        applyFocusRing()
+        if resigned {
+            isFocused = false
+            applyFocusRing()
+        }
         return resigned
     }
 
@@ -186,8 +194,8 @@ final class AttachmentRowView: NSView {
     /// and Increase Contrast re-resolve the dynamic colour.
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
-        guard hovered else { return }
         applyHoverFill()
+        applyFocusRing()
     }
 
     private func applyHoverFill() {
@@ -196,7 +204,7 @@ final class AttachmentRowView: NSView {
     }
 
     private func applyFocusRing() {
-        layer?.borderWidth = window?.firstResponder == self ? 1.5 : 0
+        layer?.borderWidth = isFocused ? 1.5 : 0
         layer?.borderColor = NSColor.keyboardFocusIndicatorColor.cgColor
     }
 }
