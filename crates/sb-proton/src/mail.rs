@@ -318,7 +318,7 @@ pub(crate) fn validate_query_id(id: &str, what: &str) -> Result<(), ProtonError>
         })
 }
 
-/// A message or attachment id must be one non-empty path segment: no empty
+/// A message, attachment or event id must be one non-empty path segment: no empty
 /// id, no control character, and none of `/ \ ? # %`, which would change the
 /// request's path or query.
 pub(crate) fn validate_path_id(id: &str) -> Result<(), ProtonError> {
@@ -329,7 +329,7 @@ pub(crate) fn validate_path_id(id: &str) -> Result<(), ProtonError> {
             byte.is_ascii_graphic() && !matches!(byte, b'/' | b'\\' | b'?' | b'#' | b'%')
         });
     path_safe.then_some(()).ok_or(ProtonError::Malformed {
-        message: "a message or attachment id must be one non-empty path segment".to_owned(),
+        message: "a message, attachment or event id must be one non-empty path segment".to_owned(),
     })
 }
 
@@ -634,7 +634,7 @@ impl Client {
         session: &Session,
         cursor: &EventId,
     ) -> Result<EventBatch, ProtonError> {
-        let path = format!("{EVENTS_PATH}/{}", cursor.as_str());
+        let path = events_path(cursor)?;
         let response: EventResponse = self.get_json(&path, session, Priority::Background).await?;
         require_payloads(&response, &path)?;
         Ok(EventBatch {
@@ -766,6 +766,14 @@ fn require_payloads(response: &EventResponse, path: &str) -> Result<(), ProtonEr
         }
     }
     Ok(())
+}
+
+/// The events path for `cursor`. The server supplies the cursor and the
+/// store keeps it, so it gets the same check as every other id in a
+/// request path: one that changed shape must not rewrite the target.
+fn events_path(cursor: &EventId) -> Result<String, ProtonError> {
+    validate_path_id(cursor.as_str())?;
+    Ok(format!("{EVENTS_PATH}/{}", cursor.as_str()))
 }
 
 #[cfg(test)]
@@ -906,5 +914,27 @@ mod tests {
         let bare_label = response(json!([]), json!([{"ID": "label-1", "Action": 1}]));
         let error = require_payloads(&bare_label, EVENTS_PATH).expect_err("a create needs it");
         assert!(error.to_string().contains("omitted the label"));
+    }
+}
+
+#[cfg(test)]
+mod events_path_tests {
+    use super::EventId;
+
+    #[test]
+    fn a_cursor_is_one_path_segment() {
+        for cursor in [
+            "", ".", "..", "../keys", "a/b", "a\\b", "a?x", "a#x", "a%x", "a b", "é",
+        ] {
+            let error = super::events_path(&EventId::new(cursor)).unwrap_err();
+            assert!(
+                matches!(error, super::ProtonError::Malformed { .. }),
+                "{cursor:?}: {error:?}"
+            );
+        }
+        assert_eq!(
+            super::events_path(&EventId::new("abc123-_=")).unwrap(),
+            "/core/v4/events/abc123-_="
+        );
     }
 }
