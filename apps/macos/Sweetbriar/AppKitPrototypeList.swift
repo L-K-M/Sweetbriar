@@ -701,9 +701,11 @@ final class MessageRowCellView: NSTableCellView {
         unreadDot.isHidden = !content.unread
         flagMarker.isHidden = !content.flagged
         attachmentMarker.isHidden = !content.hasAttachments
+        // `visibleTags` allocates: read it once, not per chip.
+        let visibleTags = content.visibleTags
         for (index, chip) in tagChips.enumerated() {
-            if index < content.visibleTags.count {
-                chip.title = content.visibleTags[index]
+            if index < visibleTags.count {
+                chip.title = visibleTags[index]
                 chip.isHidden = false
             } else {
                 chip.isHidden = true
