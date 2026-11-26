@@ -129,6 +129,9 @@ final class HTMLReaderView: NSView, WKNavigationDelegate, WKUIDelegate {
     private var initialNavigationPending = false
     private var navigation: WKNavigation?
     private let compileRules: @MainActor () async throws -> WKContentRuleList
+    /// How many rule lists were installed. The rules never change, so a
+    /// web view installs them once; tests assert it.
+    private(set) var rulesAddedCount = 0
 
     var linkActivated: ((URL) -> Void)?
     var ruleListUnavailable: ((UInt64) -> Void)?
@@ -202,7 +205,10 @@ final class HTMLReaderView: NSView, WKNavigationDelegate, WKUIDelegate {
             base.host = rendition.token
             base.path = "/__body_\(ticket)"
             guard let url = base.url else { throw URLError(.badURL) }
-            webView.configuration.userContentController.add(rules)
+            if rulesAddedCount == 0 {
+                webView.configuration.userContentController.add(rules)
+                rulesAddedCount += 1
+            }
             cidHandler.replace(with: rendition, ticket: ticket)
             bodyURL = url
             initialNavigationPending = true

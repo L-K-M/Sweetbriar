@@ -101,6 +101,25 @@ func htmlReaderReusesViewAndRefusesNavigationButReportsCurrentClicks() async thr
     #expect(pane.webView.isHidden)
 }
 
+/// The one shared rule list is installed once for the web view's life,
+/// not again on every message.
+@Test(.timeLimit(.minutes(1))) @MainActor
+func htmlReaderInstallsItsRuleListOnce() async throws {
+    var ticket: UInt64 = 1
+    let pane = HTMLReaderView(currentTicket: { ticket })
+    let first = try htmlFixture("<html><body>First</body></html>")
+    let second = try htmlFixture("<html><body>Second</body></html>")
+    defer {
+        try? FileManager.default.removeItem(at: first.directory)
+        try? FileManager.default.removeItem(at: second.directory)
+    }
+    await pane.show(first, ticket: ticket)
+    #expect(pane.rulesAddedCount == 1)
+    ticket = 2
+    await pane.show(second, ticket: ticket)
+    #expect(pane.rulesAddedCount == 1)
+}
+
 private final class ConnectionCounter: @unchecked Sendable {
     private let lock = NSLock()
     private var count = 0
