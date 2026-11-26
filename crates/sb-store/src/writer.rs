@@ -77,8 +77,9 @@ struct WriterShared {
 
 /// What hears of each committed list generation. Called on the writer
 /// thread between a commit and its future resolving, so it must return
-/// at once and never panic. A panic is caught: the observers after it
-/// still hear, the future resolves and the writer keeps serving.
+/// at once and never panic. A panic is caught (the panic hook still
+/// reports it): the observers after it still hear, the future resolves
+/// and the writer keeps serving.
 pub type ListObserver = Arc<dyn Fn(u64) + Send + Sync>;
 
 /// The same post-commit callback contract, for the independent Search counter.
