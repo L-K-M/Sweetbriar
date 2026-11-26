@@ -328,6 +328,11 @@ final class ReaderViewController: NSViewController {
         }
     }
 
+    /// "1 remote content item blocked", "3 remote content items blocked".
+    private static func remoteContentText(_ blocked: UInt32) -> String {
+        "\(blocked) remote content \(blocked == 1 ? "item" : "items") blocked"
+    }
+
     /// View → Message Source answers while a message is shown.
     var canToggleSource: Bool { model.currentMessage != nil }
     var isShowingSource: Bool { model.isShowingSource }
@@ -445,7 +450,7 @@ final class ReaderViewController: NSViewController {
             renderAccountChip(message)
             sourceButton.title = model.isShowingSource ? "Sender Layout" : "View Source"
             let blocked = model.currentLease?.remoteContentBlocked ?? 0
-            remoteContent.stringValue = "\(blocked) remote content items blocked"
+            remoteContent.stringValue = Self.remoteContentText(blocked)
             remoteContent.isHidden = blocked == 0
             renderMetadata(message)
             rebuildAttachments()

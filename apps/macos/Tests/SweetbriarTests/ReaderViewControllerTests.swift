@@ -8,6 +8,7 @@ private struct PresentationSource: ReaderSource {
     let directory: URL
     let message: ReaderMessage
     let plainOnly: Bool
+    var remoteContentBlocked: UInt32 = 3
 
     init(plainOnly: Bool = false) throws {
         self.plainOnly = plainOnly
@@ -35,7 +36,7 @@ private struct PresentationSource: ReaderSource {
         let kind: BodyKind = plainOnly && preferred == .sanitizedHtml ? .plainText : preferred
         let file = kind == .source ? "source.txt" : (kind == .plainText ? "body.txt" : "body.html")
         return BodyLease(leaseId: "presentation", kind: kind, filePath: directory.appendingPathComponent(file).path,
-                         byteLength: 0, remoteContentBlocked: 3, warnings: [],
+                         byteLength: 0, remoteContentBlocked: remoteContentBlocked, warnings: [],
                          manifestPath: kind == .source ? nil : directory.appendingPathComponent("manifest.json").path)
     }
     func openAttachment(messageID: Int64, partID: String) async throws -> AttachmentLease {
@@ -43,6 +44,20 @@ private struct PresentationSource: ReaderSource {
                         byteLength: 10, partId: partID, displayName: "hello.txt", mediaType: "text/plain")
     }
     func releaseLease(_ leaseID: String) {}
+}
+
+/// The reader's blocked-content line names one item correctly.
+@Test @MainActor
+func readerCopyUsesSingularForOneBlockedItem() async throws {
+    var source = try PresentationSource()
+    source.remoteContentBlocked = 1
+    defer { try? FileManager.default.removeItem(at: source.directory) }
+    let controller = ReaderViewController(
+        model: ReaderModel(source: source, preferred: .sanitizedHtml))
+    await controller.show(selection: [42])
+    #expect(!controller.remoteContent.isHidden)
+    #expect(controller.remoteContent.stringValue == "1 remote content item blocked")
+    controller.close()
 }
 
 /// A body Proton hasn't fetched yet: the open waits, so it isn't a
