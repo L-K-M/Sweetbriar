@@ -75,7 +75,7 @@ fn reads_like_sorting(
         };
 
         // After the first page, then back before the second page's first row.
-        let after = read(SearchAnchor::After(last.cursor().to_owned()));
+        let after = read(SearchAnchor::After(last.cursor(top.binding())));
         let second = &ids[first.len()..ids.len().min(2 * LIMIT)];
         assert_eq!(rows(&after), second, "{context} after");
         assert_eq!(
@@ -84,7 +84,7 @@ fn reads_like_sorting(
             "{context} after"
         );
         if let Some(head) = after.rows().first() {
-            let before = read(SearchAnchor::Before(head.cursor().to_owned()));
+            let before = read(SearchAnchor::Before(head.cursor(after.binding())));
             assert_eq!(rows(&before), first, "{context} before");
             assert!(!before.has_more_before(), "{context} before");
         }

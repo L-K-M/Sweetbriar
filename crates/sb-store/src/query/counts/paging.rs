@@ -42,11 +42,17 @@ pub enum SearchAnchor {
     Around(i64),
 }
 
-/// Display data paired with this chosen row's opaque cursor.
+/// Display data paired with this chosen row's cursor key.
+///
+/// The cursor itself is minted only for a page's two edges (see
+/// `SearchPage::edge_cursors`): minting one per row serialises the whole
+/// canonical query into every cursor, so a maximum-size query made each
+/// cursor about 16 KB and a 1,000-row page allocated about 16 MB of
+/// strings, on every page read and every keystroke.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StoredSearchRow {
     row: StoredListRow,
-    cursor: String,
+    key: Key,
 }
 
 impl StoredSearchRow {
@@ -54,13 +60,14 @@ impl StoredSearchRow {
     pub fn row(&self) -> &StoredListRow {
         &self.row
     }
-    /// The generation-bound opaque cursor, passed back byte-for-byte.
-    pub fn cursor(&self) -> &str {
-        &self.cursor
+    /// Consume display data without cloning.
+    pub fn into_row(self) -> StoredListRow {
+        self.row
     }
-    /// Consume display data and cursor without cloning.
-    pub fn into_parts(self) -> (StoredListRow, String) {
-        (self.row, self.cursor)
+    /// This row's cursor, minted against `binding`. Only a caller that
+    /// pages from this row needs one, and the store's tests do.
+    pub(crate) fn cursor(&self, binding: &Binding) -> String {
+        binding.mint(self.key)
     }
 }
 
@@ -72,6 +79,9 @@ pub struct SearchPage {
     has_more_before: bool,
     has_more_after: bool,
     excluded_unknown: u64,
+    /// What a cursor from this page decodes against. Kept whole, not per
+    /// row: minting a cursor serialises it.
+    binding: Binding,
 }
 
 impl SearchPage {
@@ -99,9 +109,25 @@ impl SearchPage {
     pub fn into_rows(self) -> Vec<StoredSearchRow> {
         self.rows
     }
+    /// What this page's cursors mint and decode against.
+    pub(crate) fn binding(&self) -> &Binding {
+        &self.binding
+    }
+    /// The cursors a caller pages from: this page's first and last rows.
+    /// The rest of the page never needs one.
+    pub fn edge_cursors(&self) -> (Option<String>, Option<String>) {
+        (
+            self.rows.first().map(|row| self.binding.mint(row.key)),
+            self.rows.last().map(|row| self.binding.mint(row.key)),
+        )
+    }
 }
 
-struct Binding {
+/// What a cursor from a page decodes against, and what minting one
+/// serialises. Crate-visible so the store's tests can mint a cursor
+/// from a row they hold; never part of the public API.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Binding {
     store: Uuid,
     incarnation: Uuid,
     spec: Json,
@@ -115,13 +141,13 @@ struct Decoded {
     key: Key,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Sort {
     Date,
     Relevance,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Key {
     Date(ListKey),
     Score { bits: u64, occurrence_id: i64 },
@@ -324,10 +350,7 @@ fn read_page(
     let rows = rows
         .into_iter()
         .zip(keys)
-        .map(|(row, key)| StoredSearchRow {
-            cursor: binding.mint(key),
-            row,
-        })
+        .map(|(row, key)| StoredSearchRow { row, key })
         .collect();
     let excluded_unknown = match kept.unknown {
         UnknownCount::Reuse {
@@ -351,6 +374,7 @@ fn read_page(
         has_more_before: before,
         has_more_after: after,
         excluded_unknown,
+        binding,
     }))
 }
 
