@@ -537,10 +537,6 @@ final class MessageRowCellView: NSTableCellView {
     /// This row's reserved date width, set from its formatted date.
     private var reservedDateWidth: CGFloat = 84
 
-    /// The tag chip pool: synthetic rows carry at most two; extras
-    /// stay hidden.
-    private static let tagChipCount = 3
-
     private let rail = NSView()
     private let railMarker = NSView()
     private let railLeftEdge = NSView()
@@ -554,9 +550,11 @@ final class MessageRowCellView: NSTableCellView {
     private let snippetField = NSTextField(labelWithString: "")
     private let flagMarker = NSImageView()
     private let attachmentMarker = NSImageView()
-    private let tagChips = (0 ..< MessageRowCellView.tagChipCount).map {
+    private let tagChips = (0 ..< MessageRowMetrics.visibleTagCount).map {
         _ in BadgeView()
     }
+    /// Draws `+N` when a row carries more tags than the chips show.
+    private let overflowChip = BadgeView()
     private let placeholderFill = NSView()
 
     /// The row's account color, kept so the layer colors can be
@@ -572,7 +570,7 @@ final class MessageRowCellView: NSTableCellView {
     /// is out.
     private var contentSubviews: [NSView] {
         [rail, monogram, unreadDot, senderField, dateField, accountField, subjectField,
-         snippetField, flagMarker, attachmentMarker] + tagChips
+         snippetField, flagMarker, attachmentMarker] + tagChips + [overflowChip]
     }
 
     init(showsAccountMarker: Bool) {
@@ -635,6 +633,10 @@ final class MessageRowCellView: NSTableCellView {
             chip.font = .systemFont(ofSize: 10)
             addSubview(chip)
         }
+        overflowChip.fillColor = .quaternaryLabelColor
+        overflowChip.titleColor = .secondaryLabelColor
+        overflowChip.font = .systemFont(ofSize: 10)
+        addSubview(overflowChip)
 
         placeholderFill.wantsLayer = true
         placeholderFill.layer?.cornerRadius =
@@ -700,12 +702,18 @@ final class MessageRowCellView: NSTableCellView {
         flagMarker.isHidden = !content.flagged
         attachmentMarker.isHidden = !content.hasAttachments
         for (index, chip) in tagChips.enumerated() {
-            if index < content.tags.count {
-                chip.title = content.tags[index]
+            if index < content.visibleTags.count {
+                chip.title = content.visibleTags[index]
                 chip.isHidden = false
             } else {
                 chip.isHidden = true
             }
+        }
+        if content.hiddenTagCount > 0 {
+            overflowChip.title = "+\(content.hiddenTagCount)"
+            overflowChip.isHidden = false
+        } else {
+            overflowChip.isHidden = true
         }
 
         setAccessibilityElement(true)
@@ -837,6 +845,14 @@ final class MessageRowCellView: NSTableCellView {
                 width: chipWidth, height: 15
             )
             chipTrail = chip.frame.minX - metrics.markerSpacing
+        }
+        if !overflowChip.isHidden {
+            let chipWidth = overflowChip.fittingWidth()
+            overflowChip.frame = NSRect(
+                x: chipTrail - chipWidth, y: 40,
+                width: chipWidth, height: 15
+            )
+            chipTrail = overflowChip.frame.minX - metrics.markerSpacing
         }
         snippetField.frame = NSRect(
             x: contentX, y: 41,

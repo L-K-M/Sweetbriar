@@ -43,6 +43,11 @@ enum MessageRowMetrics {
     /// The gap between two trailing markers.
     static let markerSpacing: CGFloat = 4
 
+    /// How many tag chips a row draws before it collapses the rest
+    /// into a `+N` chip. Both lists share this through
+    /// `MessageRowContent.visibleTags`.
+    static let visibleTagCount = 3
+
     /// How many palette slots `accountColorIndex` rotates through. The
     /// AppKit and SwiftUI palettes are declared in matching order.
     static let accountColorCount = 6
@@ -102,6 +107,14 @@ struct MessageRowContent: Equatable {
 
     /// The rail's one-letter monogram.
     var monogram: String
+
+    /// The first `MessageRowMetrics.visibleTagCount` tags, the only
+    /// ones the lists draw as chips.
+    var visibleTags: [String] { Array(tags.prefix(MessageRowMetrics.visibleTagCount)) }
+
+    /// How many tags the chips collapse, drawn as the `+N` chip's
+    /// title. Zero when every tag fits.
+    var hiddenTagCount: Int { max(0, tags.count - MessageRowMetrics.visibleTagCount) }
 }
 
 /// Formats `ListRow` fields into `MessageRowContent` (plan M0.10):

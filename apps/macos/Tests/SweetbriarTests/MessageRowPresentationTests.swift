@@ -106,4 +106,28 @@ struct MessageRowPresentationTests {
         #expect(content.tags == ["tag"])
         #expect(content.monogram == "A")
     }
+
+    @Test("tags cap at the visible count and report the collapsed rest")
+    func tagOverflow() {
+        let formatter = MessageRowFormatter()
+        let content = formatter.present(
+            sender: "Ada", subject: "Hi", snippet: "",
+            dateMilliseconds: 1_760_000_000_000,
+            unread: false, flagged: false, hasAttachments: false,
+            tags: ["one", "two", "three", "four", "five"],
+            accountID: "synthetic-a"
+        )
+        #expect(content.visibleTags == ["one", "two", "three"])
+        #expect(content.hiddenTagCount == 2)
+
+        let fitting = formatter.present(
+            sender: "Ada", subject: "Hi", snippet: "",
+            dateMilliseconds: 1_760_000_000_000,
+            unread: false, flagged: false, hasAttachments: false,
+            tags: ["one", "two"],
+            accountID: "synthetic-a"
+        )
+        #expect(fitting.visibleTags == ["one", "two"])
+        #expect(fitting.hiddenTagCount == 0)
+    }
 }
