@@ -678,7 +678,7 @@ final class MessageRowCellView: NSTableCellView {
         // `AppearanceModel.appearance` answers after the list has
         // opened, so the first cells a window makes are configured
         // without one and a later reuse has to bring the marker back.
-        showsMarker = showsAccountMarker && !(usesAppearance && account == nil)
+        showsMarker = showsAccountMarker && (!usesAppearance || account != nil)
         rail.isHidden = !showsMarker
         monogram.isHidden = !showsMarker
         guard let content else {
