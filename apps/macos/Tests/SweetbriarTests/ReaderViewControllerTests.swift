@@ -94,6 +94,48 @@ private struct FetchingSource: ReaderSource {
     func releaseLease(_ leaseID: String) {}
 }
 
+/// A source whose occurrence 43 is a second message (id 8).
+private struct TwoMessageSource: ReaderSource {
+    let inner: PresentationSource
+    let other: ReaderMessage
+    func messageForOccurrence(occurrenceId: Int64) async throws -> Int64 { occurrenceId == 43 ? 8 : 7 }
+    func getMessage(messageId: Int64) async throws -> ReaderMessage { messageId == 8 ? other : inner.message }
+    func openBody(messageID: Int64, preferred: BodyKind) async throws -> BodyLease {
+        try await inner.openBody(messageID: messageID, preferred: preferred)
+    }
+    func openAttachment(messageID: Int64, partID: String) async throws -> AttachmentLease {
+        try await inner.openAttachment(messageID: messageID, partID: partID)
+    }
+    func releaseLease(_ leaseID: String) {}
+}
+
+/// An unsubmitted tag name stays with its message: a re-render of the
+/// same message keeps the draft, another message clears it.
+@Test @MainActor
+func tagPickerDraftStaysWithItsMessage() async throws {
+    let source = try PresentationSource()
+    defer { try? FileManager.default.removeItem(at: source.directory) }
+    var other = source.message
+    other.messageId = 8
+    let controller = ReaderViewController(
+        model: ReaderModel(source: TwoMessageSource(inner: source, other: other), preferred: .sanitizedHtml))
+    await controller.show(selection: [42])
+    controller.tagPicker.text = "draft"
+    // The same message shown again keeps the draft.
+    await controller.show(selection: [42])
+    #expect(controller.tagPicker.text == "draft")
+    // A different occurrence of the same message (44 also maps to
+    // message 7) drops the draft: the selection changed, and
+    // resetSelection clears eagerly before the message resolves.
+    await controller.show(selection: [44])
+    #expect(controller.tagPicker.text == "")
+    // Another message takes the draft with it.
+    await controller.show(selection: [43])
+    #expect(controller.tagPicker.text == "")
+    #expect(controller.tagPicker.tagNames == ["Keep"])
+    controller.close()
+}
+
 /// spec/08 "Latency log": a body fetched for the open is shown but not
 /// recorded; the next, cached open is.
 @Test @MainActor

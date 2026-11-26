@@ -261,6 +261,11 @@ final class ReaderViewController: NSViewController {
 
     private func resetSelection(_ selection: Set<Int64>) {
         _ = view
+        // A different selection drops an unsubmitted tag draft with it.
+        if selection.count != 1 || selection.first != model.occurrenceID {
+            tagDraftMessageId = nil
+            tagPicker.text = ""
+        }
         model.clear()
         html.clear(ticket: model.navigationTicket)
         plainText.text = ""
@@ -579,9 +584,18 @@ final class ReaderViewController: NSViewController {
         return text
     }
 
+    /// The message the tag field's unsubmitted draft belongs to.
+    private var tagDraftMessageId: Int64?
+
     /// Show the message's tags and note; the editor keeps the user's
-    /// text while it is being edited.
+    /// text while it is being edited. A draft typed on another message
+    /// does not follow the selection: the field clears when the
+    /// selection changes (even to another occurrence of the same
+    /// message) or the shown message changes; only re-showing the
+    /// identical selection keeps it.
     private func renderMetadata(_ message: ReaderMessage) {
+        if tagDraftMessageId != message.messageId { tagPicker.text = "" }
+        tagDraftMessageId = message.messageId
         tagPicker.configure(tags: message.tags)
         if noteEditor.isEditing {
             // Navigation moved on mid-edit: save to the edited message.
