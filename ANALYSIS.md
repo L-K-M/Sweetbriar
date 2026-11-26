@@ -276,11 +276,14 @@ canonical text appear. Each of those is a separate engine hop.
 
 `AppKitPrototypeList.swift` caps the row cell at `tagChipCount = 3` and
 hides any further chips without an overflow indicator, and
-`MessageRowContent.accessibilityLabel` omits tags entirely. A message
-with four or more tags therefore reads as three in the list and none to
-VoiceOver, while the reader shows them all. Draw a trailing `+N` chip
-after the visible chips (keeping the fixed-size pool so the hand layout
-is unchanged) and add the remaining count to the accessibility label.
+`MessageRowContent.accessibilityLabel` omits tags and attachments
+entirely. A message with four or more tags therefore reads as three in
+the list and none to VoiceOver, while the paperclip is visual-only and
+the reader shows the full state. Draw a trailing `+N` chip after the
+visible chips (keeping the fixed-size pool so the hand layout is
+unchanged) and add the remaining tag count and attachment presence to
+the accessibility label. Keep the established sender, subject and date
+order first, and audit verbosity for a row with many tags.
 
 ## B14. A self-built payload is encoded with `try!`
 
@@ -288,6 +291,18 @@ is unchanged) and add the remaining count to the accessibility label.
 dictionary the same file builds, so it cannot fail today; the pattern
 is fragile if the payload ever gains a non-JSON value. Throw or record
 an internal error instead.
+
+## B15. Settings snapshots are posted into a discard sink
+
+`CoreBridge.settings()` posts every snapshot into the caller-owned
+`FrameBatcher` for "`@MainActor` observers", but the production
+`AppDelegate` constructs that batcher with `{ _ in }` and no observer
+consumes it. A future settings writer can therefore appear to propagate
+while nothing in the app hears the update. Either wire the batcher to
+the appearance/reading settings models it was meant to update, or make
+the absence explicit by removing the dead publication path and having
+consumers read settings directly. Add a test at the chosen boundary so
+this cannot silently regress.
 
 ---
 
