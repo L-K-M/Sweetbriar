@@ -93,6 +93,7 @@ struct ListAppearanceTests {
         #expect(HoverRowView.hoverAlpha(hovering: true, selected: false) == 1)
         #expect(HoverRowView.hoverAlpha(hovering: false, selected: false) == 0)
         #expect(HoverRowView.hoverAlpha(hovering: true, selected: true) == 0)
+        #expect(HoverRowView.hoverAlpha(hovering: false, selected: true) == 0)
     }
 
     @Test func flaggedControllerShowsBothAccountsAndSurvivesAppearanceReset() async throws {
