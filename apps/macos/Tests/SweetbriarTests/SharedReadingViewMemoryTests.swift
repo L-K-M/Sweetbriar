@@ -9,10 +9,17 @@ import Testing
 @testable import Sweetbriar
 
 private final class SwapSource: ReadingViewMemorySource, @unchecked Sendable {
-    var stored: [String]
+    private let lock = NSLock()
+    private var held: [String]
+    /// The list the store holds; locked, since a load reads it off the
+    /// main actor.
+    var stored: [String] {
+        get { lock.withLock { held } }
+        set { lock.withLock { held = newValue } }
+    }
 
     init(_ stored: [String]) {
-        self.stored = stored
+        held = stored
     }
 
     func readingViewSenders() async throws -> [String] { stored }
