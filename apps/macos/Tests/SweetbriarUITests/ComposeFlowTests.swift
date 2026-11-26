@@ -12,6 +12,23 @@ final class ComposeFlowTests: XCTestCase {
     private static let body = "A line written in the compose flow."
 
     @MainActor
+    func testClosingTheViewerLeavesItsMenuCommandAvailable() throws {
+        continueAfterFailure = false
+        let roots = FileManager.default.temporaryDirectory
+            .appendingPathComponent("sweetbriar-viewer-flow-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: roots, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: roots) }
+        let app = launch(roots: roots, attachPath: nil)
+        defer { app.terminate() }
+        let viewer = app.windows["Sweetbriar"]
+        app.typeKey("w", modifierFlags: .command)
+        XCTAssertTrue(waitFor(viewer, predicate: NSPredicate(format: "exists == false")))
+        app.menuBars.menuBarItems["Window"].click()
+        app.menuBars.menuItems["Message Viewer"].click()
+        XCTAssertTrue(viewer.waitForExistence(timeout: Self.timeout))
+    }
+
+    @MainActor
     func testADraftSurvivesQuitAndReopensFromTheDraftsList() throws {
         continueAfterFailure = false
         let roots = FileManager.default.temporaryDirectory
@@ -22,6 +39,7 @@ final class ComposeFlowTests: XCTestCase {
         try Data("Synthetic attachment for the compose flow.\n".utf8).write(to: file)
 
         let app = launch(roots: roots, attachPath: file.path)
+        defer { app.terminate() }
         app.typeKey("n", modifierFlags: .command)
         let compose = app.windows.matching(NSPredicate(format: "identifier BEGINSWITH 'compose-'")).firstMatch
         XCTAssertTrue(compose.waitForExistence(timeout: Self.timeout))
@@ -29,8 +47,11 @@ final class ComposeFlowTests: XCTestCase {
 
         let to = compose.descendants(matching: .any)["composeTo"]
         XCTAssertTrue(to.waitForExistence(timeout: Self.timeout))
-        to.click()
-        to.typeText(Self.recipient + "\t")
+        // Type into the active window so a click cannot mask the
+        // initial focus. Tab commits the recipient token.
+        app.typeText(Self.recipient + "\t")
+        XCTAssertTrue(to.textFields.matching(NSPredicate(format: "value == %@", Self.recipient))
+            .firstMatch.waitForExistence(timeout: Self.timeout))
         let subject = compose.textFields["composeSubject"]
         subject.click()
         subject.typeText(Self.subject)
@@ -47,7 +68,7 @@ final class ComposeFlowTests: XCTestCase {
         body.click()
         XCTAssertTrue(waitFor(status, value: "Saved"))
 
-        compose.buttons["composeAttach"].click()
+        app.typeKey("a", modifierFlags: [.command, .shift])
         // The row's label is the file name once its publication is attached.
         XCTAssertTrue(compose.staticTexts["flow-notes.txt"].waitForExistence(timeout: Self.timeout))
         XCTAssertTrue(waitFor(status, value: "Saved"))
@@ -106,7 +127,10 @@ final class ComposeFlowTests: XCTestCase {
     }
 
     private func waitFor(_ element: XCUIElement, value: String) -> Bool {
-        let predicate = NSPredicate(format: "value == %@", value)
+        waitFor(element, predicate: NSPredicate(format: "value == %@", value))
+    }
+
+    private func waitFor(_ element: XCUIElement, predicate: NSPredicate) -> Bool {
         let expectation = XCTNSPredicateExpectation(predicate: predicate, object: element)
         return XCTWaiter().wait(for: [expectation], timeout: Self.timeout) == .completed
     }

@@ -16,8 +16,10 @@ final class SidebarViewController: NSViewController, NSMenuDelegate {
     private static let entryCellID = NSUserInterfaceItemIdentifier("SidebarEntry")
     private static let headerCellID = NSUserInterfaceItemIdentifier("SidebarHeader")
     private static let healthCellID = NSUserInterfaceItemIdentifier("SidebarHealth")
+    private static let collapsedSectionsKey = "SidebarCollapsedSections"
     private let model: SidebarModel
     private let appearance: AppearanceModel
+    private let defaults: UserDefaults
     /// The app's shared Activity model; its `accounts` drive the
     /// account health rows.
     private let activity: ActivityModel?
@@ -52,6 +54,7 @@ final class SidebarViewController: NSViewController, NSMenuDelegate {
     /// The outline's items, rebuilt per reload: NSOutlineView keys its
     /// rows by object identity.
     private var nodes: [SectionNode] = []
+    private var reloadingSections = false
 
     /// The chosen entry's id, kept across reloads.
     private var chosenID: String?
@@ -84,10 +87,14 @@ final class SidebarViewController: NSViewController, NSMenuDelegate {
     /// health").
     var onOpenActivity: (@MainActor () -> Void)?
 
-    init(model: SidebarModel, appearance: AppearanceModel, activity: ActivityModel? = nil) {
+    init(
+        model: SidebarModel, appearance: AppearanceModel, activity: ActivityModel? = nil,
+        defaults: UserDefaults = .standard
+    ) {
         self.model = model
         self.appearance = appearance
         self.activity = activity
+        self.defaults = defaults
         super.init(nibName: nil, bundle: nil)
         observeAppearance()
         observeActivity()
@@ -167,9 +174,11 @@ final class SidebarViewController: NSViewController, NSMenuDelegate {
         reloadSections()
     }
 
-    /// Show the model's sections, every one expanded, keeping the
-    /// chosen entry selected while it is still listed.
+    /// Keep the section disclosures and the visible selection across
+    /// reloads, even though the model supplies new row objects.
     func reloadSections() {
+        reloadingSections = true
+        defer { reloadingSections = false }
         nodes = model.sections.map { section in
             SectionNode(section, health: healthText(for: section.account?.accountId))
         }
@@ -177,7 +186,8 @@ final class SidebarViewController: NSViewController, NSMenuDelegate {
             healthTextCache[section.id] = healthText(for: section.account?.accountId)
         }
         outlineView.reloadData()
-        for node in nodes {
+        let collapsed = Set(defaults.stringArray(forKey: Self.collapsedSectionsKey) ?? [])
+        for node in nodes where !collapsed.contains(node.section.id) {
             outlineView.expandItem(node)
         }
         select(entryID: chosenID)
@@ -345,10 +355,10 @@ final class SidebarViewController: NSViewController, NSMenuDelegate {
 
     /// Choose the entry `id` names, as a click would: it is selected
     /// and, if it opens a window, `onChoose` hears of it.
-    func choose(entryID id: String) {
+    func choose(entryID id: String, revealSection: Bool = true) {
         guard let entry = model.entry(id: id), Self.isChoosable(entry) else { return }
         chosenID = id
-        select(entryID: id)
+        select(entryID: id, revealSection: revealSection)
         report(entry)
     }
 
@@ -369,25 +379,38 @@ final class SidebarViewController: NSViewController, NSMenuDelegate {
     }
 
     /// Select the row of `id` without reporting a choice.
-    private func select(entryID id: String?) {
+    private func select(entryID id: String?, revealSection: Bool = false) {
         selectingInCode = true
         defer { selectingInCode = false }
-        guard let id, let node = entryNode(id: id) else {
+        guard let id, let (section, node) = entryNode(id: id) else {
             outlineView.deselectAll(nil)
             return
         }
+        if revealSection { outlineView.expandItem(section) }
         let row = outlineView.row(forItem: node)
         guard row >= 0 else { return }
         outlineView.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
     }
 
-    private func entryNode(id: String) -> EntryNode? {
+    private func entryNode(id: String) -> (SectionNode, EntryNode)? {
         for section in nodes {
             if let node = section.entries.first(where: { $0.entry.id == id }) {
-                return node
+                return (section, node)
             }
         }
         return nil
+    }
+
+    private func recordDisclosure(_ notification: Notification, expanded: Bool) {
+        guard !reloadingSections, let node = notification.userInfo?["NSObject"] as? SectionNode else { return }
+        var collapsed = Set(defaults.stringArray(forKey: Self.collapsedSectionsKey) ?? [])
+        if expanded {
+            collapsed.remove(node.section.id)
+            if !selectingInCode { select(entryID: chosenID) }
+        } else {
+            collapsed.insert(node.section.id)
+        }
+        defaults.set(collapsed.sorted(), forKey: Self.collapsedSectionsKey)
     }
 }
 
@@ -418,6 +441,14 @@ extension SidebarViewController: NSOutlineViewDataSource, NSOutlineViewDelegate 
 
     func outlineView(_ outlineView: NSOutlineView, isGroupItem item: Any) -> Bool {
         item is SectionNode
+    }
+
+    func outlineViewItemDidExpand(_ notification: Notification) {
+        recordDisclosure(notification, expanded: true)
+    }
+
+    func outlineViewItemDidCollapse(_ notification: Notification) {
+        recordDisclosure(notification, expanded: false)
     }
 
     func outlineView(_ outlineView: NSOutlineView, heightOfRowByItem item: Any) -> CGFloat {
@@ -536,7 +567,7 @@ extension SidebarViewController: NSOutlineViewDataSource, NSOutlineViewDelegate 
     }
 
     func outlineViewSelectionDidChange(_ notification: Notification) {
-        guard !selectingInCode else { return }
+        guard !selectingInCode, !reloadingSections else { return }
         let row = outlineView.selectedRow
         guard row >= 0, let node = outlineView.item(atRow: row) as? EntryNode,
               Self.isChoosable(node.entry)
@@ -758,6 +789,7 @@ enum SidebarSymbol {
 private final class SidebarEntryCellView: NSTableCellView {
     private let title = NSTextField(labelWithString: "")
     private let unread = NSTextField(labelWithString: "")
+    private let unreadBadge = NSBox()
     private let symbol = NSImageView()
 
     init(identifier: NSUserInterfaceItemIdentifier) {
@@ -766,8 +798,17 @@ private final class SidebarEntryCellView: NSTableCellView {
         for field in [title, unread] {
             field.translatesAutoresizingMaskIntoConstraints = false
             field.lineBreakMode = .byTruncatingTail
-            addSubview(field)
         }
+        addSubview(title)
+        unreadBadge.translatesAutoresizingMaskIntoConstraints = false
+        unreadBadge.boxType = .custom
+        unreadBadge.borderWidth = 0
+        unreadBadge.cornerRadius = 8
+        unreadBadge.fillColor = .quaternaryLabelColor
+        unreadBadge.setAccessibilityElement(false)
+        unread.setAccessibilityElement(true)
+        addSubview(unreadBadge)
+        addSubview(unread)
         textField = title
         // The source list tints a cell's image view with the accent
         // color, as Mail's mailbox symbols are.
@@ -777,7 +818,8 @@ private final class SidebarEntryCellView: NSTableCellView {
         addSubview(symbol)
         imageView = symbol
         unread.textColor = .secondaryLabelColor
-        unread.alignment = .right
+        unread.alignment = .center
+        unread.font = .monospacedDigitSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .medium)
         unread.setContentCompressionResistancePriority(.required, for: .horizontal)
         title.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         NSLayoutConstraint.activate([
@@ -786,11 +828,15 @@ private final class SidebarEntryCellView: NSTableCellView {
             symbol.widthAnchor.constraint(equalToConstant: 20),
             title.leadingAnchor.constraint(equalTo: symbol.trailingAnchor, constant: 6),
             title.centerYAnchor.constraint(equalTo: centerYAnchor),
-            unread.leadingAnchor.constraint(
+            unreadBadge.leadingAnchor.constraint(
                 greaterThanOrEqualTo: title.trailingAnchor, constant: 6
             ),
-            unread.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -4),
-            unread.centerYAnchor.constraint(equalTo: centerYAnchor),
+            unreadBadge.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -4),
+            unreadBadge.centerYAnchor.constraint(equalTo: centerYAnchor),
+            unreadBadge.heightAnchor.constraint(equalToConstant: 16),
+            unread.leadingAnchor.constraint(equalTo: unreadBadge.leadingAnchor, constant: 5),
+            unread.trailingAnchor.constraint(equalTo: unreadBadge.trailingAnchor, constant: -5),
+            unread.centerYAnchor.constraint(equalTo: unreadBadge.centerYAnchor),
         ])
     }
 
@@ -802,8 +848,10 @@ private final class SidebarEntryCellView: NSTableCellView {
         title.stringValue = entry.title
         symbol.image = NSImage(systemSymbolName: name, accessibilityDescription: nil)
         let count = entry.unread ?? 0
-        unread.stringValue = count > 0 ? "\(count)" : ""
-        unread.isHidden = count == 0
+        let hasUnread = count > 0
+        unread.stringValue = hasUnread ? count.formatted() : ""
+        unread.isHidden = !hasUnread
+        unreadBadge.isHidden = !hasUnread
         switch entry.target {
         case .window, .drafts, .outBox:
             title.textColor = .labelColor

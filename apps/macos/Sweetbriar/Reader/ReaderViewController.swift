@@ -168,7 +168,7 @@ final class ReaderViewController: NSViewController {
         stack.addArrangedSubview(status)
         stack.addArrangedSubview(body)
         placeholder.font = .preferredFont(forTextStyle: .title2)
-        placeholder.textColor = .tertiaryLabelColor
+        placeholder.textColor = .secondaryLabelColor
         placeholder.alignment = .center
         placeholder.isSelectable = false
         placeholder.translatesAutoresizingMaskIntoConstraints = false

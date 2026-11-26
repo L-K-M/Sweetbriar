@@ -86,6 +86,21 @@ final class FilingFlowTests: XCTestCase {
 
         select(Self.archived, in: window)
         row(Self.trashed, in: window).rightClick()
+        let open = window.menuItems["Open in New Window"]
+        XCTAssertTrue(open.waitForExistence(timeout: Self.timeout))
+        for title in ["Reply", "Reply All", "Forward"] {
+            let item = window.menuItems[title]
+            XCTAssertTrue(item.exists, "\(title) is missing")
+            XCTAssertTrue(item.isEnabled, "\(title) is disabled")
+        }
+        open.click()
+        let message = app.windows["messageWindow"]
+        XCTAssertTrue(message.waitForExistence(timeout: Self.timeout))
+        app.typeKey("w", modifierFlags: .command)
+        waitUntil(message, "exists == false")
+        XCTAssertTrue(row(Self.archived, in: window).isSelected)
+
+        row(Self.trashed, in: window).rightClick()
         let archive = window.menuItems["Archive"]
         XCTAssertTrue(archive.waitForExistence(timeout: Self.timeout))
         archive.click()

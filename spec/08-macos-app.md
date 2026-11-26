@@ -216,6 +216,10 @@ conversation; the Bridge account sheet is no longer offered.
   `flag`, Out Box `tray.and.arrow.up`, a saved view
   `folder.badge.gearshape`. An entry that opens nothing is dimmed,
   symbol included.
+- **Sidebar sections** can collapse independently and remember their
+  state across launches. Choosing a mailbox by command expands its
+  section. The unread count sits in a capsule and stays in the row's
+  accessibility label.
 - **Mailboxes** come from `mailboxes(account_id)` (07), with unread
   counts. Imported mailboxes are flat, named after their sources; no
   role or hierarchy is read into a file name. IMAP hierarchy uses the
@@ -389,6 +393,8 @@ M4.4c. Choosing Out Box shows the Out Box in the list pane, as Drafts
     `SelectionToken`;
   - a context click on a selected row acts on the selection; on an
     unselected row it acts on that row alone and leaves the selection.
+    For a single message, the context menu also offers Open in New
+    Window, Reply, Reply All and Forward on that message.
 - **Keyboard:**
   - arrows, Return to open the message in its own window, Space to
     page the reader (Message window, below);
@@ -618,7 +624,8 @@ A message window is the reader for one message on its own, with its own
     keyboard focus or commit marked text. Async answers are versioned:
     old parsing/completion never replaces later recipient or body edits.
     Blur commits and validates the displayed input before flushing.
-  - Subject.
+    A blank New Message starts with the keyboard in To.
+  - A labeled Subject field.
 - **Saving:**
   - autosaves 1.5 s after typing stops, and on blur and quit;
   - each save is a new draft revision (02);
