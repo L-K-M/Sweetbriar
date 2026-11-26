@@ -14,7 +14,8 @@ A further pass (`friendly-wasp`) added the small correctness, layout,
 hygiene and product entries below; its four fixes are PRs #578, #581,
 #585 and #590.
 A further independent review, by opencode, added Part 8; its nine
-changes are PRs #573, #582, #583, #584, #587, #591, #595, #596 and #597.
+changes, PRs #573, #582, #583, #584, #587, #591, #595, #596 and #597,
+are merged.
 
 ## Completed on main
 
@@ -23,10 +24,11 @@ changes are PRs #573, #582, #583, #584, #587, #591, #595, #596 and #597.
   archive, never the user's (#582); the Reading view memory resets after
   a restore (#583); `Info.plist` matches `project.yml` (#584); long
   recipient lists collapse behind **Show All Recipients** (#587);
-  `scripts/bundle-notices.sh` is shellchecked in CI (#591); the Proton
-  events cursor gets the same path check as every other id (#596); a
-  backup reference that is not a hash fails `Corrupt` before it names a
-  directory (#597). Details and what remains are in Part 8.
+  `scripts/bundle-notices.sh` is shellchecked in CI (#591); a panicking
+  writer observer no longer hangs its write or ends the writer (#595);
+  the Proton events cursor gets the same path check as every other id
+  (#596); a backup reference that is not a hash fails `Corrupt` before
+  it names a directory (#597). Details and what remains are in Part 8.
 
 - **Help menu content.** Help → Keyboard Shortcuts… now opens a shared
   reference window with the app's keyboard commands. [Menu entry](apps/macos/Sweetbriar/MainMenu.swift#L458), [Shortcut reference](apps/macos/Sweetbriar/KeyboardShortcutHelp.swift)
@@ -51,10 +53,6 @@ changes are PRs #573, #582, #583, #584, #587, #591, #595, #596 and #597.
   maximum.
 
 ## Submitted patches
-
-- **Second review (opencode), submitted.** A panicking writer observer no
-  longer hangs its write or ends the writer ([PR](https://github.com/L-K-M/Sweetbriar/pull/595));
-  its local gate is green and only the macOS job is pending.
 
 - **Reader rule-list install** (further pass, PR #581). `HTMLReaderView`
   installs its shared `WKContentRuleList` once per web view instead of
@@ -1228,7 +1226,7 @@ repeating it.
 | `Info.plist` regenerated from `project.yml` | #584 | merged |
 | Long recipient lists collapse behind **Show All Recipients** | #587 | merged |
 | `scripts/bundle-notices.sh` is shellchecked in CI | #591 | merged |
-| A panicking writer observer no longer hangs its write | #595 | open |
+| A panicking writer observer no longer hangs its write | #595 | merged |
 | The Proton events cursor is checked like every other id | #596 | merged |
 | A backup reference that is not a hash fails `Corrupt` | #597 | merged |
 
