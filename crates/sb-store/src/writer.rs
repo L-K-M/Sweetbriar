@@ -77,7 +77,8 @@ struct WriterShared {
 
 /// What hears of each committed list generation. Called on the writer
 /// thread between a commit and its future resolving, so it must return
-/// at once and never panic.
+/// at once and never panic. A panic is caught: the observers after it
+/// still hear, the future resolves and the writer keeps serving.
 pub type ListObserver = Arc<dyn Fn(u64) + Send + Sync>;
 
 /// The same post-commit callback contract, for the independent Search counter.
@@ -282,7 +283,9 @@ where
                 panic_message(panic.as_ref())
             )))),
             Ok(Ok(value)) => {
-                committed(conn);
+                // The write is durable: a panic after its commit must not
+                // leave its caller waiting.
+                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| committed(conn)));
                 slot.resolve(Ok(value));
             }
             Ok(Err(err)) => slot.resolve(Err(err)),
@@ -331,7 +334,9 @@ fn run_write<T, F>(
             // A failed commit drops the transaction inside rusqlite,
             // rolling the write back.
             Ok(()) => {
-                committed(conn);
+                // The write is durable: a panic after its commit must not
+                // leave its caller waiting.
+                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| committed(conn)));
                 slot.resolve(Ok(value));
             }
             Err(e) => slot.resolve(Err(classify(e, "commit a write transaction"))),
@@ -970,7 +975,9 @@ fn announce(conn: &Connection, shared: &WriterShared, announced: &mut Announced)
     if maintenance_changed(conn, &mut announced.maintenance) {
         let observer = lock(&shared.maintenance_observer).clone();
         if let Some(observer) = observer {
-            observer();
+            // Caught, as the integrity latch's observer is: the write
+            // committed, and the callers of its future must not wait on it.
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| observer()));
         }
     }
 }
@@ -990,7 +997,9 @@ fn announce_one(
     *announced = Some(current);
     let observer = lock(observer).clone();
     if let Some(observer) = observer {
-        observer(current);
+        // Caught, so the observers after it still hear and the writer
+        // keeps serving.
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| observer(current)));
     }
 }
 
