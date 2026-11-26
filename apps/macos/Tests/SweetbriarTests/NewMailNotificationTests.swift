@@ -88,6 +88,17 @@ struct NewMailNotificationTests {
         #expect(NewMailNotificationTarget.accountID(from: ["other": "account-7"]) == nil)
     }
 
+    @Test func theAppDelegateAnswersTheNotificationDelegateSelectors() {
+        // The Objective-C runtime only routes the completion-handler
+        // selectors; an async or mislabelled Swift method compiles and
+        // is never called.
+        let delegate = AppDelegate()
+        #expect(delegate.responds(
+            to: NSSelectorFromString("userNotificationCenter:willPresentNotification:withCompletionHandler:")))
+        #expect(delegate.responds(
+            to: NSSelectorFromString("userNotificationCenter:didReceiveNotificationResponse:withCompletionHandler:")))
+    }
+
     @Test func previewsOnShowsTheHeadersAndAsksAuthorizationOnce() async throws {
         let source = FakeNewMailSource(
             settings: Self.previews("on"),

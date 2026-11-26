@@ -179,7 +179,10 @@ public final class SidebarModel {
             let id = entryID(for: inbox) {
             return id
         }
-        return mailboxes.first(where: \.selectable).flatMap(entryID)
+        for mailbox in mailboxes where mailbox.selectable {
+            if let id = entryID(for: mailbox) { return id }
+        }
+        return nil
     }
 
     private static func mailboxEntryID(account: String, mailbox: Int64) -> String {

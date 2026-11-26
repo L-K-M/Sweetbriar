@@ -549,28 +549,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     /// Show new-mail banners while Sweetbriar is frontmost too, so a
-    /// tap can always reach the inbox it names.
+    /// tap can always reach the inbox it names. These are the
+    /// completion-handler `UNUserNotificationCenterDelegate` methods;
+    /// the Objective-C runtime only exposes those selectors, and they
+    /// arrive off the main actor.
     nonisolated func userNotificationCenter(
         _ center: UNUserNotificationCenter,
-        willPresent notification: UNNotification
-    ) async -> UNNotificationPresentationOptions {
-        [.banner, .list, .sound]
+        willPresent notification: UNNotification,
+        withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
+    ) {
+        completionHandler([.banner, .list, .sound])
     }
 
     /// A tapped banner opens the account it names. Other actions (none
     /// ship yet) and background deliveries change nothing here.
     nonisolated func userNotificationCenter(
         _ center: UNUserNotificationCenter,
-        didReceive response: UNNotificationResponse
-    ) async {
+        didReceive response: UNNotificationResponse,
+        withCompletionHandler completionHandler: @escaping () -> Void
+    ) {
         guard response.actionIdentifier == UNNotificationDefaultActionIdentifier,
               let accountId = NewMailNotificationTarget.accountID(
                 from: response.notification.request.content.userInfo)
-        else { return }
-        await MainActor.run {
+        else {
+            completionHandler()
+            return
+        }
+        Task { @MainActor in
             NSApp.activate(ignoringOtherApps: true)
             self.mainWindow?.showWindow(nil)
             self.mainWindow?.revealAccountInbox(accountId: accountId)
         }
+        completionHandler()
     }
 }
