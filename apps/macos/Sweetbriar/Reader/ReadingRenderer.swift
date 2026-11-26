@@ -86,7 +86,9 @@ enum ReadingRenderer {
             text.append(content)
             text.append(NSAttributedString(string: "\n"))
             indent(NSRange(location: itemStart, length: text.length - itemStart), by: 24, in: text)
-            next = advance(number, reversed: reversed)
+            if ordered {
+                next = advance(number, reversed: reversed)
+            }
         }
     }
 

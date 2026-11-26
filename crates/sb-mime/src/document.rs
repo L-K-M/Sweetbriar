@@ -27,7 +27,8 @@ use crate::{Limits, ParseFailure, PartId, RelatedResource, RenderInput, Selected
 use self::html::RawNode;
 
 /// Bump when the document semantics change; the reader caches the
-/// normalized form with this stamp and rebuilds on upgrade.
+/// normalized form with this stamp and rebuilds on upgrade. Version 2
+/// counts a reversed list without a valid start down from its item count.
 pub const DOCUMENT_VERSION: u32 = 2;
 
 /// A positive structure check: a document exists only for supported

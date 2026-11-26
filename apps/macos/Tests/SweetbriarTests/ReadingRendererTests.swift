@@ -114,6 +114,10 @@ struct ReadingRendererTests {
             partID: "p", ordered: true, start: 4, reversed: false,
             items: [item("four"), item("nine", number: 9), item("ten")])
         #expect(text([forward]) == "4. four\n9. nine\n10. ten\n")
+        let downward: ReadingBlock = .list(
+            partID: "p", ordered: true, start: 5, reversed: false,
+            items: [item("five"), item("two", number: 2), item("three")])
+        #expect(text([downward]) == "5. five\n2. two\n3. three\n")
 
         let backward: ReadingBlock = .list(
             partID: "p", ordered: true, start: 3, reversed: true,

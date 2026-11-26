@@ -408,6 +408,7 @@ fn reversed_lists_default_to_their_item_count() {
         assert!(list.ordered());
         assert!(list.reversed());
         assert_eq!(list.start(), 3, "{source}");
+        assert!(list.items().iter().all(|item| item.number().is_none()));
     }
 
     let document = supported(&html(
