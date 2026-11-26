@@ -123,6 +123,13 @@ struct MailboxPresentationTests {
             "Cc: Copy 1 <c1@example.test>, Copy 2 <c2@example.test>, Copy 3 <c3@example.test>, and 2 more\n"))
         #expect(!line.string.contains("Copy 4"))
         #expect(ReaderViewController.hiddenRecipients(in: copied, limit: 3) == 2)
+
+        // The button shows for any message that hides recipients, and
+        // only for those, whichever state the header is in.
+        #expect(ReaderViewController.hidesRecipients(all))
+        #expect(ReaderViewController.hidesRecipients(copied))
+        #expect(!ReaderViewController.hidesRecipients(short))
+        #expect(!ReaderViewController.hidesRecipients(message(subject: "None", to: [], cc: [])))
     }
 
     @Test func theHeaderSkipsMissingAddressLines() {

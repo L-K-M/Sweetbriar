@@ -545,7 +545,7 @@ final class ReaderViewController: NSViewController {
             message, primary: headerTint?.foreground ?? .labelColor,
             secondary: headerTint?.foreground.withAlphaComponent(0.75) ?? .secondaryLabelColor,
             recipientLimit: limit)
-        recipientsButton.isHidden = Self.hiddenRecipients(in: message, limit: limit) == 0
+        recipientsButton.isHidden = !Self.hidesRecipients(message)
         recipientsButton.title = showsAllRecipients ? "Show Fewer" : "Show All Recipients"
         let total = message.headers.to.count + message.headers.cc.count
         recipientsButton.setAccessibilityLabel(
@@ -555,6 +555,12 @@ final class ReaderViewController: NSViewController {
     @objc private func toggleRecipients(_ sender: NSButton) {
         showsAllRecipients.toggle()
         if let message = model.currentMessage { renderHeader(message) }
+    }
+
+    /// Whether the header hides recipients of `message` until they are
+    /// shown all; the button shows for such a message in either state.
+    static func hidesRecipients(_ message: ReaderMessage) -> Bool {
+        hiddenRecipients(in: message, limit: collapsedRecipientLimit) > 0
     }
 
     /// How many recipients `limit` leaves out of the header.
@@ -585,7 +591,7 @@ final class ReaderViewController: NSViewController {
             text.append(NSAttributedString(string: string, attributes: [.font: font, .foregroundColor: color]))
         }
         func line(_ label: String, _ values: [ReaderAddress], names: NSFont, hidden: Int = 0) {
-            guard !values.isEmpty || hidden > 0 else { return }
+            guard !values.isEmpty else { return }
             append("\n\(label) ", font, secondary)
             for (index, value) in values.enumerated() {
                 if index > 0 { append(", ", font, primary) }
