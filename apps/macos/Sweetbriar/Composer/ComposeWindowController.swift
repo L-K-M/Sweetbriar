@@ -326,6 +326,10 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
     private static let bannerInsets = NSEdgeInsets(top: 6, left: 8, bottom: 6, right: 8)
     /// Send's widest title before a long account name truncates.
     private static let sendMaximumWidth: CGFloat = 260
+    /// Every header row's label column, wide enough for "Subject:" at
+    /// the system font. All five rows share it, so the controls they
+    /// introduce start at one x instead of jogging by each label's width.
+    private static let headerLabelWidth: CGFloat = 52
 
     /// The draft's first load and render are done: its fields take
     /// keystrokes unless the load failed.
@@ -353,15 +357,22 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
 
     private func buildContent(_ window: NSWindow) {
         func headerRow(_ title: String, field: NSControl) -> NSStackView {
-            let label = NSTextField(labelWithString: title)
-            label.alignment = .right
-            label.widthAnchor.constraint(equalToConstant: 52).isActive = true
-            headerLabels.append(label)
-            let row = NSStackView(views: [label, field])
+            let row = NSStackView(views: [headerLabel(title), field])
             row.spacing = 8
             row.distribution = .fill
             field.setContentHuggingPriority(.defaultLow, for: .horizontal)
             return row
+        }
+
+        /// One label column for every header row: the same width and the
+        /// same right alignment, so the controls they introduce share one
+        /// leading edge instead of jogging by each label's own width.
+        func headerLabel(_ title: String) -> NSTextField {
+            let label = NSTextField(labelWithString: title)
+            label.alignment = .right
+            label.widthAnchor.constraint(equalToConstant: Self.headerLabelWidth).isActive = true
+            headerLabels.append(label)
+            return label
         }
 
         let recipientRows = zip(["To:", "Cc:", "Bcc:"], recipientFields).map { title, field in
@@ -394,8 +405,9 @@ final class ComposeWindowController: NSWindowController, NSWindowDelegate, NSTex
         statusLabel.textColor = .secondaryLabelColor
         cueStatusLabel.setAccessibilityIdentifier("composeAppearanceStatus")
         cueStatusLabel.textColor = .secondaryLabelColor
-        let fromLabel = NSTextField(labelWithString: "From:")
-        headerLabels.append(fromLabel)
+        // The From row's control shares the header's label column, so the
+        // pop-up button lines up with the recipient and subject fields.
+        let fromLabel = headerLabel("From:")
         headerLabels.append(replyLine.label)
         let identity = NSStackView(views: [
             fromLabel, identityControls.popup, identityControls.refreshButton,
