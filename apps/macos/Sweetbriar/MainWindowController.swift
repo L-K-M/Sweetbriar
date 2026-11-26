@@ -81,6 +81,16 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     private var reader: ReaderViewController?
     /// Marks a shown unread Proton message read (spec/08 "Reader").
     private var markRead: MarkReadTimer?
+    /// The toolbar's search field is the message list's, so it only
+    /// searches while the list pane shows messages. With Drafts
+    /// (local) or the Out Box up, the list is hidden and a submitted
+    /// search would change nothing the user can see: no result, no
+    /// title change, no error. Disabling it is the smaller change:
+    /// the alternative is to switch the pane back and reopen the list
+    /// the search replaced.
+    private func admitSearchField() {
+        messageList?.searchField.isEnabled = listPane?.pane == .messages
+    }
     /// The flags last read for a whole-window selection, for the flag
     /// commands' titles.
     private var windowFlags: (selection: MessageSelection, flags: SelectionFlags)?
@@ -364,6 +374,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
             guard let self, contentSerial == serial else { return }
             let wasNonMessage = listPane?.pane == .drafts || listPane?.pane == .outBox
             listPane?.show(.messages)
+            self.admitSearchField()
             messageList?.show(spec)
             if wasNonMessage, !closed { self.reader?.select(messageList?.list?.selectedIDs ?? []) }
             self.updateTitle()
@@ -371,6 +382,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         sidebar.onChooseDrafts = { [weak self, weak drafts, weak listPane] in
             guard let self, contentSerial == serial else { return }
             listPane?.show(.drafts)
+            self.admitSearchField()
             self.reader?.select([])
             self.markRead?.show(nil)
             drafts?.reload()
@@ -379,6 +391,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         sidebar.onChooseOutBox = { [weak self, weak outBox, weak listPane] in
             guard let self, contentSerial == serial else { return }
             listPane?.show(.outBox)
+            self.admitSearchField()
             self.reader?.select([])
             self.markRead?.show(nil)
             outBox?.reload()
@@ -489,7 +502,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         self.listPane = listPane
         // The toolbar's search item edits this list's search.
         searchItem?.searchField = messageList.searchField
-        messageList.searchField.isEnabled = true
+        admitSearchField()
         messageList.onSearchCancel = { [weak self] in self?.searchItem?.endSearchInteraction() }
         contentTasks.run { [weak self] in
             await sidebarModel.reload()
@@ -691,7 +704,9 @@ extension MainWindowController {
     /// Edit → Find → Search Mail (⌥⌘F): into the toolbar's search
     /// field, expanding it if the toolbar collapsed it.
     @objc func focusSearch(_ sender: Any?) {
-        guard let searchItem, messageList != nil, window?.toolbar?.isVisible == true else {
+        guard let searchItem, window?.toolbar?.isVisible == true,
+            messageList?.searchField.isEnabled == true
+        else {
             return NSSound.beep()
         }
         searchItem.beginSearchInteraction()
