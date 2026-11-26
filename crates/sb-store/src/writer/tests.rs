@@ -305,6 +305,89 @@ fn a_write_closure_holds_the_write_lock_from_its_start() {
     drop(scratch);
 }
 
+/// Resolve `future` within a bound, polling it: `None` while it stays
+/// pending, which is the hang a committed write must never show.
+fn resolve_within<T>(future: &mut WriteFuture<T>) -> Option<Result<T, StoreError>> {
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        if let Poll::Ready(result) = poll_once(future) {
+            return Some(result);
+        }
+        if std::time::Instant::now() >= deadline {
+            return None;
+        }
+        thread::sleep(Duration::from_millis(5));
+    }
+}
+
+/// A post-commit observer that panics is caught: the committed write's
+/// future still resolves `Ok`, the observers after it still hear, and
+/// the writer keeps serving. The observers' contract forbids a panic,
+/// but a committed write's caller must never wait on one.
+#[test]
+fn a_panicking_observer_is_caught() {
+    let (_scratch, store) = store_with_probe("writer-observer-panic");
+    let panics = Arc::new(AtomicUsize::new(0));
+    store.observe_list_generation({
+        let panics = Arc::clone(&panics);
+        Arc::new(move |_| {
+            panics.fetch_add(1, Ordering::SeqCst);
+            panic!("injected observer panic");
+        })
+    });
+    let search_heard = Arc::new(AtomicUsize::new(0));
+    store.observe_search_generation({
+        let search_heard = Arc::clone(&search_heard);
+        Arc::new(move |_| {
+            search_heard.fetch_add(1, Ordering::SeqCst);
+        })
+    });
+    let maintenance_heard = Arc::new(AtomicUsize::new(0));
+    store.observe_maintenance_inputs({
+        let maintenance_heard = Arc::clone(&maintenance_heard);
+        Arc::new(move || {
+            maintenance_heard.fetch_add(1, Ordering::SeqCst);
+        })
+    });
+
+    let mut written = store.write::<(), _>(WritePriority::User, |tx| {
+        crate::list_rows::advance_generation(tx)?;
+        tx.execute(
+            "INSERT OR REPLACE INTO store_meta (key, value) VALUES ('seen_address_inputs', 'x')",
+            [],
+        )
+        .map_err(bug)?;
+        Ok(())
+    });
+    let result = resolve_within(&mut written);
+    assert!(
+        matches!(result, Some(Ok(()))),
+        "the committed write's future did not resolve Ok: {result:?}"
+    );
+    assert_eq!(panics.load(Ordering::SeqCst), 1, "the list observer ran");
+    assert_eq!(
+        search_heard.load(Ordering::SeqCst),
+        1,
+        "the observer after the panicking one still heard"
+    );
+    assert_eq!(
+        maintenance_heard.load(Ordering::SeqCst),
+        1,
+        "the maintenance observer still heard"
+    );
+
+    writing(&store, |tx| {
+        tx.execute("UPDATE writer_probe SET n = n + 1", [])
+            .map_err(bug)?;
+        Ok(())
+    });
+    assert_eq!(
+        probe_count(&store),
+        1,
+        "the writer did not survive the observer's panic"
+    );
+}
+
 /// A value whose drop panics. Returned by a write nobody awaits, it is
 /// dropped on the writer thread, outside the closure's `catch_unwind`.
 struct PanicOnDrop;
