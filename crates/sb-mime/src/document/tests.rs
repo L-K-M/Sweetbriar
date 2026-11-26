@@ -385,6 +385,23 @@ fn image_src_entities_decode_exactly_once() {
 }
 
 #[test]
+fn reversed_lists_default_to_the_item_count() {
+    for (start_attr, expected_start) in [("", 3), (" start='x'", 3), (" start='-2'", -2)] {
+        let document = supported(&html(&format!(
+            "<ol reversed{start_attr}><li>a</li><li>b</li><li>c</li></ol>"
+        )));
+        let list = block!(document.blocks(), 0, List);
+        assert!(list.ordered());
+        assert!(list.reversed());
+        assert_eq!(
+            list.start(),
+            expected_start,
+            "start attribute: {start_attr:?}"
+        );
+    }
+}
+
+#[test]
 fn invalid_list_numbering_attributes_use_defaults() {
     let document = supported(&html(
         "<ol start=\"x\"><li>a</li><li value=\"y\">b</li></ol>",

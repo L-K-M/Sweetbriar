@@ -106,6 +106,29 @@ struct ReadingRendererTests {
             text([.list(partID: "p", ordered: false, start: 1, reversed: false, items: [item])]) == "• One\n")
     }
 
+    @Test(arguments: [false, true])
+    func explicitListItemNumberResetsTheSequence(reversed: Bool) {
+        let items = [
+            ReadingListItem(partID: "p", number: nil, blocks: [paragraph([literal("One")])]),
+            ReadingListItem(partID: "p", number: 9, blocks: [paragraph([literal("Two")])]),
+            ReadingListItem(partID: "p", number: nil, blocks: [paragraph([literal("Three")])]),
+        ]
+        let list = ReadingBlock.list(partID: "p", ordered: true, start: 3, reversed: reversed, items: items)
+        #expect(text([list]) == "3. One\n9. Two\n\(reversed ? 8 : 10). Three\n")
+    }
+
+    @Test(arguments: [false, true])
+    func listNumberingStaysWithinTheDocumentBounds(reversed: Bool) {
+        let limit = reversed ? Int64.min : Int64.max
+        let items = [
+            ReadingListItem(partID: "p", number: limit, blocks: [paragraph([literal("One")])]),
+            ReadingListItem(partID: "p", number: nil, blocks: [paragraph([literal("Two")])]),
+            ReadingListItem(partID: "p", number: 1, blocks: [paragraph([literal("Three")])]),
+        ]
+        let list = ReadingBlock.list(partID: "p", ordered: true, start: 1, reversed: reversed, items: items)
+        #expect(text([list]) == "\(limit). One\n\(limit). Two\n1. Three\n")
+    }
+
     @Test func listItemsIndentOnTopOfTheirContent() throws {
         func list(_ blocks: [ReadingBlock]) -> ReadingBlock {
             .list(

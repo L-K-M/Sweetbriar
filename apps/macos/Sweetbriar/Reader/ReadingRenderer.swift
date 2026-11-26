@@ -73,15 +73,25 @@ enum ReadingRenderer {
         _ items: [ReadingListItem], ordered: Bool, start: Int64, reversed: Bool,
         into text: NSMutableAttributedString
     ) {
-        for (index, item) in items.enumerated() {
-            let fallback = reversed ? start - Int64(index) : start + Int64(index)
+        var nextNumber = start
+        for item in items {
             let content = NSMutableAttributedString()
             for block in item.blocks { render(block, depth: 0, into: content) }
             while content.length > 0, content.string.hasSuffix("\n") {
                 content.deleteCharacters(in: NSRange(location: content.length - 1, length: 1))
             }
             let itemStart = text.length
-            text.append(NSAttributedString(string: ordered ? "\(item.number ?? fallback). " : "• "))
+            let marker: String
+            if ordered {
+                let number = item.number ?? nextNumber
+                marker = "\(number). "
+                let (next, overflow) = number.addingReportingOverflow(reversed ? -1 : 1)
+                // A wider value cannot be represented by the document model.
+                nextNumber = overflow ? number : next
+            } else {
+                marker = "• "
+            }
+            text.append(NSAttributedString(string: marker))
             text.append(content)
             text.append(NSAttributedString(string: "\n"))
             indent(NSRange(location: itemStart, length: text.length - itemStart), by: 24, in: text)
