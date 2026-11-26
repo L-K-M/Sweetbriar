@@ -706,6 +706,10 @@ final class MessageRowCellView: NSTableCellView {
         unreadDot.isHidden = !content.unread
         flagMarker.isHidden = !content.flagged
         attachmentMarker.isHidden = !content.hasAttachments
+        assert(
+            tagChips.count == MessageRowMetrics.visibleTagCount,
+            "Add or remove tag chip views to match MessageRowMetrics.visibleTagCount"
+        )
         let visibleTags = content.visibleTags
         for (index, chip) in tagChips.enumerated() {
             if index < visibleTags.count {
