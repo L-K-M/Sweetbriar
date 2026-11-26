@@ -898,9 +898,12 @@ Implements [15-account-colors](../research/15-account-colors.md):
 - **Mode previews:** Settings → Appearance shows Color Wash, Standard,
   Strong and Minimal each with a preview of a compose window's top, drawn from the
   same presentation as the real strip with the selected account's
-  tokens, or the neutral route when there is no account. A preview
-  never takes focus. Its mode's accessibility label says in words what
-  the mode colors.
+  tokens, or the neutral route when there is no account. The Color Wash
+  preview includes the wash under the strip. With Increase Contrast or
+  Reduce Transparency on, it previews the Strong fallback with a neutral
+  editor background, while its radio still selects Color Wash. A preview
+  never takes focus. Its mode's accessibility label describes the
+  colors shown, including any fallback.
 - **Cross-account check:** replying through a different account than the
   one that received the original shows an inline banner with **Use
   <account>** and **Keep <account>**. An unacknowledged mismatch is

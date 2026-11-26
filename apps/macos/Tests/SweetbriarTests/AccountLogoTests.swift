@@ -257,6 +257,23 @@ struct AccountLogoTests {
         #expect(!isRed(try pixel(of: strip, at: NSPoint(x: rect.midX, y: rect.midY))))
     }
 
+    @Test func theStripDrawsTheLogoWithoutAMonogram() throws {
+        let strip = IdentityStripView(frame: NSRect(x: 0, y: 0, width: 320, height: 40))
+        strip.contrastOptions = { (false, false) }
+        let label = "From: me@example.test"
+        strip.content = .identity(label: label, monogram: "", tokens: logoTokens)
+        let logo = try #require(NSImage(data: try redLogo()))
+        strip.logo = logo
+
+        let rect = strip.logoRect()
+        let center = NSPoint(x: rect.midX, y: rect.midY)
+        #expect(strip.bounds.contains(rect))
+        #expect(isRed(try pixel(of: strip, at: center)))
+        #expect(strip.accessibilityLabel() == label)
+        strip.logo = nil
+        #expect(!isRed(try pixel(of: strip, at: center)))
+    }
+
     @Test func theSidebarAndTheFromMenuSwatchDrawTheLogo() throws {
         let sidebar = SidebarMonogramView(frame: NSRect(x: 0, y: 0, width: 24, height: 24))
         sidebar.contrastOptions = { (false, false) }

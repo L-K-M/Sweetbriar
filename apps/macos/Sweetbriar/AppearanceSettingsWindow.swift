@@ -272,8 +272,8 @@ private struct AccountAppearanceSettings: View {
                             logoControls(current)
                             addressControls(current)
                             HStack(spacing: 12) {
-                                preview("Light", current.tokens.light, current.monogram, logo: AccountLogoImages.image(for: current))
-                                preview("Dark", current.tokens.dark, current.monogram, logo: AccountLogoImages.image(for: current))
+                                preview("Light", scheme: .light, account: current)
+                                preview("Dark", scheme: .dark, account: current)
                             }
                             Text("Stored on this device; included in export.").font(.footnote)
                                 .foregroundStyle(.secondary)
@@ -454,15 +454,16 @@ private struct AccountAppearanceSettings: View {
         return SidebarViewController.accountLabel(section, among: sections)
     }
 
-    private func preview(_ name: String, _ variant: AppearanceVariant, _ mark: String, logo: NSImage?) -> some View {
-        VStack(alignment: .leading) {
+    private func preview(_ name: String, scheme: ColorScheme, account: AccountAppearance) -> some View {
+        let variant = scheme == .dark ? account.tokens.dark : account.tokens.light
+        return VStack(alignment: .leading) {
             Text(name).font(.caption)
             HStack {
-                if let logo {
+                if let logo = AccountLogoImages.image(for: account) {
                     AccountLogoMark(image: logo, ring: color(variant.markerSrgb), side: 18)
-                        .environment(\.colorScheme, name == "Dark" ? .dark : .light)
+                        .environment(\.colorScheme, scheme)
                 } else {
-                    Text(mark).bold().foregroundStyle(color(variant.foregroundSrgb))
+                    Text(account.monogram).bold().foregroundStyle(color(variant.foregroundSrgb))
                 }
                 Text("From: \(accounts.first { $0.accountId == selected }?.displayName ?? "Account")").foregroundStyle(color(variant.foregroundSrgb))
                 Spacer()

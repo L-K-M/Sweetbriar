@@ -18,6 +18,9 @@ final class RecipientAllowancesModel {
     private let accountNames: @MainActor () async -> [String: String]
     private(set) var groups: [Group] = []
     private(set) var isLoading = false
+    private var listLoadSucceeded = false
+    /// A successful load confirmed the list is empty.
+    var showsEmptyState: Bool { listLoadSucceeded && !isLoading && groups.isEmpty }
     private(set) var removing: RecipientAllowance?
     private(set) var error: String?
     /// The newest load: an older one that finishes later is dropped, so
@@ -47,9 +50,11 @@ final class RecipientAllowancesModel {
             groups = order.map {
                 Group(accountId: $0, accountName: names[$0] ?? $0, allowances: byAccount[$0] ?? [])
             }
+            listLoadSucceeded = true
             error = nil
         } catch {
             guard mine == loadTicket else { return }
+            listLoadSucceeded = false
             self.error = "Couldn't load the allowed addresses: \(error.localizedDescription)"
         }
     }

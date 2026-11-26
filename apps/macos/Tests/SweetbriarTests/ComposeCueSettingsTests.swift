@@ -395,6 +395,45 @@ struct ComposeCueSettingsTests {
         }
     }
 
+    @Test(arguments: [true, false])
+    func washPreviewFollowsAccessibilityFallback(increaseContrast: Bool) async throws {
+        let route = IdentityStripView.Content.identity(
+            label: "From: Work", monogram: "W", tokens: sampleAccount.tokens)
+        var chosen: ComposeCueMode?
+        var picker = ComposeCuePicker(mode: .wash, enabled: true, preview: route) { chosen = $0 }
+        let host = NSHostingView(rootView: picker)
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 600, height: 360),
+            styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        defer { window.close() }
+
+        func washPreview(_ view: NSView) -> ComposeCuePreview? {
+            if let preview = view as? ComposeCuePreview, preview.mode == .wash { return preview }
+            return view.subviews.lazy.compactMap(washPreview).first
+        }
+
+        try #require(await cueSettingsEventually { washPreview(host)?.wash != nil })
+        let preview = try #require(washPreview(host))
+        let radio = try #require(cueButton(host, identifier: "composeCueColorWash"))
+
+        picker.displayOptions = (increaseContrast, !increaseContrast)
+        host.rootView = picker
+        try #require(await cueSettingsEventually { preview.strip.cueMode == .strong })
+        #expect(preview.windowTint != nil && preview.wash == nil)
+        #expect(radio.accessibilityLabel()?.contains("upper window") == true)
+        #expect(radio.state == .on)
+        radio.performClick(nil)
+        #expect(chosen == .wash)
+
+        picker.displayOptions = (false, false)
+        host.rootView = picker
+        try #require(await cueSettingsEventually { preview.wash != nil })
+        #expect(preview.strip.cueMode == .wash)
+        #expect(radio.accessibilityLabel()?.contains("behind the text") == true)
+    }
+
     @Test func pickerShowsEveryModeFromTheRealStripWithoutTakingFocus() async throws {
         let route = IdentityStripView.Content.identity(
             label: "From: Work", monogram: "W", tokens: sampleAccount.tokens)
