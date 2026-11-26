@@ -47,7 +47,16 @@ enum BackupsPresentation {
     }
 
     static func byteCount(_ totalBytes: UInt64?) -> String {
-        totalBytes.map { "\($0) bytes" } ?? "-"
+        guard let totalBytes else { return "-" }
+        guard let count = Int64(exactly: totalBytes) else {
+            return exactByteCount(totalBytes)
+        }
+        return ByteCountFormatter.string(fromByteCount: count, countStyle: .file)
+    }
+
+    static func exactByteCount(_ totalBytes: UInt64?) -> String {
+        guard let totalBytes else { return "-" }
+        return "\(totalBytes) \(totalBytes == 1 ? "byte" : "bytes")"
     }
 
     static func objectCount(_ objectCount: UInt64?) -> String {

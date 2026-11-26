@@ -9,6 +9,16 @@ import Testing
 @Suite
 @MainActor
 struct BackupsPresentationTests {
+    @Test func backupSizesUseReadableUnits() {
+        let size = BackupsPresentation.byteCount(675_840)
+        #expect(size != "675840 bytes")
+        #expect(!size.isEmpty)
+        #expect(BackupsPresentation.exactByteCount(675_840) == "675840 bytes")
+        #expect(BackupsPresentation.exactByteCount(1) == "1 byte")
+        #expect(BackupsPresentation.exactByteCount(0) == "0 bytes")
+        #expect(BackupsPresentation.exactByteCount(nil) == "-")
+    }
+
     @Test func encryptionAtRestNamesFileVaultAndTheBackupDisk() {
         let note = BackupsPresentation.encryptionAtRest
         #expect(note.contains("doesn't encrypt"))

@@ -190,7 +190,14 @@ struct BackupsSettingsView: View {
                 "\(BackupsPresentation.byteCount(generation.totalBytes)); "
                     + "\(BackupsPresentation.objectCount(generation.objectCount)); "
                     + BackupsPresentation.verification(generation.verification)
-            ).font(.caption)
+            )
+            .font(.caption)
+            .help(BackupsPresentation.exactByteCount(generation.totalBytes))
+            .accessibilityLabel(
+                "\(BackupsPresentation.exactByteCount(generation.totalBytes)); "
+                    + "\(BackupsPresentation.objectCount(generation.objectCount)); "
+                    + BackupsPresentation.verification(generation.verification)
+            )
             HStack {
                 Text(generation.location).textSelection(.enabled)
                     .accessibilityIdentifier("backupLocation-\(generation.id)")
