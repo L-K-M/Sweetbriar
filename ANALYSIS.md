@@ -4,7 +4,9 @@ Consolidated on 2026-11-26 from the full review of `origin/main` at
 `19fde48e` (Rust ~298k lines, Swift ~60k lines) plus a second pass over
 the reader and list hot paths. This file is the shovel-ready backlog:
 every open item names the file and line that carries it, and each entry
-is written so an LLM can pick it up cold. Completed work and submitted patches are recorded below.
+is written so an LLM can pick it up cold. Extended at `366f29bc` with
+a third pass that shipped typed attachment rows and notification
+click-through. Completed work and submitted patches are recorded below.
 
 ## Completed on main
 
@@ -13,6 +15,21 @@ is written so an LLM can pick it up cold. Completed work and submitted patches a
 
 ## Submitted patches
 
+- **Reader attachments as typed rows** (third pass, PR #580). Each
+  attachment gets a full-width row with a media-type symbol, truncating
+  name, trailing size, hover wash, Return/Space activation and a
+  VoiceOver press action; opening still goes through the core lease.
+  GLM's two review rounds found a stale hover draw, a missing press
+  action, a possible zero-width stack and a focus-ring ordering bug;
+  all were fixed before this entry was written.
+  [Attachment rows PR](https://github.com/L-K-M/Sweetbriar/pull/580)
+- **Notification click-through** (third pass, PR #592).
+  `AppDelegate` adopts `UNUserNotificationCenterDelegate`, promises
+  banners while Sweetbriar is frontmost, and a default-action tap
+  reveals the account's Inbox role, falling back to its first
+  selectable mailbox. A tap during a cold launch is remembered until
+  the sidebar opens. The router and destination choice are pure and
+  tested. [Notification open PR](https://github.com/L-K-M/Sweetbriar/pull/592)
 - **Reader rendition interleaving.** Parked HTML preparation hid the
   current Reading view on navigation or restarted WebKit after a
   rendition toggle. The regression tests cover a late selection load,
@@ -80,6 +97,16 @@ is written so an LLM can pick it up cold. Completed work and submitted patches a
   remain open.
 - The findings cite source locations and distinguish observations
   from proposals.
+- The third pass built the Debug app locally (Xcode 27.2, macOS
+  27.0.1, Rust 1.99.0) and ran it once against throwaway roots; its new
+  app-hosted tests passed. On this Mac `CARGO_HOME` must point at the
+  real registry path or `askama`'s absolute include paths break.
+- Paseo worktrees on this machine are not always exclusive: another
+  agent can switch branches or commit in the same directory, so check
+  `git reflog` and `git status` before assuming a clean tree, and use a
+  private worktree for multi-branch work. App-hosted UI tests that
+  assert `NSApplication.shared.isActive` fail spuriously when another
+  process holds the foreground; they are not a code signal.
 
 ---
 
@@ -254,6 +281,13 @@ with four or more tags therefore reads as three in the list and none to
 VoiceOver, while the reader shows them all. Draw a trailing `+N` chip
 after the visible chips (keeping the fixed-size pool so the hand layout
 is unchanged) and add the remaining count to the accessibility label.
+
+## B14. A self-built payload is encoded with `try!`
+
+`apps/macos/SweetbriarBridge/HumanVerification.swift:46` encodes a
+dictionary the same file builds, so it cannot fail today; the pattern
+is fragile if the payload ever gains a non-JSON value. Throw or record
+an internal error instead.
 
 ---
 
@@ -450,6 +484,15 @@ archive materialises and sorts hundreds of thousands of ids per call.
 
 See B4. `crates/sb-store/src/query/counts.rs:482`.
 
+## P13. A cold sidebar reads every account serially
+
+`SidebarModel.readOnce()` awaits `mailboxes(accountId:)` one account at
+a time, so the first sidebar paint pays N independent round trips
+serially. Read them with a task group, preserving the account order, and
+keep the reload's cancellation and coalescing behaviour. Related
+per-row costs are in P10 (`accounts.first(where:)` per configured row,
+and the date rule's `Calendar.current` work per row).
+
 ---
 
 # Part 3 — Visual and layout issues
@@ -493,6 +536,11 @@ A short first-run checklist could also link the keyboard reference and
 guide the user to a completed import. Keep those links secondary to
 the primary action.
 
+Use one shared empty-state view — large tertiary symbol, title and one
+optional hint — for the list panes, reader, Drafts and Out Box. Keep
+"Opening…" and failure text separate: `MessageListViewController`'s
+`statusLabel` currently mixes loading, errors and emptiness.
+
 ## V5. The app icon set is thin
 
 `Assets.xcassets/AppIcon.appiconset` carries 16, 32, 64, 128, 256, 512
@@ -526,6 +574,15 @@ reader gets 20 pt at the minimum width. A three-pane Mail layout at
 800 pt is cramped but legal; the reader pane is effectively unusable
 there.
 
+## V9. Row heights cannot follow larger text
+
+Message rows hand-layout at a fixed 56 pt pitch
+(`MessageRowMetrics.pitch`) with fixed fonts and y positions, and the
+Drafts and Out Box rows hard-code 74 pt. There is no Dynamic Type path:
+a user who raises the system text size gets clipped or overlapping
+labels. Treat this as its own step with measured text extents and a
+re-baselined list benchmark rather than a tweak to the row constants.
+
 ---
 
 # Part 4 — Missing features and quality-of-life gaps
@@ -543,6 +600,10 @@ There is no "Show only unread" toggle, no per-mailbox filter chip and no
 quick "Mark all as read" for a mailbox. The Unified Inbox with a Proton
 account carrying thousands of unread messages has no fast path.
 
+A bulk "Mark all as read" is deliberately not on this backlog: a mass
+Proton mutation is exactly the case the breaker guards exist for, so it
+needs its own spec and safety analysis rather than a convenience flag.
+
 ## F3. No thread/conversation view
 
 `WindowSpec` has a `.thread` case and `MessageRowPresentation` knows
@@ -557,6 +618,10 @@ message list as a separate decision. [Window
 types](apps/macos/SweetbriarBridge/Types.swift#L392)
 
 ## F4. Attachment saving and preview controls
+
+**Landed in part:** PR #580 gives every attachment a typed, full-width
+row with name, size, hover and keyboard/VoiceOver activation. Saving
+and previewing remain:
 
 `ReaderViewController` lists attachments and `openAttachment` hands back
 a file URL, but pressing Space on an attachment does not open Quick
@@ -633,12 +698,19 @@ command palette. Each needs a spec line before implementation.
 
 ## F16. Notification clicks do nothing and there are no actions
 
-`NewMailNotifier` sets no `UNUserNotificationCenterDelegate` and
-registers no categories, so clicking a new-mail notification does
-nothing, and there are no Mark Read/Reply actions. Set a delegate that
-opens the account's Inbox (the message when one is named) and consider a
-small action set. Keep the redaction rules: no content beyond the text
-already approved by `NewMailNotificationText`.
+**Landed:** PR #592 installs a delegate; a tap opens the account's
+Inbox (falling back to its first selectable mailbox), including a tap
+that arrives while the archive is still opening. What remains:
+
+- No Mark Read / Reply notification categories, and no per-account
+  muting (F9). Add categories only with core commands behind them and
+  keep the redaction rules: no content beyond the text already approved
+  by `NewMailNotificationText`.
+- The subscription's failure policy is undefined: `NewMailNotifier.pull()`
+  stops for the rest of the session on any stream error, so a transient
+  Proton or network failure silences later mail even though the event
+  loop recovers. Choose a bounded retry policy or record why stopping is
+  final, and test it.
 
 ## F17. Find does not work in an HTML message
 
@@ -662,6 +734,40 @@ Larger, post-pilot. Both fit the durable-intent architecture: a scheduled
 send is an Out Box attempt with a `not_before` time; snooze is a durable
 flag plus later re-insertion. The existing Undo Send hold shows the
 outbox state machine can carry a delay. Write the spec before any UI.
+
+## F20. A saved draft cannot be discarded from the UI
+
+`DraftModel.discard()`, the FFI `discardDraft` and the core
+`discard_draft` command all exist, but no menu or context command
+calls them. Once a draft has been saved, the only way to remove it is
+Close Without Saving before the first save; afterwards it accumulates
+forever, and a failed send leaves clutter. Spec/05 step 8 defines the
+semantics: refused `Conflict` while an attempt is live, revisions kept.
+
+Add a Drafts-list context command (identifier
+`ch.lkmc.Sweetbriar.cmd.discardDraft`) plus a Delete key path, a
+confirmation naming the draft, one retained idempotency key per draft,
+routing through `ArchiveWriteTasks` so a restore retires it, and an
+error path that keeps the rows. Decide what a still-open compose window
+does when its draft is discarded elsewhere. Revise spec/08's Drafts
+(local) section first. Test discarding removes the row, a live attempt
+refuses, a replay is idempotent, a read-only archive refuses, and a
+failed reload keeps rows.
+
+## F21. Remember recent searches
+
+Small. Keep recent queries locally (a settings row or UserDefaults),
+offer them from the search field's recipe menu and allow clearing them.
+Search text is sensitive, so state the retention and keep clearing
+obvious; never put it in the opt-in latency log, which is documented to
+hold no query text.
+
+## F22. Remember each mailbox's scroll position and selection
+
+Small. The id index makes restoring a rank cheap. Persist the last
+visible rank and selected occurrence ids per mailbox and restore them
+when the mailbox is chosen again. Needs a storage location and a spec
+sentence; cover a mailbox that shrank, a deleted message and a restore.
 
 ---
 
