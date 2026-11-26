@@ -544,6 +544,11 @@ M4.4c. Choosing Out Box shows the Out Box in the list pane, as Drafts
   - the subject in bold, then from (the sender's name in bold), to, cc
     and the date where present, their labels and addresses in the
     secondary color; addresses always show beside names;
+  - a `to` or `cc` line with more than three recipients shows its first
+    three and "and K more"; a `to` line that hides names hides the `cc`
+    line too. **Show All Recipients**, a borderless button under the
+    date, expands them for the message shown, and **Show Fewer**
+    collapses them again; another message starts collapsed;
   - the "Received in <account>" account chip (Account chips), from
     the selected occurrence's account;
   - a tag picker and a multi-line note editor, borderless with an
