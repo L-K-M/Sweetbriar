@@ -109,6 +109,11 @@ func tagPickerDraftStaysWithItsMessage() async throws {
     // The same message shown again keeps the draft.
     await controller.show(selection: [42])
     #expect(controller.tagPicker.text == "draft")
+    // A different occurrence of the same message (44 also maps to
+    // message 7) drops the draft: the selection changed, and
+    // resetSelection clears eagerly before the message resolves.
+    await controller.show(selection: [44])
+    #expect(controller.tagPicker.text == "")
     // Another message takes the draft with it.
     await controller.show(selection: [43])
     #expect(controller.tagPicker.text == "")
