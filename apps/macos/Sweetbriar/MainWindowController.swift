@@ -89,7 +89,14 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     /// the alternative is to switch the pane back and reopen the list
     /// the search replaced.
     private func admitSearchField() {
-        messageList?.searchField.isEnabled = listPane?.pane == .messages
+        let enabled = listPane?.pane == .messages
+        // Ending the interaction first: a disabled field left expanded
+        // keeps the toolbar's search item active over a pane that
+        // cannot search.
+        if !enabled, messageList?.searchField.isEnabled == true {
+            searchItem?.endSearchInteraction()
+        }
+        messageList?.searchField.isEnabled = enabled
     }
     /// The flags last read for a whole-window selection, for the flag
     /// commands' titles.
