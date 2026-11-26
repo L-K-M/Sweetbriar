@@ -946,9 +946,9 @@ extension AppKitPrototypeList {
 
 /// The list's row view: a subtle fill while the pointer is over the
 /// row, the way Mail's message list answers a hover. The fill sits
-/// under the cell the table adds afterwards. The row's own selection
-/// highlight draws beneath both, so the fill is hidden — not drawn
-/// over — whenever the row is selected.
+/// under the cell the table adds afterwards. The selection highlight
+/// is painted by the row itself, beneath the fill, so `hoverAlpha`
+/// fades the fill out while selected instead of stacking two signals.
 @MainActor
 final class HoverRowView: NSTableRowView {
     /// The hover fill. Insets keep it off the row's edges, so the
@@ -980,9 +980,13 @@ final class HoverRowView: NSTableRowView {
     /// happens to be current rather than this view's.
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
+        // A 5 % tint is faint by design, and invisible once Increase
+        // Contrast has taken the rest of the window's subtlety away.
+        let alpha: CGFloat = NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
+            ? 0.14 : 0.05
         var fill: CGColor?
         effectiveAppearance.performAsCurrentDrawingAppearance {
-            fill = NSColor.labelColor.withAlphaComponent(0.05).cgColor
+            fill = NSColor.labelColor.withAlphaComponent(alpha).cgColor
         }
         hoverFill.layer?.backgroundColor = fill
     }
@@ -1014,6 +1018,11 @@ final class HoverRowView: NSTableRowView {
         hovering = window.map {
             bounds.contains(convert($0.mouseLocationOutsideOfEventStream, from: nil))
         } ?? false
+        // Applied rather than animated: a row that appears under a
+        // stationary cursor should be filled at once, and this must not
+        // depend on AppKit posting a `mouseEntered` for an area that
+        // was installed under a pointer that is not moving.
+        hoverFill.alphaValue = Self.hoverAlpha(hovering: hovering, selected: isSelected)
     }
 
     override func mouseEntered(with event: NSEvent) {
