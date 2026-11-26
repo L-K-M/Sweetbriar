@@ -26,6 +26,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var terminating = false
     /// Set once the archive closed; no new-mail notifier starts after.
     private var archiveIsClosed = false
+    /// The roots this launch opened: the arguments', a test host's
+    /// private pair, or nil for the platform's defaults.
+    private(set) var archiveRoots: CoreConfig?
+    /// The private pair a test host opened, removed once its core closed.
+    private var privateRoots: CoreConfig?
 
     /// The menu builder is retained: `NSMenuItem.target` is weak, so
     /// the Debug items die with their builder otherwise.
@@ -57,8 +62,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // The session opens off the main thread at once; quitting at
         // any point later — mid-open included — shuts down what it
         // opened. `-dataRoot <path> -cacheRoot <path>` opens other
-        // roots: UI tests import into fresh ones (spec/11).
-        let roots = LaunchRoots.fromArguments()
+        // roots: UI tests import into fresh ones (spec/11). A host of
+        // the unit-test bundle opens a private pair, never the user's
+        // own archive.
+        let arguments = LaunchRoots.fromArguments()
+        let roots = arguments ?? (TestHostRoots.isTestHost() ? TestHostRoots.make() : nil)
+        archiveRoots = roots
+        privateRoots = arguments == nil ? roots : nil
         // External edits a crash left behind go unread (spec/10).
         if let cacheRoot = (roots ?? (try? CoreBridge.platformDefaultConfig()))?.cacheRoot {
             let cache = URL(fileURLWithPath: cacheRoot, isDirectory: true)
@@ -538,8 +548,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             await mainWindow?.retireContent()
             await appearance.reset()
             await session.shutdown()
+            removePrivateRoots()
             NSApplication.shared.reply(toApplicationShouldTerminate: true)
         }
         return .terminateLater
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        removePrivateRoots()
+    }
+
+    /// A private archive is the test host's alone; it goes once the
+    /// core that used it has closed.
+    private func removePrivateRoots() {
+        guard let roots = privateRoots else { return }
+        privateRoots = nil
+        try? FileManager.default.removeItem(at: TestHostRoots.parent(of: roots))
     }
 }
