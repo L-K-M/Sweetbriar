@@ -169,13 +169,25 @@ build_app() {
   fi
   # Homebrew's Rust can precede rustup in PATH and bypass the repository
   # pin. Its prebuilt standard library may require a newer macOS than
-  # the app supports. Select the proxies for Cargo and its subprocesses.
-  local rust_bin="${CARGO_HOME:-$HOME/.cargo}/bin" tool
+  # the app supports. Select rustup's tools for Cargo and its
+  # subprocesses: the proxies in CARGO_HOME's bin, else the repository's
+  # pinned toolchain, whose cargo and rustc `rustup which` names. That
+  # covers Homebrew's rustup, which keeps its proxies out of CARGO_HOME.
+  local home_bin="${CARGO_HOME:-$HOME/.cargo}/bin" rust_bin="" tool missing=""
   for tool in rustup cargo rustc; do
-    if [[ ! -x "$rust_bin/$tool" ]]; then
-      skip_or_fail app "rustup's $tool not found at $rust_bin/$tool (see https://rustup.rs)"; return
-    fi
+    if [[ -z "$missing" && ! -x "$home_bin/$tool" ]]; then missing="$tool"; fi
   done
+  if [[ -z "$missing" ]]; then
+    rust_bin="$home_bin"
+  elif have rustup; then
+    tool="$(rustup which cargo 2>/dev/null)"
+    if [[ -n "$tool" && -x "${tool%/*}/cargo" && -x "${tool%/*}/rustc" ]]; then
+      rust_bin="${tool%/*}"
+    fi
+  fi
+  if [[ -z "$rust_bin" ]]; then
+    skip_or_fail app "rustup's $missing not found at $home_bin/$missing (see https://rustup.rs)"; return
+  fi
   export PATH="$rust_bin:$PATH"
   if ! have xcodebuild; then skip_or_fail app "Xcode (xcodebuild) not found"; return; fi
   if ! have xcodegen; then
