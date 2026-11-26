@@ -151,8 +151,14 @@ func readerHeaderChipAttachmentsAndSourceToggle() async throws {
     #expect(rows[0].labelText == "hello.txt, " + ByteCountFormatter.string(fromByteCount: 10, countStyle: .file))
     #expect(rows[1].labelText == "broken.pdf, damaged")
     #expect(rows[0].attachmentPartID == "1.2")
+    // The pane's width reaches each row; a row with no intrinsic width
+    // must not collapse inside the leading-aligned stack.
+    controller.view.frame = NSRect(x: 0, y: 0, width: 480, height: 600)
+    controller.view.layoutSubtreeIfNeeded()
+    #expect(rows.allSatisfy { $0.frame.width > 100 })
+    #expect(rows[0].acceptsFirstResponder)
     #expect(opened.isEmpty)
-    rows[0].performOpen()
+    #expect(rows[0].accessibilityPerformPress())
     let deadline = ContinuousClock.now + .seconds(5)
     while opened.isEmpty, ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(10)) }
     #expect(opened == [source.directory.appendingPathComponent("attachment.txt")])

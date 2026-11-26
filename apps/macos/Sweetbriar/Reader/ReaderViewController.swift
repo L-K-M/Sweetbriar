@@ -161,6 +161,10 @@ final class ReaderViewController: NSViewController {
         attachments.alignment = .leading
         attachments.spacing = 2
         details.addArrangedSubview(attachments)
+        // The leading alignment keeps arranged children at their
+        // intrinsic width, and the rows report none: pin the stack to the
+        // pane so every row spans its click target.
+        attachments.widthAnchor.constraint(equalTo: details.widthAnchor).isActive = true
         readingNote.textColor = .secondaryLabelColor
         readingNote.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
         readingNote.isHidden = true

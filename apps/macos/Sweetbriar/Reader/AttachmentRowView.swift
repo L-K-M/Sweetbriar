@@ -71,6 +71,11 @@ final class AttachmentRowView: NSView {
 
     init() {
         super.init(frame: .zero)
+        // The layer owns the hover wash and the keyboard focus ring, so
+        // both repaint cleanly without a custom draw pass.
+        wantsLayer = true
+        layer?.cornerRadius = 6
+        layer?.backgroundColor = NSColor.clear.cgColor
         icon.translatesAutoresizingMaskIntoConstraints = false
         icon.symbolConfiguration = NSImage.SymbolConfiguration(scale: .small)
         icon.contentTintColor = .secondaryLabelColor
@@ -119,8 +124,34 @@ final class AttachmentRowView: NSView {
         setAccessibilityLabel(model.accessibilityLabel)
     }
 
-    /// The tests' click: the same path a mouse down takes.
-    func performOpen() { onOpen?() }
+    /// VoiceOver's press action: the row advertises a button role, so it
+    /// must do what a press would.
+    override func accessibilityPerformPress() -> Bool {
+        onOpen?()
+        return true
+    }
+
+    /// Keyboard users reach the row and open it with Return or Space.
+    override var acceptsFirstResponder: Bool { true }
+
+    override func keyDown(with event: NSEvent) {
+        switch event.charactersIgnoringModifiers {
+        case " ", "\r": onOpen?()
+        default: super.keyDown(with: event)
+        }
+    }
+
+    override func becomeFirstResponder() -> Bool {
+        let became = super.becomeFirstResponder()
+        applyFocusRing()
+        return became
+    }
+
+    override func resignFirstResponder() -> Bool {
+        let resigned = super.resignFirstResponder()
+        applyFocusRing()
+        return resigned
+    }
 
     override var intrinsicContentSize: NSSize {
         NSSize(width: NSView.noIntrinsicMetric, height: 30)
@@ -143,17 +174,29 @@ final class AttachmentRowView: NSView {
 
     override func mouseEntered(with event: NSEvent) {
         hovered = true
-        needsDisplay = true
+        applyHoverFill()
     }
 
     override func mouseExited(with event: NSEvent) {
         hovered = false
-        needsDisplay = true
+        applyHoverFill()
     }
 
-    override func draw(_ dirtyRect: NSRect) {
+    /// The hover wash follows the effective appearance, so Dark Mode
+    /// and Increase Contrast re-resolve the dynamic colour.
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
         guard hovered else { return }
-        NSColor.quaternaryLabelColor.withAlphaComponent(0.25).setFill()
-        NSBezierPath(roundedRect: bounds.insetBy(dx: 2, dy: 1), xRadius: 6, yRadius: 6).fill()
+        applyHoverFill()
+    }
+
+    private func applyHoverFill() {
+        let fill = NSColor.quaternaryLabelColor.withAlphaComponent(0.25)
+        layer?.backgroundColor = hovered ? fill.cgColor : NSColor.clear.cgColor
+    }
+
+    private func applyFocusRing() {
+        layer?.borderWidth = window?.firstResponder == self ? 1.5 : 0
+        layer?.borderColor = NSColor.keyboardFocusIndicatorColor.cgColor
     }
 }
