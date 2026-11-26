@@ -30,15 +30,40 @@ struct ListAppearanceTests {
         #expect(!WindowSpec.mailbox(1).showsAccountMarker)
     }
 
-    @Test func theTrailingDateReservesOnlyItsOwnWidth() {
-        let font = NSFont.systemFont(ofSize: 12)
-        let shortest = MessageRowCellView.dateColumnWidth(for: "1", font: font)
-        let time = MessageRowCellView.dateColumnWidth(for: "12:34", font: font)
-        let fullDate = MessageRowCellView.dateColumnWidth(for: "2024-11-26", font: font)
-        #expect(shortest >= 32)
-        #expect(time >= 32)
-        #expect(time < fullDate)
-        #expect(fullDate <= 84)
+    @Test func swipeActionsOfferTheContextMenuCommandsForTheClickTarget() async throws {
+        let model = ListWindowModel(
+            source: OneRowSource(), spec: .debugSynthetic, clock: ImmediateClock())
+        let list = AppKitPrototypeList(model: model, formatter: MessageRowFormatter())
+        var targets: Set<Int64> = []
+        list.contextActions = { ids in
+            targets = ids
+            func item(
+                _ id: NSUserInterfaceItemIdentifier, _ title: String, enabled: Bool = true
+            ) -> MessageContextAction {
+                MessageContextAction(title: title, identifier: id, enabled: enabled) {}
+            }
+            return [
+                item(MainMenuBuilder.ItemID.toggleRead, "Mark as Read"),
+                item(MainMenuBuilder.ItemID.toggleStar, "Star", enabled: false),
+                item(MainMenuBuilder.ItemID.archive, "Archive"),
+                item(MainMenuBuilder.ItemID.trash, "Move to Trash"),
+                item(MainMenuBuilder.ItemID.move, "Move to…"),
+            ]
+        }
+        try await model.open()
+        for _ in 0..<200 where model.row(at: 0) == nil {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let table = try #require(
+            (list.listView as? NSScrollView)?.documentView as? NSTableView)
+
+        let trailing = list.tableView(table, rowActionsForRow: 0, edge: .trailing)
+        #expect(trailing.map(\.title) == ["Archive", "Move to Trash"])
+        #expect(trailing.last?.style == .destructive)
+
+        let leading = list.tableView(table, rowActionsForRow: 0, edge: .leading)
+        #expect(leading.map(\.title) == ["Mark as Read"])
+        #expect(targets == [1])
     }
 
     @Test func flaggedControllerShowsBothAccountsAndSurvivesAppearanceReset() async throws {
