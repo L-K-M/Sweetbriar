@@ -482,6 +482,21 @@ struct RecipientFenceComposeTests {
         #expect(!settings.showsEmptyState)
     }
 
+    /// A failed removal keeps its message even when the reload that
+    /// follows also fails, and the list is not called empty.
+    @Test func aFailedRemoveOutranksAFailedLoad() async {
+        let source = FenceSource(senders: [:])
+        let settings = RecipientAllowancesModel(source: source) { [:] }
+        await settings.load()
+        #expect(settings.showsEmptyState)
+        await source.setAllowanceLoadFailure(.unavailable(reason: "Synthetic failure"))
+        await settings.remove(.init(accountId: "work", address: correspondent, createdAtMs: 1))
+        #expect(settings.removeError?.hasPrefix("Couldn't remove \(correspondent):") == true)
+        #expect(settings.loadError?.hasPrefix("Couldn't load the allowed addresses:") == true)
+        #expect(settings.error == settings.removeError)
+        #expect(!settings.showsEmptyState)
+    }
+
     @Test func aRecipientFenceConflictFromSendShowsTheBanner() async throws {
         let source = FenceSource(senders: [:])
         try await withFenceWindow(source) { controller in

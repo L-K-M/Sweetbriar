@@ -22,7 +22,13 @@ final class RecipientAllowancesModel {
     /// A successful load confirmed the list is empty.
     var showsEmptyState: Bool { listLoadSucceeded && !isLoading && groups.isEmpty }
     private(set) var removing: RecipientAllowance?
-    private(set) var error: String?
+    /// The last remove's failure; a failed removal outranks a stale
+    /// list read, since the user's action is what they need to know.
+    private(set) var removeError: String?
+    /// The last list read's failure.
+    private(set) var loadError: String?
+    /// The most useful failure to show.
+    var error: String? { removeError ?? loadError }
     /// The newest load: an older one that finishes later is dropped, so
     /// a removed row never comes back.
     @ObservationIgnored private var loadTicket: UInt64 = 0
@@ -51,11 +57,11 @@ final class RecipientAllowancesModel {
                 Group(accountId: $0, accountName: names[$0] ?? $0, allowances: byAccount[$0] ?? [])
             }
             listLoadSucceeded = true
-            error = nil
+            loadError = nil
         } catch {
             guard mine == loadTicket else { return }
             listLoadSucceeded = false
-            self.error = "Couldn't load the allowed addresses: \(error.localizedDescription)"
+            loadError = "Couldn't load the allowed addresses: \(error.localizedDescription)"
         }
     }
 
@@ -67,12 +73,12 @@ final class RecipientAllowancesModel {
         defer { removing = nil }
         do {
             _ = try await source.removeRecipientAllowance(accountId: allowance.accountId, address: allowance.address)
-            error = nil
+            removeError = nil
         } catch {
-            self.error = "Couldn't remove \(allowance.address): \(error.localizedDescription)"
+            removeError = "Couldn't remove \(allowance.address): \(error.localizedDescription)"
         }
-        let failure = error
+        let failure = removeError
         await load()
-        if let failure { error = failure }
+        if let failure { removeError = failure }
     }
 }
