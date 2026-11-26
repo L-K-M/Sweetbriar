@@ -16,7 +16,9 @@ use crate::account_health::{LiveCondition, LiveStatus};
 use crate::account_sync::AccountJobs;
 use crate::engine::{Engine, Spawn, Worker, validate_idempotency_key};
 use crate::policy::proton_api;
-use crate::proton::{Sessions, mark_session_refused, restore_proton_account};
+use crate::proton::{
+    RestoreFailure, Sessions, is_active, mark_session_refused, restore_proton_account,
+};
 use crate::proton_send::{
     DRAFTS_LABEL, Evidence, SENT_LABEL, SendBackoff, SendEvidence, submit_queued_attempts,
 };
@@ -32,8 +34,8 @@ use sb_resources::proton_sync::{
     refresh_proton_identities, resolve_breaker_event, withhold_unlisted,
 };
 use sb_resources::{
-    APP_IDENTITY_REFUSED_REASON, AccountState, ApiCode, BackoffKind, EventAction, EventBatch,
-    EventId, HUMAN_VERIFICATION_REASON, KeyStore, ListingAnchor, PROTON_MAX_PAGE_SIZE,
+    APP_IDENTITY_REFUSED_REASON, AccountKind, AccountState, ApiCode, BackoffKind, EventAction,
+    EventBatch, EventId, HUMAN_VERIFICATION_REASON, KeyStore, ListingAnchor, PROTON_MAX_PAGE_SIZE,
     ProtonClient, ProtonError, Receipt, Secret, Session, StoreError, StoredAccount, Transaction,
     WaitReason, WritePriority, accounts, clear_account_intents_waiting, earliest_hold_until,
     mark_send_accepted, pause_for_reason, proton_account, proton_identities, queue_due_held,
@@ -270,9 +272,8 @@ impl Engine {
     }
 }
 
-/// Start a worker for every account whose session is in memory, except
-/// a paused or disconnected one: launch starts neither (spec/04
-/// "Account states and health", 07 `pause_account`). First move every
+/// Start a worker for each active Proton account, including one whose
+/// session could not be restored while offline. First move every
 /// due `held` attempt to `queued` for all accounts, including those
 /// whose worker never starts (spec/05 step 2).
 pub(crate) async fn start_all(
@@ -286,21 +287,16 @@ pub(crate) async fn start_all(
 ) {
     recover_proton_submitting_at_startup(worker).await;
     queue_due_held_at_startup(worker).await;
-    let skipping: HashSet<&str> = accounts
-        .iter()
-        .filter(|account| {
-            matches!(
+    let session_ids: HashSet<String> = sessions.lock().await.keys().cloned().collect();
+    for account in accounts.iter().filter(|account| {
+        account.kind == AccountKind::Proton
+            && !matches!(
                 account.state,
                 AccountState::Paused | AccountState::Disconnected
             )
-        })
-        .map(|account| account.account_id.as_str())
-        .collect();
-    let ids: Vec<String> = sessions.lock().await.keys().cloned().collect();
-    for account_id in ids {
-        if skipping.contains(account_id.as_str()) {
-            continue;
-        }
+            && (account.state == AccountState::Active || session_ids.contains(&account.account_id))
+    }) {
+        let account_id = account.account_id.clone();
         start(
             worker,
             jobs,
@@ -495,6 +491,7 @@ async fn run_loop(
             send_backoff: &mut send_backoff,
             send_evidence: evidence,
             verifications,
+            restore_backoff: Mutex::new(None),
         };
         // A stop doesn't wait for a request in flight: a write already
         // submitted commits or not as a whole, and the next attempt
@@ -508,7 +505,13 @@ async fn run_loop(
             Halt::Stopped | Halt::Ended => return,
             Halt::Retry => {
                 let now_ms = worker.resources().now().as_millis();
-                record_retry(&statuses, account_id, client.last_backoff(), now_ms, delay);
+                let backoff = attempt
+                    .restore_backoff
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .take()
+                    .or_else(|| client.last_backoff());
+                record_retry(&statuses, account_id, backoff, now_ms, delay);
             }
             Halt::Refresh => {}
         }
@@ -556,6 +559,10 @@ struct Attempt<'a> {
     /// The latest Proton evidence observed per unresolved attempt,
     /// shared with the engine's `out_box()` (spec/05 step 6).
     send_evidence: &'a Arc<SendEvidence>,
+    /// How this attempt's own session restore last failed in transit,
+    /// for the account's condition while the run loop backs off: the
+    /// restore runs on a client of its own, which `client` can't see.
+    restore_backoff: Mutex<Option<BackoffKind>>,
 }
 
 impl Attempt<'_> {
@@ -1335,7 +1342,7 @@ impl Attempt<'_> {
         F: Fn(&'c ProtonClient, Session) -> Fut,
         Fut: Future<Output = Result<T, ProtonError>>,
     {
-        let session = self.session().await.map_err(|_| FetchError::Ended)?;
+        let session = self.session().await.map_err(FetchError::from)?;
         match request(self.client, session.clone()).await {
             Ok(value) => return Ok(value),
             Err(ProtonError::UnexpectedMessage) => return Err(FetchError::UnexpectedMessage),
@@ -1344,7 +1351,7 @@ impl Attempt<'_> {
             Err(error) => return Err(self.refusal(&error).await.into()),
         }
         self.refresh(&session).await;
-        let session = self.session().await.map_err(|_| FetchError::Ended)?;
+        let session = self.session().await.map_err(FetchError::from)?;
         match request(self.client, session).await {
             Ok(value) => Ok(value),
             Err(ProtonError::UnexpectedMessage) => Err(FetchError::UnexpectedMessage),
@@ -1406,16 +1413,51 @@ impl Attempt<'_> {
         Halt::Ended
     }
 
+    /// The account's session. A worker can lack one: it started while
+    /// Proton was unreachable, or a refresh couldn't reach Proton. While
+    /// the account is active it restores the session here; a failure in
+    /// transit retries on the run loop's backoff, since offline stays
+    /// `active`, retrying (spec/04 "Account states and health"). A
+    /// restore that settled the account (refused, paused for its
+    /// credentials, disconnected) ends the worker, as does an account
+    /// that is no longer active.
     async fn session(&self) -> Result<Session, Halt> {
+        if let Some(session) = self.restored_session().await {
+            return Ok(session);
+        }
+        match is_active(self.worker, self.account_id).await {
+            Some(true) => {}
+            Some(false) => return Err(Halt::Ended),
+            None => return Err(Halt::Retry),
+        }
+        match restore_proton_account(self.worker, self.sessions, self.account_id).await {
+            Ok(()) => self.restored_session().await.ok_or(Halt::Retry),
+            Err(RestoreFailure::Settled) => Err(Halt::Ended),
+            Err(RestoreFailure::Transient(None)) => Err(Halt::Retry),
+            // Recorded and mapped like any request's failure: offline
+            // retries, an account-state refusal pauses and ends.
+            Err(RestoreFailure::Transient(Some(error))) => {
+                if restore_was_offline(&error) {
+                    *self
+                        .restore_backoff
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner()) = Some(BackoffKind::Network);
+                }
+                Err(self.refusal(&error).await)
+            }
+        }
+    }
+
+    async fn restored_session(&self) -> Option<Session> {
         let sessions = self.sessions.lock().await;
         sessions
             .get(self.account_id)
             .map(|restored| restored.session.clone())
-            .ok_or(Halt::Ended)
     }
 
     /// Replace a session Proton refused, unless another caller (a
-    /// sign-in again) already did.
+    /// sign-in again) already did. A restore that fails leaves no
+    /// session; [`Attempt::session`] restores or retries.
     async fn refresh(&self, refused: &Session) {
         {
             let mut sessions = self.sessions.lock().await;
@@ -1424,7 +1466,7 @@ impl Attempt<'_> {
             }
             sessions.remove(self.account_id);
         }
-        restore_proton_account(self.worker, self.sessions, self.account_id).await;
+        let _ = restore_proton_account(self.worker, self.sessions, self.account_id).await;
     }
 
     async fn write<T, F>(&self, closure: F) -> Result<T, Halt>
@@ -1538,6 +1580,13 @@ fn needs_attention(error: &ProtonError) -> Option<&'static str> {
     }
 }
 
+fn restore_was_offline(error: &ProtonError) -> bool {
+    matches!(
+        error,
+        ProtonError::Unavailable { .. } | ProtonError::Timeout
+    )
+}
+
 /// Record why the worker retries and when (spec/04's table). A rate
 /// limit keeps the time Proton asked for, which the observer recorded
 /// while the client slept.
@@ -1617,6 +1666,11 @@ fn changes(batch: &EventBatch) -> Result<Vec<ProtonChange>, Halt> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_restore_timeout_is_reported_as_offline() {
+        assert!(restore_was_offline(&ProtonError::Timeout));
+    }
 
     const START_MS: i64 = 1_000_000;
 

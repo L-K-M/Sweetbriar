@@ -549,6 +549,11 @@ pub enum Fault {
     /// download bound (spec/04 "Timeouts"); use it through
     /// [`Fault::OnceAt`].
     Oversized(usize),
+    /// Two one-shot faults in sequence: the first ([`Fault::Once`] or
+    /// [`Fault::OnceAt`]) applies as it would alone, and once it fired
+    /// the second takes the slot, so a test can fail a request and then
+    /// the request it triggers (a 401, then its refresh).
+    Then(Box<Fault>, Box<Fault>),
 }
 
 /// Takes a connection-level fault ([`Fault::RefuseConnection`] or
@@ -1574,6 +1579,24 @@ async fn dispatch(
                 None
             }
             Some(Fault::OnceSend(inner)) => Some(*inner),
+            Some(Fault::Then(first, then)) => match *first {
+                Fault::Once(inner) => {
+                    *slot = Some(*then);
+                    Some(*inner)
+                }
+                Fault::OnceAt { path: at, fault } if at == path => {
+                    *slot = Some(*then);
+                    Some(*fault)
+                }
+                waiting => {
+                    debug_assert!(
+                        matches!(waiting, Fault::OnceAt { .. }),
+                        "Fault::Then requires a one-shot first fault"
+                    );
+                    *slot = Some(Fault::Then(Box::new(waiting), then));
+                    None
+                }
+            },
             other => {
                 slot.clone_from(&other);
                 other
@@ -1619,7 +1642,7 @@ async fn dispatch(
             Fault::RefuseConnection | Fault::RefuseConnections | Fault::StallHandshake(_) => {}
             // One-shot faults are unwrapped into their inner fault
             // before the match.
-            Fault::Once(_) | Fault::OnceAt { .. } | Fault::OnceSend(_) => {}
+            Fault::Once(_) | Fault::OnceAt { .. } | Fault::OnceSend(_) | Fault::Then(..) => {}
         }
     }
 

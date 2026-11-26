@@ -333,7 +333,8 @@ impl Engine {
                     {
                         continue;
                     }
-                    restore_proton_account(&worker, &sessions, &account.account_id).await;
+                    // The worker interprets a failure and retries when appropriate (spec/04).
+                    let _ = restore_proton_account(&worker, &sessions, &account.account_id).await;
                 }
                 crate::proton_sync::start_all(
                     &worker,
@@ -522,6 +523,22 @@ async fn is_disconnected(worker: &Worker, account_id: &str) -> bool {
     }
 }
 
+/// Whether the account is `active`; `None` when the store can't say.
+pub(crate) async fn is_active(worker: &Worker, account_id: &str) -> Option<bool> {
+    let id = account_id.to_owned();
+    match worker
+        .blocking(move |resources| resources.read(accounts))
+        .await
+    {
+        Ok(Ok(accounts)) => Some(
+            accounts
+                .iter()
+                .any(|account| account.account_id == id && account.state == AccountState::Active),
+        ),
+        _ => None,
+    }
+}
+
 /// The account's kind, or `None` when it doesn't exist.
 pub(crate) async fn account_kind(
     worker: &Worker,
@@ -548,8 +565,26 @@ fn credential_pause(error: SecretError) -> CredentialPause {
     }
 }
 
-/// Restore one account's session (spec/04 "Restore on start").
-pub(crate) async fn restore_proton_account(worker: &Worker, sessions: &Sessions, account_id: &str) {
+/// Why [`restore_proton_account`] left no session of its own, when it
+/// didn't restore one.
+pub(crate) enum RestoreFailure {
+    /// Proton refused or couldn't be reached, or the store couldn't be
+    /// read: the account stays as it was. The worker interprets Proton
+    /// refusals and retries transient failures (spec/04 "Backoff").
+    Transient(Option<ProtonError>),
+    /// The account is gone, disconnected or was paused for its
+    /// credentials: no later attempt restores it without the user.
+    Settled,
+}
+
+/// Restore one account's session (spec/04 "Restore on start"). `Ok`
+/// means the account has a session: this one, or one a sign-in that
+/// ran meanwhile stored.
+pub(crate) async fn restore_proton_account(
+    worker: &Worker,
+    sessions: &Sessions,
+    account_id: &str,
+) -> Result<(), RestoreFailure> {
     let id = account_id.to_owned();
     let reference = match worker
         .blocking({
@@ -559,7 +594,8 @@ pub(crate) async fn restore_proton_account(worker: &Worker, sessions: &Sessions,
         .await
     {
         Ok(Ok(Some(account))) => account.credential_ref,
-        _ => return,
+        Ok(Ok(None)) => return Err(RestoreFailure::Settled),
+        _ => return Err(RestoreFailure::Transient(None)),
     };
     let get_reference = reference.clone();
     let secret = match worker
@@ -569,19 +605,19 @@ pub(crate) async fn restore_proton_account(worker: &Worker, sessions: &Sessions,
         Ok(Ok(secret)) => secret,
         Ok(Err(SecretError::NotFound)) => {
             mark_session_refused(worker, account_id).await;
-            return;
+            return Err(RestoreFailure::Settled);
         }
         Ok(Err(error)) => {
             pause_for_secret_error(worker, account_id, error).await;
-            return;
+            return Err(RestoreFailure::Settled);
         }
-        Err(_) => return,
+        Err(_) => return Err(RestoreFailure::Transient(None)),
     };
     let decoded = match decode_proton_session(secret.expose()) {
         Ok(decoded) => decoded,
         Err(_) => {
             mark_session_refused(worker, account_id).await;
-            return;
+            return Err(RestoreFailure::Settled);
         }
     };
     drop(secret);
@@ -598,11 +634,11 @@ pub(crate) async fn restore_proton_account(worker: &Worker, sessions: &Sessions,
         Ok(restored) => restored,
         Err(ProtonError::RefreshRefused { .. }) => {
             mark_session_refused(worker, account_id).await;
-            return;
+            return Err(RestoreFailure::Settled);
         }
-        // Offline and other transport failures leave the account as it
-        // is; the next start tries again (spec/04).
-        Err(_) => return,
+        // Offline and other failures leave the account as it is; the
+        // caller retries (spec/04).
+        Err(error) => return Err(RestoreFailure::Transient(Some(error))),
     };
     // Proton rotated the refresh token: store the new item before the
     // session is used (spec/04 "Refresh").
@@ -615,9 +651,14 @@ pub(crate) async fn restore_proton_account(worker: &Worker, sessions: &Sessions,
     // A sign-in or disconnect that ran meanwhile owns the secret item
     // now: this session is surplus, so it is revoked, never stored.
     if sessions.contains_key(account_id) || is_disconnected(worker, account_id).await {
+        let restored = sessions.contains_key(account_id);
         drop(sessions);
         let _ = worker.resources().logout_proton_session(&session).await;
-        return;
+        return if restored {
+            Ok(())
+        } else {
+            Err(RestoreFailure::Settled)
+        };
     }
     let set_reference = reference.clone();
     let stored = worker
@@ -633,11 +674,15 @@ pub(crate) async fn restore_proton_account(worker: &Worker, sessions: &Sessions,
                     key_passphrase,
                 },
             );
+            Ok(())
         }
-        Ok(Err(error)) => pause_for_secret_error(worker, account_id, error).await,
+        Ok(Err(error)) => {
+            pause_for_secret_error(worker, account_id, error).await;
+            Err(RestoreFailure::Settled)
+        }
         // The blocking join failed (shutdown): leave the account as it
         // is rather than report a store condition that never happened.
-        Err(_) => {}
+        Err(_) => Err(RestoreFailure::Transient(None)),
     }
 }
 
