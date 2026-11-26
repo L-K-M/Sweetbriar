@@ -110,6 +110,51 @@ func theSidebarListsUnifiedThenEachAccount() async throws {
     #expect(model.generation == 7)
 }
 
+/// The Dock badge total counts every account's Inbox mailbox once and
+/// no other role, before and after a reload changes the counts.
+@MainActor
+@Test(.timeLimit(.minutes(1)))
+func inboxUnreadCountsEveryAccountInboxOnce() async throws {
+    let fake = FakeSidebarSource()
+    let second = Account(
+        accountId: "a2", kind: .proton, displayName: "Second", state: .active,
+        stateReason: nil, sortOrder: 1
+    )
+    func inbox(_ id: Int64, _ account: String, unread: UInt64) -> Mailbox {
+        Mailbox(
+            mailboxId: id, accountId: account, name: "Inbox", delimiter: nil,
+            role: .inbox, kind: .folder, selectable: true,
+            total: unread + 1, unread: unread
+        )
+    }
+    func other(_ id: Int64, _ account: String, role: MailboxRole?, unread: UInt64) -> Mailbox {
+        Mailbox(
+            mailboxId: id, accountId: account, name: "Other", delimiter: nil,
+            role: role, kind: .folder, selectable: true,
+            total: unread + 1, unread: unread
+        )
+    }
+    await fake.set(archive, [
+        inbox(1, archive.accountId, unread: 3),
+        other(2, archive.accountId, role: .archive, unread: 8),
+        other(3, archive.accountId, role: nil, unread: 5),
+    ], generation: 1)
+    await fake.set(second, [inbox(4, second.accountId, unread: 4)], generation: 2)
+
+    let model = SidebarModel(source: fake)
+    #expect(model.inboxUnread == 0)
+    await model.reload()
+    #expect(model.inboxUnread == 7)
+
+    await fake.set(archive, [
+        inbox(1, archive.accountId, unread: 0),
+        other(2, archive.accountId, role: .archive, unread: 8),
+        other(3, archive.accountId, role: nil, unread: 5),
+    ], generation: 3)
+    await model.noteGeneration(3)
+    #expect(model.inboxUnread == 4)
+}
+
 @MainActor
 @Test func composeContextUsesOnlyAnExistingAccountSectionEntry() async {
     let fake = FakeSidebarSource()

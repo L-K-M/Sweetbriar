@@ -133,6 +133,24 @@ public final class SidebarModel {
         }
     }
 
+    /// The unread messages in every account's Inbox mailbox, counted
+    /// once each. This is the app's Dock badge total; it excludes the
+    /// other roles (Sent, Archive, Trash, labels) so filing mail does
+    /// not leave a badge behind.
+    ///
+    /// `mailboxes` is keyed by account id alone, never by the unified
+    /// section, so no Inbox is counted twice. The key is still checked
+    /// rather than assumed, since its keys come from the core.
+    public var inboxUnread: UInt64 {
+        var total: UInt64 = 0
+        for (sectionId, list) in mailboxes where sectionId != Self.unifiedSectionID {
+            for mailbox in list where mailbox.role == .inbox {
+                total += mailbox.unread
+            }
+        }
+        return total
+    }
+
     /// The saved views the unified section lists, in `saved_views()`
     /// order.
     public private(set) var savedViews: [SavedView] = []
