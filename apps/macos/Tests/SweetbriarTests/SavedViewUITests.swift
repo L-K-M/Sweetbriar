@@ -186,6 +186,7 @@ struct SavedViewUITests {
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 600, height: 200),
             styleMask: [.titled], backing: .buffered, defer: false)
+        defer { window.close() }
         window.contentView = controller.view
         model.updateText("hello")
         #expect(await waitUntil { model.queryJSON != nil })
@@ -217,8 +218,14 @@ struct SavedViewUITests {
         #expect(!confirm.isEnabled)
         name.stringValue = "A view"
         NotificationCenter.default.post(name: NSControl.textDidChangeNotification, object: name)
+        #expect(sheet.makeFirstResponder(name))
+        let editor = try #require(name.currentEditor() as? NSTextView)
+        editor.insertText("   ", replacementRange: NSRange(location: 0, length: editor.string.utf16.count))
+        #expect(!confirm.isEnabled)
+        editor.insertText("Typed view", replacementRange: NSRange(location: 0, length: editor.string.utf16.count))
+        #expect(confirm.isEnabled)
         confirm.performClick(nil)
-        #expect(await waitUntil { savedName == "A view" })
+        #expect(await waitUntil { savedName == "Typed view" })
     }
 
     /// The search strip's command saves through the sidebar model and

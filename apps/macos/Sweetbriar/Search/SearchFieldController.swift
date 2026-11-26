@@ -479,6 +479,7 @@ final class SearchFieldController: NSViewController {
         field.delegate = validator
         alert.accessoryView = field
         let answer = { (response: NSApplication.ModalResponse) in
+            // The field's delegate is weak; retain it until the sheet ends.
             withExtendedLifetime(validator) {
                 confirm(response == .alertFirstButtonReturn ? field.stringValue : nil)
             }
