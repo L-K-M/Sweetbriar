@@ -105,7 +105,7 @@ func readerDropsLateLeaseAndNeverShowsOldMessage() async throws {
     expectPlain(model, id: 2)
     #expect(model.navigationTicket == 2)
     await fake.gate.open()
-    await old.value
+    #expect(await old.value == false)
     expectPlain(model, id: 2)
     #expect(fake.released == ["1-plainText"])
     #expect(model.currentLease?.leaseId == "2-plainText")
@@ -122,7 +122,7 @@ private func readerDropsStaleErrors(phase: FakeReaderSource.Phase) async throws 
     try #require(await eventually { fake.isParked })
     await model.show(occurrenceID: 2)
     await fake.gate.open()
-    await old.value
+    #expect(await old.value == false)
     expectPlain(model, id: 2)
     model.close()
 }
@@ -187,7 +187,7 @@ func readerClearOrCloseDropsPendingLease(close: Bool) async throws {
     try #require(await eventually { fake.isParked })
     if close { model.close() } else { model.clear() }
     await fake.gate.open()
-    await pending.value
+    #expect(await pending.value == false)
     #expect(fake.released == ["1-plainText"])
     #expect(model.currentLease == nil)
     guard case .empty = model.state else { Issue.record("stale completion changed cleared state"); return }
@@ -199,7 +199,7 @@ func readerShowsCurrentCoreFailureAndReleasesUnreadableLease() async throws {
     let fake = FakeReaderSource(path: "/missing", delayedID: 1, failure: failure)
     await fake.gate.open()
     let model = ReaderModel(source: fake)
-    await model.show(occurrenceID: 1)
+    #expect(await model.show(occurrenceID: 1))
     guard case .unavailable(let received) = model.state else { Issue.record("expected unavailable"); return }
     #expect(received == failure)
     await model.show(occurrenceID: 2)
@@ -252,7 +252,7 @@ private func readerDropsStaleMetadataBeforeOpeningBody(phase: FakeReaderSource.P
     try #require(await eventually { fake.isParked })
     await model.show(occurrenceID: 2)
     await fake.gate.open()
-    await old.value
+    #expect(await old.value == false)
     expectPlain(model, id: 2)
     #expect(fake.opened.map(\.0) == [2])
     model.close()

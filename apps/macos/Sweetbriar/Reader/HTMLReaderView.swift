@@ -125,6 +125,8 @@ final class HTMLReaderView: NSView, WKNavigationDelegate, WKUIDelegate {
     private let cidHandler: ReaderCIDHandler
     private let currentTicket: () -> UInt64
     private var ticket: UInt64 = 0
+    // A rendition toggle can revoke HTML without changing the model ticket.
+    private var preparation: UInt64 = 0
     private var bodyURL: URL?
     private var initialNavigationPending = false
     private var navigation: WKNavigation?
@@ -170,6 +172,7 @@ final class HTMLReaderView: NSView, WKNavigationDelegate, WKUIDelegate {
     func clear(ticket: UInt64) {
         guard ticket == currentTicket() else { return }
         self.ticket = ticket
+        preparation += 1
         bodyURL = nil
         navigation = nil
         initialNavigationPending = false
@@ -181,20 +184,21 @@ final class HTMLReaderView: NSView, WKNavigationDelegate, WKUIDelegate {
     func show(_ rendition: HTMLRendition, ticket: UInt64) async {
         guard ticket == currentTicket() else { return }
         clear(ticket: ticket)
+        let preparation = self.preparation
         let rules: WKContentRuleList
         do {
             rules = try await compileRules()
         } catch {
-            guard self.ticket == ticket, ticket == currentTicket() else { return }
+            guard isPreparing(preparation, ticket: ticket) else { return }
             ruleListUnavailable?(ticket)
             return
         }
-        guard self.ticket == ticket, ticket == currentTicket() else { return }
+        guard isPreparing(preparation, ticket: ticket) else { return }
         do {
             let html = try await Task.detached(priority: .userInitiated) {
                 String(decoding: try Data(contentsOf: rendition.htmlFile), as: UTF8.self)
             }.value
-            guard self.ticket == ticket, ticket == currentTicket() else { return }
+            guard isPreparing(preparation, ticket: ticket) else { return }
             // Substitute data needs no file: exemption or WebKit file access.
             // The base is unique per selection; the body is supplied directly.
             var base = URLComponents()
@@ -208,9 +212,13 @@ final class HTMLReaderView: NSView, WKNavigationDelegate, WKUIDelegate {
             initialNavigationPending = true
             navigation = webView.loadHTMLString(html, baseURL: url)
         } catch {
-            guard self.ticket == ticket, ticket == currentTicket() else { return }
+            guard isPreparing(preparation, ticket: ticket) else { return }
             loadFailed?(ticket, error)
         }
+    }
+
+    private func isPreparing(_ preparation: UInt64, ticket: UInt64) -> Bool {
+        self.preparation == preparation && ticket == currentTicket()
     }
 
     /// Shared by the delegate and tests. Admit the exact initial body once;

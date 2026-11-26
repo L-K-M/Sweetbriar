@@ -86,35 +86,39 @@ public final class ReaderModel {
 
     /// Even selecting the same occurrence takes a new ticket. Callers may
     /// overlap these operations; cancellation is not the freshness check.
-    public func show(occurrenceID: Int64) async {
-        guard !closed else { return }
+    /// Returns whether the completed load still owns the presentation.
+    @discardableResult
+    public func show(occurrenceID: Int64) async -> Bool {
+        guard !closed else { return false }
         manifest = nil
         readingDocument = nil
         readingViewOverride = nil
         showsReadingView = false
         self.occurrenceID = occurrenceID
         isShowingSource = false
-        await load(occurrenceID: occurrenceID)
+        return await load(occurrenceID: occurrenceID)
     }
 
     /// One action switches between the rendition and raw acquisition.
-    public func showSource(_ enabled: Bool) async {
-        guard !closed else { return }
+    @discardableResult
+    public func showSource(_ enabled: Bool) async -> Bool {
+        guard !closed else { return false }
         isShowingSource = enabled
         guard let occurrenceID else {
             invalidate()
-            return
+            return false
         }
-        await load(occurrenceID: occurrenceID)
+        return await load(occurrenceID: occurrenceID)
     }
 
     /// The pane calls this if the process-wide rule list cannot be compiled.
     /// Stale pane completions must never replace a newer selection.
-    public func ruleListUnavailable(ticket: UInt64) async {
-        guard !closed, ticket == navigationTicket else { return }
+    @discardableResult
+    public func ruleListUnavailable(ticket: UInt64) async -> Bool {
+        guard !closed, ticket == navigationTicket else { return false }
         htmlAvailable = false
-        guard !isShowingSource, let occurrenceID else { return }
-        await load(occurrenceID: occurrenceID)
+        guard !isShowingSource, let occurrenceID else { return false }
+        return await load(occurrenceID: occurrenceID)
     }
 
     public func clear() {
@@ -234,16 +238,16 @@ public final class ReaderModel {
         leaseOwner = nil
     }
 
-    private func load(occurrenceID: Int64) async {
+    private func load(occurrenceID: Int64) async -> Bool {
         invalidate()
         let ticket = navigationTicket
         let kind: BodyKind = isShowingSource ? .source : (htmlAvailable ? preferred : .plainText)
         state = .loading
         do {
             let id = try await source.messageForOccurrence(occurrenceId: occurrenceID)
-            guard ticket == navigationTicket else { return }
+            guard ticket == navigationTicket else { return false }
             let message = try await source.getMessage(messageId: id)
-            guard ticket == navigationTicket else { return }
+            guard ticket == navigationTicket else { return false }
             // Both renditions come back under this selection's ticket; a
             // completion for an older selection is dropped below.
             let documentFetch = Task { @MainActor [source] in
@@ -252,12 +256,12 @@ public final class ReaderModel {
             let lease = try await source.openBody(messageID: id, preferred: kind)
             guard ticket == navigationTicket else {
                 source.releaseLease(lease.leaseId)
-                return
+                return false
             }
             let document = await documentFetch.value
             guard ticket == navigationTicket else {
                 source.releaseLease(lease.leaseId)
-                return
+                return false
             }
             readingDocument = document
             showsReadingView =
@@ -269,17 +273,17 @@ public final class ReaderModel {
                     throw RenditionManifest.Invalid.unsafeResource
                 }
                 let parsed = try await readManifest(lease)
-                guard ticket == navigationTicket else { return }
+                guard ticket == navigationTicket else { return false }
                 manifest = parsed
                 let rendition = HTMLRendition(
                     token: lease.leaseId, htmlFile: URL(fileURLWithPath: lease.filePath), manifest: parsed
                 )
                 state = .html(message: message, rendition: rendition)
-                return
+                return true
             }
             if lease.kind == .plainText, lease.manifestPath != nil {
                 let parsed = try await readManifest(lease)
-                guard ticket == navigationTicket else { return }
+                guard ticket == navigationTicket else { return false }
                 manifest = parsed
             }
             // Source is arbitrary acquisition bytes, not necessarily UTF-8.
@@ -288,14 +292,14 @@ public final class ReaderModel {
                 let data = try Data(contentsOf: URL(fileURLWithPath: lease.filePath))
                 return String(decoding: data, as: UTF8.self)
             }.value
-            guard ticket == navigationTicket else { return }
+            guard ticket == navigationTicket else { return false }
             switch lease.kind {
             case .plainText: state = .plainText(message: message, text: text)
             case .source: state = .source(message: message, text: text)
             case .sanitizedHtml: preconditionFailure("HTML handled before text decoding")
             }
         } catch {
-            guard ticket == navigationTicket else { return }
+            guard ticket == navigationTicket else { return false }
             leaseOwner = nil
             if let failure = error as? CoreFailure, case .unavailable = failure {
                 state = .unavailable(failure)
@@ -303,6 +307,7 @@ public final class ReaderModel {
                 state = .failed(error)
             }
         }
+        return true
     }
 }
 

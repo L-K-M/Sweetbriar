@@ -38,11 +38,13 @@ private final class Gate: @unchecked Sendable {
 private final class DelayedBodySource: ReaderSource, @unchecked Sendable {
     let directory: URL
     let bodyGate = Gate()
+    private let supportsReadingView: Bool
     private let lock = NSLock()
     private var releasedIDs: [String] = []
     private var bodyEntered = false
 
-    init() throws {
+    init(supportsReadingView: Bool = false) throws {
+        self.supportsReadingView = supportsReadingView
         directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let manifest = Data(#"{"v":1,"resources":[{"id":"r1","file":"r1.png","media_type":"image/png","bytes":8}],"links":[],"attachments":[]}"#.utf8)
@@ -83,6 +85,13 @@ private final class DelayedBodySource: ReaderSource, @unchecked Sendable {
             byteLength: 0, remoteContentBlocked: 0, warnings: [],
             manifestPath: directory.appendingPathComponent("m\(messageID).json").path
         )
+    }
+
+    func readingDocument(messageId: Int64) async throws -> ReadingDocument? {
+        guard supportsReadingView else { return nil }
+        return .init(
+            sourcePartID: "body", version: 1,
+            blocks: [.paragraph(partID: "body", inlines: [.text(partID: "body", text: "Reading \(messageId)")])])
     }
 
     func openAttachment(messageID: Int64, partID: String) async throws -> AttachmentLease {
@@ -137,7 +146,13 @@ private func waitUntil(_ condition: () -> Bool) async -> Bool {
 func parkedFirstBodyNeverDisplaysAndItsLeaseIsReleased() async throws {
     let source = try DelayedBodySource()
     defer { try? FileManager.default.removeItem(at: source.directory) }
-    let controller = ReaderViewController(model: ReaderModel(source: source, preferred: .sanitizedHtml))
+    var preparations = 0
+    let controller = ReaderViewController(
+        model: ReaderModel(source: source, preferred: .sanitizedHtml),
+        compileRules: {
+            preparations += 1
+            return try await ReaderContentRules.compiled()
+        })
     let stale = controller.select([1])
     defer {
         source.bodyGate.open()
@@ -156,6 +171,7 @@ func parkedFirstBodyNeverDisplaysAndItsLeaseIsReleased() async throws {
     source.bodyGate.open()
     await stale.value
     #expect(source.released == ["lease-11"])
+    #expect(preparations == 1)
     #expect(controller.model.navigationTicket == ticket)
     #expect(controller.model.currentLease?.leaseId == "lease-22")
     #expect(controller.model.currentMessage?.messageId == 22)
@@ -173,6 +189,45 @@ func parkedFirstBodyNeverDisplaysAndItsLeaseIsReleased() async throws {
     #expect(controller.html.webView.url != firstBody)
     controller.close()
     #expect(source.released == ["lease-11", "lease-22"])
+}
+
+/// An HTML preparation suspended before navigation cannot hide or replace
+/// the native rendition that became visible while it was suspended.
+@Test(.timeLimit(.minutes(1)), arguments: [true, false]) @MainActor
+func parkedHTMLDoesNotReplaceReadingView(navigate: Bool) async throws {
+    let source = try DelayedBodySource(supportsReadingView: true)
+    defer { try? FileManager.default.removeItem(at: source.directory) }
+    source.bodyGate.open()
+    let gate = Gate()
+    let rules = try await ReaderContentRules.compiled()
+    var preparing = false
+    let model = ReaderModel(source: source, preferred: .sanitizedHtml)
+    let controller = ReaderViewController(model: model, compileRules: {
+        preparing = true
+        await gate.wait()
+        return rules
+    })
+    model.prefersReadingView = { $0 == "m22@example.test" }
+    defer {
+        gate.open()
+        controller.close()
+    }
+
+    let stale = controller.select([1])
+    try #require(await waitUntil { preparing })
+    if navigate {
+        await controller.show(selection: [2])
+    } else {
+        await controller.setReadingView(true)
+    }
+    #expect(!controller.readingScroll.isHidden)
+
+    gate.open()
+    await stale.value
+    #expect(!controller.readingScroll.isHidden)
+    #expect(controller.readingView.string == (navigate ? "Reading 22\n\n" : "Reading 11\n\n"))
+    #expect(controller.html.isHidden)
+    #expect(!controller.html.webView.isLoading)
 }
 
 /// A `sweetbriar-cid:` read parked across the second selection cannot
