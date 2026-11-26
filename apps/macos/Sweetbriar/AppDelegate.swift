@@ -6,10 +6,11 @@
 // failure shows in the main window.
 
 import AppKit
+import UserNotifications
 import SweetbriarBridge
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
     private var mainWindow: MainWindowController?
     private var session: CoreSession?
     private var settingsWindow: AppearanceSettingsWindow?
@@ -49,6 +50,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         installMainMenu()
+        // A delivered notification's tap routes to its account's inbox;
+        // the delegate is owned by the notification center for the
+        // app's life (spec/10 "Notifications").
+        UNUserNotificationCenter.current().delegate = self
 
         // The bridge batches setting snapshots on the display clock.
         let clockView = NSView()
@@ -541,5 +546,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             NSApplication.shared.reply(toApplicationShouldTerminate: true)
         }
         return .terminateLater
+    }
+
+    /// Show new-mail banners while Sweetbriar is frontmost too, so a
+    /// tap can always reach the inbox it names.
+    nonisolated func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        willPresent notification: UNNotification
+    ) async -> UNNotificationPresentationOptions {
+        [.banner, .list, .sound]
+    }
+
+    /// A tapped banner opens the account it names. Other actions (none
+    /// ship yet) and background deliveries change nothing here.
+    nonisolated func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        didReceive response: UNNotificationResponse
+    ) async {
+        guard response.actionIdentifier == UNNotificationDefaultActionIdentifier,
+              let accountId = NewMailNotificationTarget.accountID(
+                from: response.notification.request.content.userInfo)
+        else { return }
+        await MainActor.run {
+            NSApp.activate(ignoringOtherApps: true)
+            self.mainWindow?.showWindow(nil)
+            self.mainWindow?.revealAccountInbox(accountId: accountId)
+        }
     }
 }

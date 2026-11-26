@@ -561,6 +561,26 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         }
     }
 
+    /// Open `accountId`'s inbox, used when a new-mail notification is
+    /// tapped. The account's Inbox role wins; otherwise its first
+    /// selectable mailbox. A sidebar that has not loaded yet is reloaded
+    /// once before choosing.
+    func revealAccountInbox(accountId: String) {
+        guard !closed, let sidebarModel, let sidebar else { return }
+        let serial = contentSerial
+        contentTasks.run { [weak self] in
+            guard let self, contentSerial == serial else { return }
+            if self.sidebarModel?.inboxEntryID(accountId: accountId) == nil {
+                await sidebarModel.reload()
+                guard !Task.isCancelled, contentSerial == serial else { return }
+                sidebar.reloadSections()
+                updateTitle()
+            }
+            guard let entryID = sidebarModel.inboxEntryID(accountId: accountId) else { return }
+            sidebar.choose(entryID: entryID)
+        }
+    }
+
     /// Re-read the sidebar: an import changed what it lists.
     private func reloadSidebar() {
         guard let sidebarModel, let sidebar else { return }

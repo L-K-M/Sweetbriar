@@ -80,6 +80,14 @@ struct NewMailNotificationTests {
         #expect(await poster.authorizationRequests == 2, "a grant is not re-read")
     }
 
+    @Test func aTappedNotificationNamesItsAccount() {
+        let key = NewMailNotificationTarget.accountIDKey
+        #expect(NewMailNotificationTarget.accountID(from: [key: "account-7"]) == "account-7")
+        #expect(NewMailNotificationTarget.accountID(from: [key: ""]) == nil)
+        #expect(NewMailNotificationTarget.accountID(from: [key: 42]) == nil)
+        #expect(NewMailNotificationTarget.accountID(from: ["other": "account-7"]) == nil)
+    }
+
     @Test func previewsOnShowsTheHeadersAndAsksAuthorizationOnce() async throws {
         let source = FakeNewMailSource(
             settings: Self.previews("on"),
