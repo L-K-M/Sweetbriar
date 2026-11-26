@@ -468,7 +468,7 @@ async fn start_worker(
     match kind {
         AccountKind::Proton => {
             if sessions.lock().await.get(&id).is_none() {
-                // A failure is the worker's to retry (spec/04).
+                // The worker interprets a failure and retries when appropriate (spec/04).
                 let _ = crate::proton::restore_proton_account(worker, sessions, &id).await;
             }
             crate::proton_sync::start(worker, jobs, sessions, opened, evidence, verifications, id);

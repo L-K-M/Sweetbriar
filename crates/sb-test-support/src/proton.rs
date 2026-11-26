@@ -1589,6 +1589,10 @@ async fn dispatch(
                     Some(*fault)
                 }
                 waiting => {
+                    debug_assert!(
+                        matches!(waiting, Fault::OnceAt { .. }),
+                        "Fault::Then requires a one-shot first fault"
+                    );
                     *slot = Some(Fault::Then(Box::new(waiting), then));
                     None
                 }

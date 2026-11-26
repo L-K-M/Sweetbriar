@@ -333,7 +333,7 @@ impl Engine {
                     {
                         continue;
                     }
-                    // A failure is the worker's to retry (spec/04).
+                    // The worker interprets a failure and retries when appropriate (spec/04).
                     let _ = restore_proton_account(&worker, &sessions, &account.account_id).await;
                 }
                 crate::proton_sync::start_all(
@@ -569,8 +569,8 @@ fn credential_pause(error: SecretError) -> CredentialPause {
 /// didn't restore one.
 pub(crate) enum RestoreFailure {
     /// Proton refused or couldn't be reached, or the store couldn't be
-    /// read: the account stays as it was, and a later attempt may
-    /// restore it (spec/04 "Backoff").
+    /// read: the account stays as it was. The worker interprets Proton
+    /// refusals and retries transient failures (spec/04 "Backoff").
     Transient(Option<ProtonError>),
     /// The account is gone, disconnected or was paused for its
     /// credentials: no later attempt restores it without the user.

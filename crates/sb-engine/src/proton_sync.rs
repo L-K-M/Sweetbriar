@@ -1437,7 +1437,7 @@ impl Attempt<'_> {
             // Recorded and mapped like any request's failure: offline
             // retries, an account-state refusal pauses and ends.
             Err(RestoreFailure::Transient(Some(error))) => {
-                if matches!(error, ProtonError::Unavailable { .. }) {
+                if restore_was_offline(&error) {
                     *self
                         .restore_backoff
                         .lock()
@@ -1580,6 +1580,13 @@ fn needs_attention(error: &ProtonError) -> Option<&'static str> {
     }
 }
 
+fn restore_was_offline(error: &ProtonError) -> bool {
+    matches!(
+        error,
+        ProtonError::Unavailable { .. } | ProtonError::Timeout
+    )
+}
+
 /// Record why the worker retries and when (spec/04's table). A rate
 /// limit keeps the time Proton asked for, which the observer recorded
 /// while the client slept.
@@ -1659,6 +1666,11 @@ fn changes(batch: &EventBatch) -> Result<Vec<ProtonChange>, Halt> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_restore_timeout_is_reported_as_offline() {
+        assert!(restore_was_offline(&ProtonError::Timeout));
+    }
 
     const START_MS: i64 = 1_000_000;
 
