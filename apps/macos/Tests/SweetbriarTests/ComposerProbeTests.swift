@@ -283,5 +283,40 @@ struct ComposerProbeTests {
         #expect(textView.accessibilityLabel() == "Message body")
         #expect(textView.accessibilityValue() == "hello **world**")
     }
+
+    @Test("Markdown source is literal: no smart quotes, dashes or replacements")
+    func markdownSourceIsLiteral() {
+        textView.mode = .markdown
+        #expect(!textView.isAutomaticQuoteSubstitutionEnabled)
+        #expect(!textView.isAutomaticDashSubstitutionEnabled)
+        #expect(!textView.isAutomaticTextReplacementEnabled)
+
+        // Plain text follows the system's text settings.
+        textView.mode = .plain
+        #expect(textView.isAutomaticQuoteSubstitutionEnabled
+            == NSSpellChecker.isAutomaticQuoteSubstitutionEnabled)
+        #expect(textView.isAutomaticDashSubstitutionEnabled
+            == NSSpellChecker.isAutomaticDashSubstitutionEnabled)
+        #expect(textView.isAutomaticTextReplacementEnabled
+            == NSSpellChecker.isAutomaticTextReplacementEnabled)
+
+        // Exercise the transition regardless of this Mac's preferences.
+        textView.isAutomaticQuoteSubstitutionEnabled = true
+        textView.isAutomaticDashSubstitutionEnabled = true
+        textView.isAutomaticTextReplacementEnabled = true
+        textView.mode = .markdown
+        #expect(!textView.isAutomaticQuoteSubstitutionEnabled)
+        #expect(!textView.isAutomaticDashSubstitutionEnabled)
+        #expect(!textView.isAutomaticTextReplacementEnabled)
+    }
+
+    @Test("a fresh Markdown editor starts literal")
+    func freshMarkdownEditorIsLiteral() {
+        let editor = ComposerTextView()
+        #expect(editor.mode == .markdown)
+        #expect(!editor.isAutomaticQuoteSubstitutionEnabled)
+        #expect(!editor.isAutomaticDashSubstitutionEnabled)
+        #expect(!editor.isAutomaticTextReplacementEnabled)
+    }
 }
 #endif

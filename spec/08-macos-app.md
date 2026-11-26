@@ -616,6 +616,9 @@ A message window is the reader for one message on its own, with its own
     markers as one undoable edit.
   - Nothing touches TextKit 1 (`layoutManager`), which would drop the
     view into compatibility mode.
+  - On entering Markdown mode, disable smart quote, smart dash and
+    text-replacement substitutions: punctuation can carry formatting or
+    appear in code. On entering plain mode, use the current system settings.
 - **Above the editor:**
   - the **identity strip** (below);
   - To, Cc and Bcc `NSTokenField` controls, with completion from

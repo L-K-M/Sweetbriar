@@ -49,12 +49,28 @@ final class ComposerTextView: NSTextView {
     private let contentStorage = NSTextContentStorage()
 
     /// Plain or Markdown. Switching restyles the document so the
-    /// delegate runs again for every paragraph.
+    /// delegate runs again for every paragraph, and sets the text
+    /// substitutions the mode allows.
     var mode: ComposerMode = .markdown {
         didSet {
             guard mode != oldValue else { return }
+            applySubstitutions()
             restyle(NSRange(location: 0, length: (string as NSString).length))
         }
+    }
+
+    /// Markdown source is literal (spec/08 "Composer"): punctuation can
+    /// carry formatting or appear in code, so Markdown mode turns off
+    /// smart quotes, smart dashes and text replacement. Entering plain mode
+    /// applies the current system text settings.
+    private func applySubstitutions() {
+        let literal = mode == .markdown
+        isAutomaticQuoteSubstitutionEnabled =
+            !literal && NSSpellChecker.isAutomaticQuoteSubstitutionEnabled
+        isAutomaticDashSubstitutionEnabled =
+            !literal && NSSpellChecker.isAutomaticDashSubstitutionEnabled
+        isAutomaticTextReplacementEnabled =
+            !literal && NSSpellChecker.isAutomaticTextReplacementEnabled
     }
 
     /// Receives files dropped on the editor (spec/08 "Attachments"), so
@@ -116,6 +132,7 @@ final class ComposerTextView: NSTextView {
         baseWritingDirection = .natural
         font = .systemFont(ofSize: NSFont.systemFontSize)
         setAccessibilityLabel("Message body")
+        applySubstitutions()
     }
 
     required init?(coder: NSCoder) {
