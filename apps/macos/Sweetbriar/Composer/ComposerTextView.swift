@@ -61,8 +61,8 @@ final class ComposerTextView: NSTextView {
 
     /// Markdown source is literal (spec/08 "Composer"): punctuation can
     /// carry formatting or appear in code, so Markdown mode turns off
-    /// smart quotes, smart dashes and text replacement. Plain mode follows
-    /// the system's text settings.
+    /// smart quotes, smart dashes and text replacement. Entering plain mode
+    /// applies the current system text settings.
     private func applySubstitutions() {
         let literal = mode == .markdown
         isAutomaticQuoteSubstitutionEnabled =
