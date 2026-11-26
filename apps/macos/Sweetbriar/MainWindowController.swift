@@ -210,6 +210,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         messageList?.onSelectionChange = nil
         markRead?.cancel()
         windowFlags = nil
+        pendingAccountReveal = nil
         messageWindows.closeAll()
         filing?.retire()
         filing = nil
@@ -499,6 +500,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
             if messageList.shownSpec == nil {
                 sidebar.choose(entryID: SidebarModel.unifiedInboxID, revealSection: false)
             }
+            // A notification tapped during the open lands after the
+            // sidebar exists.
+            revealPendingAccountInbox()
             await imports?.reattach()
         }
     }
@@ -563,10 +567,18 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
 
     /// Open `accountId`'s inbox, used when a new-mail notification is
     /// tapped. The account's Inbox role wins; otherwise its first
-    /// selectable mailbox. A sidebar that has not loaded yet is reloaded
-    /// once before choosing.
+    /// selectable mailbox. A tap that arrives while the archive is still
+    /// opening is remembered and consumed once the sidebar exists; one
+    /// that finds no listed destination reloads the sidebar once more.
     func revealAccountInbox(accountId: String) {
-        guard !closed, let sidebarModel, let sidebar else { return }
+        pendingAccountReveal = accountId
+        revealPendingAccountInbox()
+    }
+
+    private func revealPendingAccountInbox() {
+        guard !closed, let accountId = pendingAccountReveal,
+            let sidebarModel, let sidebar
+        else { return }
         let serial = contentSerial
         contentTasks.run { [weak self] in
             guard let self, contentSerial == serial else { return }
@@ -577,9 +589,14 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
                 updateTitle()
             }
             guard let entryID = sidebarModel.inboxEntryID(accountId: accountId) else { return }
+            self.pendingAccountReveal = nil
             sidebar.choose(entryID: entryID)
         }
     }
+
+    /// A notification's account whose inbox is not open yet; a tap during
+    /// a cold launch is served once `install` has built the sidebar.
+    private var pendingAccountReveal: String?
 
     /// Re-read the sidebar: an import changed what it lists.
     private func reloadSidebar() {
