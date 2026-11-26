@@ -7,14 +7,33 @@ every open item names the file and line that carries it, and each entry
 is written so an LLM can pick it up cold. Extended at `366f29bc` with
 a third pass that shipped typed attachment rows and notification
 click-through. Completed work and submitted patches are recorded below.
+Extended again from a fourth pass focused on row presentation and the
+first-run surface: message-row tag collapse (PR #572) and the first-run
+welcome island (PR #577) are recorded under their original entries.
 
 ## Completed on main
 
 - **Help menu content.** Help → Keyboard Shortcuts… now opens a shared
   reference window with the app's keyboard commands. [Menu entry](apps/macos/Sweetbriar/MainMenu.swift#L458), [Shortcut reference](apps/macos/Sweetbriar/KeyboardShortcutHelp.swift)
+- **First-run welcome** (PR #577). A fresh archive shows a welcome
+  island over exactly the empty Unified Inbox (`SidebarModel.isFreshArchive`,
+  no account beyond the local one and no imported mailboxes): the
+  headline is "No messages", the body explains local-first storage, and
+  Add Proton Account… / Import Mail… reuse the existing commands. Any
+  other window, search, error or real row hides it. The headline keeps
+  the XCUITest empty-state expectations matching.
 
 ## Submitted patches
 
+- **Message-row tag collapse** (fourth pass, PR #572). Rows drew at
+  most three tag chips and silently dropped the rest, so a row
+  under-reported its state and disagreed with the SwiftUI prototype.
+  Both lists now share `MessageRowMetrics.visibleTagCount` and
+  `MessageRowContent.visibleTags`/`hiddenTagCount`; the AppKit cell
+  draws a `+N` chip when it fits and hides it rather than overlap tags
+  on narrow rows, and VoiceOver hears the collapsed count. Tests:
+  `tags cap at the visible count...`, `narrowRowsKeepEveryChipInsideTheRow`.
+  [Tag collapse PR](https://github.com/L-K-M/Sweetbriar/pull/572)
 - **Reader attachments as typed rows** (third pass, PR #580). Each
   attachment gets a full-width row with a media-type symbol, truncating
   name, trailing size, hover wash, Return/Space activation and a
@@ -284,6 +303,14 @@ visible chips (keeping the fixed-size pool so the hand layout is
 unchanged) and add the remaining tag count and attachment presence to
 the accessibility label. Keep the established sender, subject and date
 order first, and audit verbosity for a row with many tags.
+
+**Implementation note (PR #572):** both lists now share
+`MessageRowMetrics.visibleTagCount`; the AppKit cell renders
+`content.visibleTags` plus a `+N` chip when it fits between the content
+origin and the trailing group, otherwise it shows the tags alone rather
+than overlap. `accessibilityOverflowSuffix` appends ", N more tags" in
+both lists. Tags are unique per message (`message_tags`'s primary key),
+so the prototype's `ForEach(id: \.self)` stays stable.
 
 ## B14. A self-built payload is encoded with `try!`
 
@@ -556,6 +583,14 @@ optional hint — for the list panes, reader, Drafts and Out Box. Keep
 "Opening…" and failure text separate: `MessageListViewController`'s
 `statusLabel` currently mixes loading, errors and emptiness.
 
+**Landed in part (PR #577):** the first-run case is now a SwiftUI island
+in the list pane (`WelcomeEmptyState`), shown only when
+`SidebarModel.isFreshArchive` holds, the Unified Inbox is shown, there
+are no rows and no error/search. Its headline is exactly "No messages"
+so the existing XCUITests that wait for that string still match; the
+body carries the welcome copy and the two commands. The remaining
+reader/empty-mailbox/zero-hit consistency work above is still open.
+
 ## V5. The app icon set is thin
 
 `Assets.xcassets/AppIcon.appiconset` carries 16, 32, 64, 128, 256, 512
@@ -784,6 +819,32 @@ visible rank and selected occurrence ids per mailbox and restore them
 when the mailbox is chosen again. Needs a storage location and a spec
 sentence; cover a mailbox that shrank, a deleted message and a restore.
 
+## F23. Sort control for mailboxes
+
+Window ordering is fixed to `sort_date` descending
+(`crates/sb-store/src/lists.rs`); only Search offers relevance/date.
+Mail users expect date/sender/subject/size and ascending/descending.
+**Spec-first:** extend `WindowSpec`/the list queries with sort keys and
+backing indexes, then expose a list header/menu control. Keyset paging
+and cursors must be re-derived for the new order.
+
+## F24. Spring-loaded sidebar destinations
+
+Dragging rows onto a sidebar mailbox works, but holding a drag over a
+collapsed folder does not open it after a delay (spring loading), which
+slows deep filing. Implement hover timers over the sidebar's outline
+view, or disclosure-on-drag. Keep the existing drop-target rule (same
+account, not the shown mailbox) and its refusal text.
+
+## F25. Mark all as read
+
+`set_flags` caps at 1,000 ids and the shell has whole-window selection
+tokens for large selections; a mailbox-wide mark-read needs a dedicated
+preconditioned core intent over the mailbox rather than a shipped id
+list. **Spec-first.** Include a confirmation naming the mailbox and
+count, undo through the normal filing undo path, and a refusal path for
+a read-only archive.
+
 ---
 
 # Part 5 — Novel, delightful and quirky ideas
@@ -856,6 +917,14 @@ already handles one call per account and the row actions from PR #579
 provide the same command set. Keep it clear of selection, drag,
 context-click targeting and the row's hand layout, and keep every action
 reachable from the context menu, swipe and keyboard.
+
+## D12. Composer Markdown preview beside the source
+
+The composer styles Markdown live (`MarkdownStyler`) but always shows
+source. A toggleable split preview — styled output in a read-only text
+view next to or below the editor — would make Markdown-first composing
+feel safe without hiding the source. Keep it presentation-only (never
+stored), undo-aware, and off by default for plain-text drafts.
 
 ---
 
