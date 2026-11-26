@@ -848,14 +848,17 @@ final class MessageRowCellView: NSTableCellView {
         }
         if !overflowChip.isHidden {
             let chipWidth = overflowChip.fittingWidth()
-            // Keep the chip inside the row when the trailing space is
-            // already spent; the snippet narrows to fit.
-            let chipX = max(contentX, chipTrail - chipWidth)
-            overflowChip.frame = NSRect(
-                x: chipX, y: 40,
-                width: chipWidth, height: 15
-            )
-            chipTrail = overflowChip.frame.minX - metrics.markerSpacing
+            if chipTrail - chipWidth >= contentX {
+                overflowChip.frame = NSRect(
+                    x: chipTrail - chipWidth, y: 40,
+                    width: chipWidth, height: 15
+                )
+                chipTrail = overflowChip.frame.minX - metrics.markerSpacing
+            } else {
+                // Too narrow for the chip beside the visible tags:
+                // show the tags alone rather than overlap them.
+                overflowChip.isHidden = true
+            }
         }
         snippetField.frame = NSRect(
             x: contentX, y: 41,
