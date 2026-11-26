@@ -910,13 +910,21 @@ final class MessageRowCellView: NSTableCellView {
             height: 15
         )
 
-        // Snippet with right-aligned tag chips.
+        // Snippet with right-aligned tag chips. The chips stop at
+        // `contentX`: without a floor, three long labels walk past the
+        // text column, draw over the rail and outside the cell, and
+        // squeeze the snippet to nothing.
+        let chipFloor = contentX
         var chipTrail = width - metrics.trailingPadding
         for chip in tagChips.reversed() where !chip.isHidden {
             let chipWidth = chip.fittingWidth()
+            guard chipTrail - chipWidth >= chipFloor else {
+                chip.isHidden = true
+                continue
+            }
             chip.frame = NSRect(
                 x: chipTrail - chipWidth, y: 40,
-                width: chipWidth, height: 15
+                width: chipWidth, height: 14
             )
             chipTrail = chip.frame.minX - metrics.markerSpacing
         }
