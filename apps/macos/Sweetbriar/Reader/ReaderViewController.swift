@@ -159,7 +159,12 @@ final class ReaderViewController: NSViewController {
         details.addArrangedSubview(remoteContent)
         attachments.orientation = .vertical
         attachments.alignment = .leading
+        attachments.spacing = 2
         details.addArrangedSubview(attachments)
+        // The leading alignment keeps arranged children at their
+        // intrinsic width, and the rows report none: pin the stack to the
+        // pane so every row spans its click target.
+        attachments.widthAnchor.constraint(equalTo: details.widthAnchor).isActive = true
         readingNote.textColor = .secondaryLabelColor
         readingNote.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
         readingNote.isHidden = true
@@ -660,18 +665,21 @@ final class ReaderViewController: NSViewController {
             item.removeFromSuperview()
         }
         for attachment in model.manifest?.attachments ?? [] {
-            let size = attachment.bytes.map { ByteCountFormatter.string(fromByteCount: Int64(clamping: $0), countStyle: .file) } ?? "damaged"
-            let button = NSButton(title: "\(attachment.displayName) (\(size))", target: self, action: #selector(openAttachment(_:)))
-            button.identifier = NSUserInterfaceItemIdentifier(attachment.partID)
-            button.setAccessibilityIdentifier("attachment-\(attachment.partID)")
-            attachments.addArrangedSubview(button)
+            let row = AttachmentRowView()
+            row.configure(AttachmentRowViewModel(attachment: attachment))
+            row.setAccessibilityIdentifier("attachment-\(attachment.partID)")
+            row.translatesAutoresizingMaskIntoConstraints = false
+            attachments.addArrangedSubview(row)
+            // A vertical stack keeps an arranged row's intrinsic width;
+            // the row spans the pane so the whole line is a click target.
+            row.widthAnchor.constraint(equalTo: attachments.widthAnchor).isActive = true
+            let partID = attachment.partID
+            row.onOpen = { [weak self] in
+                guard let self else { return }
+                self.reads.run { await self.activateAttachment(partID) }
+            }
         }
         attachments.isHidden = attachments.arrangedSubviews.isEmpty
-    }
-
-    @objc private func openAttachment(_ sender: NSButton) {
-        guard let partID = sender.identifier?.rawValue else { return }
-        reads.run { await self.activateAttachment(partID) }
     }
 
     func activateAttachment(_ partID: String) async {

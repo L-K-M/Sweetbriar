@@ -203,12 +203,21 @@ func readerHeaderChipAttachmentsAndSourceToggle() async throws {
     #expect(controller.accountChip.rootView.appearance == nil)
     #expect(!controller.remoteContent.isHidden)
     #expect(controller.remoteContent.stringValue == "3 remote content items blocked")
-    let buttons = controller.attachments.arrangedSubviews.compactMap { $0 as? NSButton }
-    #expect(buttons.count == 2)
-    #expect(buttons[0].title == "hello.txt (" + ByteCountFormatter.string(fromByteCount: 10, countStyle: .file) + ")")
-    #expect(buttons[1].title == "broken.pdf (damaged)")
+    let rows = controller.attachments.arrangedSubviews.compactMap { $0 as? AttachmentRowView }
+    #expect(rows.count == 2)
+    #expect(rows[0].labelText == "hello.txt, " + ByteCountFormatter.string(fromByteCount: 10, countStyle: .file))
+    #expect(rows[1].labelText == "broken.pdf, damaged")
+    #expect(rows[0].attachmentPartID == "1.2")
+    // The pane's width reaches each row; a row with no intrinsic width
+    // must not collapse inside the leading-aligned stack.
+    controller.view.frame = NSRect(x: 0, y: 0, width: 480, height: 600)
+    controller.view.layoutSubtreeIfNeeded()
+    let stackWidth = try #require(rows.first?.superview?.frame.width)
+    #expect(stackWidth > 100)
+    #expect(rows.allSatisfy { abs($0.frame.width - stackWidth) < 1 })
+    #expect(rows[0].acceptsFirstResponder)
     #expect(opened.isEmpty)
-    buttons[0].performClick(nil)
+    #expect(rows[0].accessibilityPerformPress())
     let deadline = ContinuousClock.now + .seconds(5)
     while opened.isEmpty, ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(10)) }
     #expect(opened == [source.directory.appendingPathComponent("attachment.txt")])
@@ -247,8 +256,22 @@ func readerUsesPlainPaneForPlainBodyOrUnavailableRules(plainOnly: Bool) async th
     #expect(controller.plainText.text == "Plain fallback body")
     #expect(controller.plainText.mode == .text)
     #expect(controller.html.isHidden)
-    #expect(controller.attachments.arrangedSubviews.count == 2)
+    #expect(controller.attachments.arrangedSubviews.compactMap { $0 as? AttachmentRowView }.count == 2)
     controller.close()
+}
+
+@Test @MainActor
+func attachmentRowsPickATypeSymbolAndFormatTheirSize() {
+    #expect(AttachmentRowViewModel.symbolName(for: "image/png") == "photo")
+    #expect(AttachmentRowViewModel.symbolName(for: "audio/mpeg") == "music.note")
+    #expect(AttachmentRowViewModel.symbolName(for: "video/mp4") == "film")
+    #expect(AttachmentRowViewModel.symbolName(for: "application/pdf") == "doc.richtext")
+    #expect(AttachmentRowViewModel.symbolName(for: "text/plain") == "doc.text")
+    #expect(AttachmentRowViewModel.symbolName(for: "text/csv") == "tablecells")
+    #expect(AttachmentRowViewModel.symbolName(for: "application/zip") == "doc.fill")
+    #expect(AttachmentRowViewModel.symbolName(for: "not-a-media-type") == "doc.fill")
+    #expect(AttachmentRowViewModel.sizeText(nil) == "damaged")
+    #expect(AttachmentRowViewModel.sizeText(2_500) == ByteCountFormatter.string(fromByteCount: 2_500, countStyle: .file))
 }
 
 @Test(arguments: [false, true]) @MainActor
