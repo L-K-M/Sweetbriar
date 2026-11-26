@@ -1027,19 +1027,35 @@ fn empty_generation_completes_and_store_closes_cleanly() {
     );
 }
 
-/// A reference the store does not hold as a hash is corrupt data, not a
-/// path: the backup fails `Corrupt` before it names a directory after it.
+/// A reference that is not a hash is corrupt data, not a path: the
+/// backup fails `Corrupt`, naming it, before it creates a directory.
 #[test]
 fn a_reference_that_is_not_a_hash_fails_the_backup_as_corrupt() {
     let (_scratch, _paths, store) = open("backup-reference-not-a-hash");
     let (id, sha) = object(&store, PAYLOAD);
     reference(&store, &id, "published");
     let mut snapshot = store.backup_snapshot(BackupDestination::DataRoot).unwrap();
+    // Pinned like a reference the store collected, so the snapshot's
+    // pins match and the copy, not an earlier check, meets it.
+    let generation = snapshot.generation_id().to_owned();
+    writing(&store, move |tx| {
+        tx.execute(
+            "INSERT INTO object_pins VALUES ('x', 'backup_in_progress', ?1, 0)",
+            [&generation],
+        )
+        .map_err(bug)?;
+        Ok(())
+    });
     snapshot.referenced = vec![sha, "x".to_owned()].into();
+    let location = snapshot.location.clone();
     let result = store.complete_backup(snapshot);
+    let Err(StoreError::Corrupt { detail }) = &result else {
+        panic!("expected Corrupt, got {result:?}");
+    };
+    assert!(detail.contains("\"x\""), "{detail}");
     assert!(
-        matches!(result, Err(StoreError::Corrupt { .. })),
-        "{result:?}"
+        !location.join("objects").exists(),
+        "a directory was named after a reference"
     );
 }
 
