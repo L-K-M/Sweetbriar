@@ -470,19 +470,42 @@ final class SearchFieldController: NSViewController {
         let alert = NSAlert()
         alert.messageText = "Save as View"
         alert.informativeText = "Name this search."
-        alert.addButton(withTitle: "Save")
+        let save = alert.addButton(withTitle: "Save")
+        save.isEnabled = false
         alert.addButton(withTitle: "Cancel")
         let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
         field.placeholderString = "Name"
+        let validator = SavedViewNameValidator(save: save)
+        field.delegate = validator
         alert.accessoryView = field
         let answer = { (response: NSApplication.ModalResponse) in
-            confirm(response == .alertFirstButtonReturn ? field.stringValue : nil)
+            // The field's delegate is weak; retain it until the sheet ends.
+            withExtendedLifetime(validator) {
+                confirm(response == .alertFirstButtonReturn ? field.stringValue : nil)
+            }
         }
         if let window = view.window {
             alert.beginSheetModal(for: window) { answer($0) }
         } else {
             answer(alert.runModal())
         }
+    }
+}
+
+/// Keep Save unavailable while the name field is blank, including edits
+/// that have not yet been committed from its field editor.
+@MainActor
+private final class SavedViewNameValidator: NSObject, NSTextFieldDelegate {
+    private weak var save: NSButton?
+
+    init(save: NSButton) {
+        self.save = save
+    }
+
+    func controlTextDidChange(_ notification: Notification) {
+        guard let field = notification.object as? NSTextField else { return }
+        let text = (field.currentEditor() as? NSTextView)?.string ?? field.stringValue
+        save?.isEnabled = !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 }
 

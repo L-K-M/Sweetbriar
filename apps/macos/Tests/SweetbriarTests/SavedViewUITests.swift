@@ -178,6 +178,56 @@ private func waitUntil(_ limit: Duration = .seconds(5), _ condition: () async ->
 @Suite("Saved views and reader metadata")
 @MainActor
 struct SavedViewUITests {
+    @Test func savedViewNameSheetRequiresANonblankName() async throws {
+        let model = SearchFieldModel(parser: StubSearchParser())
+        let controller = SearchFieldController(model: model, scopes: { [] })
+        var savedName: String?
+        controller.onSaveAsView = { savedName = $0 }
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 600, height: 200),
+            styleMask: [.titled], backing: .buffered, defer: false)
+        defer { window.close() }
+        window.contentView = controller.view
+        model.updateText("hello")
+        #expect(await waitUntil { model.queryJSON != nil })
+        let save = try #require(find(in: controller.view, id: "search.saveView") as? NSButton)
+        #expect(await waitUntil { save.isEnabled })
+        save.performClick(nil)
+        let sheet = try #require(window.attachedSheet)
+        defer {
+            if window.attachedSheet === sheet {
+                window.endSheet(sheet, returnCode: .alertSecondButtonReturn)
+            }
+        }
+
+        func descendants(_ view: NSView) -> [NSView] {
+            [view] + view.subviews.flatMap(descendants)
+        }
+        let views = descendants(try #require(sheet.contentView))
+        let name = try #require(views.compactMap { $0 as? NSTextField }.first { $0.placeholderString == "Name" })
+        let confirm = try #require(views.compactMap { $0 as? NSButton }.first { $0.title == "Save" })
+        #expect(!confirm.isEnabled)
+        name.stringValue = "  \n"
+        NotificationCenter.default.post(name: NSControl.textDidChangeNotification, object: name)
+        #expect(!confirm.isEnabled)
+        name.stringValue = "A view"
+        NotificationCenter.default.post(name: NSControl.textDidChangeNotification, object: name)
+        #expect(confirm.isEnabled)
+        name.stringValue = ""
+        NotificationCenter.default.post(name: NSControl.textDidChangeNotification, object: name)
+        #expect(!confirm.isEnabled)
+        name.stringValue = "A view"
+        NotificationCenter.default.post(name: NSControl.textDidChangeNotification, object: name)
+        #expect(sheet.makeFirstResponder(name))
+        let editor = try #require(name.currentEditor() as? NSTextView)
+        editor.insertText("   ", replacementRange: NSRange(location: 0, length: editor.string.utf16.count))
+        #expect(!confirm.isEnabled)
+        editor.insertText("Typed view", replacementRange: NSRange(location: 0, length: editor.string.utf16.count))
+        #expect(confirm.isEnabled)
+        confirm.performClick(nil)
+        #expect(await waitUntil { savedName == "Typed view" })
+    }
+
     /// The search strip's command saves through the sidebar model and
     /// selects the new view, which opens its window.
     @Test func savingASearchListsAViewAndSelectingItOpensItsWindow() async throws {
