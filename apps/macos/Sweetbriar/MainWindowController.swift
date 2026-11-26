@@ -610,6 +610,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         contentTasks.run { [weak self] in
             await sidebarModel.reload()
             guard let self, !Task.isCancelled, contentSerial == serial else { return }
+            self.updateDockBadge()
             sidebar.reloadSections()
             updateTitle()
         }
@@ -623,6 +624,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         contentTasks.run { [weak self] in
             await sidebarModel.noteGeneration(generation)
             guard let self, !Task.isCancelled, contentSerial == serial else { return }
+            self.updateDockBadge()
             sidebar.reloadSections()
             updateTitle()
         }
@@ -643,9 +645,7 @@ extension MainWindowController {
             entry: sidebar?.chosenEntry, account: sidebar?.chosenAccountTitle, count: shownCount)
         if window.title != presentation.title { window.title = presentation.title }
         if window.subtitle != presentation.subtitle { window.subtitle = presentation.subtitle }
-        // The Dock badge follows the sidebar's inbox counts, so it
-        // changes with every reload and clears with the archive below.
-        NSApp.dockTile.badgeLabel = Self.dockBadgeLabel(for: sidebarModel?.inboxUnread ?? 0)
+        updateDockBadge()
     }
 
     /// The Dock badge's text for an inbox unread total: the plain
@@ -653,6 +653,14 @@ extension MainWindowController {
     /// window's state so tests can pin it.
     static func dockBadgeLabel(for unread: UInt64) -> String {
         unread > 0 ? String(unread) : ""
+    }
+
+    /// Mirror the sidebar's inbox counts on the Dock tile, writing only
+    /// when the label changed, like the title and subtitle above.
+    private func updateDockBadge() {
+        let badge = Self.dockBadgeLabel(for: sidebarModel?.inboxUnread ?? 0)
+        guard NSApp.dockTile.badgeLabel != badge else { return }
+        NSApp.dockTile.badgeLabel = badge
     }
 
     /// The title and subtitle for what the list pane shows; free of the
@@ -703,7 +711,7 @@ extension MainWindowController {
         banner = nil
         split = nil
         shownCount = nil
-        NSApp.dockTile.badgeLabel = Self.dockBadgeLabel(for: 0)
+        updateDockBadge()
         searchItem?.searchField = Self.placeholderSearchField()
         window?.title = Self.title
         window?.subtitle = ""
