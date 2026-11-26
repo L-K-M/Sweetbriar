@@ -96,6 +96,35 @@ struct MailboxPresentationTests {
         #expect(copied.string.contains("\nCc: Cy <cy@example.test>\n"))
     }
 
+    @Test func aLongRecipientListCollapsesBehindShowAllRecipients() throws {
+        let many = (1...18).map { ReaderAddress(name: "Person \($0)", address: "p\($0)@example.test") }
+        let copies = (1...5).map { ReaderAddress(name: "Copy \($0)", address: "c\($0)@example.test") }
+        let all = message(subject: "All-hands", to: many, cc: copies)
+        let collapsed = ReaderViewController.headerText(all, recipientLimit: 3)
+        #expect(collapsed.string.contains(
+            "To: Person 1 <p1@example.test>, Person 2 <p2@example.test>, Person 3 <p3@example.test>, and 20 more\n"))
+        #expect(!collapsed.string.contains("Person 4"))
+        #expect(!collapsed.string.contains("Cc:"))
+        #expect(ReaderViewController.hiddenRecipients(in: all, limit: 3) == 20)
+        #expect(ReaderViewController.hiddenRecipients(in: all, limit: nil) == 0)
+        let expanded = ReaderViewController.headerText(all)
+        #expect(expanded.string.contains("Person 18 <p18@example.test>"))
+        #expect(expanded.string.contains("Copy 5 <c5@example.test>"))
+
+        // A short list hides nothing and reads exactly as before.
+        let short = message(subject: "Lunch", to: Array(many.prefix(2)), cc: Array(copies.prefix(1)))
+        #expect(ReaderViewController.hiddenRecipients(in: short, limit: 3) == 0)
+        #expect(ReaderViewController.headerText(short, recipientLimit: 3).string == ReaderViewController.headerText(short).string)
+
+        // A long cc under a to that fits collapses on its own.
+        let copied = message(subject: "Copies", to: Array(many.prefix(3)), cc: copies)
+        let line = ReaderViewController.headerText(copied, recipientLimit: 3)
+        #expect(line.string.contains(
+            "Cc: Copy 1 <c1@example.test>, Copy 2 <c2@example.test>, Copy 3 <c3@example.test>, and 2 more\n"))
+        #expect(!line.string.contains("Copy 4"))
+        #expect(ReaderViewController.hiddenRecipients(in: copied, limit: 3) == 2)
+    }
+
     @Test func theHeaderSkipsMissingAddressLines() {
         let header = ReaderViewController.headerText(message(subject: "Notice", from: [], to: []))
         let date = Date(timeIntervalSince1970: 1_792_238_400).formatted(date: .abbreviated, time: .shortened)
