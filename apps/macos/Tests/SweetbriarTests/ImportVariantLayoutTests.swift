@@ -65,11 +65,16 @@ struct ImportVariantLayoutTests {
         let clip = try #require(ancestor as? NSClipView)
         let frame = popup.convert(popup.bounds, to: clip)
         let mailbox = source.mailbox
+        let row = try #require(popup.superview as? NSStackView)
+        let label = try #require(row.arrangedSubviews.first as? NSTextField)
         #expect(clip.bounds.width > 400)
-        #expect(frame.width > 150)
+        #expect(frame.width >= popup.fittingSize.width - 0.5)
+        #expect(popup.fittingSize.width > 0)
         #expect(frame.minX >= clip.bounds.minX - 0.5)
         #expect(frame.maxX <= clip.bounds.maxX + 0.5)
         #expect(popup.accessibilityLabel()?.contains(mailbox) == true)
+        #expect(label.toolTip?.contains(mailbox) == true)
+        #expect(label.toolTip?.contains("/tmp/mail.mbox") == true)
     }
 }
 #endif

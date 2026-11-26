@@ -277,7 +277,7 @@ final class ImportSheetController: NSViewController {
         choices.addArrangedSubview(note)
         for source in sources {
             let label = NSTextField(labelWithString: source.mailbox)
-            label.toolTip = source.path
+            label.toolTip = "\(source.mailbox)\n\(source.path)"
             label.lineBreakMode = .byTruncatingMiddle
             label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
             let popup = NSPopUpButton(frame: .zero, pullsDown: false)
