@@ -585,8 +585,9 @@ final class ReaderViewController: NSViewController {
     /// Show the message's tags and note; the editor keeps the user's
     /// text while it is being edited. A draft typed on another message
     /// does not follow the selection: the field clears when the
-    /// selection changes or the shown message changes, and a
-    /// metadata-only refresh of the same message keeps it.
+    /// selection changes (even to another occurrence of the same
+    /// message) or the shown message changes; only re-showing the
+    /// identical selection keeps it.
     private func renderMetadata(_ message: ReaderMessage) {
         if tagDraftMessageId != message.messageId { tagPicker.text = "" }
         tagDraftMessageId = message.messageId
