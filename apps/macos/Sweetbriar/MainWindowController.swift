@@ -569,7 +569,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     /// tapped. The account's Inbox role wins; otherwise its first
     /// selectable mailbox. A tap that arrives while the archive is still
     /// opening is remembered and consumed once the sidebar exists; one
-    /// that finds no listed destination reloads the sidebar once more.
+    /// that names no listed destination after one reload is dropped.
     func revealAccountInbox(accountId: String) {
         pendingAccountReveal = accountId
         revealPendingAccountInbox()
@@ -588,7 +588,10 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
                 sidebar.reloadSections()
                 updateTitle()
             }
-            guard let entryID = sidebarModel.inboxEntryID(accountId: accountId) else { return }
+            guard let entryID = sidebarModel.inboxEntryID(accountId: accountId) else {
+                self.pendingAccountReveal = nil
+                return
+            }
             self.pendingAccountReveal = nil
             sidebar.choose(entryID: entryID)
         }
