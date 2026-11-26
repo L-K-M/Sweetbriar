@@ -103,6 +103,9 @@ func htmlReaderReusesViewAndRefusesNavigationButReportsCurrentClicks() async thr
 
 /// The one shared rule list is installed once for the web view's life,
 /// not again on every message.
+/// `WKUserContentController` has no public read-back of its rule lists,
+/// so the install count is the dedupe seam; content blocking itself is
+/// covered by `readerRuleListCompilesAndBlocksHTTPResources`.
 @Test(.timeLimit(.minutes(1))) @MainActor
 func htmlReaderInstallsItsRuleListOnce() async throws {
     var ticket: UInt64 = 1

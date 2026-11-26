@@ -121,6 +121,9 @@ final class ReaderCIDHandler: NSObject, WKURLSchemeHandler {
 /// effective even before the next show.
 @MainActor
 final class HTMLReaderView: NSView, WKNavigationDelegate, WKUIDelegate {
+    /// Created once in `init` and never replaced, so its configuration's
+    /// content controller lives as long as this view and needs the rule
+    /// list installed only once.
     let webView: WKWebView
     private let cidHandler: ReaderCIDHandler
     private let currentTicket: () -> UInt64
