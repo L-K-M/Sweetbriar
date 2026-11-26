@@ -526,9 +526,16 @@ final class MessageRowCellView: NSTableCellView {
         (NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast,
          NSWorkspace.shared.accessibilityDisplayShouldDifferentiateWithoutColor)
     }
-    /// The trailing date's reserved width — wide enough for the short
-    /// date form.
-    private static let dateWidth: CGFloat = 84
+    /// The trailing date's reserved width: measured from the formatted
+    /// string, clamped so a time-only date does not waste the text
+    /// column while a long date never takes more than before.
+    static func dateColumnWidth(for date: String, font: NSFont) -> CGFloat {
+        let text = (date as NSString).size(withAttributes: [.font: font])
+        return min(84, max(32, ceil(text.width) + 2))
+    }
+
+    /// This row's reserved date width, set from its formatted date.
+    private var reservedDateWidth: CGFloat = 84
 
     /// The tag chip pool: synthetic rows carry at most two; extras
     /// stay hidden.
@@ -684,6 +691,8 @@ final class MessageRowCellView: NSTableCellView {
         senderField.font = content.unread
             ? .boldSystemFont(ofSize: 13) : .systemFont(ofSize: 13)
         dateField.stringValue = content.date
+        reservedDateWidth = Self.dateColumnWidth(
+            for: content.date, font: dateField.font ?? .systemFont(ofSize: 12))
         subjectField.stringValue = content.subject
         snippetField.stringValue = content.snippet
 
@@ -780,8 +789,8 @@ final class MessageRowCellView: NSTableCellView {
         // Top line: [dot] sender … [flag] [paperclip] date.
         var trailing = width - metrics.trailingPadding
         dateField.frame = NSRect(
-            x: trailing - Self.dateWidth, y: 7,
-            width: Self.dateWidth, height: 16
+            x: trailing - reservedDateWidth, y: 7,
+            width: reservedDateWidth, height: 16
         )
         trailing = dateField.frame.minX - metrics.markerSpacing
         if !accountField.isHidden {

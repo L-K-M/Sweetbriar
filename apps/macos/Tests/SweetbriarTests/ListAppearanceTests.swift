@@ -30,6 +30,17 @@ struct ListAppearanceTests {
         #expect(!WindowSpec.mailbox(1).showsAccountMarker)
     }
 
+    @Test func theTrailingDateReservesOnlyItsOwnWidth() {
+        let font = NSFont.systemFont(ofSize: 12)
+        let shortest = MessageRowCellView.dateColumnWidth(for: "1", font: font)
+        let time = MessageRowCellView.dateColumnWidth(for: "12:34", font: font)
+        let fullDate = MessageRowCellView.dateColumnWidth(for: "2024-11-26", font: font)
+        #expect(shortest >= 32)
+        #expect(time >= 32)
+        #expect(time < fullDate)
+        #expect(fullDate <= 84)
+    }
+
     @Test func flaggedControllerShowsBothAccountsAndSurvivesAppearanceReset() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
