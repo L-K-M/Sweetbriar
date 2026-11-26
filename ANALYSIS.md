@@ -10,6 +10,9 @@ click-through. Completed work and submitted patches are recorded below.
 Extended again from a fourth pass focused on row presentation and the
 first-run surface: message-row tag collapse (PR #572) and the first-run
 welcome island (PR #577) are recorded under their original entries.
+A further pass (`friendly-wasp`) added the small correctness, layout,
+hygiene and product entries below; its four fixes are PRs #578, #581,
+#585 and #590.
 
 ## Completed on main
 
@@ -22,9 +25,27 @@ welcome island (PR #577) are recorded under their original entries.
   Add Proton Account… / Import Mail… reuse the existing commands. Any
   other window, search, error or real row hides it. The headline keeps
   the XCUITest empty-state expectations matching.
+- **Reader blocked-content copy** (further pass, PR #578). The reader's
+  remote-content line pluralizes ("1 remote content item blocked")
+  instead of reading "1 remote content items blocked" at a count of one.
+- **Allowance error precedence** (further pass, PR #585). Settings →
+  Sending keeps a failed allowance removal apart from a failed list
+  load and reports the removal failure when both happen, instead of
+  overwriting one with the other.
 
 ## Submitted patches
 
+- **Reader rule-list install** (further pass, PR #581). `HTMLReaderView`
+  installs its shared `WKContentRuleList` once per web view instead of
+  once per message. GLM found no actionable issues; its one minor note
+  about a hypothetical replaced web view was answered with an explicit
+  one-web-view invariant and a test comment about the SDK's lack of
+  rule-list read-back.
+- **Row date column** (further pass, PR #590). Message rows reserve the
+  measured width of their formatted trailing date (clamped 32-84 pt)
+  instead of a fixed 84 pt, returning roughly 50 pt to the subject and
+  snippet on today's time-only rows while long dates keep the old
+  maximum.
 - **Message-row tag collapse** (fourth pass, PR #572). Rows drew at
   most three tag chips and silently dropped the rest, so a row
   under-reported its state and disagreed with the SwiftUI prototype.
@@ -126,6 +147,10 @@ welcome island (PR #577) are recorded under their original entries.
   private worktree for multi-branch work. App-hosted UI tests that
   assert `NSApplication.shared.isActive` fail spuriously when another
   process holds the foreground; they are not a code signal.
+- The further (`friendly-wasp`) pass worked in a private git worktree,
+  built the app with Xcode 27.2, and let each of its four fixes run the
+  repository's full macOS gate (Rust tests, bindings, XcodeGen,
+  `xcodebuild build test`, the XCUITest flows and both benchmarks).
 
 ---
 
@@ -331,6 +356,27 @@ the absence explicit by removing the dead publication path and having
 consumers read settings directly. Add a test at the chosen boundary so
 this cannot silently regress.
 
+## B16. Search parse-span conversion can trap on a mid-scalar offset
+
+`apps/macos/SweetbriarBridge/SearchQuery.swift`'s `utf16Range` indexes
+`text.utf8` with `bytes.index(_:offsetBy:)`, which traps when the
+core's span is not on a UTF-8 scalar boundary. The comment promises
+scalar-boundary offsets and the core tests cover EOF/over-limit spans,
+so this is hardening rather than a known crash: convert with a
+nearest-boundary scan or return nil, and add a unit test with a span
+inside a multi-byte character.
+
+## B17. Row cells register accessibility observers they never remove
+
+`MessageRowCellView.init`
+(`apps/macos/Sweetbriar/AppKitPrototypeList.swift`) observes
+`NSWorkspace.accessibilityDisplayOptionsDidChangeNotification` and no
+`deinit` removes it. Cells live as long as the table's reuse pool.
+Verify with a test that closes and deallocates a window's table while
+registered; modern AppKit generally zeroing-weakens selector observers,
+so if it is safe, record that conclusion here rather than re-reporting
+it.
+
 ---
 
 # Part 2 — Performance
@@ -535,6 +581,16 @@ keep the reload's cancellation and coalescing behaviour. Related
 per-row costs are in P10 (`accounts.first(where:)` per configured row,
 and the date rule's `Calendar.current` work per row).
 
+## P14. Row date formatting mutates one shared `DateFormatter`
+
+`MessageRowFormatter.dateString`
+(`apps/macos/Sweetbriar/MessageRowPresentation.swift`) flips a cached
+`DateFormatter`'s `dateFormat` per row and consults `Calendar.current`.
+It is main-actor confined today, so it is not a current stutter source,
+but any move of row formatting off the main actor turns it into a data
+race. Use three cached formatters (today / this year / older) or
+`Date.FormatStyle`, plus a cached calendar.
+
 ---
 
 # Part 3 — Visual and layout issues
@@ -632,6 +688,25 @@ Drafts and Out Box rows hard-code 74 pt. There is no Dynamic Type path:
 a user who raises the system text size gets clipped or overlapping
 labels. Treat this as its own step with measured text extents and a
 re-baselined list benchmark rather than a tweak to the row constants.
+
+## V10. The note placeholder is drawn by hand
+
+`NoteTextView.draw`
+(`apps/macos/Sweetbriar/Reader/ReaderMetadataViews.swift`) draws
+"Add a note" at a computed origin on every draw. Any text-container
+geometry change (Dynamic Type, insets) can misalign it, and it
+duplicates what a real placeholder mechanism provides. Use an overlay
+field or an attributed placeholder, and pin alignment with a large-text
+test.
+
+## V11. Native renditions may not show link destinations on hover
+
+spec/08 says links show their real destination on hover. The HTML web
+view gets this from WebKit; `ReadingView` and `PlainTextReaderView`
+attach `.link` attributes but implement no tooltip tracking. Verify in
+the running app first; if missing, add a mouse-moved character lookup
+with `addToolTipRect` for link ranges, shared by both native views and
+honoring Reduce Motion. Related: F15's IDN warnings.
 
 ---
 
@@ -845,6 +920,32 @@ list. **Spec-first.** Include a confirmation naming the mailbox and
 count, undo through the normal filing undo path, and a refusal path for
 a read-only archive.
 
+## F26. Menu-bar extra with per-account unread counts
+
+A small status item and menu listing accounts and their unread counts
+would suit people who keep the main window closed. Reuse the sidebar's
+counts and respect notification settings; it complements the submitted
+dock badge (PR #575).
+
+## F27. Saved-view icons or colors
+
+Saved views are all gear folders in the sidebar. A stable symbol or
+color per view would make them scannable. Store the choice with the
+view's record and spec it first; rename/delete must keep working.
+
+## F28. Search syntax help
+
+The parser supports a query language, but nothing teaches it. A
+popover from the search field listing supported operators with examples
+is presentation-only. Keep chip editing, grouping and negation semantics
+unchanged.
+
+## F29. Message permalinks and deep links
+
+Copy a `sweetbriar:message/<id>` link for the shown message, useful from
+Notes. Needs a URL scheme, a resolver, and an explicit missing-message
+state; decide whether a link may open another archive safely.
+
 ---
 
 # Part 5 — Novel, delightful and quirky ideas
@@ -925,6 +1026,51 @@ source. A toggleable split preview — styled output in a read-only text
 view next to or below the editor — would make Markdown-first composing
 feel safe without hiding the source. Keep it presentation-only (never
 stored), undo-aware, and off by default for plain-text drafts.
+
+## D13. Sender rhythm
+
+Show the times of day a sender usually writes, derived locally from the
+archive, in the reader header ("usually mornings"). Purely local,
+privacy-safe, and a small delight. Never send or store it outside the
+archive.
+
+## D14. Quiet-hours triage view
+
+A menu extra that gathers mail that arrived overnight into one temporary
+view with Archive / Reply / Keep as three large keys. The saved-view and
+filing machinery already covers the pieces; this is an arrangement, not
+a new model.
+
+## D15. Message postcard in the Reading view
+
+Render the sender's most recent message as a small quoted card at the
+bottom of the Reading view, reusing `ReadingRenderer`. It makes one
+sender's context visible without leaving the message.
+
+## D16. Typing-first compose
+
+For quick replies, reduce chrome: subject optional until send,
+recipients shown as tokens only when needed, and the body focused first.
+Keep every field reachable and the existing safety checks intact.
+
+## D17. Local focus score
+
+A diagnostic-only measure (response time, thread depth) in Activity,
+never sent, to explain why a mailbox feels heavy. Keep it clearly
+labeled as an estimate.
+
+## D18. "Where did that go?" filing timeline
+
+A one-key timeline of recent filing actions with jump-back, built on the
+undo toast and intents. Turns the ten-second undo reflex into a
+browsable safety net; the durable intent records already carry what is
+needed.
+
+## D19. Animated account wash on sidebar selection
+
+Mirror the composer's crossfade when the list changes account, under
+Reduce Motion. Small, but it makes the account color system feel
+connected across surfaces.
 
 ---
 
