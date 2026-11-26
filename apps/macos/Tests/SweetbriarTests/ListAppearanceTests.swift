@@ -506,6 +506,34 @@ struct ListAppearanceTests {
         await model.close()
     }
 
+    @Test func welcomeCoversOnlyAFreshUnifiedInbox() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let config = CoreConfig(dataRoot: root.appendingPathComponent("data").path,
+                                cacheRoot: root.appendingPathComponent("cache").path)
+        let batcher = FrameBatcher<[Setting]>(clock: ImmediateClock()) { _ in }
+        let bridge = try await CoreBridge.open(config: config, snapshots: batcher)
+        let sidebar = SidebarModel(source: bridge)
+        await sidebar.reload()
+        #expect(sidebar.isFreshArchive)
+
+        let controller = MessageListViewController(
+            bridge: bridge, sidebar: sidebar,
+            appearance: AppearanceModel(source: bridge), clock: ImmediateClock())
+        controller.show(.unified(.inbox))
+        for _ in 0..<500 where controller.model?.hasExactIndex != true {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(controller.isShowingWelcome)
+
+        // Another empty window is not the first-run state.
+        controller.show(.flagged)
+        for _ in 0..<500 where controller.model?.hasExactIndex != true {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(!controller.isShowingWelcome)
+    }
+
     private func renderSRGB(_ view: NSView) throws -> NSBitmapImageRep {
         // A window-backed default cache uses the display profile. Its cached
         // bytes are not sRGB-tagged; use an explicit sRGB target before

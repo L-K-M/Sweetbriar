@@ -144,9 +144,10 @@ jobs:
       - name: Dovecot protocol suite
         run: cargo xtask dovecot
 
-  # The local build script and the nightly test wrapper: shellcheck, and
-  # `--install` against a fake macOS toolchain (the macOS job reruns it
-  # under the system bash 3.2).
+  # The shell scripts CI can reach (the local build script, the app's
+  # notice-bundling build phase and the nightly test wrapper): shellcheck,
+  # and `--install` against a fake macOS toolchain (the macOS job reruns
+  # it under the system bash 3.2).
   scripts:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -157,7 +158,7 @@ jobs:
           echo "Runner image: ${ImageOS:-unknown} ${ImageVersion:-unknown}"
           shellcheck --version
       - name: shellcheck
-        run: shellcheck scripts/build.sh scripts/test-build-install.sh ci/cargo-test-nonempty.sh
+        run: shellcheck scripts/build.sh scripts/bundle-notices.sh scripts/test-build-install.sh ci/cargo-test-nonempty.sh
       - name: build.sh --install
         run: bash scripts/test-build-install.sh
 

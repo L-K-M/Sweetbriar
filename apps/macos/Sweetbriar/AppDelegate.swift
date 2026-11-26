@@ -6,14 +6,16 @@
 // failure shows in the main window.
 
 import AppKit
+import UserNotifications
 import SweetbriarBridge
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
     private var mainWindow: MainWindowController?
     private var session: CoreSession?
     private var settingsWindow: AppearanceSettingsWindow?
     private var activityWindow: ActivityWindowController?
+    private var shortcutHelpWindow: ShortcutHelpWindowController?
     private let appearance = SharedAppearance()
     private let readingViewMemory = SharedReadingViewMemory()
     private var backups: SharedBackups?
@@ -54,6 +56,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         installMainMenu()
+        // A delivered notification's tap routes to its account's inbox;
+        // the delegate is owned by the notification center for the
+        // app's life (spec/10 "Notifications").
+        UNUserNotificationCenter.current().delegate = self
 
         // The bridge batches setting snapshots on the display clock.
         let clockView = NSView()
@@ -194,6 +200,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             },
             onSettings: { [weak self] in self?.showSettings() },
             onShowActivity: { [weak self] in self?.showActivity() },
+            onShowShortcuts: { [weak self] in self?.showShortcutHelp() },
             onShowViewer: { [weak self] in self?.mainWindow?.showWindow(nil) },
             isWriteEnabled: { [weak self] in self?.backups?.canWrite == true },
             onNewMessage: { [weak self] in
@@ -243,6 +250,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         activityWindow?.showWindow(nil)
         activityWindow?.window?.makeKeyAndOrderFront(nil)
+    }
+
+    /// Help → Keyboard Shortcuts…: one shared reference window, made
+    /// on first use and brought forward after that.
+    private func showShortcutHelp() {
+        guard !terminating else { return }
+        if shortcutHelpWindow == nil {
+            shortcutHelpWindow = ShortcutHelpWindowController()
+        }
+        shortcutHelpWindow?.showWindow(nil)
+        shortcutHelpWindow?.window?.makeKeyAndOrderFront(nil)
     }
 
     /// The Activity window holds the old core's model and bridge, so a
@@ -460,6 +478,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         prototypeController = nil
         await mainWindow?.retireContent()
         await appearance.reset()
+        readingViewMemory.reset()
         if !terminating { await mainWindow?.rebuildAfterRestore() }
     }
 
@@ -474,6 +493,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         prototypeController = nil
         await mainWindow?.archiveClosed()
         await appearance.reset()
+        readingViewMemory.reset()
     }
 
     /// Debug failures surface as an alert — a sheet when a window can
@@ -552,6 +572,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             NSApplication.shared.reply(toApplicationShouldTerminate: true)
         }
         return .terminateLater
+    }
+
+    /// Show new-mail banners while Sweetbriar is frontmost too, so a
+    /// tap can always reach the inbox it names. These are the
+    /// completion-handler `UNUserNotificationCenterDelegate` methods;
+    /// the Objective-C runtime only exposes those selectors, and they
+    /// arrive off the main actor.
+    nonisolated func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        willPresent notification: UNNotification,
+        withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
+    ) {
+        completionHandler([.banner, .list, .sound])
+    }
+
+    /// A tapped banner opens the account it names. Other actions (none
+    /// ship yet) and background deliveries change nothing here.
+    nonisolated func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        didReceive response: UNNotificationResponse,
+        withCompletionHandler completionHandler: @escaping () -> Void
+    ) {
+        guard response.actionIdentifier == UNNotificationDefaultActionIdentifier,
+              let accountId = NewMailNotificationTarget.accountID(
+                from: response.notification.request.content.userInfo)
+        else {
+            completionHandler()
+            return
+        }
+        Task { @MainActor in
+            NSApp.activate(ignoringOtherApps: true)
+            self.mainWindow?.showWindow(nil)
+            self.mainWindow?.revealAccountInbox(accountId: accountId)
+        }
+        completionHandler()
     }
 
     func applicationWillTerminate(_ notification: Notification) {

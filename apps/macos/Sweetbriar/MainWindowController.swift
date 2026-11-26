@@ -210,6 +210,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         messageList?.onSelectionChange = nil
         markRead?.cancel()
         windowFlags = nil
+        pendingAccountReveal = nil
         messageWindows.closeAll()
         filing?.retire()
         filing = nil
@@ -340,7 +341,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         let policy = backups
         sidebar.canWrite = { policy.canWrite }
         let messageList = MessageListViewController(bridge: bridge, sidebar: sidebarModel, appearance: appearanceModel,
-                                                     writes: writes, canWrite: { policy.canWrite })
+                                                     writes: writes, canWrite: { policy.canWrite },
+                                                     onAddAccount: { [weak self] in self?.beginProtonSignIn() },
+                                                     onImport: { [weak self] in self?.beginImport() })
         let reader = ReaderViewController(
             model: ReaderModel(source: bridge, preferred: .sanitizedHtml),
             memory: readingViewMemory.model(source: bridge),
@@ -499,6 +502,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
             if messageList.shownSpec == nil {
                 sidebar.choose(entryID: SidebarModel.unifiedInboxID, revealSection: false)
             }
+            // A notification tapped during the open lands after the
+            // sidebar exists.
+            revealPendingAccountInbox()
             await imports?.reattach()
         }
     }
@@ -560,6 +566,42 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
             sidebar.choose(entryID: SidebarModel.savedViewEntryID(view.viewId))
         }
     }
+
+    /// Open `accountId`'s inbox, used when a new-mail notification is
+    /// tapped. The account's Inbox role wins; otherwise its first
+    /// selectable mailbox. A tap that arrives while the archive is still
+    /// opening is remembered and consumed once the sidebar exists; one
+    /// that names no listed destination after one reload is dropped.
+    func revealAccountInbox(accountId: String) {
+        pendingAccountReveal = accountId
+        revealPendingAccountInbox()
+    }
+
+    private func revealPendingAccountInbox() {
+        guard !closed, let accountId = pendingAccountReveal,
+            let sidebarModel, let sidebar
+        else { return }
+        let serial = contentSerial
+        contentTasks.run { [weak self] in
+            guard let self, contentSerial == serial else { return }
+            if self.sidebarModel?.inboxEntryID(accountId: accountId) == nil {
+                await sidebarModel.reload()
+                guard !Task.isCancelled, contentSerial == serial else { return }
+                sidebar.reloadSections()
+                updateTitle()
+            }
+            guard let entryID = sidebarModel.inboxEntryID(accountId: accountId) else {
+                self.pendingAccountReveal = nil
+                return
+            }
+            self.pendingAccountReveal = nil
+            sidebar.choose(entryID: entryID)
+        }
+    }
+
+    /// A notification's account whose inbox is not open yet; a tap during
+    /// a cold launch is served once `install` has built the sidebar.
+    private var pendingAccountReveal: String?
 
     /// Re-read the sidebar: an import changed what it lists.
     private func reloadSidebar() {

@@ -77,6 +77,10 @@ actor FakeListWindowSource: ListWindowSource {
     /// Like `corruptRead`, for the next `openWindow`.
     private var corruptOpen = false
 
+    /// When set, the next `readWindow` throws it instead of answering —
+    /// a page that lands as a failure.
+    private var readFailure: (any Error)?
+
     /// Reads `Around` these ids also wait on their gate — one page
     /// held while others land.
     private var aroundGates: [Int64: ThrowingGate] = [:]
@@ -158,6 +162,11 @@ actor FakeListWindowSource: ListWindowSource {
     /// Make the next open answer rows whose ids don't match the index.
     func corruptNextOpen() {
         corruptOpen = true
+    }
+
+    /// Make the next read throw `error` instead of answering.
+    func failNextRead(_ error: any Error) {
+        readFailure = error
     }
 
     /// Hold reads `Around(id)` on `gate` until it opens.
@@ -249,6 +258,10 @@ actor FakeListWindowSource: ListWindowSource {
                 cancelledReads += 1
             }
             throw error
+        }
+        if let failure = readFailure {
+            readFailure = nil
+            throw failure
         }
         let range = try resolve(anchor, limit: limit, in: count)
         var result = page(id, range, count: count, generation: generation, coverage: coverage)

@@ -80,6 +80,25 @@ struct NewMailNotificationTests {
         #expect(await poster.authorizationRequests == 2, "a grant is not re-read")
     }
 
+    @Test func aTappedNotificationNamesItsAccount() {
+        let key = NewMailNotificationTarget.accountIDKey
+        #expect(NewMailNotificationTarget.accountID(from: [key: "account-7"]) == "account-7")
+        #expect(NewMailNotificationTarget.accountID(from: [key: ""]) == nil)
+        #expect(NewMailNotificationTarget.accountID(from: [key: 42]) == nil)
+        #expect(NewMailNotificationTarget.accountID(from: ["other": "account-7"]) == nil)
+    }
+
+    @Test func theAppDelegateAnswersTheNotificationDelegateSelectors() {
+        // The Objective-C runtime only routes the completion-handler
+        // selectors; an async or mislabelled Swift method compiles and
+        // is never called.
+        let delegate = AppDelegate()
+        #expect(delegate.responds(
+            to: NSSelectorFromString("userNotificationCenter:willPresentNotification:withCompletionHandler:")))
+        #expect(delegate.responds(
+            to: NSSelectorFromString("userNotificationCenter:didReceiveNotificationResponse:withCompletionHandler:")))
+    }
+
     @Test func previewsOnShowsTheHeadersAndAsksAuthorizationOnce() async throws {
         let source = FakeNewMailSource(
             settings: Self.previews("on"),

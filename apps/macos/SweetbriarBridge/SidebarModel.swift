@@ -124,6 +124,15 @@ public final class SidebarModel {
     /// the first reload.
     public private(set) var generation: UInt64 = 0
 
+    /// True until the archive holds anything beyond the implicit local
+    /// archive: no other account and no imported mailboxes yet. The
+    /// shell shows its first-run welcome over an empty Unified Inbox.
+    public var isFreshArchive: Bool {
+        sections.dropFirst().allSatisfy { section in
+            section.account?.kind == .local && section.entries.isEmpty
+        }
+    }
+
     /// The saved views the unified section lists, in `saved_views()`
     /// order.
     public private(set) var savedViews: [SavedView] = []
@@ -162,6 +171,27 @@ public final class SidebarModel {
         return mailboxes[account]?.first {
             Self.mailboxEntryID(account: account, mailbox: $0.mailboxId) == entryId
         }
+    }
+
+    /// The entry id of an account's Inbox, falling back to its first
+    /// selectable mailbox; nil when the account or no listed destination
+    /// is present. A notification tap uses this to land where its
+    /// messages live (spec/10 "Notifications").
+    public func inboxEntryID(accountId: String) -> String? {
+        guard let section = sections.first(where: { $0.id == accountId }) else { return nil }
+        func entryID(for mailbox: Mailbox) -> String? {
+            let id = Self.mailboxEntryID(account: accountId, mailbox: mailbox.mailboxId)
+            return section.entries.contains { $0.id == id } ? id : nil
+        }
+        let mailboxes = mailboxes[accountId] ?? []
+        if let inbox = mailboxes.first(where: { $0.role == .inbox }),
+            let id = entryID(for: inbox) {
+            return id
+        }
+        for mailbox in mailboxes where mailbox.selectable {
+            if let id = entryID(for: mailbox) { return id }
+        }
+        return nil
     }
 
     private static func mailboxEntryID(account: String, mailbox: Int64) -> String {

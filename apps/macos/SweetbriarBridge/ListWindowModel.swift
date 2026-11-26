@@ -465,6 +465,10 @@ public final class ListWindowModel {
     /// way it moved is the way the list scrolled, and before any
     /// movement the model looks ahead — toward older rows.
     public func setVisible(_ range: Range<Int>) {
+        // A layout pass can report the same range again: nothing about
+        // the wanted set changes, so skip the recompute — a failed page
+        // stays failed until the range actually moves.
+        if range == visible { return }
         if range.lowerBound > visible.lowerBound {
             direction = .forward
         } else if range.lowerBound < visible.lowerBound {

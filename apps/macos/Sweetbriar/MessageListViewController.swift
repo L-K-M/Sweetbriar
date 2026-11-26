@@ -14,6 +14,7 @@
 import AppKit
 import Observation
 import QuartzCore
+import SwiftUI
 import SweetbriarBridge
 
 @MainActor
@@ -28,6 +29,9 @@ final class MessageListViewController: NSViewController {
     private let formatter = MessageRowFormatter()
     private let appearance: AppearanceModel
     private let sidebar: SidebarModel
+    /// The welcome's actions: File → Add Proton Account… and Import….
+    private let onAddAccount: @MainActor () -> Void
+    private let onImport: @MainActor () -> Void
     private var clock: DisplayLinkClock?
     private(set) var model: ListWindowModel?
     private(set) var list: AppKitPrototypeList?
@@ -40,6 +44,13 @@ final class MessageListViewController: NSViewController {
     private let openingTasks = ArchiveViewTasks()
 
     private let statusLabel = NSTextField(labelWithString: "")
+    /// The first-run welcome, shown over an empty Unified Inbox while
+    /// the archive is still fresh (no account, no imported mail).
+    private lazy var welcomeView = NSHostingView(
+        rootView: WelcomeEmptyState(onAddAccount: onAddAccount, onImport: onImport)
+    )
+    /// Whether the welcome is covering the list now; tests read it.
+    private(set) var isShowingWelcome = false
 
     /// Search coverage, collapsed while no Search status shows.
     private let coverage = SearchCoverageView()
@@ -116,7 +127,9 @@ final class MessageListViewController: NSViewController {
     init(bridge: CoreBridge, sidebar: SidebarModel, appearance: AppearanceModel,
          listSource: (any ListWindowSource)? = nil, clock: (any FrameClock)? = nil,
          writes: ArchiveWriteTasks? = nil, canWrite: @escaping @MainActor () -> Bool = { true },
-         latency: LatencyRecorder = .shared) {
+         latency: LatencyRecorder = .shared,
+         onAddAccount: @escaping @MainActor () -> Void = {},
+         onImport: @escaping @MainActor () -> Void = {}) {
         self.bridge = bridge
         self.latency = latency
         self.listSource = listSource ?? bridge
@@ -125,6 +138,8 @@ final class MessageListViewController: NSViewController {
         self.canWrite = canWrite
         self.appearance = appearance
         self.sidebar = sidebar
+        self.onAddAccount = onAddAccount
+        self.onImport = onImport
         let model = SearchFieldModel(parser: bridge, label: { reference in
             switch reference {
             case .account(let id): return sidebar.sections.first { $0.id == id }?.title
@@ -198,6 +213,9 @@ final class MessageListViewController: NSViewController {
         statusLabel.isHidden = true
         statusLabel.translatesAutoresizingMaskIntoConstraints = false
         content.addSubview(statusLabel)
+        welcomeView.translatesAutoresizingMaskIntoConstraints = false
+        welcomeView.isHidden = true
+        content.addSubview(welcomeView)
         coverage.isHidden = true
         coverage.translatesAutoresizingMaskIntoConstraints = false
         content.addSubview(coverage)
@@ -216,6 +234,11 @@ final class MessageListViewController: NSViewController {
             statusLabel.widthAnchor.constraint(
                 lessThanOrEqualTo: content.widthAnchor, constant: -40
             ),
+            // The welcome fills the list area under the search strip.
+            welcomeView.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+            welcomeView.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+            welcomeView.topAnchor.constraint(equalTo: search.view.bottomAnchor),
+            welcomeView.bottomAnchor.constraint(equalTo: content.bottomAnchor),
         ])
         view = content
     }
@@ -579,10 +602,27 @@ final class MessageListViewController: NSViewController {
             text = nil
         }
         statusLabel.stringValue = text ?? ""
-        statusLabel.isHidden = text == nil
+        let welcome = shouldShowWelcome()
+        isShowingWelcome = welcome
+        welcomeView.isHidden = !welcome
+        // The welcome replaces the "No messages" line; an error or a
+        // search always keeps its own status.
+        statusLabel.isHidden = text == nil || welcome
         let counted = !standalone && openError == nil && model?.lastError == nil
             && model?.hasExactIndex == true
         onCountChange?(counted ? model?.count : nil)
+    }
+
+    /// The welcome belongs only over an empty Unified Inbox in a fresh
+    /// archive: no account beyond the local one and no imported
+    /// mailboxes yet. Any row, error, search or mailbox choice hides it.
+    private func shouldShowWelcome() -> Bool {
+        guard shownSpec == .unified(.inbox), !standalone, openError == nil,
+              model?.lastError == nil, sidebar.lastError == nil,
+              model?.hasExactIndex == true, model?.count == 0,
+              sidebar.isFreshArchive
+        else { return false }
+        return true
     }
 
     /// Why Search can't open, from the index's own state (spec/08), or

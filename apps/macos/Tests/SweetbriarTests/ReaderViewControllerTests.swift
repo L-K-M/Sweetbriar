@@ -8,6 +8,7 @@ private struct PresentationSource: ReaderSource {
     let directory: URL
     let message: ReaderMessage
     let plainOnly: Bool
+    var remoteContentBlocked: UInt32 = 3
 
     init(plainOnly: Bool = false) throws {
         self.plainOnly = plainOnly
@@ -35,7 +36,7 @@ private struct PresentationSource: ReaderSource {
         let kind: BodyKind = plainOnly && preferred == .sanitizedHtml ? .plainText : preferred
         let file = kind == .source ? "source.txt" : (kind == .plainText ? "body.txt" : "body.html")
         return BodyLease(leaseId: "presentation", kind: kind, filePath: directory.appendingPathComponent(file).path,
-                         byteLength: 0, remoteContentBlocked: 3, warnings: [],
+                         byteLength: 0, remoteContentBlocked: remoteContentBlocked, warnings: [],
                          manifestPath: kind == .source ? nil : directory.appendingPathComponent("manifest.json").path)
     }
     func openAttachment(messageID: Int64, partID: String) async throws -> AttachmentLease {
@@ -43,6 +44,20 @@ private struct PresentationSource: ReaderSource {
                         byteLength: 10, partId: partID, displayName: "hello.txt", mediaType: "text/plain")
     }
     func releaseLease(_ leaseID: String) {}
+}
+
+/// The reader's blocked-content line names one item correctly.
+@Test @MainActor
+func readerCopyUsesSingularForOneBlockedItem() async throws {
+    var source = try PresentationSource()
+    source.remoteContentBlocked = 1
+    defer { try? FileManager.default.removeItem(at: source.directory) }
+    let controller = ReaderViewController(
+        model: ReaderModel(source: source, preferred: .sanitizedHtml))
+    await controller.show(selection: [42])
+    #expect(!controller.remoteContent.isHidden)
+    #expect(controller.remoteContent.stringValue == "1 remote content item blocked")
+    controller.close()
 }
 
 /// A body Proton hasn't fetched yet: the open waits, so it isn't a
@@ -77,6 +92,48 @@ private struct FetchingSource: ReaderSource {
         try await inner.openAttachment(messageID: messageID, partID: partID)
     }
     func releaseLease(_ leaseID: String) {}
+}
+
+/// A source whose occurrence 43 is a second message (id 8).
+private struct TwoMessageSource: ReaderSource {
+    let inner: PresentationSource
+    let other: ReaderMessage
+    func messageForOccurrence(occurrenceId: Int64) async throws -> Int64 { occurrenceId == 43 ? 8 : 7 }
+    func getMessage(messageId: Int64) async throws -> ReaderMessage { messageId == 8 ? other : inner.message }
+    func openBody(messageID: Int64, preferred: BodyKind) async throws -> BodyLease {
+        try await inner.openBody(messageID: messageID, preferred: preferred)
+    }
+    func openAttachment(messageID: Int64, partID: String) async throws -> AttachmentLease {
+        try await inner.openAttachment(messageID: messageID, partID: partID)
+    }
+    func releaseLease(_ leaseID: String) {}
+}
+
+/// An unsubmitted tag name stays with its message: a re-render of the
+/// same message keeps the draft, another message clears it.
+@Test @MainActor
+func tagPickerDraftStaysWithItsMessage() async throws {
+    let source = try PresentationSource()
+    defer { try? FileManager.default.removeItem(at: source.directory) }
+    var other = source.message
+    other.messageId = 8
+    let controller = ReaderViewController(
+        model: ReaderModel(source: TwoMessageSource(inner: source, other: other), preferred: .sanitizedHtml))
+    await controller.show(selection: [42])
+    controller.tagPicker.text = "draft"
+    // The same message shown again keeps the draft.
+    await controller.show(selection: [42])
+    #expect(controller.tagPicker.text == "draft")
+    // A different occurrence of the same message (44 also maps to
+    // message 7) drops the draft: the selection changed, and
+    // resetSelection clears eagerly before the message resolves.
+    await controller.show(selection: [44])
+    #expect(controller.tagPicker.text == "")
+    // Another message takes the draft with it.
+    await controller.show(selection: [43])
+    #expect(controller.tagPicker.text == "")
+    #expect(controller.tagPicker.tagNames == ["Keep"])
+    controller.close()
 }
 
 /// spec/08 "Latency log": a body fetched for the open is shown but not
@@ -146,12 +203,21 @@ func readerHeaderChipAttachmentsAndSourceToggle() async throws {
     #expect(controller.accountChip.rootView.appearance == nil)
     #expect(!controller.remoteContent.isHidden)
     #expect(controller.remoteContent.stringValue == "3 remote content items blocked")
-    let buttons = controller.attachments.arrangedSubviews.compactMap { $0 as? NSButton }
-    #expect(buttons.count == 2)
-    #expect(buttons[0].title == "hello.txt (" + ByteCountFormatter.string(fromByteCount: 10, countStyle: .file) + ")")
-    #expect(buttons[1].title == "broken.pdf (damaged)")
+    let rows = controller.attachments.arrangedSubviews.compactMap { $0 as? AttachmentRowView }
+    #expect(rows.count == 2)
+    #expect(rows[0].labelText == "hello.txt, " + ByteCountFormatter.string(fromByteCount: 10, countStyle: .file))
+    #expect(rows[1].labelText == "broken.pdf, damaged")
+    #expect(rows[0].attachmentPartID == "1.2")
+    // The pane's width reaches each row; a row with no intrinsic width
+    // must not collapse inside the leading-aligned stack.
+    controller.view.frame = NSRect(x: 0, y: 0, width: 480, height: 600)
+    controller.view.layoutSubtreeIfNeeded()
+    let stackWidth = try #require(rows.first?.superview?.frame.width)
+    #expect(stackWidth > 100)
+    #expect(rows.allSatisfy { abs($0.frame.width - stackWidth) < 1 })
+    #expect(rows[0].acceptsFirstResponder)
     #expect(opened.isEmpty)
-    buttons[0].performClick(nil)
+    #expect(rows[0].accessibilityPerformPress())
     let deadline = ContinuousClock.now + .seconds(5)
     while opened.isEmpty, ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(10)) }
     #expect(opened == [source.directory.appendingPathComponent("attachment.txt")])
@@ -190,8 +256,22 @@ func readerUsesPlainPaneForPlainBodyOrUnavailableRules(plainOnly: Bool) async th
     #expect(controller.plainText.text == "Plain fallback body")
     #expect(controller.plainText.mode == .text)
     #expect(controller.html.isHidden)
-    #expect(controller.attachments.arrangedSubviews.count == 2)
+    #expect(controller.attachments.arrangedSubviews.compactMap { $0 as? AttachmentRowView }.count == 2)
     controller.close()
+}
+
+@Test @MainActor
+func attachmentRowsPickATypeSymbolAndFormatTheirSize() {
+    #expect(AttachmentRowViewModel.symbolName(for: "image/png") == "photo")
+    #expect(AttachmentRowViewModel.symbolName(for: "audio/mpeg") == "music.note")
+    #expect(AttachmentRowViewModel.symbolName(for: "video/mp4") == "film")
+    #expect(AttachmentRowViewModel.symbolName(for: "application/pdf") == "doc.richtext")
+    #expect(AttachmentRowViewModel.symbolName(for: "text/plain") == "doc.text")
+    #expect(AttachmentRowViewModel.symbolName(for: "text/csv") == "tablecells")
+    #expect(AttachmentRowViewModel.symbolName(for: "application/zip") == "doc.fill")
+    #expect(AttachmentRowViewModel.symbolName(for: "not-a-media-type") == "doc.fill")
+    #expect(AttachmentRowViewModel.sizeText(nil) == "damaged")
+    #expect(AttachmentRowViewModel.sizeText(2_500) == ByteCountFormatter.string(fromByteCount: 2_500, countStyle: .file))
 }
 
 @Test(arguments: [false, true]) @MainActor

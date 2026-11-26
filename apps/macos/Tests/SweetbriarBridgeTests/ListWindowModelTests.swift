@@ -261,6 +261,42 @@ func concurrentMissesOnAPageIssueOneRead() async throws {
     await model.close()
 }
 
+/// A repeated `setVisible` with the same range is a no-op: it does not
+/// retry a failed page — the retry waits until the range actually
+/// moves (spec/08: failed until the next visibility change).
+@MainActor
+@Test(.timeLimit(.minutes(1)))
+func aRepeatedVisibleRangeDoesNotRetryAFailedPage() async throws {
+    let n = 2_000
+    let fake = FakeListWindowSource()
+    _ = await fake.fill(n)
+    let clock = ManualFrameClock()
+    let model = try await openModel(over: fake, clock: clock)
+
+    // Page 3 pinned, page 4 prefetched; the first of the two reads
+    // fails and its page lands as failed.
+    await fake.failNextRead(CoreFailure.notFound(what: "boom"))
+    model.setVisible(600 ..< 650)
+    try #require(await eventually { await fake.reads.count == 2 })
+    try #require(await settle(clock) { model.lastError != nil })
+
+    // The same range again starts nothing.
+    model.setVisible(600 ..< 650)
+    for _ in 0 ..< 16 {
+        await Task.yield()
+    }
+    #expect(await fake.reads.count == 2)
+
+    // The range moves (still covering pages 3 and 4): the failed page
+    // is retried and lands.
+    model.setVisible(620 ..< 670)
+    try #require(await eventually { await fake.reads.count == 3 })
+    try #require(await settle(clock) { model.row(at: 600) != nil })
+    try #require(await settle(clock) { model.row(at: 800) != nil })
+
+    await model.close()
+}
+
 /// Rapid jumps never run more than two reads: each obsolete read is
 /// cancelled, and a cancelled read still counts against the cap until
 /// it finishes (spec/08).

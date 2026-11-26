@@ -79,6 +79,8 @@ final class MainMenuBuilder: NSObject {
     private let onShowActivity: @MainActor () -> Void
     private let onShowViewer: @MainActor () -> Void
     private let isWriteEnabled: @MainActor () -> Bool
+    /// Help → Keyboard Shortcuts… (spec/08 "Menus and commands").
+    private let onShowShortcuts: @MainActor () -> Void
     /// The opt-in latency log the Debug items control (spec/08).
     private let latency: LatencyRecorder
     private var latencyReport: BenchmarkReportWindowController?
@@ -95,6 +97,8 @@ final class MainMenuBuilder: NSObject {
 
         /// Sweetbriar → Settings….
         static let settings = command("settings")
+        /// Help → Keyboard Shortcuts….
+        static let showShortcuts = command("showShortcuts")
         /// File → New Message.
         static let newMessage = command("newMessage")
         /// File → Add Proton Account… (spec/08 "Proton sign-in").
@@ -216,6 +220,7 @@ final class MainMenuBuilder: NSObject {
         onAddProtonAccount: @escaping @MainActor () -> Void = {},
         onSettings: @escaping @MainActor () -> Void = {},
         onShowActivity: @escaping @MainActor () -> Void = {},
+        onShowShortcuts: @escaping @MainActor () -> Void = {},
         onShowViewer: @escaping @MainActor () -> Void = {},
         isWriteEnabled: @escaping @MainActor () -> Bool = { true },
         onNewMessage: @escaping @MainActor () -> Void = {},
@@ -245,6 +250,7 @@ final class MainMenuBuilder: NSObject {
         self.onAddProtonAccount = onAddProtonAccount
         self.onSettings = onSettings
         self.onShowActivity = onShowActivity
+        self.onShowShortcuts = onShowShortcuts
         self.onShowViewer = onShowViewer
         self.isWriteEnabled = isWriteEnabled
         super.init()
@@ -452,10 +458,19 @@ final class MainMenuBuilder: NSObject {
     private func makeHelpMenu() -> NSMenuItem {
         let item = NSMenuItem()
         let menu = NSMenu(title: "Help")
+        menu.addItem(Self.item(
+            "Keyboard Shortcuts…",
+            action: #selector(showShortcuts(_:)),
+            target: self,
+            id: ItemID.showShortcuts
+        ))
         NSApplication.shared.helpMenu = menu
         item.submenu = menu
         return item
     }
+
+    /// Help → Keyboard Shortcuts…: the shared reference window.
+    @objc func showShortcuts(_ sender: Any?) { onShowShortcuts() }
 
     /// Message: Open in New Window, then Reply, Reply All and Forward,
     /// each from the message list's single selection or the key message

@@ -159,7 +159,12 @@ final class ReaderViewController: NSViewController {
         details.addArrangedSubview(remoteContent)
         attachments.orientation = .vertical
         attachments.alignment = .leading
+        attachments.spacing = 2
         details.addArrangedSubview(attachments)
+        // The leading alignment keeps arranged children at their
+        // intrinsic width, and the rows report none: pin the stack to the
+        // pane so every row spans its click target.
+        attachments.widthAnchor.constraint(equalTo: details.widthAnchor).isActive = true
         readingNote.textColor = .secondaryLabelColor
         readingNote.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
         readingNote.isHidden = true
@@ -261,6 +266,11 @@ final class ReaderViewController: NSViewController {
 
     private func resetSelection(_ selection: Set<Int64>) {
         _ = view
+        // A different selection drops an unsubmitted tag draft with it.
+        if selection.count != 1 || selection.first != model.occurrenceID {
+            tagDraftMessageId = nil
+            tagPicker.text = ""
+        }
         model.clear()
         html.clear(ticket: model.navigationTicket)
         plainText.text = ""
@@ -326,6 +336,11 @@ final class ReaderViewController: NSViewController {
         default:
             nil
         }
+    }
+
+    /// "1 remote content item blocked", "3 remote content items blocked".
+    private static func remoteContentText(_ blocked: UInt32) -> String {
+        "\(blocked) remote content \(blocked == 1 ? "item" : "items") blocked"
     }
 
     /// View → Message Source answers while a message is shown.
@@ -445,7 +460,7 @@ final class ReaderViewController: NSViewController {
             renderAccountChip(message)
             sourceButton.title = model.isShowingSource ? "Sender Layout" : "View Source"
             let blocked = model.currentLease?.remoteContentBlocked ?? 0
-            remoteContent.stringValue = "\(blocked) remote content items blocked"
+            remoteContent.stringValue = Self.remoteContentText(blocked)
             remoteContent.isHidden = blocked == 0
             renderMetadata(message)
             rebuildAttachments()
@@ -574,9 +589,18 @@ final class ReaderViewController: NSViewController {
         return text
     }
 
+    /// The message the tag field's unsubmitted draft belongs to.
+    private var tagDraftMessageId: Int64?
+
     /// Show the message's tags and note; the editor keeps the user's
-    /// text while it is being edited.
+    /// text while it is being edited. A draft typed on another message
+    /// does not follow the selection: the field clears when the
+    /// selection changes (even to another occurrence of the same
+    /// message) or the shown message changes; only re-showing the
+    /// identical selection keeps it.
     private func renderMetadata(_ message: ReaderMessage) {
+        if tagDraftMessageId != message.messageId { tagPicker.text = "" }
+        tagDraftMessageId = message.messageId
         tagPicker.configure(tags: message.tags)
         if noteEditor.isEditing {
             // Navigation moved on mid-edit: save to the edited message.
@@ -641,18 +665,21 @@ final class ReaderViewController: NSViewController {
             item.removeFromSuperview()
         }
         for attachment in model.manifest?.attachments ?? [] {
-            let size = attachment.bytes.map { ByteCountFormatter.string(fromByteCount: Int64(clamping: $0), countStyle: .file) } ?? "damaged"
-            let button = NSButton(title: "\(attachment.displayName) (\(size))", target: self, action: #selector(openAttachment(_:)))
-            button.identifier = NSUserInterfaceItemIdentifier(attachment.partID)
-            button.setAccessibilityIdentifier("attachment-\(attachment.partID)")
-            attachments.addArrangedSubview(button)
+            let row = AttachmentRowView()
+            row.configure(AttachmentRowViewModel(attachment: attachment))
+            row.setAccessibilityIdentifier("attachment-\(attachment.partID)")
+            row.translatesAutoresizingMaskIntoConstraints = false
+            attachments.addArrangedSubview(row)
+            // A vertical stack keeps an arranged row's intrinsic width;
+            // the row spans the pane so the whole line is a click target.
+            row.widthAnchor.constraint(equalTo: attachments.widthAnchor).isActive = true
+            let partID = attachment.partID
+            row.onOpen = { [weak self] in
+                guard let self else { return }
+                self.reads.run { await self.activateAttachment(partID) }
+            }
         }
         attachments.isHidden = attachments.arrangedSubviews.isEmpty
-    }
-
-    @objc private func openAttachment(_ sender: NSButton) {
-        guard let partID = sender.identifier?.rawValue else { return }
-        reads.run { await self.activateAttachment(partID) }
     }
 
     func activateAttachment(_ partID: String) async {
