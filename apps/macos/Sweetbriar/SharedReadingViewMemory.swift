@@ -23,4 +23,12 @@ final class SharedReadingViewMemory {
         current = memory
         return memory
     }
+
+    /// A restored store has its own senders, and the bridge outlives
+    /// the swap: drop the shared model so the next reader loads the
+    /// restored list, as `SharedAppearance.reset()` does.
+    func reset() {
+        current = nil
+        sourceID = nil
+    }
 }
