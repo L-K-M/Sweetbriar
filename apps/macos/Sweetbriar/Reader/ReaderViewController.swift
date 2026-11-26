@@ -13,6 +13,13 @@ enum ReaderPage: Equatable {
 final class ReaderViewController: NSViewController {
     let model: ReaderModel
     let header = NSTextField(wrappingLabelWithString: "")
+    /// Shows every recipient, or the first few again (spec/08 "Header
+    /// area"); hidden while the header hides none.
+    let recipientsButton = NSButton(title: "", target: nil, action: nil)
+    /// How many recipients a header line names before the rest wait
+    /// behind the button.
+    static let collapsedRecipientLimit = 3
+    private var showsAllRecipients = false
     /// "Received in <account>" (spec/08 "Account chips").
     let accountChip = NSHostingView(rootView: AccountChip(label: "", accountId: "", appearance: nil))
     private let appearance: AppearanceModel?
@@ -141,6 +148,13 @@ final class ReaderViewController: NSViewController {
         // Keeps the header's fonts and colors while text is selected.
         header.allowsEditingTextAttributes = true
         details.addArrangedSubview(header)
+        recipientsButton.isBordered = false
+        recipientsButton.controlSize = .small
+        recipientsButton.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        recipientsButton.target = self
+        recipientsButton.action = #selector(toggleRecipients(_:))
+        recipientsButton.setAccessibilityIdentifier("readerRecipients")
+        details.addArrangedSubview(recipientsButton)
         details.addArrangedSubview(accountChip)
         details.addArrangedSubview(tagPicker)
         details.addArrangedSubview(noteEditor)
@@ -239,6 +253,7 @@ final class ReaderViewController: NSViewController {
         for label in [remoteContent, readingNote] {
             label.textColor = tint?.foreground ?? .secondaryLabelColor
         }
+        recipientsButton.contentTintColor = tint?.foreground ?? .secondaryLabelColor
         let title = readingViewToggle.title
         if let tint {
             readingViewToggle.attributedTitle = NSAttributedString(
@@ -277,6 +292,8 @@ final class ReaderViewController: NSViewController {
         readingView.clear()
         updateReadingToggle()
         clearReadingNote()
+        showsAllRecipients = false
+        recipientsButton.isHidden = true
         details.isHidden = true
         textScroll.isHidden = true
         readingScroll.isHidden = true
@@ -538,18 +555,48 @@ final class ReaderViewController: NSViewController {
     }
 
     private func renderHeader(_ message: ReaderMessage) {
+        let limit = showsAllRecipients ? nil : Self.collapsedRecipientLimit
         header.attributedStringValue = Self.headerText(
             message, primary: headerTint?.foreground ?? .labelColor,
-            secondary: headerTint?.foreground.withAlphaComponent(0.75) ?? .secondaryLabelColor)
+            secondary: headerTint?.foreground.withAlphaComponent(0.75) ?? .secondaryLabelColor,
+            recipientLimit: limit)
+        recipientsButton.isHidden = !Self.hidesRecipients(message)
+        recipientsButton.title = showsAllRecipients ? "Show Fewer" : "Show All Recipients"
+        let total = message.headers.to.count + message.headers.cc.count
+        recipientsButton.setAccessibilityLabel(
+            showsAllRecipients ? "Show fewer recipients" : "Show all \(total) recipients")
+    }
+
+    @objc private func toggleRecipients(_ sender: NSButton) {
+        showsAllRecipients.toggle()
+        if let message = model.currentMessage { renderHeader(message) }
+    }
+
+    /// Whether the header hides recipients of `message` until they are
+    /// shown all; the button shows for such a message in either state.
+    static func hidesRecipients(_ message: ReaderMessage) -> Bool {
+        hiddenRecipients(in: message, limit: collapsedRecipientLimit) > 0
+    }
+
+    /// How many recipients `limit` leaves out of the header.
+    static func hiddenRecipients(in message: ReaderMessage, limit: Int?) -> Int {
+        let to = message.headers.to.count
+        let cc = message.headers.cc.count
+        guard let limit else { return 0 }
+        return to > limit ? to + cc - limit : max(0, cc - limit)
     }
 
     /// The header as Mail lays it out: the subject in bold, then From
     /// with the sender's name in bold, To, Cc when there is one, and the
     /// date, their labels and addresses muted. Addresses stay visible:
     /// a name alone could pass for anyone.
+    /// With `recipientLimit`, a line naming more recipients shows its
+    /// first `limit` and "and K more"; a `to` line that hides names
+    /// hides the `cc` line too, so the body starts within the first
+    /// screen (spec/08 "Header area").
     static func headerText(
         _ message: ReaderMessage, primary: NSColor = .labelColor,
-        secondary: NSColor = .secondaryLabelColor
+        secondary: NSColor = .secondaryLabelColor, recipientLimit: Int? = nil
     ) -> NSAttributedString {
         let font = NSFont.systemFont(ofSize: NSFont.systemFontSize)
         let bold = NSFont.boldSystemFont(ofSize: NSFont.systemFontSize)
@@ -558,7 +605,7 @@ final class ReaderViewController: NSViewController {
         func append(_ string: String, _ font: NSFont, _ color: NSColor) {
             text.append(NSAttributedString(string: string, attributes: [.font: font, .foregroundColor: color]))
         }
-        func line(_ label: String, _ values: [ReaderAddress], names: NSFont) {
+        func line(_ label: String, _ values: [ReaderAddress], names: NSFont, hidden: Int = 0) {
             guard !values.isEmpty else { return }
             append("\n\(label) ", font, secondary)
             for (index, value) in values.enumerated() {
@@ -572,12 +619,27 @@ final class ReaderViewController: NSViewController {
                 case (nil, nil): append("Unknown", names, primary)
                 }
             }
+            if hidden > 0 {
+                if !values.isEmpty { append(", ", font, primary) }
+                append("and \(hidden.formatted()) more", font, secondary)
+            }
         }
         let subject = message.headers.subject?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         append(subject.isEmpty ? "(No Subject)" : subject, title, primary)
         line("From:", message.headers.from, names: bold)
-        line("To:", message.headers.to, names: font)
-        line("Cc:", message.headers.cc, names: font)
+        if let recipientLimit {
+            let to = message.headers.to
+            let cc = message.headers.cc
+            let toHidden = to.count > recipientLimit ? to.count + cc.count - recipientLimit : 0
+            line("To:", Array(to.prefix(recipientLimit)), names: font, hidden: toHidden)
+            if toHidden == 0 {
+                line("Cc:", Array(cc.prefix(recipientLimit)), names: font,
+                     hidden: max(0, cc.count - recipientLimit))
+            }
+        } else {
+            line("To:", message.headers.to, names: font)
+            line("Cc:", message.headers.cc, names: font)
+        }
         if let timestamp = message.headers.date {
             let seconds = Duration.milliseconds(timestamp) / .seconds(1)
             let date = Date(timeIntervalSince1970: seconds).formatted(date: .abbreviated, time: .shortened)
