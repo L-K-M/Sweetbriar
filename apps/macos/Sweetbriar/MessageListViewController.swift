@@ -44,6 +44,11 @@ final class MessageListViewController: NSViewController {
     private let openingTasks = ArchiveViewTasks()
 
     private let statusLabel = NSTextField(labelWithString: "")
+    /// Offered while a read failure is the status line's message: the
+    /// failed pages are otherwise only retried by a scroll gesture.
+    private let retryButton = NSButton(
+        title: "Try Again", target: nil, action: nil
+    )
     /// The first-run welcome, shown over an empty Unified Inbox while
     /// the archive is still fresh (no account, no imported mail).
     private lazy var welcomeView = NSHostingView(
@@ -213,6 +218,14 @@ final class MessageListViewController: NSViewController {
         statusLabel.isHidden = true
         statusLabel.translatesAutoresizingMaskIntoConstraints = false
         content.addSubview(statusLabel)
+        retryButton.bezelStyle = .rounded
+        retryButton.controlSize = .regular
+        retryButton.isHidden = true
+        retryButton.translatesAutoresizingMaskIntoConstraints = false
+        retryButton.target = self
+        retryButton.action = #selector(retryFailedPages(_:))
+        retryButton.setAccessibilityIdentifier("listRetry")
+        content.addSubview(retryButton)
         welcomeView.translatesAutoresizingMaskIntoConstraints = false
         welcomeView.isHidden = true
         content.addSubview(welcomeView)
@@ -232,6 +245,15 @@ final class MessageListViewController: NSViewController {
             statusLabel.centerXAnchor.constraint(equalTo: content.centerXAnchor),
             statusLabel.centerYAnchor.constraint(equalTo: content.centerYAnchor),
             statusLabel.widthAnchor.constraint(
+                lessThanOrEqualTo: content.widthAnchor, constant: -40
+            ),
+            retryButton.centerXAnchor.constraint(equalTo: content.centerXAnchor),
+            retryButton.topAnchor.constraint(
+                equalTo: statusLabel.bottomAnchor, constant: 12
+            ),
+            // The status line's own width cap, so a long localized
+            // failure message cannot push the button off the pane.
+            retryButton.widthAnchor.constraint(
                 lessThanOrEqualTo: content.widthAnchor, constant: -40
             ),
             // The welcome fills the list area under the search strip.
@@ -602,17 +624,34 @@ final class MessageListViewController: NSViewController {
             text = nil
         }
         statusLabel.stringValue = text ?? ""
+        let failed = !standalone && openError == nil && model?.lastError != nil
+        retryButton.isHidden = !failed
         let welcome = shouldShowWelcome()
         isShowingWelcome = welcome
         welcomeView.isHidden = !welcome
         // The welcome replaces the "No messages" line; an error or a
         // search always keeps its own status.
         statusLabel.isHidden = text == nil || welcome
-        let counted = !standalone && openError == nil && model?.lastError == nil
-            && model?.hasExactIndex == true
+        // The count belongs to the spec that is shown. While a new
+        // choice is opening, `model` is still the previous list, so
+        // reporting it would put the old count under the new title
+        // ("Search · 240 results" straight after leaving a 240-row
+        // mailbox) until the new model reports its own.
+        let counted = !standalone && !opening && openError == nil
+            && model?.lastError == nil && model?.hasExactIndex == true
         onCountChange?(counted ? model?.count : nil)
     }
 
+    /// Ask for the pages that failed to read again (spec/08: a failure
+    /// is a state, not a dead end).
+    @objc private func retryFailedPages(_ sender: NSButton) {
+        model?.retryFailedPages()
+        updateStatus()
+    }
+
+    /// The welcome belongs only over an empty Unified Inbox in a fresh
+    /// archive: no account beyond the local one and no imported
+    /// mailboxes yet. Any row, error, search or mailbox choice hides it.
     /// The welcome belongs only over an empty Unified Inbox in a fresh
     /// archive: no account beyond the local one and no imported
     /// mailboxes yet. Any row, error, search or mailbox choice hides it.

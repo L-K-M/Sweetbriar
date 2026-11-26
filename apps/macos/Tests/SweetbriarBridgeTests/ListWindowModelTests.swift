@@ -297,6 +297,33 @@ func aRepeatedVisibleRangeDoesNotRetryAFailedPage() async throws {
     await model.close()
 }
 
+/// A page that fails and then succeeds clears the model's error, so the
+/// list stops reporting a failure it no longer has (spec/08: the status
+/// line and the window's count follow the list's real state).
+@MainActor
+@Test(.timeLimit(.minutes(1)))
+func aSuccessfulRetryClearsTheReadError() async throws {
+    let n = 2_000
+    let fake = FakeListWindowSource()
+    _ = await fake.fill(n)
+    let clock = ManualFrameClock()
+    let model = try await openModel(over: fake, clock: clock)
+
+    // Page 3 pinned, page 4 prefetched; the first of the two reads fails.
+    await fake.failNextRead(CoreFailure.notFound(what: "boom"))
+    model.setVisible(600 ..< 650)
+    try #require(await settle(clock) { model.lastError != nil })
+
+    // The retry re-reads the failed page and it lands: the error goes.
+    model.retryFailedPages()
+    try #require(await eventually { await fake.reads.count == 3 })
+    try #require(await settle(clock) { model.row(at: 600) != nil })
+    try #require(await settle(clock) { model.row(at: 800) != nil })
+    #expect(await model.lastError == nil)
+
+    await model.close()
+}
+
 /// Rapid jumps never run more than two reads: each obsolete read is
 /// cancelled, and a cancelled read still counts against the cap until
 /// it finishes (spec/08).
