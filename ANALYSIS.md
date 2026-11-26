@@ -19,6 +19,12 @@ are merged.
 
 ## Completed on main
 
+- **Dock unread badge** (second pass, PR #575). `SidebarModel.inboxUnread`
+  sums every account's Inbox mailbox once; `MainWindowController` mirrors
+  it on `NSApp.dockTile`, refreshes after generation-driven sidebar
+  reloads, and clears it when content retires. Tests cover the sum, the
+  role filter, reload updates and the badge text.
+
 - **Second review (opencode), landed.** `scripts/build.sh` finds rustup's
   tools outside `CARGO_HOME` (#573); the unit-test host opens a private
   archive, never the user's (#582); the Reading view memory resets after
@@ -59,6 +65,24 @@ are merged.
   rule-list read-back.
 
 ## Submitted patches
+
+- **Saved-view naming.** Save stays disabled until the name contains
+  non-whitespace text. [Saved-view PR](https://github.com/L-K-M/Sweetbriar/pull/606)
+- **Import variant choices.** Long names truncate without hiding the
+  picker; the tooltip keeps the full name and path, and the picker
+  announces its mailbox. [Import PR](https://github.com/L-K-M/Sweetbriar/pull/605)
+- **Backup sizes.** Ordinary sizes use readable units, with exact byte
+  counts available through accessibility and the tooltip. [Backup PR](https://github.com/L-K-M/Sweetbriar/pull/604)
+- **Literal Markdown punctuation.** Entering Markdown mode disables
+  smart quotes, dashes and text replacement; entering plain mode applies
+  current system preferences. [Composer PR](https://github.com/L-K-M/Sweetbriar/pull/602)
+- **Out Box row height.** Attempt rows use the configured 74-point height
+  while the History heading remains compact. The larger-text sizing work
+  remains in V9. [Out Box PR](https://github.com/L-K-M/Sweetbriar/pull/603)
+- **Proton sync after a failed session restore.** Active accounts retry
+  session restoration after an offline launch or a failed refresh rather
+  than leaving the sync worker stopped. Synthetic tests cover both paths
+  and timeout classification. [Proton retry PR](https://github.com/L-K-M/Sweetbriar/pull/598)
 
 - **Message-row tag collapse** (fourth pass, PR #572). Rows drew at
   most three tag chips and silently dropped the rest, so a row
@@ -117,11 +141,6 @@ are merged.
   `ListWindowModel.setVisible` returns early when the range is
   unchanged, so `failedPages` survives until the range actually moves.
   Test `aRepeatedVisibleRangeDoesNotRetryAFailedPage`.
-- **Dock unread badge** (second pass, PR #575). `SidebarModel.inboxUnread`
-  sums every account's Inbox mailbox once; `MainWindowController` mirrors
-  it on `NSApp.dockTile`, refreshes after generation-driven sidebar
-  reloads, and clears it when content retires. Tests cover the sum, the
-  role filter, reload updates and the badge text.
 - **Trackpad swipe actions** (second pass, PR #579). Trailing swipe
   offers Archive and Move to Trash; leading swipe offers Mark as
   Read/Unread and Star/Unstar. It reuses the context menu's titles,
@@ -135,6 +154,20 @@ are merged.
 - `ListWindowModel` fires `onIndexChanged` twice on open (provisional
   prefix, then exact index); both fire are needed so the list redraws
   when provisional ids are replaced by the full index.
+- A new-mail subscription does not fail on a transient Proton network
+  error: `next` ends on engine shutdown or a concurrent wait, and the
+  notifier is its sole caller. Reconnecting the stream on shutdown would
+  spin on a dead engine. [Subscription](crates/sb-engine/src/windows/subscribe.rs#L337)
+- Appearance's account controls are disabled as a group when the archive
+  is read-only; the compose-cue controls receive the same write state.
+  [Appearance settings](apps/macos/Sweetbriar/AppearanceSettingsWindow.swift)
+- A server's IDLE command refusal ends the IMAP watcher and the scheduler
+  falls back to polling; it does not loop on that refusal. Transport
+  errors can retry, so keep that case separate.
+  [IMAP watcher](crates/sb-engine/src/account_sync/idle.rs)
+- Sidebar health rows use static condition titles, not relative times.
+  The Activity window's relative-time detail has its own refresh tick.
+  [Sidebar health](apps/macos/Sweetbriar/SidebarViewController.swift)
 
 ## How the review was done
 
@@ -455,6 +488,11 @@ of `RenderInput.resources` into `Manifest.resources` with `to_vec`, so
 peak image memory doubles while input and manifest coexist, then doubles
 again when the file is written. Fix: move/drain resources out of an
 owned `RenderInput`, or share with `Arc<[u8]>`.
+
+An HTML-only message requested as plain text also copies referenced CID
+bytes during the first pass and then clears them. Avoid minting those
+bytes for that rendition while retaining CID validation and warnings;
+test that the HTML rendition still publishes the same resources.
 
 ## P6. Relevance searches score and materialise every hit
 
@@ -845,11 +883,6 @@ that arrives while the archive is still opening. What remains:
   muting (F9). Add categories only with core commands behind them and
   keep the redaction rules: no content beyond the text already approved
   by `NewMailNotificationText`.
-- The subscription's failure policy is undefined: `NewMailNotifier.pull()`
-  stops for the rest of the session on any stream error, so a transient
-  Proton or network failure silences later mail even though the event
-  loop recovers. Choose a bounded retry policy or record why stopping is
-  final, and test it.
 
 ## F17. Find does not work in an HTML message
 
@@ -861,9 +894,9 @@ views already work through their scroll views' find bars.
 
 ## F18. No unified inbox total or progress treatment
 
-The Unified section has no header total, so the aggregate unread count
-lives only on each account's Inbox row; sync and filing surface through
-the integrity banner and transient toasts. A visible unified total and
+The Unified section has no header total, though the Dock badge now shows
+the Inbox unread total. Sync and filing surface through the integrity
+banner and transient toasts. A visible unified sidebar total and
 a subtle toolbar/sidebar progress treatment would make the shell
 scannable. Check secondary-text contrast in Color Wash first.
 
@@ -872,16 +905,17 @@ scannable. Check secondary-text contrast in Color Wash first.
 Larger, post-pilot. Both fit the durable-intent architecture: a scheduled
 send is an Out Box attempt with a `not_before` time; snooze is a durable
 flag plus later re-insertion. The existing Undo Send hold shows the
-outbox state machine can carry a delay. Write the spec before any UI.
+outbox state machine can carry a delay; offer a scheduled date and time
+beside that affordance. Write the spec before any UI.
 
 ## F20. A saved draft cannot be discarded from the UI
 
 `DraftModel.discard()`, the FFI `discardDraft` and the core
 `discard_draft` command all exist, but no menu or context command
-calls them. Once a draft has been saved, the only way to remove it is
-Close Without Saving before the first save; afterwards it accumulates
-forever, and a failed send leaves clutter. Spec/05 step 8 defines the
-semantics: refused `Conflict` while an attempt is live, revisions kept.
+calls them. Closing a compose window leaves its draft in place, including
+a new untouched blank draft; no UI command removes it. A failed send can
+also leave clutter. Spec/05 step 8 defines the semantics: refused
+`Conflict` while an attempt is live, revisions kept.
 
 Add a Drafts-list context command (identifier
 `ch.lkmc.Sweetbriar.cmd.discardDraft`) plus a Delete key path, a
@@ -891,7 +925,10 @@ error path that keeps the rows. Decide what a still-open compose window
 does when its draft is discarded elsewhere. Revise spec/08's Drafts
 (local) section first. Test discarding removes the row, a live attempt
 refuses, a replay is idempotent, a read-only archive refuses, and a
-failed reload keeps rows.
+failed reload keeps rows. Separately decide whether a never-edited blank
+new draft should be discarded on close: distinguish it from replies,
+forwards and any draft with saved content, and revise the close contract
+before changing it. Test both close paths and protect nonblank drafts.
 
 ## F21. Remember recent searches
 
@@ -903,19 +940,26 @@ hold no query text.
 
 ## F22. Remember each mailbox's scroll position and selection
 
-Small. The id index makes restoring a rank cheap. Persist the last
-visible rank and selected occurrence ids per mailbox and restore them
-when the mailbox is chosen again. Needs a storage location and a spec
-sentence; cover a mailbox that shrank, a deleted message and a restore.
+The id index makes restoring a rank cheap. Keep the last visible rank or
+scroll anchor and selected occurrence IDs per mailbox, restoring them
+after its first page lands. Decide whether this is session-only or
+persists across launches. `MessageListViewController.install` currently
+recreates the table and model for each choice; retaining them per mailbox
+is one possible design, subject to a bound on memory. Part 1's B10 also
+asks the table to survive Search changes. Add a spec sentence and test a
+shrunken mailbox, deleted message, restore and sidebar navigation.
+[List installation](apps/macos/Sweetbriar/MessageListViewController.swift#L295)
 
 ## F23. Sort control for mailboxes
 
 Window ordering is fixed to `sort_date` descending
-(`crates/sb-store/src/lists.rs`); only Search offers relevance/date.
+(`crates/sb-store/src/lists.rs`); only Search offers relevance/date, and
+`date_asc` is reserved in spec/07.
 Mail users expect date/sender/subject/size and ascending/descending.
 **Spec-first:** extend `WindowSpec`/the list queries with sort keys and
 backing indexes, then expose a list header/menu control. Keyset paging
-and cursors must be re-derived for the new order.
+and cursors must be re-derived for the new order. An incremental first
+choice could offer newest and oldest first, remembered per mailbox.
 
 ## F24. Spring-loaded sidebar destinations
 
@@ -1176,7 +1220,7 @@ High priority. Record warm launch, cached reader, compose, filing and search per
 
 ### Jump to a mailbox or saved view by typing
 
-Medium priority. Add a Mailbox menu command and a keyboard palette using current sidebar entries and the filing palette's behavior. Rank exact, prefix, then recent matches. Show account and full path to disambiguate duplicates. Return navigates and Escape restores focus. Preserve the four existing unified shortcuts. Test keyboard-only travel across duplicate names in two accounts and smoke-test sidebar selection. [Filing palette](apps/macos/Sweetbriar/Filing/FilingPalette.swift), [Mailbox menu](apps/macos/Sweetbriar/MainMenu.swift#L436)
+Medium priority. Add a Mailbox menu command and a keyboard palette using current sidebar entries and the filing palette's behavior. Rank exact, prefix, then recent matches. Show account and full path to disambiguate duplicates. Return navigates and Escape restores focus. Preserve the four existing unified shortcuts. Test keyboard-only travel across duplicate names in two accounts and smoke-test sidebar selection. A later extension could offer every enabled command, using its stable `ch.lkmc.Sweetbriar.cmd.*` identifier and fuzzy matching. [Filing palette](apps/macos/Sweetbriar/Filing/FilingPalette.swift), [Mailbox menu](apps/macos/Sweetbriar/MainMenu.swift#L436)
 
 ### Pin favorite mailboxes and saved views
 
@@ -1323,8 +1367,6 @@ Each was reported by a helper and not confirmed by reading every caller.
 - `crates/sb-store/src/backups/stage_quarantine.rs:225`: when the
   quarantine work and its close both fail, the close error hides the
   first.
-- `apps/macos/Sweetbriar/OutBoxViewController.swift:396`: rows are 54 pt
-  and hold four stacked lines; check at a larger text size.
 - `apps/macos/Sweetbriar/Composer/ComposeAttachmentControls.swift:260`:
   the attachment list is rebuilt on every keystroke; diff first, as
   `renderRecipientFence` does.
@@ -1366,15 +1408,6 @@ times. This is the other half of Part 1's B1, which reads the
 consequence in the list. Reload the counts in place, or debounce to one
 reload per burst. [Sidebar reload](apps/macos/Sweetbriar/SidebarViewController.swift#L179)
 
-### Keep a table view and a model per mailbox
-
-Medium priority. `MessageListViewController.install` builds a new
-`NSTableView` and a new `ListWindowModel` for every mailbox choice
-(`:295-353`), which is why no mailbox remembers its scroll position or
-selection (Part 8, missing features). Part 1's B10 asks for the table to
-survive a Search change; keeping one table per mailbox also lets a
-mailbox return to where the user left it.
-
 ### Cache the calendar the row formatter uses
 
 Low priority. `MessageRowFormatter.dateString` resolves
@@ -1390,6 +1423,13 @@ Medium priority. `resetSelection` hides the whole header and shows
 has to fetch, the pane shows neither subject nor sender, which the row
 already knows. Show them at once, and a progress indicator beside the
 note. [Reader load](apps/macos/Sweetbriar/Reader/ReaderViewController.swift#L262)
+
+The synthetic local archive also showed a brief full-pane flash on rapid
+selection. Measure a grace period for the placeholder and compare
+retaining or crossfading the previous rendition. Never allow actions,
+links or CID requests from the old message to operate as the newly
+selected one. Test stale loads, rapid reselection, accessibility
+announcements and Reduce Motion.
 
 ### Give HTML mail a dark canvas when it sets no colors
 
@@ -1444,13 +1484,9 @@ both. [Header tint](apps/macos/Sweetbriar/Reader/ReaderViewController.swift#L525
 
 ## Missing features
 
-- **A Dock badge for unread mail.** Nothing sets `NSApp.dockTile`.
-  Count the Inbox only, with a setting to turn it off. Needs a spec
-  line in 08.
-- **A mailbox remembers where you was.** Coming back to a mailbox shows
-  the top with nothing selected. Keep the scroll offset and the
-  selected id per mailbox for the session; restore once the first page
-  lands. Depends on the table-view entry under Performance.
+- **A Dock badge preference.** The Inbox unread badge now exists. Consider
+  a setting to turn it off, with a spec line and a test that clearing the
+  preference updates an already-visible badge.
 - **Read and star for the local archive.** Both commands are disabled
   for local-archive rows ("The local archive's flags are later",
   spec/07 "Flags"), so imported mail can never be marked unread. A core
@@ -1460,9 +1496,6 @@ both. [Header tint](apps/macos/Sweetbriar/Reader/ReaderViewController.swift#L525
   import the Unified Inbox is empty while "Local Archive > Inbox" holds
   everything (seen). Offer "Treat as Inbox" for a mailbox named Inbox,
   Sent, Drafts, Trash, Archive or Junk at import, and store the role.
-- **A sort order for a mailbox.** The pilot's only list sort is newest
-  first and `date_asc` is reserved (spec/07). If wanted: View -> Sort
-  By, newest or oldest first, kept per mailbox.
 - **Skip a snippet that repeats the subject.** A message whose first
   body line equals its subject shows it twice ("Your receipt from
   Harbor Coffee Co.", seen). In `sb-mime`'s summary, drop that line and
@@ -1473,19 +1506,11 @@ both. [Header tint](apps/macos/Sweetbriar/Reader/ReaderViewController.swift#L525
 
 ## Ideas
 
-- **A palette over every command.** Extends "Jump to a mailbox or saved
-  view by typing" and Part 5's D4: every command already has a stable
-  identifier (`ch.lkmc.Sweetbriar.cmd.*`), so one fuzzy palette over the
-  enabled ones, keyboard only, is cheap.
 - **Move all from this sender.** A row's context menu offers it, with
   the filing toast's Undo; the selection token path already exists.
 - **Sender monograms.** In the reader header and the list, colored by
   the sender's domain and never by an account color; the account colors
   keep their meaning.
-- **Send later.** Beside Undo Send, which exists: a date and time the
-  Out Box holds the attempt until.
-- **Hover actions on rows.** Part 3's F8 asks for swipe actions; actions
-  that appear under the pointer need no gesture.
 
 ## Build and developer experience
 
@@ -1531,3 +1556,236 @@ both. [Header tint](apps/macos/Sweetbriar/Reader/ReaderViewController.swift#L525
   type-check was skipped; the derived app icon has no drift check;
   Dependabot skips `fuzz/` and `ci/go-proton-api`; spec/11 describes
   caches CI does not have; the layering check runs twice per leg.
+
+# Part 9 — Synthetic-mail and core follow-up
+
+A further review of `19fde48e` used a 48-message synthetic archive and
+light and dark screenshots of the list, reader, search, composer and
+settings. References below were checked against `f196d090`; confirm each
+reproduction on the branch used to implement it. Performance proposals
+need measurements rather than assuming the estimated gain.
+
+## MIME and reader fidelity
+
+### Preserve block boundaries in HTML-derived text
+
+HTML-only list snippets can join adjacent headings, divs, list items or
+table cells into one word; the same `html_to_text` conversion is used
+for a plain-text rendition. The full-message and extent snippet paths
+differ, so fix and test both together. Use block-aware HTML extraction
+that preserves inline adjacency, decodes HTML5 legacy entities, and
+retains existing byte and resource limits. Test minified headings,
+nested lists and tables, inline spans, Unicode and malformed HTML, as
+well as full versus partial input. Decide separately whether old stored
+snippets should be rebuilt. Consider preferring authored text over quoted
+replies and signatures, with a fallback when no authored text exists.
+[Summary](crates/sb-mime/src/lib.rs#L138),
+[Extent snippet](crates/sb-mime/src/extract.rs#L142),
+[Plain rendition](crates/sb-mime/src/rendition.rs#L218),
+[Search text walker](crates/sb-mime/src/search_document/html.rs)
+
+### Distinguish numeric prose from link labels that name a host
+
+The link warning's label-host detector can interpret dotted numeric
+prose, such as a version number, as a host and report a misleading
+domain mismatch. Reproduce with real link labels before changing the
+heuristic. Keep detection of actual IPv4 addresses, domains and IDNs;
+test matching and mismatched destinations as well as versions and
+prices. Do not suppress a genuine spoofing warning to reduce noise.
+[Host detection](crates/sb-mime/src/render.rs#L601)
+
+### Establish a safe base presentation for unstyled HTML mail
+
+The sanitized HTML fragment was observed with WebKit defaults, small
+margins and an oversized blocked-image placeholder. Test messages with
+no sender styling, explicit colors, inline images and wide tables at
+minimum pane width in both appearances. Specify a restrained base font,
+spacing and overflow behavior, preserving sender inline styles and the
+content-blocking boundary. Coordinate adaptive colors with Part 8's
+color-free dark-canvas entry; do not infer safety from an absent color
+on only the top-level element. [Sanitizer](crates/sb-mime/src/render.rs),
+[HTML reader](apps/macos/Sweetbriar/Reader/HTMLReaderView.swift)
+
+## Composer and interaction
+
+### Add source-preserving Markdown authoring commands
+
+Beyond Bold and Italic, consider link, strikethrough, code, quote and
+bulleted or numbered list commands, plus list continuation and an empty
+item to end a list. Define shortcuts and formatting behavior in the
+composer contract first. Each command must preserve unselected text,
+act as one undoable edit, avoid touching marked input and keep TextKit 2
+active. Cover selections across paragraphs, existing markers and
+Unicode. [Formatting](apps/macos/Sweetbriar/Composer/MarkdownFormatting.swift),
+[Editor](apps/macos/Sweetbriar/Composer/ComposerTextView.swift)
+
+### Expose literal plain-text sending
+
+The draft model carries `plainFlowed`, but the review found no control
+to select literal non-flowed text, useful for patches and code. Confirm
+the current composer path, then specify a plainly named option for
+plain mode, with a durable per-draft value and an accessible checked
+state. Test reopening a draft and both MIME encodings.
+[Composer contract](spec/08-macos-app.md#composer),
+[Message format](spec/05-send.md)
+
+### Improve remaining compact states and controls
+
+- Check the unread dot and other row markers against selected-row
+  backgrounds: an accent-colored unread dot disappeared on an emphasized
+  accent selection in the synthetic review. Use selection-aware colors
+  with sufficient contrast, including inactive and high-contrast windows;
+  keep unread state available to VoiceOver.
+  [Row markers](apps/macos/Sweetbriar/AppKitPrototypeList.swift)
+- In a one-account archive, evaluate hiding the repeated account rail and
+  monogram in unified and search rows to give the message more width.
+  Revise the row contract first; retain identity cues whenever multiple
+  accounts can appear and test the transition when accounts are added or
+  removed. [Row contract](spec/08-macos-app.md#message-list)
+- Message-row VoiceOver labels currently name sender, subject, date and
+  flags but omit attachment state. Add an unambiguous attachment cue,
+  coordinate with the existing tag-collapse accessibility work, and test
+  both lists. [Row label](apps/macos/Sweetbriar/MessageRowPresentation.swift#L179)
+- The scope popup was visibly truncated at a narrow search width. Measure
+  minimum supported widths and choose a readable scope presentation
+  without hiding sort or search accessibility.
+- Plain-text quote levels currently rely on colored italic text and
+  visible `>` markers. Prototype accessible quote bars and signature
+  de-emphasis while keeping copy and selection faithful to source.
+- Recipient safety-token warnings wait until field editing ends. This is
+  tested and deliberately avoids replacing the token value during editing,
+  which would erase native typing history. Explore earlier feedback only
+  if focus, marked text and undo remain intact; retain the end-edit test.
+  [Recipients](apps/macos/Sweetbriar/Composer/RecipientField.swift)
+- A diagnostics save error remains after a later successful save. Clear
+  it on success while retaining a useful error on failure; test failure,
+  retry and cancel. [Diagnostics save](apps/macos/Sweetbriar/DiagnosticsSheet.swift#L71)
+- Date labels should update across midnight and time-zone changes even
+  when no mailbox generation changes. Invalidate visible rows on the
+  relevant system notifications; test an injected calendar boundary.
+- The app-hosted import layout test logged conflicting vertical
+  constraints in `SearchCoverageView`: its height was zero while its
+  internal stack still required a bottom inset. Reproduce on the main
+  window, then make the hidden state compatible with the stack's
+  constraints and test both hidden and visible coverage.
+  [Search coverage](apps/macos/Sweetbriar/Search/SearchCoverageView.swift)
+- Activity describes the local archive as "Not synced since launch" even
+  though it does not sync. Distinguish the local archive from an account
+  that has not completed its first sync; test both states.
+  [Activity wording](apps/macos/SweetbriarBridge/ActivityPresentation.swift)
+
+### Prototype calmer composer and settings chrome
+
+Extend the composer state work in Part 7 with a toolbar for Send, Attach
+and format, a menu for less frequent commands, lighter field separators,
+and a borderless editor with comfortable insets. Consider a remembered
+Cc/Bcc disclosure and compact save-status treatment. Keep all commands,
+identity warnings, keyboard access and persisted recipients; compare
+small-window, dark-mode and VoiceOver behavior before revising spec/08.
+For Settings, compare toolbar-style tabs and grouped forms with the
+current fixed window, including accessible account-color swatches and a
+clear backup destination control. Preserve identifiers and existing
+flows, and avoid truncating the larger panes.
+[Composer](apps/macos/Sweetbriar/Composer/ComposeWindowController.swift),
+[Settings](apps/macos/Sweetbriar/AppearanceSettingsWindow.swift)
+
+### Keep Search reachable in a narrow toolbar
+
+The synthetic walkthrough showed the toolbar search field collapsing to
+a button at the default window width. Measure the supported widths and
+toolbar customization behavior, then consider prioritizing Search while
+keeping the displaced commands available and keyboard accessible. This
+concerns the toolbar item, not the separately verified search strip.
+[Toolbar](apps/macos/Sweetbriar/MainToolbar.swift)
+
+## Performance and protocol follow-up
+
+### Avoid repeated full-window checks during command validation
+
+For a large whole-window selection, `wholeWindowSelection` checks every
+ID against the selection. Profile toolbar and menu validation with a
+large archive before optimizing; if repeated scans are material, cache
+the result per selection and generation or maintain a proven invariant.
+Test changes to either and never substitute a count-only check that could
+mistake a different set of IDs for the full selection.
+[Selection](apps/macos/SweetbriarBridge/ListWindowModel.swift#L559)
+
+### Profile opt-in latency logging and external-edit I/O
+
+The review found synchronous file work on the main actor in the latency
+recorder and external editor. Measure a full log rotation and a large
+external-edit save before changing either path. If they stall the UI,
+move bounded reads and writes off the main actor while preserving event
+order, error reporting, last-save-on-close and archive retirement. Test
+cancellation, read errors, size limits and a save racing with close.
+[Latency log](apps/macos/SweetbriarBridge/LatencyLog.swift),
+[External edit](apps/macos/SweetbriarBridge/ExternalEdit.swift)
+
+### Investigate list invalidation recovery on errors
+
+A helper reported that a window subscription failure ends its pull loop
+and a failed index refresh may consume the invalidation without a retry.
+First establish which failures are reachable while an archive remains
+open, including restore and a transient store read, and whether the error
+is visible. Add gated tests for each reachable path; if recovery is needed,
+use bounded backoff and retire subscriptions safely rather than spinning
+on a closed engine. [List model](apps/macos/SweetbriarBridge/ListWindowModel.swift)
+
+### Bound send-evidence memory with history retention
+
+Review the in-memory evidence map and the clone used to read the Out
+Box against the retained attempt history. If entries outlive all history,
+prune only when a documented retention rule makes them unreachable.
+Never discard evidence that spec/07 requires for an accepted or unknown
+attempt. Test long sessions, retained history and any prune boundary.
+[Send worker](crates/sb-engine/src/proton_send.rs),
+[Out Box read](crates/sb-engine/src/send.rs)
+
+### Check synthetic window cursor error precedence
+
+Synthetic window filling appears to check generation before resolving
+the cursor, unlike the store path. Add malformed and foreign cursor
+cases with an old generation; align the result with the cursor contract
+without weakening generation fencing. This path serves prototype and
+benchmark windows, so confirm its callers and impact first.
+[Synthetic windows](crates/sb-engine/src/windows.rs)
+
+### Remove redundant index status work if the latch permits it
+
+An index-worker turn appears to read status twice, with the first value
+discarded. Check why both transactions exist and the failure-latch
+invariant before removing one. Retain tests for latched I/O failures,
+retry and cancellation. [Index worker](crates/sb-engine/src/index.rs#L331)
+
+### Qualify generic IMAP fallback behavior
+
+The retained generic IMAP path has a whole-mailbox flag sweep that can
+exceed its metadata budget, although that sweep currently has no engine
+caller. A refused ID command is fatal and a BYE during LOGIN can be
+reported as a rejected password. Reproduce each against a synthetic
+server and check the IMAP contract before changing behavior: the spec
+calls the ID version a best-effort hint but does not explicitly say an
+ID refusal is tolerated. Keep this separate from Proton, which uses its
+direct API. [IMAP implementation](crates/sb-imap/src),
+[IMAP contract](spec/04-sync-imap.md)
+
+## Experiments
+
+- Try a subtle briar-rose empty-inbox illustration with motion disabled
+  under Reduce Motion; compare it with the existing first-run welcome.
+- Prototype an account-colored compose insertion point only where its
+  contrast remains visible in both appearances.
+- Explore exporting a conversation as Markdown with stable source
+  attribution, and a distraction-reduced composer that keeps all fields
+  reachable. Specify privacy, content and export semantics first.
+- Explore a collapsible original-message preview while composing a reply,
+  and a restrained optional haptic when a drag lands on a valid filing
+  target. Keep keyboard feedback equivalent and honor system preferences.
+- A tracking-pixel label would need evidence stronger than image size
+  or hidden styling alone; retain the factual blocked-content count and
+  avoid claiming a sender intended tracking without such evidence.
+- Post-pilot Mac integration candidates include App Intents for creating
+  a message, searching and opening a mailbox, a Share extension for a
+  draft, account-based Focus filters, and opt-in Spotlight indexing of
+  headers. Specify authorization, local retention and privacy boundaries
+  before indexing or exposing archive content to another process.
