@@ -428,6 +428,7 @@ struct RenderedMessageRow: View {
         // (sender, subject, date, unread, flagged).
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(Text(verbatim: content.accessibilityLabel
+            + content.accessibilityOverflowSuffix
             + (showMarker && account != nil ? ", account \(accountLabel)" : "")))
     }
 

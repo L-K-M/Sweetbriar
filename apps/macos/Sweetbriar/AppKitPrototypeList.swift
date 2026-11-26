@@ -718,7 +718,7 @@ final class MessageRowCellView: NSTableCellView {
 
         setAccessibilityElement(true)
         let label = showsAccountMarker && account != nil ? ", account \(accountLabel ?? "")" : ""
-        setAccessibilityLabel(content.accessibilityLabel + label)
+        setAccessibilityLabel(content.accessibilityLabel + content.accessibilityOverflowSuffix + label)
         needsLayout = true
     }
 
@@ -848,8 +848,11 @@ final class MessageRowCellView: NSTableCellView {
         }
         if !overflowChip.isHidden {
             let chipWidth = overflowChip.fittingWidth()
+            // Keep the chip inside the row when the trailing space is
+            // already spent; the snippet narrows to fit.
+            let chipX = max(contentX, chipTrail - chipWidth)
             overflowChip.frame = NSRect(
-                x: chipTrail - chipWidth, y: 40,
+                x: chipX, y: 40,
                 width: chipWidth, height: 15
             )
             chipTrail = overflowChip.frame.minX - metrics.markerSpacing

@@ -109,12 +109,21 @@ struct MessageRowContent: Equatable {
     var monogram: String
 
     /// The first `MessageRowMetrics.visibleTagCount` tags, the only
-    /// ones the lists draw as chips.
+    /// ones the lists draw as chips. Tags are unique per message
+    /// (`message_tags`'s primary key), so `ForEach(id: \.self)` in the
+    /// prototype list stays stable.
     var visibleTags: [String] { Array(tags.prefix(MessageRowMetrics.visibleTagCount)) }
 
     /// How many tags the chips collapse, drawn as the `+N` chip's
     /// title. Zero when every tag fits.
     var hiddenTagCount: Int { max(0, tags.count - MessageRowMetrics.visibleTagCount) }
+
+    /// What VoiceOver hears for the collapsed tags, appended after the
+    /// shared label. Empty when nothing is collapsed.
+    var accessibilityOverflowSuffix: String {
+        guard hiddenTagCount > 0 else { return "" }
+        return hiddenTagCount == 1 ? ", 1 more tag" : ", \(hiddenTagCount) more tags"
+    }
 }
 
 /// Formats `ListRow` fields into `MessageRowContent` (plan M0.10):

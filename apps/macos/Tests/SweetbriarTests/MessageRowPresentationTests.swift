@@ -119,6 +119,8 @@ struct MessageRowPresentationTests {
         )
         #expect(content.visibleTags == ["one", "two", "three"])
         #expect(content.hiddenTagCount == 2)
+        #expect(content.tags == ["one", "two", "three", "four", "five"])
+        #expect(content.accessibilityOverflowSuffix == ", 2 more tags")
 
         let fitting = formatter.present(
             sender: "Ada", subject: "Hi", snippet: "",
@@ -129,5 +131,6 @@ struct MessageRowPresentationTests {
         )
         #expect(fitting.visibleTags == ["one", "two"])
         #expect(fitting.hiddenTagCount == 0)
+        #expect(fitting.accessibilityOverflowSuffix.isEmpty)
     }
 }
