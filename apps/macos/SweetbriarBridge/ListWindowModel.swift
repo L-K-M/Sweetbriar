@@ -551,6 +551,19 @@ public final class ListWindowModel {
         selection = ids
     }
 
+    /// Ask for the pages that failed to read again (spec/08: a failed
+    /// page is a state the user can act on). Without this the only
+    /// recovery is the next visibility change or index fetch, so a
+    /// user who stops scrolling is left with placeholders and an error
+    /// line and no way out but scrolling.
+    public func retryFailedPages() {
+        guard !failedPages.isEmpty, !closed else { return }
+        lastError = nil
+        // `applyVisibility` drops the failed pages from the skip set
+        // and pumps the wanted ones again.
+        applyVisibility()
+    }
+
     /// The window's `SelectionToken` when `selected` is a mailbox
     /// window's whole exact selection of more than the explicit limit
     /// (spec/08 "Message list" Selection): what a bulk command passes
@@ -716,6 +729,9 @@ public final class ListWindowModel {
         serials = [:]
         pendingDelivery = [:]
         failedPages = []
+        // A fresh index replaced whatever failed to read: the list is
+        // healthy again (the failure path clears this the same way).
+        lastError = nil
         switch mode {
         case .rebuild:
             dropAllRows()
@@ -1198,6 +1214,16 @@ public final class ListWindowModel {
                 stamp &+= 1
                 lruStamp[completion.page] = stamp
                 landed.append(completion.page)
+                // A page that had failed and now lands: the list is
+                // healthy again. Without this the error is sticky —
+                // the status line keeps "Couldn't read this list" over
+                // healthy rows and the window's subtitle loses its
+                // count, because `onCountChange` reports nil while
+                // `lastError` is set.
+                failedPages.remove(completion.page)
+                if failedPages.isEmpty {
+                    lastError = nil
+                }
             case .failure(let error):
                 if error is CancellationError { continue }
                 if let failure = error as? CoreFailure,
