@@ -304,6 +304,19 @@ expect_no_call "cargo"
 for tool in rustup cargo rustc; do
   mv "$toolchain/$tool.saved" "$rust_bin/$tool"
 done
+
+# A rustup that names a directory without cargo and rustc is refused the same way.
+fake rustup 'echo "$TOOLCHAIN/nowhere/$2"'
+for tool in rustup cargo rustc; do
+  mv "$rust_bin/$tool" "$toolchain/$tool.saved"
+done
+run "is refused when the named toolchain holds no cargo and rustc" -- app --install
+expect_status 1
+expect_out "names no toolchain holding cargo and rustc"
+expect_no_call "cargo"
+for tool in rustup cargo rustc; do
+  mv "$toolchain/$tool.saved" "$rust_bin/$tool"
+done
 fake rustup 'echo "unmanaged rustup" >> "$log"; exit 1'
 
 # The Xcode build phase must bundle the same toolchain's standard-library

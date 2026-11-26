@@ -186,7 +186,7 @@ build_app() {
     if [[ -n "$tool" && -x "${tool%/*}/cargo" && -x "${tool%/*}/rustc" ]]; then
       rust_bin="${tool%/*}"
     else
-      skip_or_fail app "rustup's $missing not found at $home_bin/$missing, and the rustup on PATH names no toolchain holding cargo and rustc (see https://rustup.rs)"; return
+      skip_or_fail app "rustup's $missing not found at $home_bin/$missing, and the rustup on PATH names no toolchain holding cargo and rustc (run 'rustup which cargo' from the repository root for its reason; see https://rustup.rs)"; return
     fi
   fi
   if [[ -z "$rust_bin" ]]; then
