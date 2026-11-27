@@ -296,6 +296,13 @@ public final class SidebarModel {
         await reload()
     }
 
+    /// Called after every read, successful or not. `sections` is
+    /// replaced on each list-generation change, so a caller that
+    /// observes it directly re-reads whenever mail arrives; this
+    /// callback lets a caller re-read only what it draws and decide
+    /// for itself whether anything changed.
+    public var onSectionsRead: (@MainActor () -> Void)?
+
     private func readOnce() async {
         do {
             let accounts = try await source.accounts()
@@ -314,11 +321,11 @@ public final class SidebarModel {
             mailboxes = byAccount
             generation = oldest ?? generation
             lastError = nil
+            onSectionsRead?()
         } catch {
             lastError = error
         }
     }
-
     /// Relist the saved views after a write, without re-reading accounts.
     private func updateSavedViews(_ views: [SavedView]) {
         savedViews = views

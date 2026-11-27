@@ -51,8 +51,6 @@ final class AppKitPrototypeList: NSView {
     private let formatter: MessageRowFormatter
     private let accountMarker: AccountMarker
     private let appearanceModel: AppearanceModel?
-    private let accountLabel: (String) -> String
-    private let observeAccountLabels: () -> Void
     private let selectionLoss: SelectionLoss
     private let scrollView = NSScrollView()
     private let tableView = MessageTableView()
@@ -74,6 +72,14 @@ final class AppKitPrototypeList: NSView {
 
     /// The rows the last drag from this list took.
     private(set) var draggedIDs: Set<Int64> = []
+
+    /// The account label per account id, read once per reload rather
+    /// than once per visible row on every reload.
+    private var accountLabels: [String: String] = [:]
+
+    /// The labels the caller last supplied, so an unchanged set is a
+    /// no-op.
+    private var suppliedLabels: [String: String] = [:]
 
     /// Where this list's filing undo is kept, apart from the window's,
     /// which the text editors share: ⌘Z in those never moves mail
@@ -105,8 +111,7 @@ final class AppKitPrototypeList: NSView {
         formatter: MessageRowFormatter,
         accountMarker: AccountMarker = .shown,
         appearance: AppearanceModel? = nil,
-        accountLabel: @escaping (String) -> String = { $0 },
-        observeAccountLabels: @escaping () -> Void = {},
+        accountLabels: [String: String] = [:],
         selectionLoss: SelectionLoss = .keepPosition,
         onIndexChange: (@MainActor () -> Void)? = nil
     ) {
@@ -114,8 +119,7 @@ final class AppKitPrototypeList: NSView {
         self.formatter = formatter
         self.accountMarker = accountMarker
         self.appearanceModel = appearance
-        self.accountLabel = accountLabel
-        self.observeAccountLabels = observeAccountLabels
+        self.accountLabels = accountLabels
         self.selectionLoss = selectionLoss
         super.init(frame: .zero)
         buildTable()
@@ -149,7 +153,6 @@ final class AppKitPrototypeList: NSView {
         guard let appearanceModel else { return }
         withObservationTracking {
             _ = appearanceModel.appearance
-            observeAccountLabels()
         } onChange: { [weak self] in
             Task { @MainActor [weak self] in
                 guard let self else { return }
@@ -160,6 +163,21 @@ final class AppKitPrototypeList: NSView {
                 observeAppearance()
             }
         }
+    }
+
+    /// The caller reports that an account label changed. The list does
+    /// not observe the sidebar itself: `SidebarModel.sections` is
+    /// replaced on every list-generation change, so subscribing here
+    /// would rebuild the whole table whenever mail arrives (spec/08
+    /// "Sidebar"). Nothing happens while no label actually changed.
+    func reloadAccountLabels(_ labels: [String: String]) {
+        guard labels != suppliedLabels else { return }
+        suppliedLabels = labels
+        accountLabels = labels
+        restoringSelection = true
+        tableView.reloadData()
+        restoreSelection()
+        restoringSelection = false
     }
 
     required init?(coder: NSCoder) {
@@ -357,7 +375,8 @@ extension AppKitPrototypeList: NSTableViewDataSource, NSTableViewDelegate {
         let row = model.row(at: row)
         let account = row.flatMap { row in appearanceModel?.appearance?.accounts.first { $0.accountId == row.accountId } }
         cell.configure(content: row.map { formatter.present($0) }, account: account,
-                       accountLabel: row.map { accountLabel($0.accountId) }, usesAppearance: appearanceModel != nil)
+                       accountLabel: row.flatMap { accountLabels[$0.accountId] },
+                       usesAppearance: appearanceModel != nil)
         return cell
     }
 

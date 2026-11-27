@@ -370,11 +370,6 @@ final class MessageListViewController: NSViewController {
             formatter: formatter,
             accountMarker: spec.showsAccountMarker ? .shown : .hidden,
             appearance: appearance,
-            accountLabel: { [weak sidebar] id in
-                guard let sidebar else { return id }
-                return Self.accountLabel(id, sections: sidebar.sections)
-            },
-            observeAccountLabels: { [weak sidebar] in _ = sidebar?.sections },
             // spec/08: reopen at Top once the selected message is no
             // longer a hit.
             selectionLoss: spec.isSearch ? .reopenAtTop : .keepPosition
@@ -388,6 +383,14 @@ final class MessageListViewController: NSViewController {
         list.onOpen = onOpenMessage
         list.onPage = onPageReader
         list.filingUndoManager = filingUndoManager
+        // The rows draw the account labels the sidebar reports; the
+        // list no longer observes `SidebarModel.sections`, which is
+        // replaced on every list-generation change (spec/08).
+        list.reloadAccountLabels(accountLabels(for: sidebar))
+        sidebar.onSectionsRead = { [weak self, weak list] in
+            guard let self, let list else { return }
+            list.reloadAccountLabels(self.accountLabels(for: sidebar))
+        }
         list.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(list, positioned: .below, relativeTo: statusLabel)
         NSLayoutConstraint.activate([
@@ -509,6 +512,16 @@ final class MessageListViewController: NSViewController {
         let accounts = sections.filter { $0.id != SidebarModel.unifiedSectionID }.sorted { $0.id < $1.id }
         guard let index = accounts.firstIndex(where: { $0.id == id }) else { return id }
         return "\(index + 1) · \(SidebarViewController.accountLabel(accounts[index], among: sections))"
+    }
+
+    /// The account label per account id, resolved in one pass so a
+    /// reload does not re-run the disambiguation per visible row.
+    private func accountLabels(for sidebar: SidebarModel) -> [String: String] {
+        var labels: [String: String] = [:]
+        for section in sidebar.sections where section.account != nil {
+            labels[section.id] = Self.accountLabel(section.id, sections: sidebar.sections)
+        }
+        return labels
     }
 
     /// Show the model's read failures and Search status as they

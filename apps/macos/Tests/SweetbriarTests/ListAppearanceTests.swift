@@ -285,7 +285,7 @@ struct ListAppearanceTests {
         let model = ListWindowModel(source: OneRowSource(accountID: current.accountId),
                                     spec: .debugSynthetic, clock: ImmediateClock())
         let list = AppKitPrototypeList(model: model, formatter: MessageRowFormatter(),
-                                       accountLabel: { _ in "Work" })
+                                       accountLabels: [current.accountId: "Work"])
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 300, height: 100),
                               styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
@@ -475,7 +475,7 @@ struct ListAppearanceTests {
         let appearance = shared.model(source: source)
         let model = ListWindowModel(source: OneRowSource(), spec: .debugSynthetic, clock: ImmediateClock())
         let list = AppKitPrototypeList(model: model, formatter: MessageRowFormatter(),
-                                       appearance: appearance, accountLabel: { _ in "Work" })
+                                       appearance: appearance, accountLabels: ["account-1": "Work"])
         list.frame = NSRect(x: 0, y: 0, width: 300, height: 100)
         let window = NSWindow(contentRect: list.frame, styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
