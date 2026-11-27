@@ -86,6 +86,23 @@ struct ListAppearanceTests {
         #expect(!plain.showsMarker)
     }
 
+    /// A row answers the pointer: the hover fill shows while the
+    /// pointer is over an unselected row, and the selection's own
+    /// highlight replaces it rather than stacking on top.
+    @Test func theHoverFillYieldsToTheSelection() {
+        #expect(HoverRowView.hoverAlpha(hovering: true, selected: false) == 1)
+        #expect(HoverRowView.hoverAlpha(hovering: false, selected: false) == 0)
+        #expect(HoverRowView.hoverAlpha(hovering: true, selected: true) == 0)
+        #expect(HoverRowView.hoverAlpha(hovering: false, selected: true) == 0)
+    }
+
+    /// The fill's alpha is faint by design and stronger once Increase
+    /// Contrast has taken the rest of the window's subtlety away.
+    @Test func theFillAlphaAnswersIncreaseContrast() {
+        #expect(HoverRowView.fillAlpha(increaseContrast: false) == 0.05)
+        #expect(HoverRowView.fillAlpha(increaseContrast: true) == 0.14)
+    }
+
     @Test func flaggedControllerShowsBothAccountsAndSurvivesAppearanceReset() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }

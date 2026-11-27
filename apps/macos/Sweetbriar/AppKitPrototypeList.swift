@@ -20,7 +20,6 @@ final class AppKitPrototypeList: NSView {
     private static let cellIdentifier = NSUserInterfaceItemIdentifier(
         "MessageRow"
     )
-
     /// The account palette; the SwiftUI list declares the same colors
     /// in the same order so `accountColorIndex` matches across lists.
     private static let accountPalette: [NSColor] = [
@@ -432,6 +431,17 @@ extension AppKitPrototypeList: NSTableViewDataSource, NSTableViewDelegate {
         let cell = MessageRowCellView(showsAccountMarker: accountMarker == .shown)
         cell.identifier = Self.cellIdentifier
         return cell
+    }
+
+    /// A row view of our own, so a row answers the pointer the way
+    /// Mail's message list does: a subtle fill on hover.
+    ///
+    /// A fresh one per row: `makeView(withIdentifier:owner:)` dequeues
+    /// *cell* views, and asking it for a row view always misses, so the
+    /// identifier would be dead code. Row views are pooled by the table
+    /// itself, and a recycling pool here would be a second one.
+    func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
+        HoverRowView()
     }
 
     /// Keep the id-held selection in sync with the table's indexes —
@@ -940,6 +950,154 @@ extension AppKitPrototypeList {
     /// The palette slot's color.
     static func accountColor(at index: Int) -> NSColor {
         accountPalette[index % accountPalette.count]
+    }
+}
+
+// MARK: - Row view
+
+/// The list's row view: a subtle fill while the pointer is over the
+/// row, the way Mail's message list answers a hover. The fill sits
+/// under the cell the table adds afterwards. The selection highlight
+/// is painted by the row itself, beneath the fill, so `hoverAlpha`
+/// fades the fill out while selected instead of stacking two signals.
+@MainActor
+final class HoverRowView: NSTableRowView {
+    /// The hover fill. Insets keep it off the row's edges, so the
+    /// rail and the list's separator stay readable.
+    private let hoverFill = NSView()
+    private var trackingArea: NSTrackingArea?
+    private var hovering = false
+
+    /// The fill's corner radius: a rounded rectangle of its own, not
+    /// the placeholder's — the two visuals are unrelated.
+    private static let cornerRadius: CGFloat = 6
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        hoverFill.wantsLayer = true
+        hoverFill.layer?.cornerRadius = Self.cornerRadius
+        hoverFill.alphaValue = 0
+        addSubview(hoverFill)
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("HoverRowView is built in code")
+    }
+
+    /// Resolve the fill for the appearance it is in, so a Dark Mode
+    /// switch and Increase Contrast both take effect without a reload.
+    /// The color is resolved inside the appearance: `cgColor` on a
+    /// dynamic color otherwise resolves against whatever appearance
+    /// happens to be current rather than this view's.
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        // A 5 % tint is faint by design, and invisible once Increase
+        // Contrast has taken the rest of the window's subtlety away.
+        let alpha = Self.fillAlpha(
+            increaseContrast: NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
+        )
+        var fill: CGColor?
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            fill = NSColor.labelColor.withAlphaComponent(alpha).cgColor
+        }
+        hoverFill.layer?.backgroundColor = fill
+    }
+
+    override func layout() {
+        super.layout()
+        // One point of inset vertically keeps the fill inside the row
+        // pitch, so it never bleeds into the gap between rows.
+        hoverFill.frame = bounds.insetBy(dx: 3, dy: 1)
+    }
+
+    /// The fill is decoration: a hit that lands on it falls through to
+    /// the row, so the gutter still selects the row the way the default
+    /// row view did.
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        let hit = super.hitTest(point)
+        return hit === hoverFill ? nil : hit
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let trackingArea {
+            removeTrackingArea(trackingArea)
+        }
+        // `bounds`, not `.zero`: `.inVisibleRect` keeps the area in
+        // the view's visible rectangle, and whether AppKit substitutes
+        // or intersects it with the rect passed here, `bounds` is right
+        // either way.
+        let area = NSTrackingArea(
+            rect: bounds,
+            options: [.mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(area)
+        trackingArea = area
+        // A row can appear under a stationary pointer — a reload, or a
+        // row scrolled in beneath the cursor. AppKit sends no
+        // `mouseEntered` until the pointer moves, so the state is
+        // primed here or the highlight pops in a beat late.
+        // `mouseLocationOutsideOfEventStream` is in screen coordinates,
+        // so it becomes window coordinates before this view's own
+        // conversion, or the hit test is offset by the window's origin.
+        hovering = window.map {
+            // `convertFromScreen` is the rect form on `NSWindow`, so the
+            // screen point travels as a zero-size rect and comes back as
+            // its origin.
+            let inWindow = $0.convertFromScreen(
+                NSRect(origin: $0.mouseLocationOutsideOfEventStream, size: .zero)
+            ).origin
+            let here: NSPoint = convert(inWindow, from: nil)
+            return bounds.contains(here)
+        } ?? false
+        // Applied rather than animated: a row that appears under a
+        // stationary cursor should be filled at once, and this must not
+        // depend on AppKit posting a `mouseEntered` for an area that
+        // was installed under a pointer that is not moving.
+        // A fade still in flight finishes at its own target and would
+        // re-assert it, so it is cancelled first.
+        hoverFill.layer?.removeAllAnimations()
+        hoverFill.alphaValue = Self.hoverAlpha(hovering: hovering, selected: isSelected)
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        hovering = true
+        animateHover()
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        hovering = false
+        animateHover()
+    }
+
+    /// The selection hides the hover fill: two fills on one row read
+    /// as a bug, and AppKit's highlight is the stronger signal.
+    override var isSelected: Bool {
+        didSet {
+            if oldValue != isSelected { animateHover() }
+        }
+    }
+
+    private func animateHover() {
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.12
+            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            hoverFill.animator().alphaValue = Self.hoverAlpha(hovering: hovering, selected: isSelected)
+        }
+    }
+
+    /// The hover fill's target alpha. Pure, so the rule is testable
+    /// without driving the pointer.
+    nonisolated static func hoverAlpha(hovering: Bool, selected: Bool) -> CGFloat {
+        hovering && !selected ? 1 : 0
+    }
+
+    /// The fill's alpha: faint by design, and stronger once Increase
+    /// Contrast has taken the rest of the window's subtlety away.
+    nonisolated static func fillAlpha(increaseContrast: Bool) -> CGFloat {
+        increaseContrast ? 0.14 : 0.05
     }
 }
 
