@@ -1024,7 +1024,12 @@ final class HoverRowView: NSTableRowView {
         // so it becomes window coordinates before this view's own
         // conversion, or the hit test is offset by the window's origin.
         hovering = window.map {
-            let inWindow: NSPoint = $0.convertFromScreen($0.mouseLocationOutsideOfEventStream)
+            // `convertFromScreen` is the rect form on `NSWindow`, so the
+            // screen point travels as a zero-size rect and comes back as
+            // its origin.
+            let inWindow = $0.convertFromScreen(
+                NSRect(origin: $0.mouseLocationOutsideOfEventStream, size: .zero)
+            ).origin
             let here: NSPoint = convert(inWindow, from: nil)
             return bounds.contains(here)
         } ?? false
