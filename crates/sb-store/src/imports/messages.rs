@@ -16,36 +16,7 @@ use crate::objects::{
 };
 use sha2::{Digest, Sha256};
 
-use crate::lists::MailboxRole;
 use crate::{StoreError, Timestamp, list_rows, threads};
-
-/// The special-use role an imported mailbox's name implies, or `None`
-/// when it implies nothing (spec/02 `mailboxes.role`).
-///
-/// An import names its mailbox after the source's file or package stem
-/// (spec/09), so a well-known mailbox name arrives here intact, and the
-/// unified windows, which page `d_list_rows` by `mailbox_role`
-/// (spec/02), have rows to show for a local archive. Any other name
-/// keeps a `NULL` role rather than being guessed into a unified view it
-/// does not belong to.
-///
-/// Clients spell some of these differently from the role itself, so each
-/// role takes the spellings in use rather than only its own name. A
-/// renamed mailbox is out of reach by design: the match is a known
-/// spelling, never a substring of one.
-fn imported_role(name: &str) -> Option<MailboxRole> {
-    match name.trim().to_ascii_lowercase().as_str() {
-        "inbox" => Some(MailboxRole::Inbox),
-        "sent" | "sent messages" | "sent mail" => Some(MailboxRole::Sent),
-        "drafts" => Some(MailboxRole::Drafts),
-        "trash" | "deleted messages" | "deleted mail" => Some(MailboxRole::Trash),
-        "junk" | "junk mail" | "junk e-mail" => Some(MailboxRole::Junk),
-        "archive" | "archives" => Some(MailboxRole::Archive),
-        "all mail" => Some(MailboxRole::All),
-        "starred" | "flagged" => Some(MailboxRole::Flagged),
-        _ => None,
-    }
-}
 
 /// Domain separator for a bundle mboxrd message's framing identity
 /// (spec/09). Snapshot tokens never enter the hash.
@@ -368,11 +339,14 @@ fn local_mailbox(tx: &Transaction, name: &str) -> Result<(String, i64), StoreErr
     // so a unified window has something to page over. It is written only on
     // insert: a re-import must never rewrite a role the owner may have
     // changed, and an existing mailbox keeps whatever it had.
+    // No role is derived from the name: spec/08 "Sidebar" reads "no role
+    // or hierarchy is read into a file name", which is what leaves the
+    // unified windows empty for a local archive. Changing that is a spec
+    // decision first, not an import detail.
     tx.execute(
-        "INSERT INTO mailboxes (account_id, remote_name, role, kind, selectable, sync_state)
-         VALUES (?1, ?2, ?3, 'folder', 1, 'synced')
-         ON CONFLICT(account_id, remote_name) DO NOTHING",
-        params![account, name, imported_role(name).map(MailboxRole::as_str)],
+        "INSERT INTO mailboxes (account_id, remote_name, kind, selectable, sync_state)
+         VALUES (?1, ?2, 'folder', 1, 'synced') ON CONFLICT(account_id, remote_name) DO NOTHING",
+        params![account, name],
     )
     .map_err(sql_error)?;
     let (id, kind, selectable): (i64, String, bool) = tx.query_row(
