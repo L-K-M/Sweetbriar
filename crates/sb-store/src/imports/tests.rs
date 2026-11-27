@@ -988,17 +988,26 @@ fn imported_mailbox_names_take_their_special_use_role() {
 #[test]
 fn imported_mailbox_roles_cover_the_names_clients_use() {
     let (_scratch, _paths, store, revision) = setup();
-    let cases: [(&str, Option<&str>); 13] = [
+    // Every spelling the mapping accepts, so dropping one arm fails here
+    // rather than silently narrowing the coverage.
+    let cases: [(&str, Option<&str>); 20] = [
         ("Inbox", Some("inbox")),
+        ("  inbox  ", Some("inbox")),
+        ("Sent", Some("sent")),
         ("Sent Messages", Some("sent")),
         ("Sent Mail", Some("sent")),
         ("Drafts", Some("drafts")),
+        ("Trash", Some("trash")),
         ("Deleted Messages", Some("trash")),
+        ("Deleted Mail", Some("trash")),
+        ("Junk", Some("junk")),
         ("Junk Mail", Some("junk")),
+        ("Junk E-Mail", Some("junk")),
         ("Archive", Some("archive")),
+        ("Archives", Some("archive")),
         ("All Mail", Some("all")),
         ("Starred", Some("flagged")),
-        ("  inbox  ", Some("inbox")),
+        ("Flagged", Some("flagged")),
         ("Trip receipts 2024", None),
         ("Work archive folder", None),
         ("Receipts", None),
