@@ -326,6 +326,40 @@ struct ComposeWindowTests {
         }
     }
 
+    /// Every header row's label shares one width, so the controls they
+    /// introduce start at one x. The From row's pop-up button used to be
+    /// laid out against its own label's intrinsic width, which put it 17 pt
+    /// left of the To, Cc, Bcc and Subject fields.
+    @Test func theHeaderControlsShareOneLeadingEdge() async throws {
+        try await withComposeFixture { fixture in
+            let controller = try await fixture.makeWindow()
+            let window = try #require(controller.window)
+            window.makeKeyAndOrderFront(nil)
+            window.layoutIfNeeded()
+            let content = try #require(window.contentView)
+            let from = try #require(
+                firstComposeView(NSControl.self, in: content) {
+                    $0.accessibilityIdentifier() == "composeFrom"
+                })
+            let to = try #require(
+                firstComposeView(NSControl.self, in: content) {
+                    $0.accessibilityIdentifier() == "composeTo"
+                })
+            let subject = try #require(
+                firstComposeView(NSControl.self, in: content) {
+                    $0.accessibilityIdentifier() == "composeSubject"
+                })
+            let leading = { (control: NSControl) in
+                control.convert(control.bounds.origin, to: content).x
+            }
+            // Auto Layout's frames are floating point: a rounding
+            // difference of a fraction of a point is the same edge.
+            let epsilon: CGFloat = 0.5
+            #expect(abs(leading(from) - leading(to)) < epsilon)
+            #expect(abs(leading(to) - leading(subject)) < epsilon)
+        }
+    }
+
     @Test func newMessageCapturesAccountContextBeforeTheHeldCreate() async throws {
         try await withComposeFixture { f in
             let gate = ComposeGate()
