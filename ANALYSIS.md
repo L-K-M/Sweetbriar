@@ -16,6 +16,14 @@ hygiene and product entries below; its four fixes (PRs #578, #581,
 A further independent review, by opencode, added Part 8; its nine
 changes, PRs #573, #582, #583, #584, #587, #591, #595, #596 and #597,
 are merged.
+A fifth pass (`friendly-wasp`, 2026-11-26/27) added Part 10 and the
+"Completed in this pass" section: eight fixes (PRs #599, #600, #601,
+#607, #608, #609, #610 and #611) covering a reused row cell's account
+marker, the sidebar's observer and reveal behaviour, a list's sticky
+read error, the toolbar search field outside the message list, the
+reader's note commit on close, a row hover fill, tag chips that
+overflowed their cell, and a search cursor minted per row instead of
+per page edge.
 
 ## Completed on main
 
@@ -63,6 +71,80 @@ are merged.
   about a hypothetical replaced web view was answered with an explicit
   one-web-view invariant and a test comment about the SDK's lack of
   rule-list read-back.
+
+## Completed in this pass
+
+- **Row account marker restore** (friendly-wasp pass, PR #599). A reused
+  message-row cell kept the rail and monogram hidden from a row whose
+  account had no appearance yet: the appearance subscription answers
+  after the list has opened, so the first cells a mixed-account window
+  makes are configured without one and nothing brought the marker back.
+  `MessageRowCellView.configure` now assigns both flags from the row's
+  own state and exposes `showsMarker` for tests. `observeAppearance`
+  answers with `reloadData`, which reuses views rather than making new
+  ones, so the bug was invisible in a fresh window and permanent in a
+  reused one.
+- **Sidebar lifecycle, reveal and count presentation** (friendly-wasp
+  pass, PR #600). Four defects: the sidebar registered an accessibility
+  observer in `loadView` and never removed it, so a restore dropped the
+  controller while it was still registered and a later Increase
+  Contrast change posted to a dead object; choosing a mailbox by
+  command expanded its section but never scrolled the row into view, so
+  a deep mailbox changed the list with no visible confirmation; account
+  ids were matched with `==`, which treats canonically equivalent
+  spellings as equal, while the account chips match them byte for byte;
+  and the summed health-row count was interpolated directly while every
+  other count the presentation shows goes through its locale formatter.
+  The "Archive closed" banner also lacked the padding its other states
+  apply, so it touched both window edges.
+- **A list's read error clears when the read succeeds** (friendly-wasp
+  pass, PR #601). `ListWindowModel.lastError` was written on every page,
+  subscription and empty-status failure and never cleared, so one
+  transient failure was permanent: the list kept "Couldn't read this
+  list: …" over healthy rows and `onCountChange` reported nil, so the
+  window's subtitle lost its count for good. The error now clears when
+  the failed pages land and when a fresh index installs, and the list's
+  failure status carries a **Try Again** button, so the retry no longer
+  depends on the user happening to scroll. While a new choice is
+  opening, `model` is still the previous list, so `updateStatus`
+  reported the old count under the new title — "Search · 240 results"
+  straight after leaving a 240-row mailbox.
+- **Toolbar search field outside the message list** (friendly-wasp pass,
+  PR #608). The toolbar's search field is the message list's and stayed
+  enabled while Drafts (local) or the Out Box filled the list pane, so
+  typing in it searched a hidden list: no visible result, no title
+  change, no error. The field is now admitted with the pane and the
+  toolbar's search interaction is ended before the field is disabled.
+- **Reader note commit on close** (friendly-wasp pass, PR #609). The
+  note editor saved only on `resignFirstResponder`, and neither
+  `ReaderViewController.close()` nor `MessageWindowController.windowWillClose`
+  ended editing or committed `noteDraft`. AppKit does not promise to
+  resign the first responder when a window closes, so a note typed into
+  the reader and then dismissed was lost. `closeAndWait` now commits and
+  awaits the save before the teardown, because a task created inside
+  `close` does not start until `close` has already closed the model.
+- **Row hover fill** (friendly-wasp pass, PR #607). The list is a
+  `.plain` NSTableView with no tracking area, so a row gave no response
+  until it was clicked. `HoverRowView` supplies a layer-backed fill that
+  fades in over 120 ms while the pointer is over an unselected row,
+  dequeued through the table's recycle queue, with its color resolved
+  inside the effective appearance and a raised alpha under Increase
+  Contrast. A row that appears under a stationary pointer primes its
+  state, and the selection's own highlight replaces the fill rather
+  than stacking on it.
+- **Row tag chips stay inside the cell** (friendly-wasp pass, PR #610).
+  The chips were laid out right-to-left with no floor, so three long
+  labels walked past the text column, drew over the rail and outside
+  the cell, and reduced the snippet to zero width. They were also
+  framed one point into the gap between rows.
+- **Search cursor minted for a page's edges** (friendly-wasp pass,
+  PR #611). `read_page` built a cursor for every hit rather than just
+  the page's first and last rows, and `Binding::mint` serialises the
+  binding's `spec`, which holds the full canonical query JSON: a
+  maximum-size query made each cursor about 16 KB, so a 1,000-row page
+  allocated about 16 MB of strings on every page read and every
+  keystroke. `StoredSearchRow` now carries the cursor's key and
+  `SearchPage` carries the binding it mints against.
 
 ## Submitted patches
 
@@ -1804,3 +1886,305 @@ direct API. [IMAP implementation](crates/sb-imap/src),
   draft, account-based Focus filters, and opt-in Spotlight indexing of
   headers. Specify authorization, local retention and privacy boundaries
   before indexing or exposing archive content to another process.
+
+---
+
+# Part 10 — Friendly-wasp review pass (2026-11-26)
+
+A second independent pass: five bounded read-only helper reviews (message
+list, reader, composer, window chrome/sidebar/toolbar, and the Rust core's
+store/engine/service), plus a live run of the Debug app against a fresh
+archive seeded by importing a 1,500-message synthetic `.mbox`, driven
+through its accessibility tree and screenshotted. Entries below are new;
+where an earlier part already covers the ground, the entry says so and adds
+only what is new. Landed items are in "Completed in this pass" above.
+
+## Correctness and interaction
+
+- **A note typed in the reader could be discarded when its pane closed.**
+  `ReaderMetadataViews.swift:190` saved only on `resignFirstResponder`, and
+  neither `ReaderViewController.close()` nor
+  `MessageWindowController.windowWillClose` ended editing or committed
+  `noteDraft`. Landed in #609; the ordering trap there is worth
+  remembering: a task created inside `close` does not start until `close`
+  has already run `reads.retire()` and `model.close()`, so the commit has
+  to happen — and be awaited — before the teardown.
+- **Reading-view sender memory races.** `ReadingViewMemory.swift:53` and
+  `:63`: `removeSender` returns early when `senders` does not contain the
+  address, so an OFF click that lands while an ON write is in flight
+  writes nothing and the ON write persists — the opposite of what the user
+  asked. `reload()` has the mirror hazard: a background read that resolves
+  after a write replaces `senders` with the stale stored list. Serialize
+  the three operations through one task or actor. See also Part 7's
+  sender-preference entry, which covers the membership check.
+- **`selectedOccurrenceIDs` stays stale until reconciliation finishes.**
+  `AppKitPrototypeList.swift:269` (`restoreSelection`) drops ids that are
+  absent from the new index from the table but does not update the
+  property the command path reads, so `perform(.open)` can open a message
+  that has left the list and filing commands refuse with a spurious
+  "list changed". Assign the mapped id set in `restoreSelection`.
+- **Pages around a selected off-screen row are never requested.**
+  `ListWindowModel.applyVisibility` derives its wanted set from the last
+  reported visible range only, and `reconcileSelection` throws away the
+  row it looked up. So a selection held by occurrence id can point at
+  ranks whose pages are not loaded, and `MainWindowController.flagTargets`
+  (`:686`) then validates Mark as Read and Star as disabled even though
+  spec/08 only disables them for local-archive rows or selections over
+  1,000 rows. Make the paging engine selection-aware, or give the flag
+  commands an async account query like `filingSelection`'s.
+- **Renaming a saved view does not refresh the window title.**
+  `SidebarViewController.swift:253` reloads and re-selects with
+  `selectingInCode == true`, so no choice is reported and
+  `MainWindowController.updateTitle()` is never called. Delete works
+  because it ends by choosing the unified inbox. Add a callback after a
+  successful rename.
+- **Sidebar account names go stale after a Settings rename, pause or
+  disconnect.** `AccountsSettingsModel` re-reads accounts and notifies
+  nobody, and the core bumps only the account revision on rename, so
+  `mailboxes()`' generation does not move. The sidebar heading, the
+  window subtitle and the account chips keep the old value until an
+  unrelated event or a restart. Wire an `onAccountsChanged` closure to
+  `reloadSidebar()`.
+- **A message window ignores Space.** `MessageWindowController` implements
+  no key handling, so spec/08's "in a message window, Space pages its
+  reader" is unimplemented; the only Space mapping is the main window's
+  table command. Add `keyDown`/`performKeyEquivalent` on the reader's
+  backdrop view, passing modified combinations through.
+- **Every tag or note write reloads the whole body rendition.**
+  `ReaderViewController.render()` always clears and re-shows the HTML pane
+  and re-sets the Reading view's attributed string, even when `setTag` or
+  `saveNote` rebuilt the state with the same rendition: the body flickers,
+  the scroll offset resets and inline images decode again. Track the last
+  shown rendition token and skip the body work when it is unchanged.
+- **A failed note save can show its error above a different message.**
+  `ReaderViewController.swift:628` has no ticket check, unlike `setTag`
+  and `activateAttachment`, so an offline-save error for message A can
+  appear over message B.
+- **The AppKit row keeps the account-marker indent when the marker is
+  hidden.** `AppKitPrototypeList.swift:776` computes `contentX` from
+  `showsAccountMarker`, not from the flags `configure` set, so before the
+  appearance answers every row indents its text 44 pt too far and then
+  jumps left. The SwiftUI row starts at `innerGap` instead. Derive the
+  indent from the actual marker visibility. (The marker hiding itself is
+  fixed in #599; the indent is not.)
+- **`MessageWindows` computes a cascade origin it never applies.**
+  `MessageWindowController.swift:184` stores `cascadeTopLeft(from:)` back
+  into `cascade` and sets no frame, so the comment describes behaviour the
+  code does not have; overlap cascading happens only through AppKit's
+  implicit nudge. Apply the point, or delete the dead state.
+- **VoiceOver's row label omits tags and attachments.**
+  `MessageRowPresentation.swift:179` builds the label from sender,
+  subject, date, unread and flagged only, and the drawn chips and the
+  paperclip are not accessibility elements, so a VoiceOver user cannot
+  tell a message has an attachment or tags. Append ", N tags" and ",
+  attachment".
+- **Sidebar id lookups used `==` where the chips compare bytes.** Landed in
+  #600; the same rule should reach `AccountLogoImages.image(for:in:)` and
+  `MessageWindowController.renderTint`, which still compare ids their own
+  way.
+
+## Composer
+
+- **A send in flight does not freeze From, Refresh Identities, Attach… or
+  Remove.** `ComposeWindowController.swift:536` computes a `busy`-aware
+  `editable` for the subject, body, format control, recipient fields and
+  Save, but `ComposeAttachmentControls` and `ComposeIdentityControls`
+  admit from their own closures, which omit `busy`. The window is half
+  frozen and a revision is saved while the attempt is held. File drops go
+  through `textView.fileDropHandler`, which bypasses editability too.
+  Include `sendModel?.isBusy` in `canChangeIdentity`/`canAttach`, or pass
+  the render's `editable` in.
+- **Keep Both drops uncommitted recipient input and in-flight inline
+  images.** `ComposeWindowController.swift:672` excludes marked text but
+  not pending recipient input, and `captureEdit()` never captures
+  recipients, so an address typed in the quiet period is absent from the
+  copy. The same freeze drops an inline image whose publication finishes
+  during `publications.settle()`.
+- **A refused close or quit leaves the autosave timer stopped.**
+  `ComposeWindowController.swift:800` cancels the debounce and, when the
+  flush fails, aborts the close without restarting it, so dirty text is
+  never autosaved again until the user types. Restore the timer in both
+  abort paths when the draft is still dirty, as the abandon alert's Keep
+  Editing branch does.
+- **Every render rebuilds all attachment rows and the From popup, and a
+  keystroke renders at least twice.** `ComposeAttachmentControls.render()`
+  detaches and recreates up to 100 rows and `ComposeIdentityControls.render()`
+  re-adds every identity; `captureEdit()` ends with `render()` and the
+  observation schedules another. Diff rows by index like
+  `renderRecipientFence()` does for banners, and cache the popup's items.
+- **A local write-gate refusal is recorded as "may have committed".**
+  `DraftModel.swift:187` sets `began = true` before the store call and
+  classifies `CoreFailure.unavailable` as unresolved, so a pre-write
+  refusal replays a stale intent on the next save. Give the local gate a
+  distinct error case that maps to `false`.
+- **A failed initial draft load has no retry.** The status advises "Try
+  Save again" while Save is disabled and nothing calls `model.load()`
+  again. Add a Retry control, and reword the status when content is nil.
+- **Pressing Send while an inline image publishes can drop the image.**
+  Admission is evaluated when the bytes arrive, after the editor is
+  frozen, so the outcome is nondeterministic. Decide admission when the
+  publication starts.
+- **The per-draft literal plain-text option has no UI.**
+  `DraftTypes.swift:369` defaults `plainFlowed: true` and nothing sets it
+  false, though spec/05 asks for it. Add a per-draft Literal toggle.
+- **Bold and Italic undo entries have no action name.**
+  `ComposerTextView.swift:175` never calls `setActionName`, unlike every
+  other composer command.
+- **Publication Cancel/Dismiss buttons are not labelled per attachment.**
+  `ComposeAttachmentControls.swift:277` sets only an identifier, so with
+  several publications in flight VoiceOver cannot tell which row a button
+  belongs to.
+
+## Performance
+
+- **Relevance searches score and materialise every matching document.**
+  `sb-store/src/query/counts/paging.rs:661` builds one materialised CTE per
+  positive leaf over the entire FTS match set, and `search_ids` sorts the
+  whole relation to produce an id index even when a single driving leaf
+  could stream in rank order. A common term scores and stores 100k+ rows
+  per leaf while the page needs `limit + tie run`. Score only the
+  documents the page fetches, carry the predicate outcome through the
+  score CTE instead of re-evaluating `check`, and give `search_ids` a
+  streaming reader for the single-leaf case. See also P6 and P11.
+- **GC's reference check is O(objects × attempts) and uses a substring
+  test.** `sb-store/src/gc.rs:133` runs one `SELECT EXISTS` per object
+  over `send_attempts` (no index on `mime_sha256`) and `draft_revisions`
+  (`attachments_json LIKE '%sha%'`), so a pass over N objects and D
+  attempts is O(N·D), and the LIKE arm is a substring match rather than an
+  exact reference. Build the referenced-digest sets once per pass.
+- **Search reads re-prepare SQL, re-register UDFs and repeat the binding
+  check.** `sb-store/src/query/counts.rs:221` uses `tx.prepare` (bypassing
+  the statement cache), `register(tx)` per execution, and
+  `check_bindings` runs twice per read; `lists::attach_tags` builds a fresh
+  1,000-placeholder `IN (...)` per list page. See P7.
+- **`complete_fields` parses JSON and `address_value` decodes addresses per
+  candidate row, per leaf.** `sb-store/src/query/counts.rs:482`: the normal
+  stored mask is exactly `[]`, so the common path parses a two-byte string
+  per row per leaf. Short-circuit `mask == "[]"`. See B4 and P12.
+- **A hidden Search list keeps its subscription and page reads running.**
+  `MessageListViewController.enterStandalone()` only hides the view; the
+  model is neither closed nor paused, so index invalidations during a
+  rebuild keep re-fetching and re-reading pages for a hidden table. Add a
+  `paused` flag checked in `handle`/`scheduleFetch`/`pump`.
+- **Account-label strings are recomputed per configured row.**
+  `MessageListViewController.swift:328` filters and sorts the sidebar
+  sections per row, and `SidebarViewController.accountLabel` filters and
+  sorts again, with up to `accounts.count` disambiguation loops. Build an
+  `[accountID: String]` map once per sections/appearance change.
+- **`DisplayLinkClock` is never invalidated.**
+  `MessageListViewController` creates a clock in `install` and never calls
+  `invalidate()` in `close()`, so a `CADisplayLink` retains its target and
+  both objects leak for the process lifetime on every retire/restore.
+  Mirror `ListPrototypeWindowController`.
+- **`evictOverflow` rescans a page map that never shrinks.**
+  `ListWindowModel.evictOverflow` reduces, filters and sorts `pages` on
+  every delivered frame, and `page(containing:)` inserts a `Page` for
+  every rank a row view asks about with nothing removing entries, so
+  `pages` grows to one object per page of the window. Maintain a
+  loaded-page counter where `page.rows` is set and cleared.
+- **`MessageRowFormatter` swaps one `DateFormatter`'s format string per
+  row.** `MessageRowPresentation.swift:215` picks a bucket, assigns
+  `dateFormatter.dateFormat`, then formats; swapping the pattern makes
+  Foundation re-parse it and rebuild the ICU formatter, and it re-reads
+  `Calendar.current` per row. Hold three preconfigured formatters, or
+  memoize per (bucket, day). See P14.
+- **Every reconfigured row re-measures its tag chips and redraws its
+  badges.** `AppKitPrototypeList.layoutSubviews` calls
+  `chip.fittingWidth()` — a CoreText measurement per chip per row — and
+  `BadgeView`'s `title`, `font`, `fillColor` and `titleColor` each do
+  `didSet { needsDisplay = true }` unconditionally. Cache the measured
+  width and guard each `didSet`.
+- **A bounds change lays every cell out twice.** Both `layout()` and
+  `resizeSubviews(withOldSize:)` end with `layoutSubviews()`, which
+  re-frames all ~25 subviews by hand. Cache the last bounds size and
+  return early.
+- **The synthetic debug id index allocates 8 MB against a documented
+  4 MB.** `sb-engine/src/windows.rs:798` builds `(0..n)` for up to
+  1,000,000 rows. Cap the fill at the documented 500k, or correct the
+  comment and spec budget.
+- **Sidebar counts silently turn a corrupt negative count into zero.**
+  `sb-store/src/sidebar.rs:209` maps a negative to 0 rather than
+  `Corrupt`, hiding schema damage from the UI and diagnostics.
+- **The reading document is fetched and awaited even when viewing
+  source.** `ReaderModel.swift:240` starts and awaits
+  `readingDocument(messageId:)` unconditionally; source view never uses
+  it, so it pays the core round trip and delays showing the raw bytes.
+
+## Visual, layout and accessibility
+
+- **The reader's HTML body is a pure white rectangle in Dark Mode.**
+  `HTMLReaderView` sets no background, so WebKit paints white and the
+  message reads as a hole in the dark window. Inject a small style that
+  makes the canvas follow the effective appearance, and let messages that
+  set their own background keep it.
+- **The tag and note fields are always on show in the reader header.**
+  `ReaderViewController.swift:147` adds the tag picker and the note
+  editor unconditionally, so every message shows an empty "Add tag" field
+  with an Add button and an "Add a note" field with no button above the
+  body. Show the note editor only for a message that has a note or on
+  focus, and give the tag picker the same treatment.
+- **The reader's body has no maximum measure.** The body stack is pinned to
+  the view's edges with 12 pt insets and nothing else, so at a 1,180 pt
+  window the plain-text body ran about 636 pt wide — roughly 110
+  characters per line. Cap the measure at about 68 characters and centre
+  it, the way the reader's placeholder already is.
+- **The header expands every To and Cc recipient.**
+  `ReaderViewController.swift:551` appends every address to a
+  non-scrolling header, so mailing-list mail pushes the body out of the
+  pane. Cap the visible recipients behind a disclosure. (Part 8 landed
+  the collapse for the Activity window; the reader header is separate.)
+- **Reader tag chips past 240 pt are clipped and unreachable.**
+  `ReaderMetadataViews.swift:53` caps the chip stack with no wrap, scroll
+  or overflow control, so trailing chips cannot be reached by mouse,
+  keyboard or VoiceOver. Wrap them, or add a trailing "+N" chip that
+  lists every tag.
+- **The empty unified window reads as a failure, not a first run.** The
+  status line is the plain string "No messages" with no action, and the
+  welcome island only covers a fresh archive. After an import the unified
+  inbox is empty and `isFreshArchive` is false, so nothing explains where
+  the mail went — see the imported-role entry in Part 9.
+- **The window opens at its minimum size when no frame is saved.** With
+  `-ApplePersistenceIgnoreState` the window came up at 800×420 (its
+  declared minimums) rather than the 1,100×700 `defaultContentSize`.
+  Apply the default content size when no autosave frame exists.
+- **View Source and the rule-list fallback show no loading state.**
+  `ReaderViewController.setSource` hides the HTML pane and then awaits the
+  fetch, so the body area is blank during a slow acquisition while the
+  header, attachment list and remote-content label still reflect the
+  previous rendition. Show the status line before awaiting.
+- **Reading-view links show no destination on hover.**
+  `ReadingRenderer.swift:60` attaches only `.link`; `ReadingView`
+  implements only the click handler, so the destination appears only after
+  clicking, while the file's header comment claims a hover affordance.
+  Expose it through `NSTextViewDelegate`'s tooltip API or a tracking-area
+  label. See V11.
+- **The two prototype lists disagree about the row's trailing group.** The
+  AppKit row lays out date, account label, paperclip, flag, then sender,
+  while the SwiftUI row's HStack reads sender, account label, flag,
+  paperclip, date, and the date column is fixed at 84 pt in AppKit but
+  elastic in SwiftUI — despite the shared header comment claiming the two
+  lists are identical. Promote the date width into `MessageRowMetrics` and
+  give both lists the same order and frame. (The date *width* itself
+  landed in #590; the order and the SwiftUI side did not.)
+- **Account rail colours collide and monograms can be digits.**
+  `MessageRowPresentation.swift:195` takes `hash % 6` over a six-slot
+  palette, so three accounts in a unified list already have about a 50 %
+  chance of two sharing a rail colour, and the rail is the only colour
+  cue. `monogram(for:)` takes the first letter of the id's last `-`
+  component, so an id like `acct-2` renders the digit "2". Assign palette
+  slots by account order in the window, and fall back to the display
+  name's first letter when the id component is not a letter.
+
+## Novel and delightful
+
+- **Reveal Archive / Trash / Mark Read on row hover.** The hover fill in
+  #607 supplies the hook: extend `HoverRowView` with a trailing button
+  group that fades in with the fill and routes through the same
+  `MessageContextAction` admission the context menu uses. See D11.
+- **A "where did my mail go" line for an empty unified window.** Once the
+  imported-role entry lands, the empty unified window should name the
+  local archive and offer "Show Local Archive" rather than a bare "No
+  messages".
+- **A reading-progress and estimated-read-time line in the reader.**
+  `ReadingView` already renders the core's semantic document, so a word
+  count is available for free. See D6.
