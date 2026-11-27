@@ -933,3 +933,103 @@ fn source_replay_requeues_a_failed_summary_with_a_fresh_revision() {
     assert_eq!(count(&store, "occurrences"), 1);
     store.close().unwrap();
 }
+
+/// An imported mailbox named after a special-use role takes that role, so a
+/// unified window, which pages `d_list_rows` by `mailbox_role` (spec/02),
+/// has rows to show for a local archive. Any other name keeps `NULL`, and a
+/// re-import never rewrites a role.
+#[test]
+fn imported_mailbox_names_take_their_special_use_role() {
+    let (_scratch, _paths, store, revision) = setup();
+    let first = message(&store, "/synthetic/Inbox.mbox", 0, ORIGINAL);
+    commit(&store, revision, "Inbox", vec![first]).unwrap();
+    let second = message(&store, "/synthetic/Receipts.mbox", 0, ORIGINAL);
+    let revision = reading(&store, |tx| Ok(import_job(tx, JOB)?.revision()));
+    commit(&store, revision, "Receipts", vec![second]).unwrap();
+    reading(&store, |tx| {
+        let roles: Vec<(String, Option<String>)> = tx
+            .prepare("SELECT remote_name, role FROM mailboxes ORDER BY remote_name")
+            .map_err(sql_error)?
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .map_err(sql_error)?
+            .collect::<Result<_, _>>()
+            .map_err(sql_error)?;
+        assert_eq!(
+            roles,
+            vec![
+                ("Inbox".to_owned(), Some("inbox".to_owned())),
+                ("Receipts".to_owned(), None),
+            ]
+        );
+        // The role reaches the list rows the unified window pages over.
+        let listed: Vec<Option<String>> = tx
+            .prepare("SELECT mailbox_role FROM d_list_rows ORDER BY occurrence_id")
+            .map_err(sql_error)?
+            .query_map([], |row| row.get(0))
+            .map_err(sql_error)?
+            .collect::<Result<_, _>>()
+            .map_err(sql_error)?;
+        assert_eq!(listed, vec![Some("inbox".to_owned()), None]);
+        Ok(())
+    });
+    // A re-import of the same name leaves the role alone.
+    let replay = message(&store, "/synthetic/Inbox.mbox", 0, ORIGINAL);
+    let revision = reading(&store, |tx| Ok(import_job(tx, JOB)?.revision()));
+    commit(&store, revision, "Inbox", vec![replay]).unwrap();
+    assert_eq!(count(&store, "mailboxes WHERE role = 'inbox'"), 1);
+    store.close().unwrap();
+}
+
+/// The names clients actually put on their special-use mailboxes reach
+/// `local_mailbox` as the source's stem, so each role takes the
+/// spellings in use and not only its own name. A name that spells
+/// nothing keeps `NULL`, so a renamed mailbox is never guessed into a
+/// unified view.
+#[test]
+fn imported_mailbox_roles_cover_the_names_clients_use() {
+    let (_scratch, _paths, store, revision) = setup();
+    // Every spelling the mapping accepts, so dropping one arm fails here
+    // rather than silently narrowing the coverage.
+    let cases: [(&str, Option<&str>); 20] = [
+        ("Inbox", Some("inbox")),
+        ("  inbox  ", Some("inbox")),
+        ("Sent", Some("sent")),
+        ("Sent Messages", Some("sent")),
+        ("Sent Mail", Some("sent")),
+        ("Drafts", Some("drafts")),
+        ("Trash", Some("trash")),
+        ("Deleted Messages", Some("trash")),
+        ("Deleted Mail", Some("trash")),
+        ("Junk", Some("junk")),
+        ("Junk Mail", Some("junk")),
+        ("Junk E-Mail", Some("junk")),
+        ("Archive", Some("archive")),
+        ("Archives", Some("archive")),
+        ("All Mail", Some("all")),
+        ("Starred", Some("flagged")),
+        ("Flagged", Some("flagged")),
+        ("Trip receipts 2024", None),
+        ("Work archive folder", None),
+        ("Receipts", None),
+    ];
+    let mut revision = revision;
+    for (index, (name, _)) in cases.iter().enumerate() {
+        let first = message(&store, "/synthetic/Source.mbox", index as u64, ORIGINAL);
+        commit(&store, revision, name, vec![first]).unwrap();
+        revision = reading(&store, |tx| Ok(import_job(tx, JOB)?.revision()));
+    }
+    reading(&store, |tx| {
+        for (name, role) in cases {
+            let stored: Option<String> = tx
+                .query_row(
+                    "SELECT role FROM mailboxes WHERE remote_name = ?1",
+                    params![name],
+                    |row| row.get(0),
+                )
+                .map_err(sql_error)?;
+            assert_eq!(stored.as_deref(), role, "{name} should map to {role:?}");
+        }
+        Ok(())
+    });
+    store.close().unwrap();
+}

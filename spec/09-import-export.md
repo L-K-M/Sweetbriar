@@ -86,6 +86,20 @@ user-granted permission path.
      a logical message and an occurrence in the local archive, in a
      mailbox named after the source file or folder, and enqueue it for
      search.
+   - **Mailbox role.** A created mailbox takes the special-use role
+     its name spells, case-insensitively and ignoring surrounding
+     whitespace, against the names clients put on those mailboxes:
+     `inbox`; `sent`, `sent messages`, `sent mail`; `drafts`; `trash`,
+     `deleted messages`, `deleted mail`; `junk`, `junk mail`,
+     `junk e-mail`; `archive`, `archives`; `all mail`; `starred`,
+     `flagged` (spec/02 `mailboxes.role`). Any other name leaves the
+     role `NULL`: a renamed mailbox is not guessed at. The role is
+     written only when the mailbox is created, so a re-import never
+     rewrites one, and it is what the unified windows page over
+     (spec/02 `d_list_rows.mailbox_role`). An export that preserves a
+     mailbox's name round-trips its role, because the re-import derives
+     it from that name again; an export that renames a mailbox does not,
+     and the mailbox it creates takes the role its new name spells.
    - Batches are at most 250 messages per transaction. The job records
      its progress (file and offset), so it can resume after a crash or
      quit without duplicating.
