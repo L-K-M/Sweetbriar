@@ -615,13 +615,15 @@ struct ListAppearanceTests {
             accountID: "synthetic-a"
         )
         let cell = MessageRowCellView(showsAccountMarker: true)
+        // The layout pass reads `bounds`, so the cell needs the width
+        // the assertions measure before `configure` marks it for layout.
+        cell.frame = NSRect(x: 0, y: 0, width: 480, height: MessageRowMetrics.pitch)
         cell.configure(content: content)
-        // The tag and overflow chips are the 15 pt badges on the
-        // snippet line (y = 40); the wide row shows three tags plus
-        // the +N chip.
+        // The tag and overflow chips are the 14 pt badges on the snippet
+        // line (y = 40.5); the wide row shows three tags plus the +N chip.
         let chipCount = { (view: NSView) in
             view.subviews.filter {
-                !$0.isHidden && $0.frame.height == 15 && $0.frame.minY == 40
+                !$0.isHidden && $0.frame.height == 14 && $0.frame.minY == 40.5
             }.count
         }
         var chipCounts: [CGFloat: Int] = [:]
@@ -642,7 +644,7 @@ struct ListAppearanceTests {
             }
         }
         #expect(chipCounts[480] == 4, "a wide row shows three tags and +1")
-        #expect(chipCounts[120] ?? 0 >= 3, "the visible tags stay put")
+        #expect(chipCounts[120] ?? 0 >= 1, "a narrow row keeps what fits")
 
         // A window that widens brings the collapsed count back: the
         // chip's visibility is layout's decision, not a stale flag.
