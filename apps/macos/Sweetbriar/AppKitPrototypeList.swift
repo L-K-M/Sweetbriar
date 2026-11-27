@@ -933,7 +933,10 @@ final class MessageRowCellView: NSTableCellView {
         // recorded when the content was set; whether each of them fits
         // is this pass's. Keeping them apart lets a wider row bring a
         // chip back without resurrecting another message's.
-        for (index, chip) in tagChips.enumerated().reversed() {
+        // Index-based reverse: `enumerated().reversed()` allocates a
+        // tuple array per row per layout pass.
+        for index in stride(from: tagChips.count - 1, through: 0, by: -1) {
+            let chip = tagChips[index]
             let chipWidth = chip.fittingWidth()
             guard index < shownTagCount, chipTrail - chipWidth >= chipFloor else {
                 chip.isHidden = true
