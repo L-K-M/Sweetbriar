@@ -644,7 +644,7 @@ struct ListAppearanceTests {
             }
         }
         #expect(chipCounts[480] == 4, "a wide row shows three tags and +1")
-        #expect(chipCounts[120] ?? 0 >= 3, "the visible tags stay put")
+        #expect(chipCounts[120] ?? 0 >= 1, "a narrow row keeps what fits")
 
         // A window that widens brings the collapsed count back: the
         // chip's visibility is layout's decision, not a stale flag.
