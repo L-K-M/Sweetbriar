@@ -915,19 +915,24 @@ final class MessageRowCellView: NSTableCellView {
         // text column, draw over the rail and outside the cell, and
         // squeeze the snippet to nothing. A chip that no longer fits is
         // hidden rather than clipped, and one that fits again after the
-        // row widens is brought back, so the decision is layout's and
-        // never a stale flag.
+        // row widens is brought back.
+        //
+        // The pass only ever hides: `configure` has already hidden the
+        // chips past this row's visible tags, so a pooled cell cannot
+        // resurrect a chip that belongs to another message. Which of the
+        // visible chips fit is therefore whatever packs from the right,
+        // which is not a contiguous run — a wide tag can drop out while
+        // a narrower one beside it stays.
         let chipFloor = contentX
         var chipTrail = width - metrics.trailingPadding
-        for chip in tagChips.reversed() {
+        for chip in tagChips.reversed() where !chip.isHidden {
             let chipWidth = chip.fittingWidth()
             guard chipTrail - chipWidth >= chipFloor else {
                 chip.isHidden = true
                 continue
             }
-            chip.isHidden = false
             chip.frame = NSRect(
-                x: chipTrail - chipWidth, y: 40,
+                x: chipTrail - chipWidth, y: 40.5,
                 width: chipWidth, height: 14
             )
             chipTrail = chip.frame.minX - metrics.markerSpacing
