@@ -399,6 +399,49 @@ struct ListAppearanceTests {
         return (max(a, b) + 0.05) / (min(a, b) + 0.05)
     }
 
+    /// The rows look their label up by `accountId`, so the sidebar's
+    /// account sections must be keyed by that same id.
+    @Test func accountLabelsAreKeyedByTheRowsAccountId() async throws {
+        let sidebar = SidebarModel(source: TwoSidebarAccounts())
+        await sidebar.reload()
+        let labels = MessageListViewController.accountLabels(for: sidebar)
+        #expect(labels["account-1"]?.hasPrefix("1 · Work") == true)
+        #expect(labels["account-2"]?.hasPrefix("2 · Work") == true)
+        // The unified section names no account.
+        #expect(labels[SidebarModel.unifiedSectionID] == nil)
+    }
+
+    /// An account with no sidebar section keeps showing its id rather
+    /// than an empty account column.
+    @Test func aRowWithoutASidebarSectionKeepsItsAccountId() async throws {
+        let model = ListWindowModel(source: OneRowSource(accountID: "account-9"),
+                                    spec: .debugSynthetic, clock: ImmediateClock())
+        let list = AppKitPrototypeList(model: model, formatter: MessageRowFormatter(),
+                                       accountLabels: ["account-1": "Work"])
+        list.frame = NSRect(x: 0, y: 0, width: 300, height: 100)
+        let window = NSWindow(contentRect: list.frame, styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = list
+        defer { window.close() }
+        try await model.open()
+        for _ in 0..<200 where model.row(at: 0) == nil {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(model.row(at: 0) != nil)
+        let scroll = try #require(list.listView as? NSScrollView)
+        let table = try #require(scroll.documentView as? NSTableView)
+        table.reloadData()
+        let cell = try #require(table.view(atColumn: 0, row: 0, makeIfNecessary: true) as? MessageRowCellView)
+        cell.layoutSubtreeIfNeeded()
+        // The account column only draws when the account's appearance
+        // says its monogram collides with another's, so the fallback
+        // shows up in the cell rather than the accessibility label.
+        #expect(cell.accessibilityLabel() != nil)
+        let shown = cell.subviews.compactMap { $0 as? NSTextField }
+            .first { $0.stringValue == "account-9" }
+        #expect(shown != nil)
+    }
+
     @Test func collisionLabelsAndStrongMonogramsDrawInBothBackends() throws {
         let sections = [SidebarModel.Section(id: "a", title: "Work", entries: []),
                         SidebarModel.Section(id: "b", title: "Work", entries: [])]

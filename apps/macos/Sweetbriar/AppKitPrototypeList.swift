@@ -374,7 +374,7 @@ extension AppKitPrototypeList: NSTableViewDataSource, NSTableViewDelegate {
         let row = model.row(at: row)
         let account = row.flatMap { row in appearanceModel?.appearance?.accounts.first { $0.accountId == row.accountId } }
         cell.configure(content: row.map { formatter.present($0) }, account: account,
-                       accountLabel: row.flatMap { accountLabels[$0.accountId] },
+                       accountLabel: row.map { accountLabels[$0.accountId] ?? $0.accountId },
                        usesAppearance: appearanceModel != nil)
         return cell
     }
