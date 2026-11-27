@@ -281,7 +281,9 @@ func anImportedMailboxCrossesTheBridge() async throws {
     #expect(inbox.accountId == archive.accountId)
     #expect(inbox.name == "Inbox")
     #expect(inbox.delimiter == nil)
-    #expect(inbox.role == nil)
+    // The imported mailbox takes the role its name spells (spec/09
+    // "Mailbox role"), so a unified window has rows to page over.
+    #expect(inbox.role == .inbox)
     #expect(inbox.kind == .folder)
     #expect(inbox.selectable)
     #expect(inbox.total == 2)
