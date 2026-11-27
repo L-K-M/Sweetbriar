@@ -352,8 +352,11 @@ struct ComposeWindowTests {
             let leading = { (control: NSControl) in
                 control.convert(control.bounds.origin, to: content).x
             }
-            #expect(leading(from) == leading(to))
-            #expect(leading(to) == leading(subject))
+            // Auto Layout's frames are floating point: a rounding
+            // difference of a fraction of a point is the same edge.
+            let epsilon: CGFloat = 0.5
+            #expect(abs(leading(from) - leading(to)) < epsilon)
+            #expect(abs(leading(to) - leading(subject)) < epsilon)
         }
     }
 
