@@ -85,7 +85,7 @@ per page edge.
   ones, so the bug was invisible in a fresh window and permanent in a
   reused one.
 - **Sidebar lifecycle, reveal and count presentation** (friendly-wasp
-  pass, PR #600). Four defects: the sidebar registered an accessibility
+  pass, PR #600). Five defects: the sidebar registered an accessibility
   observer in `loadView` and never removed it, so a restore dropped the
   controller while it was still registered and a later Increase
   Contrast change posted to a dead object; choosing a mailbox by
@@ -93,10 +93,11 @@ per page edge.
   a deep mailbox changed the list with no visible confirmation; account
   ids were matched with `==`, which treats canonically equivalent
   spellings as equal, while the account chips match them byte for byte;
-  and the summed health-row count was interpolated directly while every
-  other count the presentation shows goes through its locale formatter.
-  The "Archive closed" banner also lacked the padding its other states
-  apply, so it touched both window edges.
+  the summed health-row count was interpolated directly while every
+  other count the presentation shows goes through its locale formatter;
+  and the "Archive closed" banner lacked the padding its other states
+  apply, so it touched both window edges and its Backups… button sat on
+  the rim.
 - **A list's read error clears when the read succeeds** (friendly-wasp
   pass, PR #601). `ListWindowModel.lastError` was written on every page,
   subscription and empty-status failure and never cleared, so one
