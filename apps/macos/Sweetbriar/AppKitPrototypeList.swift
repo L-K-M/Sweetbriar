@@ -16,9 +16,9 @@ import SweetbriarBridge
 /// business, the empty-state hint is the window's.
 @MainActor
 final class AppKitPrototypeList: NSView {
-    /// The reuse identifier the cells are made and found under.
     /// The row views' identifier, so AppKit recycles them like cells.
     private static let rowViewIdentifier = NSUserInterfaceItemIdentifier("SweetbriarHoverRow")
+    /// The reuse identifier the cells are made and found under.
     private static let cellIdentifier = NSUserInterfaceItemIdentifier(
         "MessageRow"
     )
@@ -982,8 +982,9 @@ final class HoverRowView: NSTableRowView {
         super.viewDidChangeEffectiveAppearance()
         // A 5 % tint is faint by design, and invisible once Increase
         // Contrast has taken the rest of the window's subtlety away.
-        let alpha: CGFloat = NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
-            ? 0.14 : 0.05
+        let alpha = Self.fillAlpha(
+            increaseContrast: NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
+        )
         var fill: CGColor?
         effectiveAppearance.performAsCurrentDrawingAppearance {
             fill = NSColor.labelColor.withAlphaComponent(alpha).cgColor
@@ -998,13 +999,25 @@ final class HoverRowView: NSTableRowView {
         hoverFill.frame = bounds.insetBy(dx: 3, dy: 1)
     }
 
+    /// The fill is decoration: a hit that lands on it falls through to
+    /// the row, so the gutter still selects the row the way the default
+    /// row view did.
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        let hit = super.hitTest(point)
+        return hit === hoverFill ? nil : hit
+    }
+
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
         if let trackingArea {
             removeTrackingArea(trackingArea)
         }
+        // `bounds`, not `.zero`: `.inVisibleRect` keeps the area in
+        // the view's visible rectangle, and whether AppKit substitutes
+        // or intersects it with the rect passed here, `bounds` is right
+        // either way.
         let area = NSTrackingArea(
-            rect: .zero,
+            rect: bounds,
             options: [.mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect],
             owner: self,
             userInfo: nil
@@ -1022,6 +1035,9 @@ final class HoverRowView: NSTableRowView {
         // stationary cursor should be filled at once, and this must not
         // depend on AppKit posting a `mouseEntered` for an area that
         // was installed under a pointer that is not moving.
+        // A fade still in flight finishes at its own target and would
+        // re-assert it, so it is cancelled first.
+        hoverFill.layer?.removeAllAnimations()
         hoverFill.alphaValue = Self.hoverAlpha(hovering: hovering, selected: isSelected)
     }
 
@@ -1055,6 +1071,12 @@ final class HoverRowView: NSTableRowView {
     /// without driving the pointer.
     static func hoverAlpha(hovering: Bool, selected: Bool) -> CGFloat {
         hovering && !selected ? 1 : 0
+    }
+
+    /// The fill's alpha: faint by design, and stronger once Increase
+    /// Contrast has taken the rest of the window's subtlety away.
+    static func fillAlpha(increaseContrast: Bool) -> CGFloat {
+        increaseContrast ? 0.14 : 0.05
     }
 }
 
