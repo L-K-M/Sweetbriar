@@ -281,15 +281,27 @@ func anImportedMailboxCrossesTheBridge() async throws {
     #expect(inbox.accountId == archive.accountId)
     #expect(inbox.name == "Inbox")
     #expect(inbox.delimiter == nil)
-    // The imported mailbox takes the role its name spells (spec/09
-    // "Mailbox role"), so a unified window has rows to page over.
+    // An import takes the role its mailbox name spells (spec/09), so a
+    // unified window has rows to page over for a local archive.
     #expect(inbox.role == .inbox)
     #expect(inbox.kind == .folder)
     #expect(inbox.selectable)
     #expect(inbox.total == 2)
     #expect(inbox.unread == 1)
+    // The import's indexer keeps committing after the job reports done,
+    // and each commit advances the list generation, so the list read
+    // above can be a generation behind. Let it settle before opening the
+    // window, so the comparison below is between two reads of the same
+    // committed state rather than a race with the background job.
+    var settled = list.generation
+    for _ in 0..<300 {
+        let current = try await bridge.mailboxes(accountId: archive.accountId).generation
+        if current == settled { break }
+        settled = current
+        try await Task.sleep(for: .milliseconds(20))
+    }
     let window = try await bridge.openWindow(spec: .mailbox(inbox.mailboxId), anchor: .top, limit: 10)
-    #expect(list.generation == window.generation)
+    #expect(settled == window.generation)
     #expect(window.rows.count == 2)
 
     await bridge.shutdown()
