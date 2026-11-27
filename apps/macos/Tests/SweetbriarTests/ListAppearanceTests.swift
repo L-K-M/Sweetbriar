@@ -616,12 +616,11 @@ struct ListAppearanceTests {
         )
         let cell = MessageRowCellView(showsAccountMarker: true)
         cell.configure(content: content)
-        // The tag and overflow chips are the 15 pt badges on the
-        // snippet line (y = 40); the wide row shows three tags plus
-        // the +N chip.
+        // The tag and overflow chips are the 14 pt badges on the snippet
+        // line (y = 40.5); the wide row shows three tags plus the +N chip.
         let chipCount = { (view: NSView) in
             view.subviews.filter {
-                !$0.isHidden && $0.frame.height == 15 && $0.frame.minY == 40
+                !$0.isHidden && $0.frame.height == 14 && $0.frame.minY == 40.5
             }.count
         }
         var chipCounts: [CGFloat: Int] = [:]

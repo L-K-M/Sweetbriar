@@ -944,8 +944,8 @@ final class MessageRowCellView: NSTableCellView {
             let chipWidth = overflowChip.fittingWidth()
             if chipTrail - chipWidth >= contentX {
                 overflowChip.frame = NSRect(
-                    x: chipTrail - chipWidth, y: 40,
-                    width: chipWidth, height: 15
+                    x: chipTrail - chipWidth, y: 40.5,
+                    width: chipWidth, height: 14
                 )
                 overflowChip.isHidden = false
                 chipTrail = overflowChip.frame.minX - metrics.markerSpacing
