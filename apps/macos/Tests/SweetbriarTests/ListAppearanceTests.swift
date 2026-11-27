@@ -615,6 +615,9 @@ struct ListAppearanceTests {
             accountID: "synthetic-a"
         )
         let cell = MessageRowCellView(showsAccountMarker: true)
+        // The layout pass reads `bounds`, so the cell needs the width
+        // the assertions measure before `configure` marks it for layout.
+        cell.frame = NSRect(x: 0, y: 0, width: 480, height: MessageRowMetrics.pitch)
         cell.configure(content: content)
         // The tag and overflow chips are the 14 pt badges on the snippet
         // line (y = 40.5); the wide row shows three tags plus the +N chip.

@@ -864,7 +864,7 @@ final class MessageRowCellView: NSTableCellView {
             y: (bounds.height - metrics.monogramSize) / 2,
             width: metrics.monogramSize, height: metrics.monogramSize
         )
-        let contentX = showsAccountMarker
+        let contentX = showsMarker
             ? rail.frame.maxX + metrics.innerGap + metrics.monogramSize + metrics.innerGap
             : metrics.innerGap
 
