@@ -335,14 +335,11 @@ fn local_mailbox(tx: &Transaction, name: &str) -> Result<(String, i64), StoreErr
         .optional()
         .map_err(sql_error)?
         .ok_or_else(|| StoreError::corrupt("local archive is missing"))?;
-    // The role an import's mailbox name implies (spec/02 `mailboxes.role`),
-    // so a unified window has something to page over. It is written only on
-    // insert: a re-import must never rewrite a role the owner may have
-    // changed, and an existing mailbox keeps whatever it had.
     // No role is derived from the name: spec/08 "Sidebar" reads "no role
     // or hierarchy is read into a file name", which is what leaves the
     // unified windows empty for a local archive. Changing that is a spec
-    // decision first, not an import detail.
+    // decision first, not an import detail. A re-import never rewrites an
+    // existing mailbox, so any role the owner set by hand survives.
     tx.execute(
         "INSERT INTO mailboxes (account_id, remote_name, kind, selectable, sync_state)
          VALUES (?1, ?2, 'folder', 1, 'synced') ON CONFLICT(account_id, remote_name) DO NOTHING",
