@@ -617,6 +617,9 @@ final class MessageRowCellView: NSTableCellView {
     /// chip's visibility afresh on every pass (a window that widens
     /// brings it back; one that narrows drops it).
     private var overflowCount = 0
+    /// How many tag chips the current row shows at all, set by
+    /// `configure`; layout decides which of them fit.
+    private var shownTagCount = 0
     private let placeholderFill = NSView()
 
     /// The row's account color, kept so the layer colors can be
@@ -786,6 +789,7 @@ final class MessageRowCellView: NSTableCellView {
                 chip.isHidden = true
             }
         }
+        shownTagCount = visibleTags.count
         overflowCount = content.hiddenTagCount
         overflowChip.title = overflowCount > 0 ? "+\(overflowCount)" : ""
         overflowChip.isHidden = overflowCount == 0
@@ -925,12 +929,17 @@ final class MessageRowCellView: NSTableCellView {
         // a narrower one beside it stays.
         let chipFloor = contentX
         var chipTrail = width - metrics.trailingPadding
-        for chip in tagChips.reversed() where !chip.isHidden {
+        // Which chips this row shows at all is `configure`'s decision,
+        // recorded when the content was set; whether each of them fits
+        // is this pass's. Keeping them apart lets a wider row bring a
+        // chip back without resurrecting another message's.
+        for (index, chip) in tagChips.enumerated().reversed() {
             let chipWidth = chip.fittingWidth()
-            guard chipTrail - chipWidth >= chipFloor else {
+            guard index < shownTagCount, chipTrail - chipWidth >= chipFloor else {
                 chip.isHidden = true
                 continue
             }
+            chip.isHidden = false
             chip.frame = NSRect(
                 x: chipTrail - chipWidth, y: 40.5,
                 width: chipWidth, height: 14
