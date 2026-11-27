@@ -319,7 +319,7 @@ func aSuccessfulRetryClearsTheReadError() async throws {
     try #require(await eventually { await fake.reads.count == 3 })
     try #require(await settle(clock) { model.row(at: 600) != nil })
     try #require(await settle(clock) { model.row(at: 800) != nil })
-    #expect(await model.lastError == nil)
+    #expect(model.lastError == nil)
 
     await model.close()
 }
