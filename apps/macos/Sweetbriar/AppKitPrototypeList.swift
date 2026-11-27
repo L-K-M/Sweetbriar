@@ -1024,8 +1024,9 @@ final class HoverRowView: NSTableRowView {
         // so it becomes window coordinates before this view's own
         // conversion, or the hit test is offset by the window's origin.
         hovering = window.map {
-            let inWindow = $0.convertFromScreen($0.mouseLocationOutsideOfEventStream)
-            return bounds.contains(convert(inWindow, from: nil))
+            let inWindow: NSPoint = $0.convertFromScreen($0.mouseLocationOutsideOfEventStream)
+            let here: NSPoint = convert(inWindow, from: nil)
+            return bounds.contains(here)
         } ?? false
         // Applied rather than animated: a row that appears under a
         // stationary cursor should be filled at once, and this must not
