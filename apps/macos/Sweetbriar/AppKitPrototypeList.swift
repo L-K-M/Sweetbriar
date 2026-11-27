@@ -16,13 +16,10 @@ import SweetbriarBridge
 /// business, the empty-state hint is the window's.
 @MainActor
 final class AppKitPrototypeList: NSView {
-    /// The row views' identifier, so AppKit recycles them like cells.
-    private static let rowViewIdentifier = NSUserInterfaceItemIdentifier("SweetbriarHoverRow")
     /// The reuse identifier the cells are made and found under.
     private static let cellIdentifier = NSUserInterfaceItemIdentifier(
         "MessageRow"
     )
-
     /// The account palette; the SwiftUI list declares the same colors
     /// in the same order so `accountColorIndex` matches across lists.
     private static let accountPalette: [NSColor] = [
@@ -418,19 +415,14 @@ extension AppKitPrototypeList: NSTableViewDataSource, NSTableViewDelegate {
     }
 
     /// A row view of our own, so a row answers the pointer the way
-    /// Mail's message list does: a subtle fill on hover. Dequeued like
-    /// a cell, so a scroll that brings new rows into view recycles the
-    /// row views it already made instead of allocating a fresh layer
-    /// and tracking area per row.
+    /// Mail's message list does: a subtle fill on hover.
+    ///
+    /// A fresh one per row: `makeView(withIdentifier:owner:)` dequeues
+    /// *cell* views, and asking it for a row view always misses, so the
+    /// identifier would be dead code. Row views are pooled by the table
+    /// itself, and a recycling pool here would be a second one.
     func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
-        if let reused = tableView.makeView(
-            withIdentifier: Self.rowViewIdentifier, owner: nil
-        ) as? HoverRowView {
-            return reused
-        }
-        let rowView = HoverRowView()
-        rowView.identifier = Self.rowViewIdentifier
-        return rowView
+        HoverRowView()
     }
 
     /// Keep the id-held selection in sync with the table's indexes —
@@ -1028,8 +1020,12 @@ final class HoverRowView: NSTableRowView {
         // row scrolled in beneath the cursor. AppKit sends no
         // `mouseEntered` until the pointer moves, so the state is
         // primed here or the highlight pops in a beat late.
+        // `mouseLocationOutsideOfEventStream` is in screen coordinates,
+        // so it becomes window coordinates before this view's own
+        // conversion, or the hit test is offset by the window's origin.
         hovering = window.map {
-            bounds.contains(convert($0.mouseLocationOutsideOfEventStream, from: nil))
+            let inWindow = $0.convertFromScreen($0.mouseLocationOutsideOfEventStream)
+            return bounds.contains(convert(inWindow, from: nil))
         } ?? false
         // Applied rather than animated: a row that appears under a
         // stationary cursor should be filled at once, and this must not
@@ -1069,13 +1065,13 @@ final class HoverRowView: NSTableRowView {
 
     /// The hover fill's target alpha. Pure, so the rule is testable
     /// without driving the pointer.
-    static func hoverAlpha(hovering: Bool, selected: Bool) -> CGFloat {
+    nonisolated static func hoverAlpha(hovering: Bool, selected: Bool) -> CGFloat {
         hovering && !selected ? 1 : 0
     }
 
     /// The fill's alpha: faint by design, and stronger once Increase
     /// Contrast has taken the rest of the window's subtlety away.
-    static func fillAlpha(increaseContrast: Bool) -> CGFloat {
+    nonisolated static func fillAlpha(increaseContrast: Bool) -> CGFloat {
         increaseContrast ? 0.14 : 0.05
     }
 }
