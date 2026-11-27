@@ -2189,3 +2189,67 @@ only what is new. Landed items are in "Completed in this pass" above.
 - **A reading-progress and estimated-read-time line in the reader.**
   `ReadingView` already renders the core's semantic document, so a word
   count is available for free. See D6.
+
+---
+
+# Part 11 — First-pass leftovers (2026-11-26)
+
+The first friendly-wasp pass recorded its findings in a working document and
+most of them are already carried by Parts 1 to 8 above. These four are not, so
+they are transcribed here rather than dropped. Everything else in that pass is
+covered: B1 and B2 landed (PR #599, #613), the row's date column landed in
+#590, and the remaining B/V/F/D entries duplicate Parts 2 to 5.
+
+## Landed from this pass
+
+- **The composer's header controls were misaligned** (PR #619). The `From:`
+  row built its label with no width constraint, so its pop-up button started
+  at that label's intrinsic width while `To:`, `Cc:`, `Bcc:` and `Subject:`
+  all started at the 52 pt column their rows reserved: in a running window
+  the From pop-up sat 17 pt left of every other header control, and the
+  labels did not line up either. Every header row now makes its label through
+  one helper that reserves the same width with the same right alignment.
+
+## Row layout
+
+### The message-row snippet sits flush against the row boundary
+
+`AppKitPrototypeList` frames the three text zones at `y=7 h=16`, `y=26 h=15`
+and `y=41 h=13` inside a 54 pt cell (pitch 56 minus `intercellSpacing`). The
+snippet's box therefore ends exactly on the bottom edge with no inset while
+the top has 7 pt, and a 12 pt system font needs about 14.5 pt of line height,
+so the snippet's descenders crowd the next row's sender. The SwiftUI
+prototype fills the same 54 pt and adds `.clipped()`, which cuts the
+descenders outright.
+
+Rebalance the zones so the content ends about 5 pt before the boundary — for
+instance `y=5 h=15`, `y=23 h=15`, `y=41 h=14`, total still 54 — and promote the
+zone insets into `MessageRowMetrics` so both lists share them. See also the
+tag-chip clamp in PR #610, which moved the chips off the same boundary.
+
+### The sender field collapses to zero width before the date gives anything up
+
+`AppKitPrototypeList` computes the sender's width as `max(0, trailing -
+leading)` after the trailing group has reserved a fixed 84 pt date, the
+account label (up to 100 pt) and two 13 pt markers. On a narrow list column,
+or in a unified window where the account label shows, the subtraction reaches
+zero and the sender disappears entirely instead of truncating, leaving a row
+with no sender at all while the date keeps its full 84 pt.
+
+Give the sender a floor — `max(72, trailing - leading)` — and let the account
+label hide or shrink before the floor is reached. PR #590 already made the
+date column elastic, which buys back most of the room this needs.
+
+## Composer
+
+### The Send button has no prominence
+
+The composer's action row is six equal bezeled push buttons — `Plain`,
+`Markdown`, `Attach…`, `Save`, `Send`, `Close Without Saving…` — and `Send`,
+the window's primary action, reads like the other five. Apple's Mail gives
+Send a filled pill in the trailing corner and makes it the default button.
+
+Make `Send` a rounded push button with `keyEquivalent = "\r"` as the window's
+default, and separate the secondary actions (`Save`, `Attach…`,
+`Close Without Saving…`) from the mode switch with a small gap or a
+trailing-aligned group.
