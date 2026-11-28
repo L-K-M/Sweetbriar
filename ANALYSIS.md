@@ -24,6 +24,13 @@ read error, the toolbar search field outside the message list, the
 reader's note commit on close, a row hover fill, tag chips that
 overflowed their cell, and a search cursor minted per row instead of
 per page edge.
+A sixth pass (`friendly-wasp`, 2026-11-27) closed the top of Part 6's
+own ordering: B1, "any sync invalidation rebuilds the whole message
+list", landed as PR #612 with its follow-up #621, and both are recorded
+under "Completed on main" above. The B1 entry is removed from Part 1,
+V1 now records what the fix changed rather than describing an open
+defect, and Part 6's table is re-ranked with B1 struck. Nothing else in
+the backlog moved; every other entry is untouched.
 
 ## Completed on main
 
@@ -71,6 +78,24 @@ per page edge.
   about a hypothetical replaced web view was answered with an explicit
   one-web-view invariant and a test comment about the SDK's lack of
   rule-list read-back.
+
+- **Any sync invalidation rebuilt the whole message list** (friendly-wasp
+  pass, PR #612, follow-up #621). `AppKitPrototypeList.observeAppearance`
+  wrapped two reads in one `withObservationTracking` block: the shared
+  appearance and `observeAccountLabels()`, which reads
+  `SidebarModel.sections`. The sidebar replaces that array on every
+  list-generation change, so new mail, a flag change or a Proton sync
+  fired the observation and did a full `NSTableView.reloadData()` plus a
+  selection restore on the message list, re-measuring text and
+  re-resolving layer colors for every visible row. The two observations
+  are now separate: the list takes an account-label map and an explicit
+  `reloadAccountLabels(_:)`, `MessageListViewController` resolves the
+  labels in one pass instead of once per visible row, and the sidebar
+  reports each read through `SidebarModel.onSectionsRead`. GLM's review
+  round found the row losing its account label when the sidebar listed
+  no section for its account; #621 restores the `?? accountId` fallback
+  and pins the invariant that a section's id is the account id.
+  Verified: 554 app-hosted Swift tests pass.
 
 ## Completed in this pass
 
@@ -286,42 +311,6 @@ per page edge.
 
 # Part 1 — Bugs
 
-## B1. Any sync invalidation rebuilds the whole message list
-
-`AppKitPrototypeList.observeAppearance()` wraps **two** reads in one
-`withObservationTracking` block:
-
-```swift
-withObservationTracking {
-    _ = appearanceModel.appearance
-    observeAccountLabels()      // reads `sidebar.sections`
-} onChange: { … tableView.reloadData() … }
-```
-
-`observeAccountLabels` is `MessageListViewController.swift:332`:
-`{ [weak sidebar] in _ = sidebar?.sections }`. So the block subscribes to
-`SidebarModel.sections`, an `@Observable` array that `reloadSections()`
-replaces whenever the sidebar re-reads.
-
-The sidebar re-reads on every `listSaw(generation)`
-(`MainWindowController.swift:578`), i.e. on **every list index
-generation change**: new mail, a flag change, a read receipt, a Proton
-sync. Each of those calls `outlineView.reloadData()`, which assigns a new
-`nodes` array and a new `model.sections`, which fires the observation,
-which does a **full `NSTableView.reloadData()` plus a selection restore**
-on the message list.
-
-Cost: every background sync event tears down and reconfigures every
-visible row, re-measures text, rebuilds badges and re-resolves layer
-colors. On a busy Proton account this is a continuous low-grade stutter,
-and it is invisible to the existing benchmarks, which measure scrolling
-and search, not idle repaints.
-
-Fix: keep appearance observation and account-label observation separate.
-Observe only `appearanceModel.appearance` here, and let the list take an
-explicit `reloadRows()` call (or an `[accountId: String]` label map that
-is rebuilt only when a label actually changes).
-
 ## B2. cid resolution is quadratic in a message's resource count
 
 `crates/sb-mime/src/rendition.rs:333` resolves each `cid:` reference
@@ -403,7 +392,8 @@ screen before `reloadData(forRowIndexes:)`.
 entire window — and clears it at every `install` (`:454`). With a row
 selected, `reconcileSelection` (`:807`) and `restoreSelection` trigger a
 fresh O(n) main-thread dictionary construction after **every** index
-change, including the ones B1 already makes too frequent.
+change. B1 (the same observation firing the list's reload) is fixed in
+PR #612, so this is now the dominant cost left in that path.
 
 Fix: maintain the map incrementally across generations, or stamp it with
 a generation and rebuild it off the main actor.
@@ -730,11 +720,14 @@ race. Use three cached formatters (today / this year / older) or
 
 # Part 3 — Visual and layout issues
 
-## V1. The message list rebuilds on background sync (see B1)
+## V1. Background sync used to rebuild the whole message list
 
-This is listed again here because the visible symptom is a layout
-problem, not just a CPU problem: rows flicker, the scroll position can
-jump, and selection rings re-draw.
+Done in PR #612. Recorded here because the visible symptom was a layout
+problem rather than only a CPU one: rows flickered, the scroll position
+could jump and selection rings re-drew on every sync invalidation. What
+remains open in the same family is B7 (delivered pages reload rows that
+are not on screen) and P10 (per-row formatting and measurement), which
+are still the cost of a reload that does happen.
 
 ## V2. Row layout measures text synchronously on every pass
 
@@ -1223,18 +1216,20 @@ Ranked by (user-visible impact × confidence) / diff size.
 
 | # | Entry | Why first |
 |---|---|---|
-| 1 | B1 — stop the full table reload on sidebar reload | largest single stutter source, small diff, pure Swift |
-| 2 | B2 — HashMap cid resolution | clear quadratic bug, small diff, existing test surface |
-| 3 | P1 — render the body once | 2x on every message open, spec/08's 100 ms budget |
-| 4 | B3 — cache the body lease | removes re-render on re-selection and source toggling |
-| 5 | B7 — visible-only page reload | removes off-screen cell churn (`setVisible` guard tracked in PR #586) |
-| 6 | B4 + B5 + P7 — search hot path | the 100 ms search budget |
-| 7 | B8 + B9 — reverse index and dropped-selection lookups | removes main-thread stalls |
-| 8 | B10 + B12 — search field round trips | per-keystroke latency |
-| 9 | P3 + P4 + P5 — render once, decode lazily, share image bytes | memory and CPU on image-heavy mail |
-| 10 | V4 + F1 + F4 — reader empty states, Down/Up from the reader, Quick Look | visible polish |
-| 11 | F13 — signatures | daily-driver blocker |
-| 12 | D1 — Calm Inbox | the delightful one |
+| 1 | B2 — HashMap cid resolution | clear quadratic bug, small diff, existing test surface |
+| 2 | P1 — render the body once | 2x on every message open, spec/08's 100 ms budget |
+| 3 | B3 — cache the body lease | removes re-render on re-selection and source toggling |
+| 4 | B7 — visible-only page reload | removes off-screen cell churn (`setVisible` guard tracked in PR #586) |
+| 5 | B4 + B5 + P7 — search hot path | the 100 ms search budget |
+| 6 | B8 + B9 — reverse index and dropped-selection lookups | removes main-thread stalls |
+| 7 | B10 + B12 — search field round trips | per-keystroke latency |
+| 8 | P3 + P4 + P5 — render once, decode lazily, share image bytes | memory and CPU on image-heavy mail |
+| 9 | V4 + F1 + F4 — reader empty states, Down/Up from the reader, Quick Look | visible polish |
+| 10 | F13 — signatures | daily-driver blocker |
+| 11 | D1 — Calm Inbox | the delightful one |
+
+B1 (stop the full table reload on sidebar reload) was the top entry and
+is done in PR #612; its follow-up, the account-id fallback, is #621.
 
 Entries deliberately left out of the implementation pass: everything in
 Part 4 that needs a spec change first (F2, F3, F6, F9, F15), everything
@@ -1493,9 +1488,10 @@ Medium priority. `MainWindowController.listSaw` sends each list
 generation to `SidebarModel.noteGeneration`, then
 `SidebarViewController.reloadSections` rebuilds every row object and
 calls `reloadData()`. A sync landing fifty changes reloads it fifty
-times. This is the other half of Part 1's B1, which reads the
-consequence in the list. Reload the counts in place, or debounce to one
-reload per burst. [Sidebar reload](apps/macos/Sweetbriar/SidebarViewController.swift#L179)
+times. Part 1's B1, which read the consequence in the list, is fixed in
+PR #612; this entry is the sidebar's own half and is still open. Reload
+the counts in place, or debounce to one reload per burst.
+[Sidebar reload](apps/macos/Sweetbriar/SidebarViewController.swift#L179)
 
 ### Cache the calendar the row formatter uses
 
@@ -2189,67 +2185,3 @@ only what is new. Landed items are in "Completed in this pass" above.
 - **A reading-progress and estimated-read-time line in the reader.**
   `ReadingView` already renders the core's semantic document, so a word
   count is available for free. See D6.
-
----
-
-# Part 11 — First-pass leftovers (2026-11-26)
-
-The first friendly-wasp pass recorded its findings in a working document and
-most of them are already carried by Parts 1 to 8 above. These four are not, so
-they are transcribed here rather than dropped. Everything else in that pass is
-covered: B1 and B2 landed (PR #599, #613), the row's date column landed in
-#590, and the remaining B/V/F/D entries duplicate Parts 2 to 5.
-
-## Landed from this pass
-
-- **The composer's header controls were misaligned** (PR #619). The `From:`
-  row built its label with no width constraint, so its pop-up button started
-  at that label's intrinsic width while `To:`, `Cc:`, `Bcc:` and `Subject:`
-  all started at the 52 pt column their rows reserved: in a running window
-  the From pop-up sat 17 pt left of every other header control, and the
-  labels did not line up either. Every header row now makes its label through
-  one helper that reserves the same width with the same right alignment.
-
-## Row layout
-
-### The message-row snippet sits flush against the row boundary
-
-`AppKitPrototypeList` frames the three text zones at `y=7 h=16`, `y=26 h=15`
-and `y=41 h=13` inside a 54 pt cell (pitch 56 minus `intercellSpacing`). The
-snippet's box therefore ends exactly on the bottom edge with no inset while
-the top has 7 pt, and a 12 pt system font needs about 14.5 pt of line height,
-so the snippet's descenders crowd the next row's sender. The SwiftUI
-prototype fills the same 54 pt and adds `.clipped()`, which cuts the
-descenders outright.
-
-Rebalance the zones so the content ends about 5 pt before the boundary — for
-instance `y=5 h=15`, `y=23 h=15`, `y=41 h=14`, total still 54 — and promote the
-zone insets into `MessageRowMetrics` so both lists share them. See also the
-tag-chip clamp in PR #610, which moved the chips off the same boundary.
-
-### The sender field collapses to zero width before the date gives anything up
-
-`AppKitPrototypeList` computes the sender's width as `max(0, trailing -
-leading)` after the trailing group has reserved a fixed 84 pt date, the
-account label (up to 100 pt) and two 13 pt markers. On a narrow list column,
-or in a unified window where the account label shows, the subtraction reaches
-zero and the sender disappears entirely instead of truncating, leaving a row
-with no sender at all while the date keeps its full 84 pt.
-
-Give the sender a floor — `max(72, trailing - leading)` — and let the account
-label hide or shrink before the floor is reached. PR #590 already made the
-date column elastic, which buys back most of the room this needs.
-
-## Composer
-
-### The Send button has no prominence
-
-The composer's action row is six equal bezeled push buttons — `Plain`,
-`Markdown`, `Attach…`, `Save`, `Send`, `Close Without Saving…` — and `Send`,
-the window's primary action, reads like the other five. Apple's Mail gives
-Send a filled pill in the trailing corner and makes it the default button.
-
-Make `Send` a rounded push button with `keyEquivalent = "\r"` as the window's
-default, and separate the secondary actions (`Save`, `Attach…`,
-`Close Without Saving…`) from the mode switch with a small gap or a
-trailing-aligned group.
