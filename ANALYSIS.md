@@ -1,4 +1,4 @@
-# Sweetbriar — analysis backlog
+# Sweetbriar, analysis backlog
 
 Consolidated on 2026-11-26 from the full review of `origin/main` at
 `19fde48e` (Rust ~298k lines, Swift ~60k lines) plus a second pass over
@@ -23,14 +23,12 @@ marker, the sidebar's observer and reveal behaviour, a list's sticky
 read error, the toolbar search field outside the message list, the
 reader's note commit on close, a row hover fill, tag chips that
 overflowed their cell, and a search cursor minted per row instead of
-per page edge.
-A sixth pass (`friendly-wasp`, 2026-11-27) closed the top of Part 6's
-own ordering: B1, "any sync invalidation rebuilds the whole message
-list", landed as PR #612 with its follow-up #621, and both are recorded
-under "Completed on main" above. The B1 entry is removed from Part 1,
-V1 now records what the fix changed rather than describing an open
-defect, and Part 6's table is re-ranked with B1's row removed. Nothing
-else in the backlog moved; every other entry is untouched.
+per page edge. A sixth pass (`friendly-wasp`, 2026-11-27) added the
+composer's header alignment (PR #619), the bridge's imported-Inbox
+expectation (PRs #617/#618) and an imported-mailbox role that was
+reverted (PR #623) because spec/08 "Sidebar" forbids reading a role from
+a file name; Parts 12 and 13 carry what it found and what it confirmed
+as already covered.
 
 ## Completed on main
 
@@ -133,7 +131,7 @@ else in the backlog moved; every other entry is untouched.
   failure status carries a **Try Again** button, so the retry no longer
   depends on the user happening to scroll. While a new choice is
   opening, `model` is still the previous list, so `updateStatus`
-  reported the old count under the new title — "Search · 240 results"
+  reported the old count under the new title, "Search · 240 results"
   straight after leaving a 240-row mailbox.
 - **Toolbar search field outside the message list** (friendly-wasp pass,
   PR #608). The toolbar's search field is the message list's and stayed
@@ -309,13 +307,13 @@ else in the backlog moved; every other entry is untouched.
 
 ---
 
-# Part 1 — Bugs
+# Part 1, Bugs
 
 ## B2. cid resolution is quadratic in a message's resource count
 
 `crates/sb-mime/src/rendition.rs:333` resolves each `cid:` reference
 with `self.input.resources().iter().position(|r| r.content_id() == id)`
-and then checks membership with `self.used.contains(&i)` — a `Vec`
+and then checks membership with `self.used.contains(&i)`, a `Vec`
 linear scan. A newsletter with N inline images and N references does
 `N × (N + N)` work, and `Inventory` is rebuilt per render, so there is no
 carry-over between the placeholder render and the real render in
@@ -388,8 +386,8 @@ screen before `reloadData(forRowIndexes:)`.
 ## B8. The reverse id index is rebuilt wholesale after every index fetch
 
 `ListWindowModel.swift:514` (`index(of:)`) lazily builds
-`ids.enumerated().map { … }.reduce(into: [:])` — a dictionary over the
-entire window — and clears it at every `install` (`:454`). With a row
+`ids.enumerated().map { … }.reduce(into: [:])`, a dictionary over the
+entire window, and clears it at every `install` (`:454`). With a row
 selected, `reconcileSelection` (`:807`) and `restoreSelection` trigger a
 fresh O(n) main-thread dictionary construction after **every** index
 change. B1 (the same observation firing the list's reload) is fixed in
@@ -416,7 +414,7 @@ clause for editing (`editClause` re-calls it with the same canonical
 text) and pressing Return with unchanged text invalidate the current
 request, relaunch the parser, re-present the identical query, and
 `MessageListViewController.swift:323` tears down and rebuilds the whole
-`AppKitPrototypeList` — table, columns, observers, constraints —
+`AppKitPrototypeList`, table, columns, observers, constraints
 synchronously on the main actor.
 
 Fix: return early when the bytes equal the committed text and no
@@ -499,7 +497,7 @@ it.
 
 ---
 
-# Part 2 — Performance
+# Part 2, Performance
 
 ## P1. Every message open renders the body twice
 
@@ -516,7 +514,7 @@ let rendition = render(&input, files.token(), preferred);      // publish
 ```
 
 The comment is correct that the token length is fixed, but that only
-means the two renders are identical in size — not that they are cheap.
+means the two renders are identical in size, not that they are cheap.
 Every message open pays two full MIME parses, two sanitisation passes,
 two manifest builds and two HTML serialisations.
 
@@ -536,7 +534,7 @@ dropped.
 
 `crates/sb-mime/src/reader.rs:497` (`render_input`) eagerly decodes every
 CID part in the related scope into an owned `Vec`, referenced or not. A
-message with several large images holds all of them — up to 25 MB each —
+message with several large images holds all of them, up to 25 MB each
 for the whole render.
 
 `crates/sb-resources/src/bodies.rs:163` (`publish_attachment`) parses the
@@ -642,7 +640,7 @@ copies roughly 16 KB into each of up to 200 cursors per delivered page.
 - `MessageListViewController.swift:328` calls
   `Self.accountLabel(id, sections:)` per row, which filters and sorts all
   sections and then calls `SidebarViewController.accountLabel`, which
-  builds grouping dictionaries — even in single-account windows where
+  builds grouping dictionaries, even in single-account windows where
   the marker is hidden.
 - `AppKitPrototypeList.swift:705` `configure` always sets
   `needsLayout = true`, forcing `layoutSubviews` (with synchronous
@@ -718,7 +716,7 @@ race. Use three cached formatters (today / this year / older) or
 
 ---
 
-# Part 3 — Visual and layout issues
+# Part 3, Visual and layout issues
 
 ## V1. Background sync used to rebuild the whole message list
 
@@ -731,7 +729,7 @@ are still the cost of a reload that does happen.
 
 ## V2. Row layout measures text synchronously on every pass
 
-`AppKitPrototypeList.swift:741`/`:748` — both `layout()` and
+`AppKitPrototypeList.swift:741`/`:748`, both `layout()` and
 `resizeSubviews` can invoke `layoutSubviews` in one resize, and
 `layoutSubviews` measures text for each visible row
 (`accountField.intrinsicContentSize.width` at `:788`,
@@ -762,8 +760,8 @@ A short first-run checklist could also link the keyboard reference and
 guide the user to a completed import. Keep those links secondary to
 the primary action.
 
-Use one shared empty-state view — large tertiary symbol, title and one
-optional hint — for the list panes, reader, Drafts and Out Box. Keep
+Use one shared empty-state view, large tertiary symbol, title and one
+optional hint, for the list panes, reader, Drafts and Out Box. Keep
 "Opening…" and failure text separate: `MessageListViewController`'s
 `statusLabel` currently mixes loading, errors and emptiness.
 
@@ -838,7 +836,7 @@ honoring Reduce Motion. Related: F15's IDN warnings.
 
 ---
 
-# Part 4 — Missing features and quality-of-life gaps
+# Part 4, Missing features and quality-of-life gaps
 
 ## F1. No keyboard navigation between messages with the reader focused
 
@@ -1084,7 +1082,7 @@ state; decide whether a link may open another archive safely.
 
 ---
 
-# Part 5 — Novel, delightful and quirky ideas
+# Part 5, Novel, delightful and quirky ideas
 
 ## D1. A "Calm Inbox" opening view
 
@@ -1158,8 +1156,8 @@ reachable from the context menu, swipe and keyboard.
 ## D12. Composer Markdown preview beside the source
 
 The composer styles Markdown live (`MarkdownStyler`) but always shows
-source. A toggleable split preview — styled output in a read-only text
-view next to or below the editor — would make Markdown-first composing
+source. A toggleable split preview, styled output in a read-only text
+view next to or below the editor, would make Markdown-first composing
 feel safe without hiding the source. Keep it presentation-only (never
 stored), undo-aware, and off by default for plain-text drafts.
 
@@ -1210,23 +1208,23 @@ connected across surfaces.
 
 ---
 
-# Part 6 — What I would implement, in order
+# Part 6, What I would implement, in order
 
 Ranked by (user-visible impact × confidence) / diff size.
 
 | # | Entry | Why first |
 |---|---|---|
-| 1 | B2 — HashMap cid resolution | clear quadratic bug, small diff, existing test surface |
-| 2 | P1 — render the body once | 2x on every message open, spec/08's 100 ms budget |
-| 3 | B3 — cache the body lease | removes re-render on re-selection and source toggling |
-| 4 | B7 — visible-only page reload | removes off-screen cell churn (`setVisible` guard tracked in PR #586) |
-| 5 | B4 + B5 + P7 — search hot path | the 100 ms search budget |
-| 6 | B8 + B9 — reverse index and dropped-selection lookups | removes main-thread stalls |
-| 7 | B10 + B12 — search field round trips | per-keystroke latency |
-| 8 | P3 + P4 + P5 — render once, decode lazily, share image bytes | memory and CPU on image-heavy mail |
-| 9 | V4 + F1 + F4 — reader empty states, Down/Up from the reader, Quick Look | visible polish |
-| 10 | F13 — signatures | daily-driver blocker |
-| 11 | D1 — Calm Inbox | the delightful one |
+| 1 | B2, HashMap cid resolution | clear quadratic bug, small diff, existing test surface |
+| 2 | P1, render the body once | 2x on every message open, spec/08's 100 ms budget |
+| 3 | B3, cache the body lease | removes re-render on re-selection and source toggling |
+| 4 | B7, visible-only page reload | removes off-screen cell churn (`setVisible` guard tracked in PR #586) |
+| 5 | B4 + B5 + P7, search hot path | the 100 ms search budget |
+| 6 | B8 + B9, reverse index and dropped-selection lookups | removes main-thread stalls |
+| 7 | B10 + B12, search field round trips | per-keystroke latency |
+| 8 | P3 + P4 + P5, render once, decode lazily, share image bytes | memory and CPU on image-heavy mail |
+| 9 | V4 + F1 + F4, reader empty states, Down/Up from the reader, Quick Look | visible polish |
+| 10 | F13, signatures | daily-driver blocker |
+| 11 | D1, Calm Inbox | the delightful one |
 
 B1 (stop the full table reload on sidebar reload) was the top entry and
 is done in PR #612; its follow-up, the account-id fallback, is #621.
@@ -1239,7 +1237,7 @@ fix and `setVisible` no-op guard have separate submitted patches.
 
 ---
 
-# Part 7 — Parallel curated pass
+# Part 7, Parallel curated pass
 
 A second pass over `19fde48e` recorded the additional entries below.
 See V4 for first run, F3 for conversation trails, and F4 for attachments.
@@ -1327,7 +1325,7 @@ Medium priority. Document the direct Proton workflow, local archive behavior, an
 Exploratory. Add a reader context action that copies the selected passage as a Markdown block quote with its source subject and date. Let the user include the sender address when they need it. Start with native reader text selection and the standard clipboard. Support nested quotes, Unicode and multiline headers, and ensure the metadata cannot change the Markdown structure. Prototype internal links only after choosing a reference that survives restore and provides a useful missing-message state. This gives researchers and writers a quick way to collect quotations in their existing notes app.
 ---
 
-# Part 8 — Second review (2026-11-26, opencode)
+# Part 8, Second review (2026-11-26, opencode)
 
 A second pass over `19fde48e`, independent of Parts 1 to 7: the Rust
 crates (store, engine, service, FFI, MIME, Proton, resources), the Swift
@@ -1581,6 +1579,11 @@ both. [Header tint](apps/macos/Sweetbriar/Reader/ReaderViewController.swift#L525
   import the Unified Inbox is empty while "Local Archive > Inbox" holds
   everything (seen). Offer "Treat as Inbox" for a mailbox named Inbox,
   Sent, Drafts, Trash, Archive or Junk at import, and store the role.
+  PR #613 derived the role from the mailbox name automatically and was
+  reverted by #623: it overrode that decision and left spec/09
+  contradicting spec/08. The `INSERT` in `local_mailbox` now names the
+  spec/08 line that blocks the derivation. The user-confirmed route
+  above is the one that fits the spec.
 - **Skip a snippet that repeats the subject.** A message whose first
   body line equals its subject shows it twice ("Your receipt from
   Harbor Coffee Co.", seen). In `sb-mime`'s summary, drop that line and
@@ -1642,7 +1645,7 @@ both. [Header tint](apps/macos/Sweetbriar/Reader/ReaderViewController.swift#L525
   Dependabot skips `fuzz/` and `ci/go-proton-api`; spec/11 describes
   caches CI does not have; the layering check runs twice per leg.
 
-# Part 9 — Synthetic-mail and core follow-up
+# Part 9, Synthetic-mail and core follow-up
 
 A further review of `19fde48e` used a 48-message synthetic archive and
 light and dark screenshots of the list, reader, search, composer and
@@ -1886,7 +1889,7 @@ direct API. [IMAP implementation](crates/sb-imap/src),
 
 ---
 
-# Part 10 — Friendly-wasp review pass (2026-11-26)
+# Part 10, Friendly-wasp review pass (2026-11-26)
 
 A second independent pass: five bounded read-only helper reviews (message
 list, reader, composer, window chrome/sidebar/toolbar, and the Rust core's
@@ -1905,11 +1908,11 @@ only what is new. Landed items are in "Completed in this pass" above.
   `noteDraft`. Landed in #609; the ordering trap there is worth
   remembering: a task created inside `close` does not start until `close`
   has already run `reads.retire()` and `model.close()`, so the commit has
-  to happen — and be awaited — before the teardown.
+  to happen, and be awaited, before the teardown.
 - **Reading-view sender memory races.** `ReadingViewMemory.swift:53` and
   `:63`: `removeSender` returns early when `senders` does not contain the
   address, so an OFF click that lands while an ON write is in flight
-  writes nothing and the ON write persists — the opposite of what the user
+  writes nothing and the ON write persists, the opposite of what the user
   asked. `reload()` has the mirror hazard: a background read that resolves
   after a write replaces `senders` with the stale stored list. Serialize
   the three operations through one task or actor. See also Part 7's
@@ -2087,7 +2090,7 @@ only what is new. Landed items are in "Completed in this pass" above.
   memoize per (bucket, day). See P14.
 - **Every reconfigured row re-measures its tag chips and redraws its
   badges.** `AppKitPrototypeList.layoutSubviews` calls
-  `chip.fittingWidth()` — a CoreText measurement per chip per row — and
+  `chip.fittingWidth()`, a CoreText measurement per chip per row, and
   `BadgeView`'s `title`, `font`, `fillColor` and `titleColor` each do
   `didSet { needsDisplay = true }` unconditionally. Cache the measured
   width and guard each `didSet`.
@@ -2122,7 +2125,7 @@ only what is new. Landed items are in "Completed in this pass" above.
   focus, and give the tag picker the same treatment.
 - **The reader's body has no maximum measure.** The body stack is pinned to
   the view's edges with 12 pt insets and nothing else, so at a 1,180 pt
-  window the plain-text body ran about 636 pt wide — roughly 110
+  window the plain-text body ran about 636 pt wide, roughly 110
   characters per line. Cap the measure at about 68 characters and centre
   it, the way the reader's placeholder already is.
 - **The header expands every To and Cc recipient.**
@@ -2139,7 +2142,7 @@ only what is new. Landed items are in "Completed in this pass" above.
   status line is the plain string "No messages" with no action, and the
   welcome island only covers a fresh archive. After an import the unified
   inbox is empty and `isFreshArchive` is false, so nothing explains where
-  the mail went — see the imported-role entry in Part 9.
+  the mail went, see the imported-role entry in Part 9.
 - **The window opens at its minimum size when no frame is saved.** With
   `-ApplePersistenceIgnoreState` the window came up at 800×420 (its
   declared minimums) rather than the 1,100×700 `defaultContentSize`.
@@ -2159,7 +2162,7 @@ only what is new. Landed items are in "Completed in this pass" above.
   AppKit row lays out date, account label, paperclip, flag, then sender,
   while the SwiftUI row's HStack reads sender, account label, flag,
   paperclip, date, and the date column is fixed at 84 pt in AppKit but
-  elastic in SwiftUI — despite the shared header comment claiming the two
+  elastic in SwiftUI, despite the shared header comment claiming the two
   lists are identical. Promote the date width into `MessageRowMetrics` and
   give both lists the same order and frame. (The date *width* itself
   landed in #590; the order and the SwiftUI side did not.)
@@ -2185,3 +2188,180 @@ only what is new. Landed items are in "Completed in this pass" above.
 - **A reading-progress and estimated-read-time line in the reader.**
   `ReadingView` already renders the core's semantic document, so a word
   count is available for free. See D6.
+
+# Part 12, Second-pass leftovers (2026-11-27)
+
+A second friendly-wasp pass over the same tree, run against `origin/main`
+at `304db083` with a live Debug build over a 140-message synthetic
+archive (mixed `text/plain` and `multipart/alternative`, one attachment,
+unread and flagged rows, 120-character subjects, two tags per message).
+Its working document is `tmp.md`. Everything in it that Parts 1 to 11 do
+not already carry is transcribed here; where a Part already covers the
+ground the entry says so and adds only what is new.
+
+## Landed from this pass
+
+- **The composer's header controls were misaligned** (PR #619). The
+  `From:` row built its label with no width constraint, so its pop-up
+  button started at that label's intrinsic width while `To:`, `Cc:`,
+  `Bcc:` and `Subject:` all started at the 52 pt column their rows
+  reserved: measured in a running window, the From pop-up button sat at
+  x=678 and the other four fields at x=695, a 17 pt jog, and the labels
+  did not line up either (`From:` measured 37 pt against 54 for the
+  others). Every header row now makes its label through one
+  `headerLabel(_:)` helper that reserves the same width with the same
+  right alignment, so the five controls share a leading edge.
+- **An imported mailbox's role** was derived from its name in PR #613
+  and reverted by #623, because spec/08 "Sidebar" reads "no role or
+  hierarchy is read into a file name" and the derivation left spec/09
+  contradicting it. The finding, the SQL evidence and the spec line that
+  blocks it are under "Role hints for imported mailboxes" in Part 7.
+
+## Row layout
+
+### The message-row snippet sits flush against the row boundary
+
+`AppKitPrototypeList` frames the three text zones at `y=7 h=16`,
+`y=26 h=15` and `y=41 h=13` inside a 54 pt cell (pitch 56 minus
+`intercellSpacing.height`). The snippet's box therefore ends exactly on
+the bottom edge with no inset while the top has 7 pt, and a 12 pt system
+font needs about 14.5 pt of line height, so the snippet's descenders
+crowd the next row's sender. The SwiftUI prototype fills the same 54 pt
+and adds `.clipped()`, which cuts the descenders outright.
+
+Rebalance the zones so the content ends about 5 pt before the boundary
+for instance `y=5 h=15`, `y=23 h=15`, `y=41 h=14`, total still 54, and
+promote the zone insets into `MessageRowMetrics` so both lists share
+them. See also the tag-chip clamp in PR #610, which moved the chips off
+the same boundary.
+
+### The sender field collapses to zero width before the date gives anything up
+
+`AppKitPrototypeList` computes the sender's width as `max(0, trailing -
+leading)` after the trailing group has reserved a fixed 84 pt date, the
+account label (up to 100 pt) and two 13 pt markers. On a narrow list
+column, or in a unified window where the account label shows, the
+subtraction reaches zero and the sender disappears entirely instead of
+truncating, leaving a row with no sender at all while the date keeps its
+full 84 pt.
+
+Give the sender a floor, `max(72, trailing - leading)`, and let the
+account label hide or shrink before the floor is reached. PR #590 already
+made the date column elastic, which buys back most of the room this
+needs.
+
+## Composer
+
+### The Send button has no prominence
+
+The composer's action row is six equal bezeled push buttons, `Plain`,
+`Markdown`, `Attach…`, `Save`, `Send`, `Close Without Saving…`, and
+`Send`, the window's primary action, reads like the other five. Apple's
+Mail gives Send a filled pill in the trailing corner and makes it the
+default button.
+
+Make `Send` a rounded push button with `keyEquivalent = "\r"` as the
+window's default, and separate the secondary actions (`Save`, `Attach…`,
+`Close Without Saving…`) from the mode switch with a small gap or a
+trailing-aligned group.
+
+## Environment notes for this Mac
+
+- `cargo` is not on `PATH`; use
+  `PATH=/Users/lkm/.rustup/toolchains/1.99.0-aarch64-apple-darwin/bin:$PATH`.
+- `cargo xtask ffi` fails unless `CARGO_HOME` is the real registry path
+  (`/Volumes/lexar-2tb-2026/KioxiaData/Rust/cargo`): `~/.cargo` is a
+  symlink to it and `askama`'s absolute template includes break when the
+  path goes through the link.
+- `rustup run nightly-2026-10-10 cargo rustdoc` resolves `rustdoc` from
+  `PATH`, so with the stable toolchain first the nightly `cargo` finds a
+  stable `rustdoc` and `check-layers` fails with "the option
+  `document-hidden-items` is only accepted on the nightly compiler".
+  Point `PATH` at the nightly toolchain's `bin` for the whole gate, and
+  wipe `target/check-layers` between toolchains so no stale `rmeta`
+  survives.
+- `scripts/build.sh --debug` stages `dist/Sweetbriar.app`; the XcodeGen
+  step rewrites `apps/macos/Sweetbriar/Info.plist`, so restore that file
+  after a local build if it is dirty.
+- Verified non-bugs, so they are not re-reported: the sidebar's SF
+  Symbols are not stretched (the `AXImage` frame AppKit reports, 22x11,
+  does not match the drawn glyph, which measured 15x14 for `flag`); the
+  reader pane's background is the same dark grey as the list pane, not a
+  black void; and the selected row's highlight is drawn normally while
+  the window is key.
+
+# Part 13, Second-pass follow-ups (2026-11-28)
+
+Everything the second friendly-wasp pass found that Parts 1 to 12 do
+not already carry, kept short because each entry names its file and
+line. Verified against `origin/main` at `4c742c53`.
+
+## Performance
+
+- **`evictOverflow` rescans a page map that never shrinks.**
+  `ListWindowModel.evictOverflow` reduces, filters and sorts `pages` on
+  every delivered frame, and `page(containing:)` inserts a `Page` for
+  every rank a row view asks about with nothing removing entries, so
+  `pages` grows to one object per page of the window (2,500 for a
+  500k-row mailbox). Maintain a loaded-page counter where `page.rows` is
+  set and cleared, and skip the scan while it is within the cap. (Part
+  10 carries the same entry; this adds the object-count estimate.)
+- **Row date formatting mutates one shared `DateFormatter`.**
+  `MessageRowFormatter.dateString` picks a bucket, assigns
+  `dateFormatter.dateFormat`, then formats; swapping the pattern makes
+  Foundation re-parse it and rebuild the ICU formatter, and it re-reads
+  `Calendar.current` per row. Hold three preconfigured formatters, one
+  per bucket, or memoize per (bucket, day). P14 carries the same code
+  with the data-race framing; this adds the scroll-cost framing: it is
+  on the path spec/08 budgets at under 5 ms of main-thread work per
+  update.
+- **Every reconfigured row re-measures its tag chips and redraws its
+  badges.** `AppKitPrototypeList.layoutSubviews` calls
+  `chip.fittingWidth()`, a CoreText measurement per chip per row, and
+  `BadgeView`'s `title`, `font`, `fillColor` and `titleColor` each do
+  `didSet { needsDisplay = true }` unconditionally, so a reused cell
+  whose monogram did not change still queues a capsule fill and an
+  `NSString.draw`. Cache the measured width and guard each `didSet`.
+  P10 and V2 carry parts of this; the `didSet` guards are new.
+- **A bounds change lays every cell out twice.** Both `layout()` and
+  `resizeSubviews(withOldSize:)` end with `layoutSubviews()`, which
+  re-frames all about 25 subviews of the cell by hand. Cache the last
+  `bounds.size` in `layoutSubviews` and return early when it is
+  unchanged. V2 carries the same observation; the fix is new.
+
+## Visual, layout and accessibility
+
+- **The reader's body has no maximum measure.** The body stack is pinned
+  to the view's edges with 12 pt insets and nothing else, so at a
+  1,180 pt window the plain-text body ran about 636 pt wide, roughly 110
+  characters per line. Cap the measure at about 68 characters and centre
+  it, the way the reader's placeholder already is. Part 10's reader
+  entry names the same code; this adds the measured character count.
+- **The two prototype lists disagree about the row's trailing group.**
+  The AppKit row lays out date, account label, paperclip, flag, then
+  sender, while the SwiftUI row's `HStack` reads sender, account label,
+  flag, paperclip, date, and the date column is fixed at 84 pt in AppKit
+  but elastic in SwiftUI, despite the shared header comment claiming
+  the two lists are identical. Promote the date width into
+  `MessageRowMetrics` and give both lists the same order and frame.
+  Part 10 carries the same entry; PR #590 landed the date width but
+  neither the order nor the SwiftUI side.
+- **Account rail colours collide and monograms can be digits.**
+  `MessageRowPresentation` takes `hash % 6` over a six-slot palette, so
+  three accounts in a unified list already have about a 50 % chance of
+  two sharing a rail colour, and the rail is the only colour cue.
+  `monogram(for:)` takes the first letter of the id's last `-`
+  component, so an id like `acct-2` renders the digit "2". Assign
+  palette slots by account order in the window, and fall back to the
+  display name's first letter when the id component is not a letter.
+  Part 10 carries the same entry.
+
+## What the second pass confirmed as already covered
+
+Recorded so the next pass does not redo the work: the reused row cell's
+account marker (Part 10, PR #599), the row's date column (Part 1,
+PR #590), per-row formatting and measurement (P10), the reverse id index
+(B8), the sticky read error (Part 10, PR #601), the reader's always-on
+tag and note fields (Part 10), `evictOverflow` (Part 10), the empty
+unified window (Part 10 and the imported-role entry in Part 7), and
+every F and D entry the pass raised, which duplicate Parts 4 and 5.
