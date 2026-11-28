@@ -29,8 +29,8 @@ own ordering: B1, "any sync invalidation rebuilds the whole message
 list", landed as PR #612 with its follow-up #621, and both are recorded
 under "Completed on main" above. The B1 entry is removed from Part 1,
 V1 now records what the fix changed rather than describing an open
-defect, and Part 6's table is re-ranked with B1 struck. Nothing else in
-the backlog moved; every other entry is untouched.
+defect, and Part 6's table is re-ranked with B1's row removed. Nothing
+else in the backlog moved; every other entry is untouched.
 
 ## Completed on main
 
