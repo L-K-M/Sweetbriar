@@ -2189,6 +2189,8 @@ only what is new. Landed items are in "Completed in this pass" above.
   `ReadingView` already renders the core's semantic document, so a word
   count is available for free. See D6.
 
+---
+
 # Part 12, Second-pass leftovers (2026-11-27)
 
 A second friendly-wasp pass over the same tree, run against `origin/main`
@@ -2290,6 +2292,8 @@ trailing-aligned group.
   black void; and the selected row's highlight is drawn normally while
   the window is key.
 
+---
+
 # Part 13, Second-pass follow-ups (2026-11-28)
 
 Everything the second friendly-wasp pass found that Parts 1 to 12 do
@@ -2302,10 +2306,10 @@ line. Verified against `origin/main` at `4c742c53`.
   `ListWindowModel.evictOverflow` reduces, filters and sorts `pages` on
   every delivered frame, and `page(containing:)` inserts a `Page` for
   every rank a row view asks about with nothing removing entries, so
-  `pages` grows to one object per page of the window (2,500 for a
-  500k-row mailbox). Maintain a loaded-page counter where `page.rows` is
-  set and cleared, and skip the scan while it is within the cap. (Part
-  10 carries the same entry; this adds the object-count estimate.)
+  `pages` grows to one object per page of the window, about 2,500 for a
+  500k-row mailbox. Maintain a loaded-page counter where `page.rows` is
+  set and cleared, and skip the scan while it is within the cap. Part 10
+  carries the same entry; this adds the object-count estimate.
 - **Row date formatting mutates one shared `DateFormatter`.**
   `MessageRowFormatter.dateString` picks a bucket, assigns
   `dateFormatter.dateFormat`, then formats; swapping the pattern makes
@@ -2325,7 +2329,7 @@ line. Verified against `origin/main` at `4c742c53`.
   P10 and V2 carry parts of this; the `didSet` guards are new.
 - **A bounds change lays every cell out twice.** Both `layout()` and
   `resizeSubviews(withOldSize:)` end with `layoutSubviews()`, which
-  re-frames all about 25 subviews of the cell by hand. Cache the last
+  re-frames all 25-odd subviews of the cell by hand. Cache the last
   `bounds.size` in `layoutSubviews` and return early when it is
   unchanged. V2 carries the same observation; the fix is new.
 
