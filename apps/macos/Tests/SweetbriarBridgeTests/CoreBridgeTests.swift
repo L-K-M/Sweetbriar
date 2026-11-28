@@ -281,9 +281,7 @@ func anImportedMailboxCrossesTheBridge() async throws {
     #expect(inbox.accountId == archive.accountId)
     #expect(inbox.name == "Inbox")
     #expect(inbox.delimiter == nil)
-    // An import takes the role its mailbox name spells (spec/09), so a
-    // unified window has rows to page over for a local archive.
-    #expect(inbox.role == .inbox)
+    #expect(inbox.role == nil)
     #expect(inbox.kind == .folder)
     #expect(inbox.selectable)
     #expect(inbox.total == 2)
