@@ -2197,7 +2197,7 @@ A second friendly-wasp pass over the same tree, run against `origin/main`
 at `304db083` with a live Debug build over a 140-message synthetic
 archive (mixed `text/plain` and `multipart/alternative`, one attachment,
 unread and flagged rows, 120-character subjects, two tags per message).
-Its working document is `tmp.md`. Everything in it that Parts 1 to 11 do
+Its working document is `tmp.md`. Everything in it that Parts 1 to 10 do
 not already carry is transcribed here; where a Part already covers the
 ground the entry says so and adds only what is new.
 
@@ -2231,7 +2231,7 @@ font needs about 14.5 pt of line height, so the snippet's descenders
 crowd the next row's sender. The SwiftUI prototype fills the same 54 pt
 and adds `.clipped()`, which cuts the descenders outright.
 
-Rebalance the zones so the content ends about 5 pt before the boundary
+Rebalance the zones so the content ends about 5 pt before the boundary,
 for instance `y=5 h=15`, `y=23 h=15`, `y=41 h=14`, total still 54, and
 promote the zone insets into `MessageRowMetrics` so both lists share
 them. See also the tag-chip clamp in PR #610, which moved the chips off
@@ -2247,7 +2247,7 @@ subtraction reaches zero and the sender disappears entirely instead of
 truncating, leaving a row with no sender at all while the date keeps its
 full 84 pt.
 
-Give the sender a floor, `max(72, trailing - leading)`, and let the
+Give the sender a floor (`max(72, trailing - leading)`) and let the
 account label hide or shrink before the floor is reached. PR #590 already
 made the date column elastic, which buys back most of the room this
 needs.
@@ -2256,8 +2256,8 @@ needs.
 
 ### The Send button has no prominence
 
-The composer's action row is six equal bezeled push buttons, `Plain`,
-`Markdown`, `Attach…`, `Save`, `Send`, `Close Without Saving…`, and
+The composer's action row is six equal bezeled push buttons (`Plain`,
+`Markdown`, `Attach…`, `Save`, `Send`, `Close Without Saving…`) and
 `Send`, the window's primary action, reads like the other five. Apple's
 Mail gives Send a filled pill in the trailing corner and makes it the
 default button.
@@ -2310,13 +2310,20 @@ line. Verified against `origin/main` at `4c742c53`.
   500k-row mailbox. Maintain a loaded-page counter where `page.rows` is
   set and cleared, and skip the scan while it is within the cap. Part 10
   carries the same entry; this adds the object-count estimate.
+- **`index(of:)` rebuilds a whole-window dictionary after every index
+  fetch.** `ListWindowModel.index(of:)` lazily builds a dictionary over
+  the entire id index and `install` clears it, so every index change pays
+  a full build the next time a selection is restored, and
+  `restoreSelection` calls it once per selected id. Scan `ids` when the
+  id set is small and build the dictionary only when it is large. B8
+  carries the same code; this adds the per-selected-id call count.
 - **Row date formatting mutates one shared `DateFormatter`.**
   `MessageRowFormatter.dateString` picks a bucket, assigns
   `dateFormatter.dateFormat`, then formats; swapping the pattern makes
   Foundation re-parse it and rebuild the ICU formatter, and it re-reads
   `Calendar.current` per row. Hold three preconfigured formatters, one
   per bucket, or memoize per (bucket, day). P14 carries the same code
-  with the data-race framing; this adds the scroll-cost framing: it is
+  with the data-race framing; this adds the scroll-cost framing: it sits
   on the path spec/08 budgets at under 5 ms of main-thread work per
   update.
 - **Every reconfigured row re-measures its tag chips and redraws its
@@ -2367,5 +2374,7 @@ account marker (Part 10, PR #599), the row's date column (Part 1,
 PR #590), per-row formatting and measurement (P10), the reverse id index
 (B8), the sticky read error (Part 10, PR #601), the reader's always-on
 tag and note fields (Part 10), `evictOverflow` (Part 10), the empty
-unified window (Part 10 and the imported-role entry in Part 7), and
+unified window (Part 10 and the imported-role entry in Part 7), the
+reader's missing measure cap (Part 10), the two prototype lists'
+trailing order (Part 10), the rail colour collisions (Part 10), and
 every F and D entry the pass raised, which duplicate Parts 4 and 5.
