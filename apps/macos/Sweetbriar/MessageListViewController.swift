@@ -386,10 +386,10 @@ final class MessageListViewController: NSViewController {
         // The rows draw the account labels the sidebar reports; the
         // list no longer observes `SidebarModel.sections`, which is
         // replaced on every list-generation change (spec/08).
-        list.reloadAccountLabels(accountLabels(for: sidebar))
+        list.reloadAccountLabels(Self.accountLabels(for: sidebar))
         sidebar.onSectionsRead = { [weak self, weak list] in
             guard let self, let list else { return }
-            list.reloadAccountLabels(self.accountLabels(for: sidebar))
+            list.reloadAccountLabels(Self.accountLabels(for: sidebar))
         }
         list.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(list, positioned: .below, relativeTo: statusLabel)
@@ -516,10 +516,13 @@ final class MessageListViewController: NSViewController {
 
     /// The account label per account id, resolved in one pass so a
     /// reload does not re-run the disambiguation per visible row.
-    private func accountLabels(for sidebar: SidebarModel) -> [String: String] {
+    /// `SidebarModel` keys each account section by the account's id
+    /// (`section(for:)`), which is also what a row's `accountId`
+    /// carries.
+    static func accountLabels(for sidebar: SidebarModel) -> [String: String] {
         var labels: [String: String] = [:]
         for section in sidebar.sections where section.account != nil {
-            labels[section.id] = Self.accountLabel(section.id, sections: sidebar.sections)
+            labels[section.id] = accountLabel(section.id, sections: sidebar.sections)
         }
         return labels
     }
